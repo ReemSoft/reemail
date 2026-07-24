@@ -107,7 +107,8 @@ function useMailData(session: MailSession | null) {
         archive: { total: 0, unread: 0 },
         all: { total: 0, unread: 0 },
       };
-      result.forEach((c) => (map[c.folder] = { total: c.total, unread: c.unread }));
+      if (!result.ok) throw new Error(result.error);
+      result.counts.forEach((c) => (map[c.folder] = { total: c.total, unread: c.unread }));
       setCounts(map);
       setBridgeError(null);
     } catch (err: any) {
@@ -123,7 +124,8 @@ function useMailData(session: MailSession | null) {
       const result = await getMessages({
         data: { account: session.account, password: session.password, folder },
       });
-      setMessages(result);
+      if (!result.ok) throw new Error(result.error);
+      setMessages(result.messages);
       setBridgeError(null);
       setUseMock(false);
     } catch (err: any) {
@@ -133,6 +135,7 @@ function useMailData(session: MailSession | null) {
     } finally {
       setLoading(false);
     }
+
   }, [session, folder, getMessages]);
 
   useEffect(() => {
@@ -217,8 +220,10 @@ function MailApp() {
       const result = await getOne({
         data: { account: session.account, password: session.password, folder: parsed.folder, uid: parsed.uid },
       });
-      setSelectedMessage(result);
-      if (result && !result.read) {
+      if (!result.ok) throw new Error(result.error);
+      setSelectedMessage(result.message);
+      if (result.message && !result.message.read) {
+
         await markRead({
           data: { account: session.account, password: session.password, folder: parsed.folder, uid: parsed.uid, read: true },
         });
