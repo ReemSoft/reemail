@@ -220,8 +220,10 @@ function MailApp() {
       const result = await getOne({
         data: { account: session.account, password: session.password, folder: parsed.folder, uid: parsed.uid },
       });
-      setSelectedMessage(result);
-      if (result && !result.read) {
+      if (!result.ok) throw new Error(result.error);
+      setSelectedMessage(result.message);
+      if (result.message && !result.message.read) {
+
         await markRead({
           data: { account: session.account, password: session.password, folder: parsed.folder, uid: parsed.uid, read: true },
         });
