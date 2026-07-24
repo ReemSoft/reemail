@@ -710,9 +710,17 @@ function AccountsTab({
                     </p>
                   </div>
                   <button
+                    onClick={() => startEdit(a)}
+                    className="rounded-md p-2 text-muted-foreground hover:bg-primary/10 hover:text-primary"
+                    title="تعديل"
+                  >
+                    <Pencil className="h-4 w-4" />
+                  </button>
+                  <button
                     onClick={() => handleDelete(a.id)}
                     disabled={busyId === a.id}
                     className="rounded-md p-2 text-muted-foreground hover:bg-destructive/10 hover:text-destructive disabled:opacity-50"
+                    title="حذف"
                   >
                     {busyId === a.id ? (
                       <Loader2 className="h-4 w-4 animate-spin" />
