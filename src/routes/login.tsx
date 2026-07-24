@@ -41,8 +41,13 @@ function LoginPage() {
     e.preventDefault();
     setLoading(true);
     try {
-      const { account, company } = await login({ data: { email, password } });
-      saveMailSession({ account, company, password });
+      const result = await login({ data: { email, password } });
+      if (!result.ok) {
+        toast.error(result.message);
+        return;
+      }
+
+      saveMailSession({ account: result.account, company: result.company, password });
       toast.success("تم فتح البريد ✨");
       navigate({ to: "/mail" });
     } catch (err: unknown) {
