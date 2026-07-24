@@ -3,7 +3,6 @@ import { useCallback, useEffect, useState } from "react";
 import {
   ArrowLeft,
   Palette,
-  Users,
   Mail as MailIcon,
   Upload,
   Save,
@@ -18,13 +17,8 @@ import {
   Pencil,
 } from "lucide-react";
 import { toast } from "sonner";
-import { useServerFn } from "@tanstack/react-start";
 import { supabase } from "@/integrations/supabase/client";
 import { useCompanyTheme } from "@/hooks/use-company-theme";
-import {
-  createCompanyUser,
-  deleteCompanyUser,
-} from "@/lib/company-admin.functions";
 
 interface Company {
   id: string;
@@ -36,15 +30,8 @@ interface Company {
   app_name: string | null;
 }
 
-interface CompanyUser {
-  id: string;
-  email: string;
-  full_name: string | null;
-}
-
 interface MailAccount {
   id: string;
-  user_id: string;
   email_address: string;
   display_name: string | null;
   imap_host: string;
@@ -67,8 +54,7 @@ function CompanyDashboard() {
   const [company, setCompany] = useState<Company | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [tab, setTab] = useState<"branding" | "users" | "accounts">("branding");
-  const [users, setUsers] = useState<CompanyUser[]>([]);
+  const [tab, setTab] = useState<"branding" | "accounts">("branding");
   const [accounts, setAccounts] = useState<MailAccount[]>([]);
   const [isAdmin, setIsAdmin] = useState(false);
   const navigate = useNavigate();
@@ -101,13 +87,8 @@ function CompanyDashboard() {
       return;
     }
 
-    const [{ data: co }, { data: us }, { data: ma }] = await Promise.all([
+    const [{ data: co }, { data: ma }] = await Promise.all([
       supabase.from("companies").select("*").eq("id", companyId).maybeSingle(),
-      supabase
-        .from("profiles")
-        .select("id, email, full_name")
-        .eq("company_id", companyId)
-        .order("created_at", { ascending: true }),
       supabase
         .from("mail_accounts")
         .select("*")
@@ -116,7 +97,6 @@ function CompanyDashboard() {
     ]);
 
     if (co) setCompany(co as Company);
-    if (us) setUsers(us as CompanyUser[]);
     if (ma) setAccounts(ma as MailAccount[]);
     setLoading(false);
   }, []);
@@ -224,7 +204,6 @@ function CompanyDashboard() {
           {[
             { id: "branding", label: "العلامة التجارية", icon: Palette },
             { id: "accounts", label: "حسابات البريد", icon: MailIcon, count: accounts.length },
-            { id: "users", label: "المستخدمون", icon: Users, count: users.length },
           ].map((t) => (
             <button
               key={t.id}
@@ -252,13 +231,9 @@ function CompanyDashboard() {
           {tab === "branding" && (
             <BrandingTab company={company} setCompany={setCompany} />
           )}
-          {tab === "users" && (
-            <UsersTab users={users} onChange={load} />
-          )}
           {tab === "accounts" && (
             <AccountsTab
               accounts={accounts}
-              users={users}
               companyId={company.id}
               onChange={load}
             />
@@ -341,178 +316,7 @@ function BrandingTab({
   );
 }
 
-/* ----------------------------------------------------------------- Users -- */
-function UsersTab({
-  users,
-  onChange,
-}: {
-  users: CompanyUser[];
-  onChange: () => Promise<void> | void;
-}) {
-  const [open, setOpen] = useState(false);
-  const create = useServerFn(createCompanyUser);
-  const del = useServerFn(deleteCompanyUser);
-  const [busyId, setBusyId] = useState<string | null>(null);
-  const [form, setForm] = useState({ full_name: "", email: "", password: "" });
-  const [submitting, setSubmitting] = useState(false);
-
-  async function handleCreate(e: React.FormEvent) {
-    e.preventDefault();
-    setSubmitting(true);
-    try {
-      await create({ data: form });
-      toast.success("تم إنشاء المستخدم");
-      setForm({ full_name: "", email: "", password: "" });
-      setOpen(false);
-      await onChange();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "فشل الإنشاء");
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
-  async function handleDelete(id: string) {
-    if (!confirm("حذف هذا المستخدم نهائياً؟")) return;
-    setBusyId(id);
-    try {
-      await del({ data: { user_id: id } });
-      toast.success("تم الحذف");
-      await onChange();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "فشل الحذف");
-    } finally {
-      setBusyId(null);
-    }
-  }
-
-  return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-xl font-bold">المستخدمون</h2>
-          <p className="text-sm text-muted-foreground">
-            عملاء شركتك الذين يستخدمون البريد عبر بريدهم وكلمة المرور.
-          </p>
-        </div>
-        <button
-          onClick={() => setOpen(true)}
-          className="inline-flex items-center gap-1.5 rounded-lg bg-brand-gradient px-4 py-2 text-sm font-semibold text-white shadow-soft"
-        >
-          <Plus className="h-4 w-4" />
-          مستخدم جديد
-        </button>
-      </div>
-
-      <div className="overflow-hidden rounded-2xl border border-border bg-card shadow-soft">
-        {users.length === 0 ? (
-          <div className="p-10 text-center text-sm text-muted-foreground">
-            لا يوجد مستخدمون بعد. أضف أول عميل لك.
-          </div>
-        ) : (
-          <table className="w-full text-sm">
-            <thead className="bg-muted/40 text-right text-xs font-medium text-muted-foreground">
-              <tr>
-                <th className="px-4 py-2.5">الاسم</th>
-                <th className="px-4 py-2.5">البريد</th>
-                <th className="w-16 px-4 py-2.5"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {users.map((u) => (
-                <tr key={u.id} className="border-t border-border">
-                  <td className="px-4 py-3 font-medium">{u.full_name ?? "—"}</td>
-                  <td className="px-4 py-3 text-muted-foreground" dir="ltr">
-                    {u.email}
-                  </td>
-                  <td className="px-4 py-3">
-                    <button
-                      onClick={() => handleDelete(u.id)}
-                      disabled={busyId === u.id}
-                      className="rounded-md p-1.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive disabled:opacity-50"
-                    >
-                      {busyId === u.id ? (
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                      ) : (
-                        <Trash2 className="h-4 w-4" />
-                      )}
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
-
-      {open && (
-        <Modal title="إضافة مستخدم جديد" onClose={() => setOpen(false)}>
-          <form onSubmit={handleCreate} className="space-y-4">
-            <Field label="الاسم الكامل">
-              <input
-                required
-                value={form.full_name}
-                onChange={(e) => setForm({ ...form, full_name: e.target.value })}
-                className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary"
-              />
-            </Field>
-            <Field label="البريد الإلكتروني (لتسجيل الدخول)">
-              <input
-                required
-                type="email"
-                dir="ltr"
-                value={form.email}
-                onChange={(e) => setForm({ ...form, email: e.target.value })}
-                className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary"
-              />
-            </Field>
-            <Field label="كلمة مرور مؤقتة">
-              <div className="flex gap-2">
-                <input
-                  required
-                  minLength={6}
-                  value={form.password}
-                  onChange={(e) => setForm({ ...form, password: e.target.value })}
-                  className="flex-1 rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary"
-                  dir="ltr"
-                />
-                <button
-                  type="button"
-                  onClick={() =>
-                    setForm({
-                      ...form,
-                      password: Math.random().toString(36).slice(2, 12),
-                    })
-                  }
-                  className="rounded-lg border border-input px-3 text-xs hover:bg-muted"
-                >
-                  توليد
-                </button>
-              </div>
-            </Field>
-            <div className="flex justify-end gap-2 pt-2">
-              <button
-                type="button"
-                onClick={() => setOpen(false)}
-                className="rounded-lg px-4 py-2 text-sm hover:bg-muted"
-              >
-                إلغاء
-              </button>
-              <button
-                type="submit"
-                disabled={submitting}
-                className="inline-flex items-center gap-1.5 rounded-lg bg-brand-gradient px-4 py-2 text-sm font-semibold text-white shadow-soft disabled:opacity-60"
-              >
-                {submitting && <Loader2 className="h-4 w-4 animate-spin" />}
-                إنشاء
-              </button>
-            </div>
-          </form>
-        </Modal>
-      )}
-    </div>
-  );
-}
+/* Users tab removed — clients are not platform users, only email addresses under a company. */
 
 /* -------------------------------------------------------------- Accounts -- */
 const IMAP_PRESETS = [
@@ -525,12 +329,10 @@ const IMAP_PRESETS = [
 
 function AccountsTab({
   accounts,
-  users,
   companyId,
   onChange,
 }: {
   accounts: MailAccount[];
-  users: CompanyUser[];
   companyId: string;
   onChange: () => Promise<void> | void;
 }) {
@@ -539,7 +341,6 @@ function AccountsTab({
   const [editingId, setEditingId] = useState<string | null>(null);
 
   const emptyForm = {
-    user_id: "",
     display_name: "",
     email_address: "",
     imap_host: "",
@@ -561,7 +362,6 @@ function AccountsTab({
   function startEdit(account: MailAccount) {
     setEditingId(account.id);
     setForm({
-      user_id: account.user_id,
       display_name: account.display_name || "",
       email_address: account.email_address,
       imap_host: account.imap_host,
@@ -576,11 +376,9 @@ function AccountsTab({
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!form.user_id) return toast.error("اختر مستخدماً");
     setSubmitting(true);
 
     const basePayload = {
-      user_id: form.user_id,
       display_name: form.display_name || null,
       email_address: form.email_address,
       imap_host: form.imap_host,
@@ -624,7 +422,7 @@ function AccountsTab({
     await onChange();
   }
 
-  const usersById = new Map(users.map((u) => [u.id, u]));
+  
 
   function applyPreset(p: (typeof IMAP_PRESETS)[number]) {
     setForm({
@@ -649,9 +447,7 @@ function AccountsTab({
         </div>
         <button
           onClick={() => setOpen(true)}
-          disabled={users.length === 0}
-          className="inline-flex items-center gap-1.5 rounded-lg bg-brand-gradient px-4 py-2 text-sm font-semibold text-white shadow-soft disabled:opacity-60"
-          title={users.length === 0 ? "أضف مستخدماً أولاً" : undefined}
+          className="inline-flex items-center gap-1.5 rounded-lg bg-brand-gradient px-4 py-2 text-sm font-semibold text-white shadow-soft"
         >
           <Plus className="h-4 w-4" />
           حساب جديد
@@ -666,7 +462,6 @@ function AccountsTab({
         ) : (
           <ul className="divide-y divide-border">
             {accounts.map((a) => {
-              const u = usersById.get(a.user_id);
               return (
                 <li key={a.id} className="flex items-center gap-4 p-4">
                   <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-brand-gradient/10 text-brand-accent">
@@ -684,13 +479,12 @@ function AccountsTab({
                       )}
                     </div>
                     <p className="mt-0.5 truncate text-xs text-muted-foreground">
-                      {u ? `${u.full_name ?? u.email}` : "مستخدم محذوف"} ·
                       <span dir="ltr" className="mx-1">
-                        {a.imap_host}:{a.imap_port}
+                        IMAP {a.imap_host}:{a.imap_port}
                       </span>
-                      · SMTP
+                      ·
                       <span dir="ltr" className="mx-1">
-                        {a.smtp_host}:{a.smtp_port}
+                        SMTP {a.smtp_host}:{a.smtp_port}
                       </span>
                     </p>
                   </div>
@@ -726,22 +520,6 @@ function AccountsTab({
           onClose={closeModal}
         >
           <form onSubmit={handleSubmit} className="space-y-4">
-            <Field label="المستخدم">
-              <select
-                required
-                disabled={!!editingId}
-                value={form.user_id}
-                onChange={(e) => setForm({ ...form, user_id: e.target.value })}
-                className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary disabled:opacity-60"
-              >
-                <option value="">— اختر —</option>
-                {users.map((u) => (
-                  <option key={u.id} value={u.id}>
-                    {u.full_name ?? u.email}
-                  </option>
-                ))}
-              </select>
-            </Field>
 
             <div>
               <p className="mb-1.5 text-xs font-medium text-muted-foreground">

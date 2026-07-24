@@ -1,8 +1,10 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
-import { Mail, ArrowLeft, Loader2 } from "lucide-react";
-import { supabase } from "@/integrations/supabase/client";
+import { Mail, ArrowLeft, Loader2, Lock } from "lucide-react";
 import { toast } from "sonner";
+import { useServerFn } from "@tanstack/react-start";
+import { clientLogin } from "@/lib/client-mail.functions";
+import { saveMailSession, getMailSession } from "@/lib/mail-session";
 
 export const Route = createFileRoute("/login")({
   head: () => ({
@@ -23,61 +25,32 @@ export const Route = createFileRoute("/login")({
   component: LoginPage,
 });
 
-async function destinationForUser(userId: string): Promise<string> {
-  const { data: roles } = await supabase
-    .from("user_roles")
-    .select("role")
-    .eq("user_id", userId);
-  const list = (roles ?? []).map((r) => r.role);
-  if (list.includes("company_admin") || list.includes("super_admin"))
-    return "/dashboard";
-  return "/mail";
-}
-
 function LoginPage() {
   const navigate = useNavigate();
-  const [checkingSession, setCheckingSession] = useState(true);
+  const login = useServerFn(clientLogin);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    supabase.auth.getSession().then(async ({ data }) => {
-      if (data.session) {
-        const dest = await destinationForUser(data.session.user.id);
-        navigate({ to: dest });
-      } else {
-        setCheckingSession(false);
-      }
-    });
+    // If already unlocked, jump straight to mail.
+    if (getMailSession()) navigate({ to: "/mail" });
   }, [navigate]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setLoading(true);
     try {
-      const { data: signIn, error } = await supabase.auth.signInWithPassword({
-        email,
-        password,
-      });
-      if (error) throw error;
-      const dest = await destinationForUser(signIn.user!.id);
-      toast.success("مرحباً بعودتك 👋");
-      navigate({ to: dest });
+      const { account, company } = await login({ data: { email, password } });
+      saveMailSession({ account, company, password });
+      toast.success("تم فتح البريد ✨");
+      navigate({ to: "/mail" });
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "حدث خطأ غير متوقع";
+      const msg = err instanceof Error ? err.message : "بيانات الدخول غير صحيحة";
       toast.error(msg);
     } finally {
       setLoading(false);
     }
-  }
-
-  if (checkingSession) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-background">
-        <Loader2 className="h-6 w-6 animate-spin text-primary" />
-      </div>
-    );
   }
 
   return (
@@ -105,7 +78,7 @@ function LoginPage() {
               بسرعة البرق ⚡
             </h2>
             <p className="mt-4 text-lg text-white/85">
-              دخول العملاء إلى بريدهم في ثوانٍ.
+              أدخل بريدك وكلمة مروره فقط — لا حاجة لأي حساب إضافي.
             </p>
           </div>
           <p className="text-sm text-white/70">
@@ -123,9 +96,12 @@ function LoginPage() {
             <ArrowLeft className="h-4 w-4" /> العودة
           </Link>
 
-          <h1 className="text-3xl font-bold tracking-tight">دخول العميل</h1>
+          <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-brand-gradient/10 text-brand-accent">
+            <Lock className="h-6 w-6" />
+          </div>
+          <h1 className="text-3xl font-bold tracking-tight">افتح بريدك</h1>
           <p className="mt-2 text-muted-foreground">
-            استخدم بيانات الدخول التي زوّدتك بها شركتك. عند فتح البريد ستُدخل كلمة مرور بريدك لمرة واحدة في الجلسة.
+            استخدم عنوان بريدك وكلمة مروره الحقيقية. كلمة المرور تُستخدم فقط في هذه الجلسة ولا تُخزَّن.
           </p>
 
           <form onSubmit={handleSubmit} className="mt-8 space-y-4">
@@ -140,21 +116,23 @@ function LoginPage() {
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="you@company.com"
                 dir="ltr"
+                autoComplete="email"
                 className="w-full rounded-lg border border-input bg-card px-4 py-2.5 text-sm outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20"
               />
             </div>
             <div>
               <label className="mb-1.5 block text-sm font-medium text-foreground">
-                كلمة المرور
+                كلمة مرور البريد
               </label>
               <input
                 type="password"
                 required
-                minLength={6}
+                minLength={3}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="••••••••"
                 dir="ltr"
+                autoComplete="current-password"
                 className="w-full rounded-lg border border-input bg-card px-4 py-2.5 text-sm outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20"
               />
             </div>
@@ -164,7 +142,7 @@ function LoginPage() {
               className="mt-2 flex w-full items-center justify-center gap-2 rounded-lg bg-brand-gradient px-4 py-3 text-sm font-semibold text-white shadow-soft transition hover:shadow-elevated disabled:opacity-60"
             >
               {loading && <Loader2 className="h-4 w-4 animate-spin" />}
-              تسجيل الدخول
+              فتح البريد
             </button>
           </form>
 
