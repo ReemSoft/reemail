@@ -462,7 +462,6 @@ function AccountsTab({
         ) : (
           <ul className="divide-y divide-border">
             {accounts.map((a) => {
-              const u = usersById.get(a.user_id);
               return (
                 <li key={a.id} className="flex items-center gap-4 p-4">
                   <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-brand-gradient/10 text-brand-accent">
@@ -480,13 +479,12 @@ function AccountsTab({
                       )}
                     </div>
                     <p className="mt-0.5 truncate text-xs text-muted-foreground">
-                      {u ? `${u.full_name ?? u.email}` : "مستخدم محذوف"} ·
                       <span dir="ltr" className="mx-1">
-                        {a.imap_host}:{a.imap_port}
+                        IMAP {a.imap_host}:{a.imap_port}
                       </span>
-                      · SMTP
+                      ·
                       <span dir="ltr" className="mx-1">
-                        {a.smtp_host}:{a.smtp_port}
+                        SMTP {a.smtp_host}:{a.smtp_port}
                       </span>
                     </p>
                   </div>
