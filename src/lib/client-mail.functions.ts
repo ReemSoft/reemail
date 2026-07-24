@@ -4,8 +4,8 @@ import { createServerFn } from "@tanstack/react-start";
  * Client (email-owner) login.
  * The client is NOT a platform user — they are simply the owner of an email
  * address the company admin has configured. We look up the mail_account by
- * email and (for now, until real IMAP is wired) accept any non-empty password.
- * The password stays only in the browser session, never in the database.
+ * email, then verify the password directly against the real IMAP server via
+ * the bridge. The password stays only in the browser session, never in the database.
  */
 export const clientLogin = createServerFn({ method: "POST" })
   .inputValidator((input: { email: string; password: string }) => {
@@ -43,13 +43,42 @@ export const clientLogin = createServerFn({ method: "POST" })
       return { ok: false as const, message: "هذا البريد غير مُسجّل. تواصل مع شركتك." };
     }
 
-    // Load company branding for white-label display.
     const { data: company } = await supabaseAdmin
       .from("companies")
       .select("id, name, app_name, logo_url, brand_primary, brand_accent")
       .eq("id", account.company_id)
       .maybeSingle();
 
-    // TODO(phase-2): verify password against real IMAP server here.
+    // Verify credentials against the real IMAP server.
+    const bridgeUrl = process.env.MAIL_BRIDGE_URL;
+    const bridgeKey = process.env.MAIL_BRIDGE_SECRET;
+
+    if (!bridgeUrl || !bridgeKey) {
+      return {
+        ok: false as const,
+        message: "خادم البريد لم يُربط بعد. أخبر فريق الدعم برابط الـ Bridge.",
+      };
+    }
+
+    try {
+      const res = await fetch(`${bridgeUrl.replace(/\/$/, "")}/api/verify`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Bridge-Key": bridgeKey,
+        },
+        body: JSON.stringify({ account, password: data.password }),
+      });
+      const json = await res.json().catch(() => ({ ok: false, error: "Bridge error" }));
+      if (!res.ok || !json.ok) {
+        return { ok: false as const, message: "كلمة مرور البريد غير صحيحة أو خادم البريد غير متاح" };
+      }
+    } catch (err) {
+      return {
+        ok: false as const,
+        message: "تعذر الاتصال بخادم البريد. تأكد من إعدادات الشركة.",
+      };
+    }
+
     return { ok: true as const, account, company };
   });

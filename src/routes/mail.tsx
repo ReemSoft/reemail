@@ -1,5 +1,5 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useCallback } from "react";
 import {
   Inbox,
   Star,
@@ -19,14 +19,27 @@ import {
   LogOut,
   Mail as MailIcon,
   Loader2,
+  ChevronLeft,
 } from "lucide-react";
+import { useServerFn } from "@tanstack/react-start";
+import { toast } from "sonner";
 import { useCompanyTheme } from "@/hooks/use-company-theme";
 import {
-  getMessages,
-  getMessage,
-  getFolderCounts,
+  bridgeGetFolderCounts,
+  bridgeGetMessages,
+  bridgeGetMessage,
+  bridgeMarkRead,
+  bridgeStar,
+  bridgeMove,
+  bridgeDelete,
+  bridgeSend,
+} from "@/lib/mail-bridge.functions";
+import {
   formatDate,
   formatSize,
+  getFolderCounts as getMockFolderCounts,
+  getMessages as getMockMessages,
+  getMessage as getMockMessage,
 } from "@/lib/mail-mock";
 import type { MailFolder, MailMessage } from "@/lib/mail-types";
 import {
@@ -54,14 +67,116 @@ const FOLDER_META: Record<MailFolder, { label: string; icon: typeof Inbox }> = {
   all: { label: "الكل", icon: MailIcon },
 };
 
+function parseMessageId(id: string): { folder: MailFolder; uid: number } | null {
+  const [folder, uidStr] = id.split(":");
+  const uid = Number(uidStr);
+  if (!folder || !uidStr || Number.isNaN(uid)) return null;
+  return { folder: folder as MailFolder, uid };
+}
+
+function useMailData(session: MailSession | null) {
+  const getCounts = useServerFn(bridgeGetFolderCounts);
+  const getMessages = useServerFn(bridgeGetMessages);
+  const [folder, setFolder] = useState<MailFolder>("inbox");
+  const [counts, setCounts] = useState<Record<MailFolder, { total: number; unread: number }>>({
+    inbox: { total: 0, unread: 0 },
+    starred: { total: 0, unread: 0 },
+    sent: { total: 0, unread: 0 },
+    drafts: { total: 0, unread: 0 },
+    spam: { total: 0, unread: 0 },
+    trash: { total: 0, unread: 0 },
+    archive: { total: 0, unread: 0 },
+    all: { total: 0, unread: 0 },
+  });
+  const [messages, setMessages] = useState<MailMessage[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [bridgeError, setBridgeError] = useState<string | null>(null);
+  const [useMock, setUseMock] = useState(false);
+
+  const loadCounts = useCallback(async () => {
+    if (!session) return;
+    try {
+      const result = await getCounts({ data: { account: session.account, password: session.password } });
+      const map: Record<MailFolder, { total: number; unread: number }> = {
+        inbox: { total: 0, unread: 0 },
+        starred: { total: 0, unread: 0 },
+        sent: { total: 0, unread: 0 },
+        drafts: { total: 0, unread: 0 },
+        spam: { total: 0, unread: 0 },
+        trash: { total: 0, unread: 0 },
+        archive: { total: 0, unread: 0 },
+        all: { total: 0, unread: 0 },
+      };
+      result.forEach((c) => (map[c.folder] = { total: c.total, unread: c.unread }));
+      setCounts(map);
+      setBridgeError(null);
+    } catch (err: any) {
+      setBridgeError(err?.message || "فشل الاتصال بخادم البريد");
+      setCounts(Object.fromEntries(getMockFolderCounts().map((c) => [c.folder, { total: c.total, unread: c.unread }])) as Record<MailFolder, { total: number; unread: number }>);
+    }
+  }, [session, getCounts]);
+
+  const loadMessages = useCallback(async () => {
+    if (!session) return;
+    setLoading(true);
+    try {
+      const result = await getMessages({
+        data: { account: session.account, password: session.password, folder },
+      });
+      setMessages(result);
+      setBridgeError(null);
+      setUseMock(false);
+    } catch (err: any) {
+      setBridgeError(err?.message || "فشل جلب الرسائل");
+      setMessages(getMockMessages(folder));
+      setUseMock(true);
+    } finally {
+      setLoading(false);
+    }
+  }, [session, folder, getMessages]);
+
+  useEffect(() => {
+    loadCounts();
+  }, [loadCounts]);
+
+  useEffect(() => {
+    loadMessages();
+  }, [loadMessages]);
+
+  return {
+    folder,
+    setFolder,
+    counts,
+    messages,
+    setMessages,
+    loading,
+    bridgeError,
+    useMock,
+    refresh: () => {
+      loadCounts();
+      loadMessages();
+    },
+  };
+}
+
 function MailApp() {
   const navigate = useNavigate();
   const [session, setSession] = useState<MailSession | null | undefined>(undefined);
-  const [folder, setFolder] = useState<MailFolder>("inbox");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [composeOpen, setComposeOpen] = useState(false);
+  const [selectedMessage, setSelectedMessage] = useState<MailMessage | null>(null);
+  const [reading, setReading] = useState(false);
+
+  const { folder, setFolder, counts, messages, setMessages, loading, bridgeError, useMock, refresh } =
+    useMailData(session || null);
+
+  const getOne = useServerFn(bridgeGetMessage);
+  const markRead = useServerFn(bridgeMarkRead);
+  const star = useServerFn(bridgeStar);
+  const move = useServerFn(bridgeMove);
+  const deleteFn = useServerFn(bridgeDelete);
 
   useCompanyTheme(
     session?.company
@@ -78,21 +193,105 @@ function MailApp() {
     setSession(s);
   }, [navigate]);
 
-  const counts = useMemo(() => getFolderCounts(), []);
-  const messages = useMemo(() => {
-    const base = getMessages(folder);
-    if (!query.trim()) return base;
+  const filteredMessages = useMemo(() => {
+    if (!query.trim()) return messages;
     const q = query.toLowerCase();
-    return base.filter(
+    return messages.filter(
       (m) =>
         m.subject.toLowerCase().includes(q) ||
         m.from.name.toLowerCase().includes(q) ||
         m.from.email.toLowerCase().includes(q) ||
         m.preview.toLowerCase().includes(q),
     );
-  }, [folder, query]);
+  }, [messages, query]);
 
-  const selected = selectedId ? getMessage(selectedId) : null;
+  async function openMessage(id: string) {
+    setSelectedId(id);
+    const parsed = parseMessageId(id);
+    if (!parsed || !session) {
+      setSelectedMessage(getMockMessage(id) ?? null);
+      return;
+    }
+    setReading(true);
+    try {
+      const result = await getOne({
+        data: { account: session.account, password: session.password, folder: parsed.folder, uid: parsed.uid },
+      });
+      setSelectedMessage(result);
+      if (result && !result.read) {
+        await markRead({
+          data: { account: session.account, password: session.password, folder: parsed.folder, uid: parsed.uid, read: true },
+        });
+        // Optimistically update local read state
+        setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, read: true } : m)));
+      }
+    } catch (err: any) {
+      toast.error(err?.message || "فشل فتح الرسالة");
+      setSelectedMessage(getMockMessage(id) ?? null);
+    } finally {
+      setReading(false);
+    }
+  }
+
+  async function toggleStar(e: React.MouseEvent, id: string) {
+    e.stopPropagation();
+    const parsed = parseMessageId(id);
+    if (!parsed || !session) return;
+    const msg = messages.find((m) => m.id === id);
+    const nextStarred = !msg?.starred;
+    try {
+      await star({
+        data: {
+          account: session.account,
+          password: session.password,
+          folder: parsed.folder,
+          uid: parsed.uid,
+          starred: nextStarred,
+        },
+      });
+      setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, starred: nextStarred } : m)));
+    } catch (err: any) {
+      toast.error(err?.message || "فشل تحديث المميّز");
+    }
+  }
+
+  async function handleMove(id: string, toFolder: MailFolder) {
+    const parsed = parseMessageId(id);
+    if (!parsed || !session) return;
+    try {
+      await move({
+        data: {
+          account: session.account,
+          password: session.password,
+          folder: parsed.folder,
+          uid: parsed.uid,
+          toFolder,
+        },
+      });
+      toast.success("تم نقل الرسالة");
+      setMessages((prev) => prev.filter((m) => m.id !== id));
+      setSelectedId(null);
+      setSelectedMessage(null);
+    } catch (err: any) {
+      toast.error(err?.message || "فشل نقل الرسالة");
+    }
+  }
+
+  async function handleDelete(id: string) {
+    const parsed = parseMessageId(id);
+    if (!parsed || !session) return;
+    try {
+      await deleteFn({
+        data: { account: session.account, password: session.password, folder: parsed.folder, uid: parsed.uid },
+      });
+      toast.success("تم حذف الرسالة");
+      setMessages((prev) => prev.filter((m) => m.id !== id));
+      setSelectedId(null);
+      setSelectedMessage(null);
+    } catch (err: any) {
+      toast.error(err?.message || "فشل حذف الرسالة");
+    }
+  }
 
   function handleSignOut() {
     clearMailSession();
@@ -112,6 +311,14 @@ function MailApp() {
 
   return (
     <div className="flex h-screen w-full flex-col bg-background">
+      {bridgeError && (
+        <div className="flex items-center justify-center gap-2 bg-warning px-3 py-2 text-xs font-medium text-warning-foreground">
+          <AlertOctagon className="h-4 w-4" />
+          <span>{bridgeError}</span>
+          {useMock && <span className="opacity-80">(يتم عرض بيانات تجريبية مؤقتًا)</span>}
+        </div>
+      )}
+
       {/* Top bar */}
       <header className="flex h-14 shrink-0 items-center gap-2 border-b border-border bg-card px-3 sm:px-4">
         <button
@@ -148,7 +355,7 @@ function MailApp() {
         </div>
 
         <button
-          onClick={() => window.location.reload()}
+          onClick={refresh}
           className="hidden rounded-lg p-2 hover:bg-muted sm:inline-flex"
           aria-label="تحديث"
         >
@@ -192,16 +399,18 @@ function MailApp() {
           </div>
 
           <nav className="px-2">
-            {counts.map(({ folder: f, unread }) => {
+            {(Object.keys(FOLDER_META) as MailFolder[]).map((f) => {
               const meta = FOLDER_META[f];
               const active = f === folder;
               const Icon = meta.icon;
+              const { unread } = counts[f] || { unread: 0 };
               return (
                 <button
                   key={f}
                   onClick={() => {
                     setFolder(f);
                     setSelectedId(null);
+                    setSelectedMessage(null);
                     setSidebarOpen(false);
                   }}
                   className={`mb-0.5 flex w-full items-center gap-3 rounded-r-full rounded-l-md px-4 py-2.5 text-sm transition ${
@@ -225,18 +434,6 @@ function MailApp() {
               );
             })}
           </nav>
-
-          <div className="mx-4 mt-6 border-t border-border pt-4">
-            <p className="mb-2 px-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-              التخزين
-            </p>
-            <div className="px-2">
-              <div className="h-1.5 overflow-hidden rounded-full bg-muted">
-                <div className="h-full w-1/4 rounded-full bg-brand-gradient" />
-              </div>
-              <p className="mt-1.5 text-xs text-muted-foreground">2.4 / 10 جيجابايت</p>
-            </div>
-          </div>
         </aside>
 
         {sidebarOpen && (
@@ -249,30 +446,33 @@ function MailApp() {
         {/* Message list */}
         <div
           className={`flex w-full flex-col border-l border-border bg-card md:w-96 md:shrink-0 ${
-            selected ? "hidden md:flex" : "flex"
+            selectedMessage ? "hidden md:flex" : "flex"
           }`}
         >
           <div className="flex h-11 shrink-0 items-center justify-between border-b border-border px-4 text-xs">
             <span className="font-semibold text-muted-foreground">
-              {FOLDER_META[folder].label} · {messages.length}
+              {FOLDER_META[folder].label} · {filteredMessages.length}
             </span>
-            <button className="rounded-md p-1 hover:bg-muted">
-              <MoreVertical className="h-4 w-4" />
-            </button>
+            {loading && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />}
           </div>
           <div className="flex-1 overflow-y-auto">
-            {messages.length === 0 ? (
+            {loading && filteredMessages.length === 0 ? (
+              <div className="flex h-full items-center justify-center">
+                <Loader2 className="h-6 w-6 animate-spin text-primary" />
+              </div>
+            ) : filteredMessages.length === 0 ? (
               <div className="flex h-full flex-col items-center justify-center gap-2 p-8 text-center text-muted-foreground">
                 <MailIcon className="h-10 w-10 opacity-30" />
                 <p className="text-sm">لا توجد رسائل هنا</p>
               </div>
             ) : (
-              messages.map((m) => (
+              filteredMessages.map((m) => (
                 <MessageRow
                   key={m.id}
                   message={m}
                   active={m.id === selectedId}
-                  onClick={() => setSelectedId(m.id)}
+                  onClick={() => openMessage(m.id)}
+                  onToggleStar={(e) => toggleStar(e, m.id)}
                 />
               ))
             )}
@@ -282,14 +482,21 @@ function MailApp() {
         {/* Message viewer */}
         <div
           className={`flex-1 overflow-hidden bg-surface ${
-            selected ? "flex" : "hidden md:flex"
+            selectedMessage ? "flex" : "hidden md:flex"
           } flex-col`}
         >
-          {selected ? (
+          {selectedMessage ? (
             <MessageView
-              message={selected}
-              onBack={() => setSelectedId(null)}
+              message={selectedMessage}
+              loading={reading}
+              onBack={() => {
+                setSelectedId(null);
+                setSelectedMessage(null);
+              }}
               onReply={() => setComposeOpen(true)}
+              onArchive={() => handleMove(selectedMessage.id, "archive")}
+              onDelete={() => handleDelete(selectedMessage.id)}
+              onSpam={() => handleMove(selectedMessage.id, "spam")}
             />
           ) : (
             <EmptyViewer />
@@ -297,7 +504,7 @@ function MailApp() {
         </div>
       </div>
 
-      {composeOpen && <Composer onClose={() => setComposeOpen(false)} />}
+      {composeOpen && <Composer session={session} onClose={() => setComposeOpen(false)} onSent={refresh} />}
     </div>
   );
 }
@@ -306,10 +513,12 @@ function MessageRow({
   message,
   active,
   onClick,
+  onToggleStar,
 }: {
   message: MailMessage;
   active: boolean;
   onClick: () => void;
+  onToggleStar: (e: React.MouseEvent) => void;
 }) {
   return (
     <button
@@ -318,10 +527,8 @@ function MessageRow({
         active ? "bg-accent" : ""
       } ${!message.read ? "bg-card" : "bg-card/70"}`}
     >
-      <div
-        className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-brand-gradient text-sm font-bold text-white`}
-      >
-        {message.from.name.charAt(0)}
+      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-brand-gradient text-sm font-bold text-white">
+        {message.from.name.charAt(0) || message.from.email.charAt(0)}
       </div>
       <div className="flex-1 overflow-hidden">
         <div className="mb-0.5 flex items-baseline justify-between gap-2">
@@ -330,11 +537,9 @@ function MessageRow({
               !message.read ? "font-bold text-foreground" : "font-medium text-foreground/80"
             }`}
           >
-            {message.from.name}
+            {message.from.name || message.from.email}
           </span>
-          <span className="shrink-0 text-[11px] text-muted-foreground">
-            {formatDate(message.date)}
-          </span>
+          <span className="shrink-0 text-[11px] text-muted-foreground">{formatDate(message.date)}</span>
         </div>
         <p
           className={`truncate text-sm ${
@@ -345,7 +550,13 @@ function MessageRow({
         </p>
         <p className="mt-0.5 truncate text-xs text-muted-foreground">{message.preview}</p>
         <div className="mt-1 flex items-center gap-2">
-          {message.starred && <Star className="h-3 w-3 fill-star text-star" />}
+          <button
+            onClick={onToggleStar}
+            className={`rounded p-0.5 hover:bg-muted ${message.starred ? "text-star" : "text-muted-foreground"}`}
+            title={message.starred ? "إزالة المميّز" : "تمييز"}
+          >
+            <Star className={`h-3.5 w-3.5 ${message.starred ? "fill-star" : ""}`} />
+          </button>
           {message.hasAttachments && <Paperclip className="h-3 w-3 text-muted-foreground" />}
           {message.labels?.map((l) => (
             <span
@@ -363,12 +574,20 @@ function MessageRow({
 
 function MessageView({
   message,
+  loading,
   onBack,
   onReply,
+  onArchive,
+  onDelete,
+  onSpam,
 }: {
   message: MailMessage;
+  loading: boolean;
   onBack: () => void;
   onReply: () => void;
+  onArchive: () => void;
+  onDelete: () => void;
+  onSpam: () => void;
 }) {
   return (
     <>
@@ -377,16 +596,16 @@ function MessageView({
           onClick={onBack}
           className="flex items-center gap-1.5 rounded-lg p-2 text-sm hover:bg-muted md:hidden"
         >
-          <ArrowLeft className="h-4 w-4" /> رجوع
+          <ChevronLeft className="h-4 w-4" /> رجوع
         </button>
         <div className="hidden gap-1 md:flex">
-          <button className="rounded-lg p-2 hover:bg-muted" title="أرشفة">
+          <button onClick={onArchive} className="rounded-lg p-2 hover:bg-muted" title="أرشفة">
             <Archive className="h-4 w-4" />
           </button>
-          <button className="rounded-lg p-2 hover:bg-muted" title="حذف">
+          <button onClick={onDelete} className="rounded-lg p-2 hover:bg-muted" title="حذف">
             <Trash2 className="h-4 w-4" />
           </button>
-          <button className="rounded-lg p-2 hover:bg-muted" title="مزعج">
+          <button onClick={onSpam} className="rounded-lg p-2 hover:bg-muted" title="مزعج">
             <AlertOctagon className="h-4 w-4" />
           </button>
         </div>
@@ -395,68 +614,72 @@ function MessageView({
         </button>
       </div>
       <div className="flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-3xl p-4 sm:p-6">
-          <h1 className="text-xl font-bold sm:text-2xl">{message.subject}</h1>
-          <div className="mt-4 flex items-start gap-3 border-b border-border pb-4">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-brand-gradient text-sm font-bold text-white">
-              {message.from.name.charAt(0)}
-            </div>
-            <div className="flex-1">
-              <div className="flex flex-wrap items-baseline justify-between gap-2">
-                <div>
-                  <span className="font-semibold">{message.from.name}</span>
-                  <span className="mr-2 text-xs text-muted-foreground" dir="ltr">
-                    &lt;{message.from.email}&gt;
-                  </span>
-                </div>
-                <span className="text-xs text-muted-foreground">
-                  {formatDate(message.date)}
-                </span>
-              </div>
-              <p className="mt-0.5 text-xs text-muted-foreground">
-                إليّ · {message.to.map((t) => t.email).join(", ")}
-              </p>
-            </div>
+        {loading ? (
+          <div className="flex h-full items-center justify-center">
+            <Loader2 className="h-6 w-6 animate-spin text-primary" />
           </div>
-
-          <article
-            className="prose prose-sm mt-6 max-w-none text-foreground"
-            dangerouslySetInnerHTML={{ __html: message.body }}
-          />
-
-          {message.attachments && message.attachments.length > 0 && (
-            <div className="mt-6">
-              <p className="mb-2 text-xs font-semibold text-muted-foreground">
-                المرفقات ({message.attachments.length})
-              </p>
-              <div className="grid gap-2 sm:grid-cols-2">
-                {message.attachments.map((a) => (
-                  <div
-                    key={a.id}
-                    className="flex items-center gap-3 rounded-xl border border-border bg-card p-3"
-                  >
-                    <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-brand-gradient/10 text-brand-accent">
-                      <Paperclip className="h-4 w-4" />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-medium">{a.filename}</p>
-                      <p className="text-xs text-muted-foreground">{formatSize(a.size)}</p>
-                    </div>
+        ) : (
+          <div className="mx-auto max-w-3xl p-4 sm:p-6">
+            <h1 className="text-xl font-bold sm:text-2xl">{message.subject}</h1>
+            <div className="mt-4 flex items-start gap-3 border-b border-border pb-4">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-brand-gradient text-sm font-bold text-white">
+                {message.from.name.charAt(0) || message.from.email.charAt(0)}
+              </div>
+              <div className="flex-1">
+                <div className="flex flex-wrap items-baseline justify-between gap-2">
+                  <div>
+                    <span className="font-semibold">{message.from.name || message.from.email}</span>
+                    <span className="mr-2 text-xs text-muted-foreground" dir="ltr">
+                      &lt;{message.from.email}&gt;
+                    </span>
                   </div>
-                ))}
+                  <span className="text-xs text-muted-foreground">{formatDate(message.date)}</span>
+                </div>
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  إليّ · {message.to.map((t) => t.email).join(", ")}
+                </p>
               </div>
             </div>
-          )}
 
-          <div className="mt-6 flex gap-2">
-            <button
-              onClick={onReply}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-4 py-2 text-sm font-medium hover:bg-muted"
-            >
-              <Pencil className="h-4 w-4" /> رد
-            </button>
+            <article
+              className="prose prose-sm mt-6 max-w-none text-foreground"
+              dangerouslySetInnerHTML={{ __html: message.body || message.preview }}
+            />
+
+            {message.attachments && message.attachments.length > 0 && (
+              <div className="mt-6">
+                <p className="mb-2 text-xs font-semibold text-muted-foreground">
+                  المرفقات ({message.attachments.length})
+                </p>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {message.attachments.map((a) => (
+                    <div
+                      key={a.id}
+                      className="flex items-center gap-3 rounded-xl border border-border bg-card p-3"
+                    >
+                      <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-brand-gradient/10 text-brand-accent">
+                        <Paperclip className="h-4 w-4" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-medium">{a.filename}</p>
+                        <p className="text-xs text-muted-foreground">{formatSize(a.size)}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div className="mt-6 flex gap-2">
+              <button
+                onClick={onReply}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-4 py-2 text-sm font-medium hover:bg-muted"
+              >
+                <Pencil className="h-4 w-4" /> رد
+              </button>
+            </div>
           </div>
-        </div>
+        )}
       </div>
     </>
   );
@@ -471,7 +694,54 @@ function EmptyViewer() {
   );
 }
 
-function Composer({ onClose }: { onClose: () => void }) {
+function Composer({
+  session,
+  onClose,
+  onSent,
+}: {
+  session: MailSession;
+  onClose: () => void;
+  onSent: () => void;
+}) {
+  const send = useServerFn(bridgeSend);
+  const [to, setTo] = useState("");
+  const [cc, setCc] = useState("");
+  const [subject, setSubject] = useState("");
+  const [body, setBody] = useState("");
+  const [sending, setSending] = useState(false);
+
+  async function handleSend() {
+    if (!to || !subject) return;
+    setSending(true);
+    try {
+      const parseAddresses = (raw: string) =>
+        raw
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean)
+          .map((email) => ({ name: "", email }));
+
+      await send({
+        data: {
+          account: session.account,
+          password: session.password,
+          to: parseAddresses(to),
+          cc: parseAddresses(cc),
+          subject,
+          bodyHtml: body,
+          bodyText: body,
+        },
+      });
+      toast.success("تم إرسال الرسالة");
+      onClose();
+      onSent();
+    } catch (err: any) {
+      toast.error(err?.message || "فشل إرسال الرسالة");
+    } finally {
+      setSending(false);
+    }
+  }
+
   return (
     <div className="fixed inset-x-0 bottom-0 z-40 mx-auto max-w-2xl rounded-t-2xl border border-border bg-card shadow-float sm:inset-x-auto sm:bottom-4 sm:right-4 sm:w-[560px]">
       <div className="flex items-center justify-between border-b border-border px-4 py-2.5">
@@ -482,23 +752,41 @@ function Composer({ onClose }: { onClose: () => void }) {
       </div>
       <div className="p-4">
         <input
+          value={to}
+          onChange={(e) => setTo(e.target.value)}
           placeholder="إلى"
           dir="ltr"
           className="w-full border-b border-border bg-transparent px-1 py-2 text-sm outline-none"
         />
         <input
+          value={cc}
+          onChange={(e) => setCc(e.target.value)}
+          placeholder="Cc"
+          dir="ltr"
+          className="w-full border-b border-border bg-transparent px-1 py-2 text-sm outline-none"
+        />
+        <input
+          value={subject}
+          onChange={(e) => setSubject(e.target.value)}
           placeholder="الموضوع"
           className="w-full border-b border-border bg-transparent px-1 py-2 text-sm outline-none"
         />
         <textarea
+          value={body}
+          onChange={(e) => setBody(e.target.value)}
           rows={8}
           placeholder="اكتب رسالتك هنا..."
           className="w-full resize-none bg-transparent px-1 py-2 text-sm outline-none"
         />
       </div>
       <div className="flex items-center justify-between border-t border-border px-4 py-2.5">
-        <button className="inline-flex items-center gap-1.5 rounded-lg bg-brand-gradient px-4 py-2 text-sm font-semibold text-white shadow-soft">
-          <Send className="h-4 w-4" /> إرسال
+        <button
+          onClick={handleSend}
+          disabled={sending || !to || !subject}
+          className="inline-flex items-center gap-1.5 rounded-lg bg-brand-gradient px-4 py-2 text-sm font-semibold text-white shadow-soft disabled:opacity-60"
+        >
+          {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+          إرسال
         </button>
         <button className="rounded-md p-2 hover:bg-muted">
           <Paperclip className="h-4 w-4" />
