@@ -520,22 +520,6 @@ function AccountsTab({
           onClose={closeModal}
         >
           <form onSubmit={handleSubmit} className="space-y-4">
-            <Field label="المستخدم">
-              <select
-                required
-                disabled={!!editingId}
-                value={form.user_id}
-                onChange={(e) => setForm({ ...form, user_id: e.target.value })}
-                className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary disabled:opacity-60"
-              >
-                <option value="">— اختر —</option>
-                {users.map((u) => (
-                  <option key={u.id} value={u.id}>
-                    {u.full_name ?? u.email}
-                  </option>
-                ))}
-              </select>
-            </Field>
 
             <div>
               <p className="mb-1.5 text-xs font-medium text-muted-foreground">
