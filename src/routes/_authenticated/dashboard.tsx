@@ -159,16 +159,23 @@ function CompanyDashboard() {
   if (!isAdmin || !company) {
     return (
       <div className="flex min-h-screen items-center justify-center p-8 text-center">
-        <div>
+        <div className="flex flex-col items-center gap-3">
           <p className="text-muted-foreground">
             هذه الصفحة مخصّصة لمدراء الشركات فقط.
           </p>
           <Link
             to="/mail"
-            className="mt-4 inline-flex rounded-lg bg-brand-gradient px-4 py-2 text-sm font-semibold text-white"
+            className="inline-flex rounded-lg bg-brand-gradient px-4 py-2 text-sm font-semibold text-white"
           >
             الذهاب للبريد
           </Link>
+          <button
+            onClick={handleLogout}
+            className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-destructive"
+          >
+            <LogOut className="h-4 w-4" />
+            تسجيل الخروج
+          </button>
         </div>
       </div>
     );
