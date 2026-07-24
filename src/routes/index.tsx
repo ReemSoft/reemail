@@ -19,10 +19,10 @@ export const Route = createFileRoute("/")({
         content:
           "افتح أي بريد إلكتروني بأداء عالٍ وسرعة البرق. منصة SaaS للشركات مع تخصيص كامل بالشعار والألوان لكل عميل.",
       },
-      { property: "og:title", content: "MailMaestro — البريد المؤسسي" },
+      { property: "og:title", content: "MailMaestro — منصة SaaS للبريد المؤسسي متعدد الشركات" },
       {
         property: "og:description",
-        content: "منصة SaaS للبريد الإلكتروني — كل شركة بشعارها وألوانها.",
+        content: "افتح أي بريد إلكتروني بأداء عالٍ وسرعة البرق. منصة SaaS للشركات مع تخصيص كامل بالشعار والألوان لكل عميل.",
       },
     ],
   }),

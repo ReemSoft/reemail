@@ -79,20 +79,24 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
-      { title: "MailMaestro — بريدك المؤسسي بسرعة البرق" },
+      { title: "MailMaestro — منصة SaaS للبريد المؤسسي متعدد الشركات" },
       {
         name: "description",
         content:
-          "منصة SaaS متعددة الشركات لإدارة البريد الإلكتروني بواجهة حديثة. أدخل إعدادات بريدك وابدأ فوراً.",
+          "افتح أي بريد إلكتروني بأداء عالٍ وسرعة البرق. منصة SaaS للشركات مع تخصيص كامل بالشعار والألوان لكل عميل.",
       },
       { name: "author", content: "MailMaestro" },
-      { property: "og:title", content: "MailMaestro" },
+      { property: "og:title", content: "MailMaestro — منصة SaaS للبريد المؤسسي متعدد الشركات" },
       {
         property: "og:description",
-        content: "بريدك المؤسسي بسرعة البرق — منصة SaaS متعددة الشركات.",
+        content: "افتح أي بريد إلكتروني بأداء عالٍ وسرعة البرق. منصة SaaS للشركات مع تخصيص كامل بالشعار والألوان لكل عميل.",
       },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },
+      { name: "twitter:title", content: "MailMaestro — منصة SaaS للبريد المؤسسي متعدد الشركات" },
+      { name: "twitter:description", content: "افتح أي بريد إلكتروني بأداء عالٍ وسرعة البرق. منصة SaaS للشركات مع تخصيص كامل بالشعار والألوان لكل عميل." },
+      { property: "og:image", content: "https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/55b3c81e-cddc-4ed5-bef1-c1b02f3f74ad/id-preview-60e9961f--da2f05fb-8851-4f2f-9914-d1405b6cdf1d.lovable.app-1784894941024.png" },
+      { name: "twitter:image", content: "https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/55b3c81e-cddc-4ed5-bef1-c1b02f3f74ad/id-preview-60e9961f--da2f05fb-8851-4f2f-9914-d1405b6cdf1d.lovable.app-1784894941024.png" },
     ],
     links: [
       { rel: "stylesheet", href: appCss },
