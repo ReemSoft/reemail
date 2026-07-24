@@ -54,7 +54,7 @@ interface MailAccount {
   is_default: boolean;
 }
 
-export const Route = createFileRoute("/_authenticated/company")({
+export const Route = createFileRoute("/_authenticated/dashboard")({
   head: () => ({
     meta: [{ title: "لوحة تحكم الشركة — Reemsoft Mail" }],
   }),

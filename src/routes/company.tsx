@@ -6,23 +6,23 @@ import { useServerFn } from "@tanstack/react-start";
 import { registerCompanyAdmin } from "@/lib/admin-signup.functions";
 import { toast } from "sonner";
 
-export const Route = createFileRoute("/auth")({
+export const Route = createFileRoute("/company")({
   head: () => ({
     meta: [
-      { title: "دخول وتسجيل — Reemsoft Mail" },
+      { title: "بوابة الشركات — Reemsoft Mail" },
       {
         name: "description",
         content:
-          "دخول العملاء إلى بريدهم، أو تسجيل شركتك على منصة Reemsoft Mail لإدارة إيميلات عملائك.",
+          "سجّل شركتك على منصة Reemsoft Mail أو ادخل إلى لوحة تحكم شركتك لإدارة إيميلات عملائك.",
       },
-      { property: "og:title", content: "دخول وتسجيل — Reemsoft Mail" },
+      { property: "og:title", content: "بوابة الشركات — Reemsoft Mail" },
       {
         property: "og:description",
         content: "منصة SaaS لإدارة إيميلات الشركات وعملائها بسرعة البرق.",
       },
     ],
   }),
-  component: AuthPage,
+  component: CompanyPortalPage,
 });
 
 async function destinationForUser(userId: string): Promise<string> {
@@ -31,17 +31,16 @@ async function destinationForUser(userId: string): Promise<string> {
     .select("role")
     .eq("user_id", userId);
   const list = (roles ?? []).map((r) => r.role);
-  // company owners → dashboard, everyone else → their mailbox
   if (list.includes("company_admin") || list.includes("super_admin"))
-    return "/company";
+    return "/dashboard";
   return "/mail";
 }
 
 type Mode = "signin" | "register";
 
-function AuthPage() {
+function CompanyPortalPage() {
   const navigate = useNavigate();
-  const [mode, setMode] = useState<Mode>("signin");
+  const [mode, setMode] = useState<Mode>("register");
   const [checkingSession, setCheckingSession] = useState(true);
 
   useEffect(() => {
@@ -65,7 +64,6 @@ function AuthPage() {
 
   return (
     <div className="flex min-h-screen bg-background">
-      {/* Left brand panel */}
       <div className="relative hidden w-1/2 overflow-hidden bg-brand-gradient lg:block">
         <div
           className="absolute inset-0 opacity-20"
@@ -84,12 +82,12 @@ function AuthPage() {
           </Link>
           <div>
             <h2 className="text-4xl font-bold leading-tight">
-              افتح بريدك
+              أدِر إيميلات
               <br />
-              بسرعة البرق ⚡
+              عملائك من مكان واحد
             </h2>
             <p className="mt-4 text-lg text-white/85">
-              منصة واحدة لإدارة إيميلات شركتك وعملائك.
+              منصة بيضاء العلامة (White-label) لشركتك.
             </p>
           </div>
           <p className="text-sm text-white/70">
@@ -98,7 +96,6 @@ function AuthPage() {
         </div>
       </div>
 
-      {/* Right form panel */}
       <div className="flex w-full items-center justify-center p-6 lg:w-1/2">
         <div className="w-full max-w-md">
           <Link
@@ -108,19 +105,7 @@ function AuthPage() {
             <ArrowLeft className="h-4 w-4" /> العودة
           </Link>
 
-          {/* Tabs */}
           <div className="mb-8 grid grid-cols-2 gap-2 rounded-xl border border-border bg-card p-1.5">
-            <button
-              type="button"
-              onClick={() => setMode("signin")}
-              className={`flex items-center justify-center gap-2 rounded-lg px-3 py-2.5 text-sm font-medium transition ${
-                mode === "signin"
-                  ? "bg-brand-gradient text-white shadow-soft"
-                  : "text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              <LogIn className="h-4 w-4" /> تسجيل الدخول
-            </button>
             <button
               type="button"
               onClick={() => setMode("register")}
@@ -132,9 +117,34 @@ function AuthPage() {
             >
               <Building2 className="h-4 w-4" /> تسجيل شركة جديدة
             </button>
+            <button
+              type="button"
+              onClick={() => setMode("signin")}
+              className={`flex items-center justify-center gap-2 rounded-lg px-3 py-2.5 text-sm font-medium transition ${
+                mode === "signin"
+                  ? "bg-brand-gradient text-white shadow-soft"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              <LogIn className="h-4 w-4" /> دخول المدير
+            </button>
           </div>
 
-          {mode === "signin" ? <SignInForm /> : <RegisterCompanyForm onDone={() => setMode("signin")} />}
+          {mode === "signin" ? (
+            <SignInForm />
+          ) : (
+            <RegisterCompanyForm onDone={() => setMode("signin")} />
+          )}
+
+          <div className="mt-8 rounded-xl border border-border bg-card p-4 text-center text-sm">
+            <p className="text-muted-foreground">هل أنت عميل تريد فتح بريدك؟</p>
+            <Link
+              to="/login"
+              className="mt-1 inline-block font-semibold text-primary hover:underline"
+            >
+              دخول العملاء ←
+            </Link>
+          </div>
         </div>
       </div>
     </div>
@@ -169,9 +179,9 @@ function SignInForm() {
 
   return (
     <>
-      <h1 className="text-3xl font-bold tracking-tight">أهلاً بعودتك</h1>
+      <h1 className="text-3xl font-bold tracking-tight">دخول مدير الشركة</h1>
       <p className="mt-2 text-muted-foreground">
-        سجّل دخولك للوصول إلى بريدك أو لوحة تحكم شركتك.
+        سجّل دخولك للوصول إلى لوحة تحكم شركتك.
       </p>
       <form onSubmit={handleSubmit} className="mt-8 space-y-4">
         <Field
@@ -193,9 +203,6 @@ function SignInForm() {
         />
         <SubmitButton loading={loading}>تسجيل الدخول</SubmitButton>
       </form>
-      <p className="mt-6 text-center text-xs text-muted-foreground">
-        العملاء يحصلون على بيانات الدخول من مدير شركتهم.
-      </p>
     </>
   );
 }
@@ -212,14 +219,16 @@ function RegisterCompanyForm({ onDone }: { onDone: () => void }) {
 
   function handleNameChange(v: string) {
     setCompanyName(v);
-    // auto-suggest slug
     const auto = v
       .toLowerCase()
       .replace(/[^a-z0-9\s-]/g, "")
       .trim()
       .replace(/\s+/g, "-")
       .slice(0, 40);
-    if (auto && (companySlug === "" || companySlug === v.slice(0, companySlug.length))) {
+    if (
+      auto &&
+      (companySlug === "" || companySlug === v.slice(0, companySlug.length))
+    ) {
       setCompanySlug(auto);
     }
   }
@@ -237,7 +246,6 @@ function RegisterCompanyForm({ onDone }: { onDone: () => void }) {
           password,
         },
       });
-      // auto sign-in
       const { error: signErr } = await supabase.auth.signInWithPassword({
         email,
         password,
@@ -248,7 +256,7 @@ function RegisterCompanyForm({ onDone }: { onDone: () => void }) {
         return;
       }
       toast.success("مرحباً بك! جاري تجهيز لوحة التحكم…");
-      navigate({ to: "/company" });
+      navigate({ to: "/dashboard" });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "حدث خطأ غير متوقع";
       toast.error(msg);
@@ -276,7 +284,9 @@ function RegisterCompanyForm({ onDone }: { onDone: () => void }) {
           label="معرّف الشركة (بالإنجليزية)"
           type="text"
           value={companySlug}
-          onChange={(v) => setCompanySlug(v.toLowerCase().replace(/[^a-z0-9-]/g, ""))}
+          onChange={(v) =>
+            setCompanySlug(v.toLowerCase().replace(/[^a-z0-9-]/g, ""))
+          }
           placeholder="reemsoft"
           minLength={3}
           maxLength={40}

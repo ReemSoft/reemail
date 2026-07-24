@@ -54,14 +54,13 @@ function Landing() {
           </nav>
           <div className="flex items-center gap-2">
             <Link
-              to="/auth"
+              to="/login"
               className="hidden rounded-lg px-4 py-2 text-sm font-medium text-foreground hover:bg-muted sm:inline-block"
             >
               تسجيل الدخول
             </Link>
             <Link
-              to="/auth"
-              search={{ mode: "signup" }}
+              to="/company"
               className="inline-flex items-center gap-1.5 rounded-lg bg-brand-gradient px-4 py-2 text-sm font-semibold text-white shadow-soft transition hover:shadow-elevated"
             >
               ابدأ مجاناً
@@ -98,15 +97,14 @@ function Landing() {
           </p>
           <div className="mt-10 flex flex-col items-center justify-center gap-3 sm:flex-row">
             <Link
-              to="/auth"
-              search={{ mode: "signup" }}
+              to="/company"
               className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-brand-gradient px-6 py-3.5 text-base font-semibold text-white shadow-brand transition hover:scale-[1.02] sm:w-auto"
             >
               ابدأ تجربتك المجانية
               <ArrowLeft className="h-4 w-4" />
             </Link>
             <Link
-              to="/auth"
+              to="/login"
               className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-border bg-card px-6 py-3.5 text-base font-semibold text-foreground shadow-soft transition hover:border-brand-accent sm:w-auto"
             >
               لدي حساب — دخول
@@ -131,7 +129,7 @@ function Landing() {
             <div className="rounded-xl bg-surface p-1">
               <div className="flex h-96 items-center justify-center rounded-lg bg-brand-gradient/5">
                 <Link
-                  to="/auth"
+                  to="/login"
                   className="rounded-xl bg-brand-gradient px-6 py-3 text-white shadow-brand"
                 >
                   <span className="flex items-center gap-2">
@@ -214,8 +212,7 @@ function Landing() {
             سجّل الآن وابدأ خلال دقائق — بدون بطاقة ائتمانية.
           </p>
           <Link
-            to="/auth"
-            search={{ mode: "signup" }}
+            to="/company"
             className="mt-8 inline-flex items-center gap-2 rounded-xl bg-white px-6 py-3.5 text-base font-semibold text-foreground shadow-elevated transition hover:scale-[1.02]"
           >
             ابدأ الآن مجاناً
