@@ -581,7 +581,13 @@ function AccountsTab({
     if (!form.user_id) return toast.error("اختر مستخدماً");
     setSubmitting(true);
 
-    const payload: Record<string, unknown> = {
+    const cipher = form.password
+      ? typeof window !== "undefined"
+        ? btoa(unescape(encodeURIComponent(form.password)))
+        : Buffer.from(form.password).toString("base64")
+      : undefined;
+
+    const basePayload = {
       user_id: form.user_id,
       display_name: form.display_name || null,
       email_address: form.email_address,
@@ -593,32 +599,26 @@ function AccountsTab({
       smtp_secure: form.smtp_secure,
     };
 
-    if (!editingId && form.password) {
-      const cipher =
-        typeof window !== "undefined"
-          ? btoa(unescape(encodeURIComponent(form.password)))
-          : Buffer.from(form.password).toString("base64");
-      payload.credentials_ciphertext = cipher;
-    } else if (editingId && form.password) {
-      const cipher =
-        typeof window !== "undefined"
-          ? btoa(unescape(encodeURIComponent(form.password)))
-          : Buffer.from(form.password).toString("base64");
-      payload.credentials_ciphertext = cipher;
-    }
-
     if (editingId) {
+      const updatePayload = cipher
+        ? { ...basePayload, credentials_ciphertext: cipher }
+        : basePayload;
       const { error } = await supabase
         .from("mail_accounts")
-        .update(payload)
+        .update(updatePayload)
         .eq("id", editingId);
       setSubmitting(false);
       if (error) return toast.error(error.message);
       toast.success("تم تحديث الحساب");
     } else {
+      if (!cipher) {
+        setSubmitting(false);
+        return toast.error("كلمة مرور البريد مطلوبة");
+      }
       const { error } = await supabase.from("mail_accounts").insert({
         company_id: companyId,
-        ...payload,
+        ...basePayload,
+        credentials_ciphertext: cipher,
       });
       setSubmitting(false);
       if (error) return toast.error(error.message);
