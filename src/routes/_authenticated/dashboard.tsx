@@ -204,7 +204,6 @@ function CompanyDashboard() {
           {[
             { id: "branding", label: "العلامة التجارية", icon: Palette },
             { id: "accounts", label: "حسابات البريد", icon: MailIcon, count: accounts.length },
-            { id: "users", label: "المستخدمون", icon: Users, count: users.length },
           ].map((t) => (
             <button
               key={t.id}
@@ -232,13 +231,9 @@ function CompanyDashboard() {
           {tab === "branding" && (
             <BrandingTab company={company} setCompany={setCompany} />
           )}
-          {tab === "users" && (
-            <UsersTab users={users} onChange={load} />
-          )}
           {tab === "accounts" && (
             <AccountsTab
               accounts={accounts}
-              users={users}
               companyId={company.id}
               onChange={load}
             />
