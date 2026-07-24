@@ -70,6 +70,7 @@ function CompanyDashboard() {
   const [users, setUsers] = useState<CompanyUser[]>([]);
   const [accounts, setAccounts] = useState<MailAccount[]>([]);
   const [isAdmin, setIsAdmin] = useState(false);
+  const navigate = useNavigate();
 
   useCompanyTheme(
     company ? { primary: company.brand_primary, accent: company.brand_accent } : null,
