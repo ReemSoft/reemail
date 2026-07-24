@@ -70,13 +70,11 @@ function CompanyDashboard() {
   const [users, setUsers] = useState<CompanyUser[]>([]);
   const [accounts, setAccounts] = useState<MailAccount[]>([]);
   const [isAdmin, setIsAdmin] = useState(false);
-  const [needsBootstrap, setNeedsBootstrap] = useState(false);
 
   useCompanyTheme(
     company ? { primary: company.brand_primary, accent: company.brand_accent } : null,
   );
 
-  const bootstrap = useServerFn(claimSuperAdmin);
 
   const load = useCallback(async () => {
     setLoading(true);
