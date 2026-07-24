@@ -736,14 +736,18 @@ function AccountsTab({
       </div>
 
       {open && (
-        <Modal title="إعدادات بريد جديدة" onClose={() => setOpen(false)}>
-          <form onSubmit={handleCreate} className="space-y-4">
+        <Modal
+          title={editingId ? "تعديل إعدادات البريد" : "إعدادات بريد جديدة"}
+          onClose={closeModal}
+        >
+          <form onSubmit={handleSubmit} className="space-y-4">
             <Field label="المستخدم">
               <select
                 required
+                disabled={!!editingId}
                 value={form.user_id}
                 onChange={(e) => setForm({ ...form, user_id: e.target.value })}
-                className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary"
+                className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary disabled:opacity-60"
               >
                 <option value="">— اختر —</option>
                 {users.map((u) => (
