@@ -209,7 +209,7 @@ function MailApp() {
     setSelectedId(id);
     const parsed = parseMessageId(id);
     if (!parsed || !session) {
-      setSelectedMessage(getMockMessage(id));
+      setSelectedMessage(getMockMessage(id) ?? null);
       return;
     }
     setReading(true);
@@ -227,7 +227,7 @@ function MailApp() {
       }
     } catch (err: any) {
       toast.error(err?.message || "فشل فتح الرسالة");
-      setSelectedMessage(getMockMessage(id));
+      setSelectedMessage(getMockMessage(id) ?? null);
     } finally {
       setReading(false);
     }
