@@ -6,7 +6,7 @@ import { useServerFn } from "@tanstack/react-start";
 import { registerCompanyAdmin } from "@/lib/admin-signup.functions";
 import { toast } from "sonner";
 
-export const Route = createFileRoute("/auth")({
+export const Route = createFileRoute("/login")({
   head: () => ({
     meta: [
       { title: "دخول وتسجيل — Reemsoft Mail" },
