@@ -109,7 +109,8 @@ export const bridgeGetFolderCounts = createServerFn({ method: "POST" })
   .inputValidator((input: { account: MailSessionAccount; password: string }) => input)
   .handler(async ({ data }) => {
     const result = await bridgePost("/api/folders", data);
-    return result.counts as FolderCount[];
+    if (!result.ok) return { ok: false as const, error: result.error as string, counts: [] as FolderCount[] };
+    return { ok: true as const, counts: (result.counts ?? []) as FolderCount[] };
   });
 
 export const bridgeGetMessages = createServerFn({ method: "POST" })
@@ -124,7 +125,8 @@ export const bridgeGetMessages = createServerFn({ method: "POST" })
   )
   .handler(async ({ data }) => {
     const result = await bridgePost("/api/messages", data);
-    return result.messages as MailMessage[];
+    if (!result.ok) return { ok: false as const, error: result.error as string, messages: [] as MailMessage[] };
+    return { ok: true as const, messages: (result.messages ?? []) as MailMessage[] };
   });
 
 export const bridgeGetMessage = createServerFn({ method: "POST" })
@@ -133,7 +135,8 @@ export const bridgeGetMessage = createServerFn({ method: "POST" })
   )
   .handler(async ({ data }) => {
     const result = await bridgePost("/api/message", data);
-    return (result.message as MailMessage | null) ?? null;
+    if (!result.ok) return { ok: false as const, error: result.error as string, message: null as MailMessage | null };
+    return { ok: true as const, message: (result.message as MailMessage | null) ?? null };
   });
 
 export const bridgeMarkRead = createServerFn({ method: "POST" })
@@ -202,3 +205,4 @@ export const bridgeSend = createServerFn({ method: "POST" })
   .handler(async ({ data }) => {
     return bridgePost("/api/send", data);
   });
+
