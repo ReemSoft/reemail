@@ -34,7 +34,7 @@ import {
 } from "@/lib/mail-mock";
 import type { MailFolder, MailMessage } from "@/lib/mail-types";
 
-export const Route = createFileRoute("/_authenticated/mail")({
+export const Route = createFileRoute("/mail")({
   head: () => ({
     meta: [{ title: "صندوق الوارد — Reemsoft Mail" }],
   }),
