@@ -3,7 +3,6 @@ import { useCallback, useEffect, useState } from "react";
 import {
   ArrowLeft,
   Palette,
-  Users,
   Mail as MailIcon,
   Upload,
   Save,
@@ -18,13 +17,8 @@ import {
   Pencil,
 } from "lucide-react";
 import { toast } from "sonner";
-import { useServerFn } from "@tanstack/react-start";
 import { supabase } from "@/integrations/supabase/client";
 import { useCompanyTheme } from "@/hooks/use-company-theme";
-import {
-  createCompanyUser,
-  deleteCompanyUser,
-} from "@/lib/company-admin.functions";
 
 interface Company {
   id: string;

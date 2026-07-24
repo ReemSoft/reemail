@@ -17,15 +17,11 @@ import {
   RefreshCw,
   MoreVertical,
   LogOut,
-  Settings,
   Mail as MailIcon,
   Loader2,
-  Lock,
 } from "lucide-react";
-import { supabase } from "@/integrations/supabase/client";
 import { useCompanyTheme } from "@/hooks/use-company-theme";
 import {
-  MOCK_MESSAGES,
   getMessages,
   getMessage,
   getFolderCounts,
@@ -33,8 +29,14 @@ import {
   formatSize,
 } from "@/lib/mail-mock";
 import type { MailFolder, MailMessage } from "@/lib/mail-types";
+import {
+  clearMailSession,
+  getMailSession,
+  type MailSession,
+} from "@/lib/mail-session";
 
 export const Route = createFileRoute("/mail")({
+  ssr: false,
   head: () => ({
     meta: [{ title: "صندوق الوارد — Reemsoft Mail" }],
   }),
@@ -52,53 +54,29 @@ const FOLDER_META: Record<MailFolder, { label: string; icon: typeof Inbox }> = {
   all: { label: "الكل", icon: MailIcon },
 };
 
-interface MailAccount {
-  id: string;
-  email_address: string;
-  display_name: string | null;
-  imap_host: string;
-  imap_port: number;
-  imap_secure: boolean;
-  smtp_host: string;
-  smtp_port: number;
-  smtp_secure: boolean;
-}
-
 function MailApp() {
-  // Demo brand — later replaced by loaded company brand.
-  useCompanyTheme({ primary: "#0F172A", accent: "#3B82F6" });
-
   const navigate = useNavigate();
+  const [session, setSession] = useState<MailSession | null | undefined>(undefined);
   const [folder, setFolder] = useState<MailFolder>("inbox");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [composeOpen, setComposeOpen] = useState(false);
-  const [account, setAccount] = useState<MailAccount | null | undefined>(undefined);
-  const [emailPassword, setEmailPassword] = useState<string | null>(null);
-  const [passwordInput, setPasswordInput] = useState("");
-  const [loadingAccount, setLoadingAccount] = useState(true);
+
+  useCompanyTheme(
+    session?.company
+      ? { primary: session.company.brand_primary, accent: session.company.brand_accent }
+      : { primary: "#0F172A", accent: "#3B82F6" },
+  );
 
   useEffect(() => {
-    let mounted = true;
-    async function load() {
-      const { data: userRes } = await supabase.auth.getUser();
-      if (!userRes.user || !mounted) return;
-      const { data } = await supabase
-        .from("mail_accounts")
-        .select("id, email_address, display_name, imap_host, imap_port, imap_secure, smtp_host, smtp_port, smtp_secure")
-        .eq("user_id", userRes.user.id)
-        .order("is_default", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      if (mounted) {
-        setAccount(data as MailAccount | null);
-        setLoadingAccount(false);
-      }
+    const s = getMailSession();
+    if (!s) {
+      navigate({ to: "/login" });
+      return;
     }
-    void load();
-    return () => { mounted = false; };
-  }, []);
+    setSession(s);
+  }, [navigate]);
 
   const counts = useMemo(() => getFolderCounts(), []);
   const messages = useMemo(() => {
@@ -116,50 +94,21 @@ function MailApp() {
 
   const selected = selectedId ? getMessage(selectedId) : null;
 
-  async function handleSignOut() {
-    await supabase.auth.signOut();
+  function handleSignOut() {
+    clearMailSession();
     navigate({ to: "/login" });
   }
 
-  if (loadingAccount) {
+  if (session === undefined) {
     return (
       <div className="flex h-screen items-center justify-center bg-background">
         <Loader2 className="h-6 w-6 animate-spin text-primary" />
       </div>
     );
   }
+  if (!session) return null;
 
-  if (!account) {
-    return (
-      <div className="flex h-screen flex-col items-center justify-center gap-4 bg-background p-8 text-center">
-        <MailIcon className="h-12 w-12 text-muted-foreground/40" />
-        <div>
-          <h2 className="text-lg font-semibold">لم يُجهّز بريدك بعد</h2>
-          <p className="mt-1 text-sm text-muted-foreground">
-            تواصل مع مدير شركتك لإضافة إعدادات البريد الخاصة بك.
-          </p>
-        </div>
-        <button
-          onClick={handleSignOut}
-          className="inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm text-muted-foreground hover:bg-muted"
-        >
-          <LogOut className="h-4 w-4" /> تسجيل الخروج
-        </button>
-      </div>
-    );
-  }
-
-  if (!emailPassword) {
-    return (
-      <PasswordPrompt
-        account={account}
-        password={passwordInput}
-        setPassword={setPasswordInput}
-        onUnlock={() => setEmailPassword(passwordInput)}
-        onSignOut={handleSignOut}
-      />
-    );
-  }
+  const brandName = session.company?.app_name || session.company?.name || "Reemsoft Mail";
 
   return (
     <div className="flex h-screen w-full flex-col bg-background">
@@ -174,10 +123,18 @@ function MailApp() {
         </button>
 
         <Link to="/mail" className="flex shrink-0 items-center gap-2">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-brand-gradient text-white">
-            <MailIcon className="h-4 w-4" />
-          </div>
-          <span className="hidden text-base font-bold sm:inline">Reemsoft Mail</span>
+          {session.company?.logo_url ? (
+            <img
+              src={session.company.logo_url}
+              alt={brandName}
+              className="h-8 w-8 rounded-lg object-cover"
+            />
+          ) : (
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-brand-gradient text-white">
+              <MailIcon className="h-4 w-4" />
+            </div>
+          )}
+          <span className="hidden text-base font-bold sm:inline">{brandName}</span>
         </Link>
 
         <div className="mx-2 flex flex-1 items-center gap-2 rounded-xl bg-muted/70 px-3 py-2 transition focus-within:bg-card focus-within:shadow-elevated sm:mx-4 sm:max-w-2xl">
@@ -197,13 +154,18 @@ function MailApp() {
         >
           <RefreshCw className="h-4 w-4" />
         </button>
-        <Link to="/dashboard" className="hidden rounded-lg p-2 hover:bg-muted sm:inline-flex">
-          <Settings className="h-4 w-4" />
-        </Link>
+        <div
+          className="hidden max-w-[180px] truncate rounded-lg bg-muted/60 px-3 py-1.5 text-xs text-muted-foreground sm:inline-block"
+          dir="ltr"
+          title={session.account.email_address}
+        >
+          {session.account.email_address}
+        </div>
         <button
           onClick={handleSignOut}
           className="rounded-lg p-2 hover:bg-muted"
           aria-label="خروج"
+          title="تسجيل الخروج"
         >
           <LogOut className="h-4 w-4" />
         </button>
@@ -340,73 +302,6 @@ function MailApp() {
   );
 }
 
-function PasswordPrompt({
-  account,
-  password,
-  setPassword,
-  onUnlock,
-  onSignOut,
-}: {
-  account: MailAccount;
-  password: string;
-  setPassword: (v: string) => void;
-  onUnlock: () => void;
-  onSignOut: () => void;
-}) {
-  function submit(e: React.FormEvent) {
-    e.preventDefault();
-    if (password.length < 3) return;
-    onUnlock();
-  }
-
-  return (
-    <div className="flex min-h-screen items-center justify-center bg-background p-6">
-      <div className="w-full max-w-sm rounded-2xl border border-border bg-card p-6 shadow-float">
-        <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-brand-gradient/10 text-brand-accent">
-          <Lock className="h-6 w-6" />
-        </div>
-        <h2 className="mt-4 text-xl font-bold">فتح صندوق البريد</h2>
-        <p className="mt-1 text-sm text-muted-foreground">
-          أدخل كلمة مرور بريدك <span dir="ltr">{account.email_address}</span> لفتح الجلسة.
-        </p>
-        <p className="text-xs text-muted-foreground">
-          لا نحفظ كلمة المرور؛ تُستخدم لمراسلة السيرفر مباشرة ثم تُمسح عند الخروج.
-        </p>
-
-        <form onSubmit={submit} className="mt-5 space-y-4">
-          <div>
-            <label className="mb-1.5 block text-sm font-medium">كلمة مرور البريد</label>
-            <input
-              type="password"
-              required
-              autoFocus
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="••••••••"
-              dir="ltr"
-              className="w-full rounded-lg border border-input bg-background px-4 py-2.5 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
-            />
-          </div>
-          <button
-            type="submit"
-            disabled={password.length < 3}
-            className="flex w-full items-center justify-center gap-2 rounded-lg bg-brand-gradient px-4 py-2.5 text-sm font-semibold text-white shadow-soft disabled:opacity-60"
-          >
-            فتح البريد
-          </button>
-          <button
-            type="button"
-            onClick={onSignOut}
-            className="flex w-full items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm text-muted-foreground hover:bg-muted"
-          >
-            <LogOut className="h-4 w-4" /> تسجيل الخروج
-          </button>
-        </form>
-      </div>
-    </div>
-  );
-}
-
 function MessageRow({
   message,
   active,
@@ -499,71 +394,66 @@ function MessageView({
           <MoreVertical className="h-4 w-4" />
         </button>
       </div>
-
       <div className="flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-3xl p-6 sm:p-8">
-          <h1 className="text-2xl font-bold leading-snug text-foreground sm:text-3xl">
-            {message.subject}
-          </h1>
-          <div className="mt-6 flex items-start gap-3">
+        <div className="mx-auto max-w-3xl p-4 sm:p-6">
+          <h1 className="text-xl font-bold sm:text-2xl">{message.subject}</h1>
+          <div className="mt-4 flex items-start gap-3 border-b border-border pb-4">
             <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-brand-gradient text-sm font-bold text-white">
               {message.from.name.charAt(0)}
             </div>
             <div className="flex-1">
               <div className="flex flex-wrap items-baseline justify-between gap-2">
                 <div>
-                  <span className="font-semibold text-foreground">{message.from.name}</span>{" "}
-                  <span className="text-sm text-muted-foreground" dir="ltr">
+                  <span className="font-semibold">{message.from.name}</span>
+                  <span className="mr-2 text-xs text-muted-foreground" dir="ltr">
                     &lt;{message.from.email}&gt;
                   </span>
                 </div>
                 <span className="text-xs text-muted-foreground">
-                  {new Date(message.date).toLocaleString("ar-SA")}
+                  {formatDate(message.date)}
                 </span>
               </div>
-              <p className="mt-0.5 text-sm text-muted-foreground">
-                إلى: {message.to.map((t) => t.name).join("، ")}
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                إليّ · {message.to.map((t) => t.email).join(", ")}
               </p>
             </div>
           </div>
 
-          <div
-            className="prose prose-sm mt-6 max-w-none text-foreground/90 [&_ul]:list-disc [&_ul]:pr-5"
-            dangerouslySetInnerHTML={{ __html: message.body }}
+          <article
+            className="prose prose-sm mt-6 max-w-none text-foreground"
+            dangerouslySetInnerHTML={{ __html: message.bodyHtml }}
           />
 
           {message.attachments && message.attachments.length > 0 && (
-            <div className="mt-8 border-t border-border pt-4">
-              <p className="mb-3 text-sm font-semibold">
+            <div className="mt-6">
+              <p className="mb-2 text-xs font-semibold text-muted-foreground">
                 المرفقات ({message.attachments.length})
               </p>
-              <div className="flex flex-wrap gap-2">
+              <div className="grid gap-2 sm:grid-cols-2">
                 {message.attachments.map((a) => (
-                  <button
+                  <div
                     key={a.id}
-                    className="flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-2 text-sm shadow-soft transition hover:border-primary hover:shadow-elevated"
+                    className="flex items-center gap-3 rounded-xl border border-border bg-card p-3"
                   >
-                    <Paperclip className="h-4 w-4 text-muted-foreground" />
-                    <span>{a.filename}</span>
-                    <span className="text-xs text-muted-foreground">({formatSize(a.size)})</span>
-                  </button>
+                    <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-brand-gradient/10 text-brand-accent">
+                      <Paperclip className="h-4 w-4" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-medium">{a.name}</p>
+                      <p className="text-xs text-muted-foreground">{formatSize(a.size)}</p>
+                    </div>
+                  </div>
                 ))}
               </div>
             </div>
           )}
 
-          <div className="mt-8 flex gap-2">
+          <div className="mt-6 flex gap-2">
             <button
               onClick={onReply}
-              className="rounded-lg border border-border bg-card px-4 py-2 text-sm font-medium shadow-soft hover:border-primary"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-4 py-2 text-sm font-medium hover:bg-muted"
             >
-              رد
-            </button>
-            <button className="rounded-lg border border-border bg-card px-4 py-2 text-sm font-medium shadow-soft hover:border-primary">
-              رد للكل
-            </button>
-            <button className="rounded-lg border border-border bg-card px-4 py-2 text-sm font-medium shadow-soft hover:border-primary">
-              إعادة توجيه
+              <Pencil className="h-4 w-4" /> رد
             </button>
           </div>
         </div>
@@ -574,69 +464,45 @@ function MessageView({
 
 function EmptyViewer() {
   return (
-    <div className="flex flex-1 flex-col items-center justify-center gap-4 p-8 text-center">
-      <div className="flex h-20 w-20 items-center justify-center rounded-3xl bg-brand-gradient/10">
-        <MailIcon className="h-10 w-10 text-brand-accent" />
-      </div>
-      <div>
-        <h2 className="text-lg font-semibold">اختر رسالة للاطّلاع</h2>
-        <p className="mt-1 text-sm text-muted-foreground">
-          {MOCK_MESSAGES.filter((m) => !m.read).length} رسالة غير مقروءة في بريدك
-        </p>
-      </div>
+    <div className="flex h-full flex-col items-center justify-center gap-3 p-8 text-center text-muted-foreground">
+      <MailIcon className="h-16 w-16 opacity-30" />
+      <p className="text-sm">اختر رسالة من القائمة لعرضها</p>
     </div>
   );
 }
 
 function Composer({ onClose }: { onClose: () => void }) {
-  const [to, setTo] = useState("");
-  const [subject, setSubject] = useState("");
-  const [body, setBody] = useState("");
-
   return (
-    <div className="fixed inset-x-0 bottom-0 z-40 sm:inset-auto sm:bottom-4 sm:right-4">
-      <div className="mx-auto flex h-[75vh] w-full max-w-lg flex-col overflow-hidden rounded-t-2xl border border-border bg-card shadow-float sm:rounded-2xl">
-        <div className="flex items-center justify-between bg-brand-gradient px-4 py-3 text-white">
-          <span className="text-sm font-semibold">رسالة جديدة</span>
-          <button onClick={onClose} className="rounded-md p-1 hover:bg-white/15">
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-        <div className="flex-1 overflow-y-auto p-4">
-          <input
-            value={to}
-            onChange={(e) => setTo(e.target.value)}
-            placeholder="إلى"
-            className="w-full border-b border-border bg-transparent py-2 text-sm outline-none focus:border-primary"
-            dir="ltr"
-          />
-          <input
-            value={subject}
-            onChange={(e) => setSubject(e.target.value)}
-            placeholder="الموضوع"
-            className="mt-2 w-full border-b border-border bg-transparent py-2 text-sm outline-none focus:border-primary"
-          />
-          <textarea
-            value={body}
-            onChange={(e) => setBody(e.target.value)}
-            placeholder="اكتب رسالتك..."
-            className="mt-4 h-full min-h-40 w-full resize-none bg-transparent text-sm outline-none"
-          />
-        </div>
-        <div className="flex items-center justify-between gap-2 border-t border-border bg-muted/40 px-4 py-3">
-          <button className="rounded-lg p-2 hover:bg-muted">
-            <Paperclip className="h-4 w-4" />
-          </button>
-          <button
-            onClick={() => {
-              onClose();
-            }}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-brand-gradient px-5 py-2 text-sm font-semibold text-white shadow-soft hover:shadow-elevated"
-          >
-            <Send className="h-4 w-4" />
-            إرسال
-          </button>
-        </div>
+    <div className="fixed inset-x-0 bottom-0 z-40 mx-auto max-w-2xl rounded-t-2xl border border-border bg-card shadow-float sm:inset-x-auto sm:bottom-4 sm:right-4 sm:w-[560px]">
+      <div className="flex items-center justify-between border-b border-border px-4 py-2.5">
+        <p className="text-sm font-semibold">رسالة جديدة</p>
+        <button onClick={onClose} className="rounded-md p-1 hover:bg-muted">
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+      <div className="p-4">
+        <input
+          placeholder="إلى"
+          dir="ltr"
+          className="w-full border-b border-border bg-transparent px-1 py-2 text-sm outline-none"
+        />
+        <input
+          placeholder="الموضوع"
+          className="w-full border-b border-border bg-transparent px-1 py-2 text-sm outline-none"
+        />
+        <textarea
+          rows={8}
+          placeholder="اكتب رسالتك هنا..."
+          className="w-full resize-none bg-transparent px-1 py-2 text-sm outline-none"
+        />
+      </div>
+      <div className="flex items-center justify-between border-t border-border px-4 py-2.5">
+        <button className="inline-flex items-center gap-1.5 rounded-lg bg-brand-gradient px-4 py-2 text-sm font-semibold text-white shadow-soft">
+          <Send className="h-4 w-4" /> إرسال
+        </button>
+        <button className="rounded-md p-2 hover:bg-muted">
+          <Paperclip className="h-4 w-4" />
+        </button>
       </div>
     </div>
   );
