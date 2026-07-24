@@ -1,0 +1,1 @@
+ALTER TABLE public.mail_accounts ALTER COLUMN credentials_ciphertext DROP NOT NULL;
