@@ -15,6 +15,7 @@ import {
   Copy,
   Check,
   LogOut,
+  Pencil,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useServerFn } from "@tanstack/react-start";
@@ -535,6 +536,7 @@ function AccountsTab({
 }) {
   const [open, setOpen] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
 
   const emptyForm = {
     user_id: "",
@@ -551,33 +553,79 @@ function AccountsTab({
   const [form, setForm] = useState(emptyForm);
   const [submitting, setSubmitting] = useState(false);
 
-  async function handleCreate(e: React.FormEvent) {
+  function closeModal() {
+    setOpen(false);
+    setEditingId(null);
+    setForm(emptyForm);
+  }
+
+  function startEdit(account: MailAccount) {
+    setEditingId(account.id);
+    setForm({
+      user_id: account.user_id,
+      display_name: account.display_name || "",
+      email_address: account.email_address,
+      password: "",
+      imap_host: account.imap_host,
+      imap_port: account.imap_port,
+      imap_secure: account.imap_secure,
+      smtp_host: account.smtp_host,
+      smtp_port: account.smtp_port,
+      smtp_secure: account.smtp_secure,
+    });
+    setOpen(true);
+  }
+
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!form.user_id) return toast.error("اختر مستخدماً");
     setSubmitting(true);
-    // Base64 placeholder — the external IMAP backend will re-encrypt on ingestion.
-    const cipher =
-      typeof window !== "undefined"
+
+    const cipher = form.password
+      ? typeof window !== "undefined"
         ? btoa(unescape(encodeURIComponent(form.password)))
-        : Buffer.from(form.password).toString("base64");
-    const { error } = await supabase.from("mail_accounts").insert({
-      company_id: companyId,
+        : Buffer.from(form.password).toString("base64")
+      : undefined;
+
+    const basePayload = {
       user_id: form.user_id,
       display_name: form.display_name || null,
       email_address: form.email_address,
-      credentials_ciphertext: cipher,
       imap_host: form.imap_host,
       imap_port: form.imap_port,
       imap_secure: form.imap_secure,
       smtp_host: form.smtp_host,
       smtp_port: form.smtp_port,
       smtp_secure: form.smtp_secure,
-    });
-    setSubmitting(false);
-    if (error) return toast.error(error.message);
-    toast.success("تمت إضافة الحساب");
-    setForm(emptyForm);
-    setOpen(false);
+    };
+
+    if (editingId) {
+      const updatePayload = cipher
+        ? { ...basePayload, credentials_ciphertext: cipher }
+        : basePayload;
+      const { error } = await supabase
+        .from("mail_accounts")
+        .update(updatePayload)
+        .eq("id", editingId);
+      setSubmitting(false);
+      if (error) return toast.error(error.message);
+      toast.success("تم تحديث الحساب");
+    } else {
+      if (!cipher) {
+        setSubmitting(false);
+        return toast.error("كلمة مرور البريد مطلوبة");
+      }
+      const { error } = await supabase.from("mail_accounts").insert({
+        company_id: companyId,
+        ...basePayload,
+        credentials_ciphertext: cipher,
+      });
+      setSubmitting(false);
+      if (error) return toast.error(error.message);
+      toast.success("تمت إضافة الحساب");
+    }
+
+    closeModal();
     await onChange();
   }
 
@@ -662,9 +710,17 @@ function AccountsTab({
                     </p>
                   </div>
                   <button
+                    onClick={() => startEdit(a)}
+                    className="rounded-md p-2 text-muted-foreground hover:bg-primary/10 hover:text-primary"
+                    title="تعديل"
+                  >
+                    <Pencil className="h-4 w-4" />
+                  </button>
+                  <button
                     onClick={() => handleDelete(a.id)}
                     disabled={busyId === a.id}
                     className="rounded-md p-2 text-muted-foreground hover:bg-destructive/10 hover:text-destructive disabled:opacity-50"
+                    title="حذف"
                   >
                     {busyId === a.id ? (
                       <Loader2 className="h-4 w-4 animate-spin" />
@@ -680,14 +736,18 @@ function AccountsTab({
       </div>
 
       {open && (
-        <Modal title="إعدادات بريد جديدة" onClose={() => setOpen(false)}>
-          <form onSubmit={handleCreate} className="space-y-4">
+        <Modal
+          title={editingId ? "تعديل إعدادات البريد" : "إعدادات بريد جديدة"}
+          onClose={closeModal}
+        >
+          <form onSubmit={handleSubmit} className="space-y-4">
             <Field label="المستخدم">
               <select
                 required
+                disabled={!!editingId}
                 value={form.user_id}
                 onChange={(e) => setForm({ ...form, user_id: e.target.value })}
-                className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary"
+                className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary disabled:opacity-60"
               >
                 <option value="">— اختر —</option>
                 {users.map((u) => (
@@ -738,9 +798,9 @@ function AccountsTab({
               </Field>
             </div>
 
-            <Field label="كلمة مرور البريد">
+            <Field label={editingId ? "كلمة مرور البريد (اتركها فارغة للاحتفاظ بالحالية)" : "كلمة مرور البريد"}>
               <input
-                required
+                required={!editingId}
                 type="password"
                 dir="ltr"
                 value={form.password}
