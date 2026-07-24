@@ -11,7 +11,7 @@ import {
   Plus,
   Trash2,
   Server,
-  ShieldCheck,
+  Server,
   X,
   Copy,
   Check,
