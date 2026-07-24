@@ -341,7 +341,6 @@ function AccountsTab({
   const [editingId, setEditingId] = useState<string | null>(null);
 
   const emptyForm = {
-    user_id: "",
     display_name: "",
     email_address: "",
     imap_host: "",
@@ -363,7 +362,6 @@ function AccountsTab({
   function startEdit(account: MailAccount) {
     setEditingId(account.id);
     setForm({
-      user_id: account.user_id,
       display_name: account.display_name || "",
       email_address: account.email_address,
       imap_host: account.imap_host,
@@ -378,11 +376,9 @@ function AccountsTab({
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!form.user_id) return toast.error("اختر مستخدماً");
     setSubmitting(true);
 
     const basePayload = {
-      user_id: form.user_id,
       display_name: form.display_name || null,
       email_address: form.email_address,
       imap_host: form.imap_host,
