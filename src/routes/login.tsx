@@ -125,7 +125,7 @@ function LoginPage() {
 
           <h1 className="text-3xl font-bold tracking-tight">دخول العميل</h1>
           <p className="mt-2 text-muted-foreground">
-            استخدم بيانات الدخول التي زوّدتك بها شركتك.
+            استخدم بيانات الدخول التي زوّدتك بها شركتك. عند فتح البريد ستُدخل كلمة مرور بريدك لمرة واحدة في الجلسة.
           </p>
 
           <form onSubmit={handleSubmit} className="mt-8 space-y-4">

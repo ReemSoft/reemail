@@ -1,5 +1,5 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Inbox,
   Star,
@@ -19,6 +19,8 @@ import {
   LogOut,
   Settings,
   Mail as MailIcon,
+  Loader2,
+  Lock,
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useCompanyTheme } from "@/hooks/use-company-theme";
@@ -50,6 +52,18 @@ const FOLDER_META: Record<MailFolder, { label: string; icon: typeof Inbox }> = {
   all: { label: "الكل", icon: MailIcon },
 };
 
+interface MailAccount {
+  id: string;
+  email_address: string;
+  display_name: string | null;
+  imap_host: string;
+  imap_port: number;
+  imap_secure: boolean;
+  smtp_host: string;
+  smtp_port: number;
+  smtp_secure: boolean;
+}
+
 function MailApp() {
   // Demo brand — later replaced by loaded company brand.
   useCompanyTheme({ primary: "#0F172A", accent: "#3B82F6" });
@@ -60,6 +74,31 @@ function MailApp() {
   const [query, setQuery] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [composeOpen, setComposeOpen] = useState(false);
+  const [account, setAccount] = useState<MailAccount | null | undefined>(undefined);
+  const [emailPassword, setEmailPassword] = useState<string | null>(null);
+  const [passwordInput, setPasswordInput] = useState("");
+  const [loadingAccount, setLoadingAccount] = useState(true);
+
+  useEffect(() => {
+    let mounted = true;
+    async function load() {
+      const { data: userRes } = await supabase.auth.getUser();
+      if (!userRes.user || !mounted) return;
+      const { data } = await supabase
+        .from("mail_accounts")
+        .select("id, email_address, display_name, imap_host, imap_port, imap_secure, smtp_host, smtp_port, smtp_secure")
+        .eq("user_id", userRes.user.id)
+        .order("is_default", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (mounted) {
+        setAccount(data as MailAccount | null);
+        setLoadingAccount(false);
+      }
+    }
+    void load();
+    return () => { mounted = false; };
+  }, []);
 
   const counts = useMemo(() => getFolderCounts(), []);
   const messages = useMemo(() => {
@@ -80,6 +119,46 @@ function MailApp() {
   async function handleSignOut() {
     await supabase.auth.signOut();
     navigate({ to: "/login" });
+  }
+
+  if (loadingAccount) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-background">
+        <Loader2 className="h-6 w-6 animate-spin text-primary" />
+      </div>
+    );
+  }
+
+  if (!account) {
+    return (
+      <div className="flex h-screen flex-col items-center justify-center gap-4 bg-background p-8 text-center">
+        <MailIcon className="h-12 w-12 text-muted-foreground/40" />
+        <div>
+          <h2 className="text-lg font-semibold">لم يُجهّز بريدك بعد</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            تواصل مع مدير شركتك لإضافة إعدادات البريد الخاصة بك.
+          </p>
+        </div>
+        <button
+          onClick={handleSignOut}
+          className="inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm text-muted-foreground hover:bg-muted"
+        >
+          <LogOut className="h-4 w-4" /> تسجيل الخروج
+        </button>
+      </div>
+    );
+  }
+
+  if (!emailPassword) {
+    return (
+      <PasswordPrompt
+        account={account}
+        password={passwordInput}
+        setPassword={setPasswordInput}
+        onUnlock={() => setEmailPassword(passwordInput)}
+        onSignOut={handleSignOut}
+      />
+    );
   }
 
   return (
@@ -257,6 +336,73 @@ function MailApp() {
       </div>
 
       {composeOpen && <Composer onClose={() => setComposeOpen(false)} />}
+    </div>
+  );
+}
+
+function PasswordPrompt({
+  account,
+  password,
+  setPassword,
+  onUnlock,
+  onSignOut,
+}: {
+  account: MailAccount;
+  password: string;
+  setPassword: (v: string) => void;
+  onUnlock: () => void;
+  onSignOut: () => void;
+}) {
+  function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (password.length < 3) return;
+    onUnlock();
+  }
+
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-background p-6">
+      <div className="w-full max-w-sm rounded-2xl border border-border bg-card p-6 shadow-float">
+        <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-brand-gradient/10 text-brand-accent">
+          <Lock className="h-6 w-6" />
+        </div>
+        <h2 className="mt-4 text-xl font-bold">فتح صندوق البريد</h2>
+        <p className="mt-1 text-sm text-muted-foreground">
+          أدخل كلمة مرور بريدك <span dir="ltr">{account.email_address}</span> لفتح الجلسة.
+        </p>
+        <p className="text-xs text-muted-foreground">
+          لا نحفظ كلمة المرور؛ تُستخدم لمراسلة السيرفر مباشرة ثم تُمسح عند الخروج.
+        </p>
+
+        <form onSubmit={submit} className="mt-5 space-y-4">
+          <div>
+            <label className="mb-1.5 block text-sm font-medium">كلمة مرور البريد</label>
+            <input
+              type="password"
+              required
+              autoFocus
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="••••••••"
+              dir="ltr"
+              className="w-full rounded-lg border border-input bg-background px-4 py-2.5 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
+            />
+          </div>
+          <button
+            type="submit"
+            disabled={password.length < 3}
+            className="flex w-full items-center justify-center gap-2 rounded-lg bg-brand-gradient px-4 py-2.5 text-sm font-semibold text-white shadow-soft disabled:opacity-60"
+          >
+            فتح البريد
+          </button>
+          <button
+            type="button"
+            onClick={onSignOut}
+            className="flex w-full items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm text-muted-foreground hover:bg-muted"
+          >
+            <LogOut className="h-4 w-4" /> تسجيل الخروج
+          </button>
+        </form>
+      </div>
     </div>
   );
 }

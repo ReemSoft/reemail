@@ -542,7 +542,6 @@ function AccountsTab({
     user_id: "",
     display_name: "",
     email_address: "",
-    password: "",
     imap_host: "",
     imap_port: 993,
     imap_secure: true,
@@ -565,7 +564,6 @@ function AccountsTab({
       user_id: account.user_id,
       display_name: account.display_name || "",
       email_address: account.email_address,
-      password: "",
       imap_host: account.imap_host,
       imap_port: account.imap_port,
       imap_secure: account.imap_secure,
@@ -581,12 +579,6 @@ function AccountsTab({
     if (!form.user_id) return toast.error("اختر مستخدماً");
     setSubmitting(true);
 
-    const cipher = form.password
-      ? typeof window !== "undefined"
-        ? btoa(unescape(encodeURIComponent(form.password)))
-        : Buffer.from(form.password).toString("base64")
-      : undefined;
-
     const basePayload = {
       user_id: form.user_id,
       display_name: form.display_name || null,
@@ -600,25 +592,18 @@ function AccountsTab({
     };
 
     if (editingId) {
-      const updatePayload = cipher
-        ? { ...basePayload, credentials_ciphertext: cipher }
-        : basePayload;
       const { error } = await supabase
         .from("mail_accounts")
-        .update(updatePayload)
+        .update(basePayload)
         .eq("id", editingId);
       setSubmitting(false);
       if (error) return toast.error(error.message);
       toast.success("تم تحديث الحساب");
     } else {
-      if (!cipher) {
-        setSubmitting(false);
-        return toast.error("كلمة مرور البريد مطلوبة");
-      }
       const { error } = await supabase.from("mail_accounts").insert({
         company_id: companyId,
         ...basePayload,
-        credentials_ciphertext: cipher,
+        credentials_ciphertext: null,
       });
       setSubmitting(false);
       if (error) return toast.error(error.message);
@@ -659,7 +644,7 @@ function AccountsTab({
         <div>
           <h2 className="text-xl font-bold">حسابات البريد (IMAP/SMTP)</h2>
           <p className="text-sm text-muted-foreground">
-            أضف إعدادات البريد لكل عميل. سيدخل هو فقط ببريده وكلمة مرور المنصّة.
+            أضف عنوان البريد وإعدادات السيرفر فقط. كلمة مرور البريد يُدخلها العميل بنفسه عند فتح صندوقه.
           </p>
         </div>
         <button
@@ -797,17 +782,6 @@ function AccountsTab({
                 />
               </Field>
             </div>
-
-            <Field label={editingId ? "كلمة مرور البريد (اتركها فارغة للاحتفاظ بالحالية)" : "كلمة مرور البريد"}>
-              <input
-                required={!editingId}
-                type="password"
-                dir="ltr"
-                value={form.password}
-                onChange={(e) => setForm({ ...form, password: e.target.value })}
-                className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary"
-              />
-            </Field>
 
             <fieldset className="rounded-xl border border-border p-3">
               <legend className="px-1 text-xs font-semibold text-muted-foreground">
