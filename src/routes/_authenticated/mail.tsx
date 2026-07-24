@@ -79,7 +79,7 @@ function MailApp() {
 
   async function handleSignOut() {
     await supabase.auth.signOut();
-    navigate({ to: "/auth" });
+    navigate({ to: "/login" });
   }
 
   return (
