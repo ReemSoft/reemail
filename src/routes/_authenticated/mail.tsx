@@ -118,7 +118,7 @@ function MailApp() {
         >
           <RefreshCw className="h-4 w-4" />
         </button>
-        <Link to="/company" className="hidden rounded-lg p-2 hover:bg-muted sm:inline-flex">
+        <Link to="/dashboard" className="hidden rounded-lg p-2 hover:bg-muted sm:inline-flex">
           <Settings className="h-4 w-4" />
         </Link>
         <button
