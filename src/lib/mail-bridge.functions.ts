@@ -68,28 +68,36 @@ const SendPayloadSchema = AuthPayloadSchema.extend({
   bodyText: z.string().optional(),
 });
 
+function bridgeConfigured() {
+  return Boolean(process.env.MAIL_BRIDGE_URL && process.env.MAIL_BRIDGE_SECRET);
+}
+
 async function bridgePost(path: string, payload: unknown) {
   const url = process.env.MAIL_BRIDGE_URL;
   const key = process.env.MAIL_BRIDGE_SECRET;
   if (!url || !key) {
-    throw new Error("لم يتم ربط خادم البريد بعد");
+    return { ok: false, unavailable: true, error: "لم يتم ربط خادم البريد بعد" };
   }
 
-  const res = await fetch(`${url.replace(/\/$/, "")}${path}`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Bridge-Key": key,
-    },
-    body: JSON.stringify(payload),
-  });
-
-  const json = await res.json().catch(() => ({ ok: false, error: "Bridge error" }));
-  if (!res.ok || !json.ok) {
-    throw new Error(json.error || `Bridge error ${res.status}`);
+  try {
+    const res = await fetch(`${url.replace(/\/$/, "")}${path}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Bridge-Key": key,
+      },
+      body: JSON.stringify(payload),
+    });
+    const json = await res.json().catch(() => ({ ok: false, error: "Bridge error" }));
+    if (!res.ok || !json.ok) {
+      return { ok: false, error: json.error || `Bridge error ${res.status}` };
+    }
+    return json;
+  } catch (err: any) {
+    return { ok: false, error: err?.message || "تعذر الاتصال بخادم البريد" };
   }
-  return json;
 }
+
 
 export const bridgeVerify = createServerFn({ method: "POST" })
   .inputValidator((input: { account: MailSessionAccount; password: string }) => input)
