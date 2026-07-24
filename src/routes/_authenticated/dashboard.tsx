@@ -536,6 +536,7 @@ function AccountsTab({
 }) {
   const [open, setOpen] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
 
   const emptyForm = {
     user_id: "",
@@ -552,33 +553,79 @@ function AccountsTab({
   const [form, setForm] = useState(emptyForm);
   const [submitting, setSubmitting] = useState(false);
 
-  async function handleCreate(e: React.FormEvent) {
+  function closeModal() {
+    setOpen(false);
+    setEditingId(null);
+    setForm(emptyForm);
+  }
+
+  function startEdit(account: MailAccount) {
+    setEditingId(account.id);
+    setForm({
+      user_id: account.user_id,
+      display_name: account.display_name || "",
+      email_address: account.email_address,
+      password: "",
+      imap_host: account.imap_host,
+      imap_port: account.imap_port,
+      imap_secure: account.imap_secure,
+      smtp_host: account.smtp_host,
+      smtp_port: account.smtp_port,
+      smtp_secure: account.smtp_secure,
+    });
+    setOpen(true);
+  }
+
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!form.user_id) return toast.error("اختر مستخدماً");
     setSubmitting(true);
-    // Base64 placeholder — the external IMAP backend will re-encrypt on ingestion.
-    const cipher =
-      typeof window !== "undefined"
-        ? btoa(unescape(encodeURIComponent(form.password)))
-        : Buffer.from(form.password).toString("base64");
-    const { error } = await supabase.from("mail_accounts").insert({
-      company_id: companyId,
+
+    const payload: Record<string, unknown> = {
       user_id: form.user_id,
       display_name: form.display_name || null,
       email_address: form.email_address,
-      credentials_ciphertext: cipher,
       imap_host: form.imap_host,
       imap_port: form.imap_port,
       imap_secure: form.imap_secure,
       smtp_host: form.smtp_host,
       smtp_port: form.smtp_port,
       smtp_secure: form.smtp_secure,
-    });
-    setSubmitting(false);
-    if (error) return toast.error(error.message);
-    toast.success("تمت إضافة الحساب");
-    setForm(emptyForm);
-    setOpen(false);
+    };
+
+    if (!editingId && form.password) {
+      const cipher =
+        typeof window !== "undefined"
+          ? btoa(unescape(encodeURIComponent(form.password)))
+          : Buffer.from(form.password).toString("base64");
+      payload.credentials_ciphertext = cipher;
+    } else if (editingId && form.password) {
+      const cipher =
+        typeof window !== "undefined"
+          ? btoa(unescape(encodeURIComponent(form.password)))
+          : Buffer.from(form.password).toString("base64");
+      payload.credentials_ciphertext = cipher;
+    }
+
+    if (editingId) {
+      const { error } = await supabase
+        .from("mail_accounts")
+        .update(payload)
+        .eq("id", editingId);
+      setSubmitting(false);
+      if (error) return toast.error(error.message);
+      toast.success("تم تحديث الحساب");
+    } else {
+      const { error } = await supabase.from("mail_accounts").insert({
+        company_id: companyId,
+        ...payload,
+      });
+      setSubmitting(false);
+      if (error) return toast.error(error.message);
+      toast.success("تمت إضافة الحساب");
+    }
+
+    closeModal();
     await onChange();
   }
 
