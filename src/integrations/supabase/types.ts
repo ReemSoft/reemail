@@ -196,6 +196,7 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      claim_super_admin: { Args: never; Returns: Json }
       get_user_company: { Args: { _user_id: string }; Returns: string }
       has_role: {
         Args: {
