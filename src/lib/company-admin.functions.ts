@@ -88,12 +88,3 @@ export const deleteCompanyUser = createServerFn({ method: "POST" })
     if (error) throw new Error(error.message);
     return { ok: true };
   });
-
-/** One-time bootstrap: claim super_admin if none exists yet. */
-export const claimSuperAdmin = createServerFn({ method: "POST" })
-  .middleware([requireSupabaseAuth])
-  .handler(async ({ context }) => {
-    const { data, error } = await context.supabase.rpc("claim_super_admin");
-    if (error) throw new Error(error.message);
-    return data as { ok: boolean; company_id: string | null };
-  });
