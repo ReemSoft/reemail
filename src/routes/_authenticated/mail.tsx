@@ -19,6 +19,8 @@ import {
   LogOut,
   Settings,
   Mail as MailIcon,
+  Loader2,
+  Lock,
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useCompanyTheme } from "@/hooks/use-company-theme";
