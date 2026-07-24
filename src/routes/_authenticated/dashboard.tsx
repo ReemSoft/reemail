@@ -644,7 +644,7 @@ function AccountsTab({
         <div>
           <h2 className="text-xl font-bold">حسابات البريد (IMAP/SMTP)</h2>
           <p className="text-sm text-muted-foreground">
-            أضف إعدادات البريد لكل عميل. سيدخل هو فقط ببريده وكلمة مرور المنصّة.
+            أضف عنوان البريد وإعدادات السيرفر فقط. كلمة مرور البريد يُدخلها العميل بنفسه عند فتح صندوقه.
           </p>
         </div>
         <button
