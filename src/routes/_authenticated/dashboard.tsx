@@ -30,15 +30,8 @@ interface Company {
   app_name: string | null;
 }
 
-interface CompanyUser {
-  id: string;
-  email: string;
-  full_name: string | null;
-}
-
 interface MailAccount {
   id: string;
-  user_id: string;
   email_address: string;
   display_name: string | null;
   imap_host: string;
@@ -61,8 +54,7 @@ function CompanyDashboard() {
   const [company, setCompany] = useState<Company | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [tab, setTab] = useState<"branding" | "users" | "accounts">("branding");
-  const [users, setUsers] = useState<CompanyUser[]>([]);
+  const [tab, setTab] = useState<"branding" | "accounts">("branding");
   const [accounts, setAccounts] = useState<MailAccount[]>([]);
   const [isAdmin, setIsAdmin] = useState(false);
   const navigate = useNavigate();
@@ -95,13 +87,8 @@ function CompanyDashboard() {
       return;
     }
 
-    const [{ data: co }, { data: us }, { data: ma }] = await Promise.all([
+    const [{ data: co }, { data: ma }] = await Promise.all([
       supabase.from("companies").select("*").eq("id", companyId).maybeSingle(),
-      supabase
-        .from("profiles")
-        .select("id, email, full_name")
-        .eq("company_id", companyId)
-        .order("created_at", { ascending: true }),
       supabase
         .from("mail_accounts")
         .select("*")
@@ -110,7 +97,6 @@ function CompanyDashboard() {
     ]);
 
     if (co) setCompany(co as Company);
-    if (us) setUsers(us as CompanyUser[]);
     if (ma) setAccounts(ma as MailAccount[]);
     setLoading(false);
   }, []);
