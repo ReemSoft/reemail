@@ -222,5 +222,5 @@ app.post("/api/send", requireKey, async (req, res) => {
 });
 
 app.listen(PORT, "0.0.0.0", () => {
-  console.log(`[bridge] Reemsoft Mail Bridge running on port ${PORT}`);
+  console.log(`[bridge] MailMaestro Bridge running on port ${PORT}`);
 });

@@ -9,13 +9,13 @@ import { toast } from "sonner";
 export const Route = createFileRoute("/company")({
   head: () => ({
     meta: [
-      { title: "بوابة الشركات — Reemsoft Mail" },
+      { title: "بوابة الشركات — MailMaestro" },
       {
         name: "description",
         content:
-          "سجّل شركتك على منصة Reemsoft Mail أو ادخل إلى لوحة تحكم شركتك لإدارة إيميلات عملائك.",
+          "سجّل شركتك على منصة MailMaestro أو ادخل إلى لوحة تحكم شركتك لإدارة إيميلات عملائك.",
       },
-      { property: "og:title", content: "بوابة الشركات — Reemsoft Mail" },
+      { property: "og:title", content: "بوابة الشركات — MailMaestro" },
       {
         property: "og:description",
         content: "منصة SaaS لإدارة إيميلات الشركات وعملائها بسرعة البرق.",
@@ -78,7 +78,7 @@ function CompanyPortalPage() {
             <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white/15 backdrop-blur">
               <Mail className="h-5 w-5" />
             </div>
-            <span className="text-xl font-bold">Reemsoft Mail</span>
+            <span className="text-xl font-bold">MailMaestro</span>
           </Link>
           <div>
             <h2 className="text-4xl font-bold leading-tight">
@@ -91,7 +91,7 @@ function CompanyPortalPage() {
             </p>
           </div>
           <p className="text-sm text-white/70">
-            © {new Date().getFullYear()} Reemsoft
+            © {new Date().getFullYear()} MailMaestro
           </p>
         </div>
       </div>
@@ -277,7 +277,7 @@ function RegisterCompanyForm({ onDone }: { onDone: () => void }) {
           type="text"
           value={companyName}
           onChange={handleNameChange}
-          placeholder="مثال: Reemsoft"
+          placeholder="مثال: MailMaestro"
           required
         />
         <Field
@@ -287,7 +287,7 @@ function RegisterCompanyForm({ onDone }: { onDone: () => void }) {
           onChange={(v) =>
             setCompanySlug(v.toLowerCase().replace(/[^a-z0-9-]/g, ""))
           }
-          placeholder="reemsoft"
+          placeholder="mailmaestro"
           minLength={3}
           maxLength={40}
           required

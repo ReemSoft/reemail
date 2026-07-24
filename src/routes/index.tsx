@@ -13,13 +13,13 @@ import {
 export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
-      { title: "Reemsoft Mail — منصة SaaS للبريد المؤسسي متعدد الشركات" },
+      { title: "MailMaestro — منصة SaaS للبريد المؤسسي متعدد الشركات" },
       {
         name: "description",
         content:
           "افتح أي بريد إلكتروني بأداء عالٍ وسرعة البرق. منصة SaaS للشركات مع تخصيص كامل بالشعار والألوان لكل عميل.",
       },
-      { property: "og:title", content: "Reemsoft Mail — البريد المؤسسي" },
+      { property: "og:title", content: "MailMaestro — البريد المؤسسي" },
       {
         property: "og:description",
         content: "منصة SaaS للبريد الإلكتروني — كل شركة بشعارها وألوانها.",
@@ -39,7 +39,7 @@ function Landing() {
             <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-brand-gradient shadow-brand">
               <Mail className="h-5 w-5 text-white" />
             </div>
-            <span className="text-lg font-bold tracking-tight">Reemsoft Mail</span>
+            <span className="text-lg font-bold tracking-tight">MailMaestro</span>
           </Link>
           <nav className="hidden items-center gap-8 md:flex">
             <a href="#features" className="text-sm text-muted-foreground hover:text-foreground">
@@ -223,7 +223,7 @@ function Landing() {
 
       <footer className="border-t border-border py-8">
         <div className="mx-auto flex max-w-7xl flex-col items-center justify-between gap-3 px-4 text-sm text-muted-foreground sm:flex-row">
-          <span>© {new Date().getFullYear()} Reemsoft Mail. جميع الحقوق محفوظة.</span>
+          <span>© {new Date().getFullYear()} MailMaestro. جميع الحقوق محفوظة.</span>
           <div className="flex gap-6">
             <a href="#" className="hover:text-foreground">
               الخصوصية

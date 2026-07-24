@@ -79,14 +79,14 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
-      { title: "Reemsoft Mail — بريدك المؤسسي بسرعة البرق" },
+      { title: "MailMaestro — بريدك المؤسسي بسرعة البرق" },
       {
         name: "description",
         content:
           "منصة SaaS متعددة الشركات لإدارة البريد الإلكتروني بواجهة حديثة. أدخل إعدادات بريدك وابدأ فوراً.",
       },
-      { name: "author", content: "Reemsoft" },
-      { property: "og:title", content: "Reemsoft Mail" },
+      { name: "author", content: "MailMaestro" },
+      { property: "og:title", content: "MailMaestro" },
       {
         property: "og:description",
         content: "بريدك المؤسسي بسرعة البرق — منصة SaaS متعددة الشركات.",

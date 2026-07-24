@@ -9,13 +9,13 @@ import { saveMailSession, getMailSession } from "@/lib/mail-session";
 export const Route = createFileRoute("/login")({
   head: () => ({
     meta: [
-      { title: "دخول العملاء — Reemsoft Mail" },
+      { title: "دخول العملاء — MailMaestro" },
       {
         name: "description",
         content:
-          "بوابة دخول العملاء إلى بريدهم الإلكتروني عبر منصة Reemsoft Mail.",
+          "بوابة دخول العملاء إلى بريدهم الإلكتروني عبر منصة MailMaestro.",
       },
-      { property: "og:title", content: "دخول العملاء — Reemsoft Mail" },
+      { property: "og:title", content: "دخول العملاء — MailMaestro" },
       {
         property: "og:description",
         content: "افتح بريدك الإلكتروني بسرعة البرق.",
@@ -74,7 +74,7 @@ function LoginPage() {
             <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white/15 backdrop-blur">
               <Mail className="h-5 w-5" />
             </div>
-            <span className="text-xl font-bold">Reemsoft Mail</span>
+            <span className="text-xl font-bold">MailMaestro</span>
           </Link>
           <div>
             <h2 className="text-4xl font-bold leading-tight">
@@ -87,7 +87,7 @@ function LoginPage() {
             </p>
           </div>
           <p className="text-sm text-white/70">
-            © {new Date().getFullYear()} Reemsoft
+            © {new Date().getFullYear()} MailMaestro
           </p>
         </div>
       </div>

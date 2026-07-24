@@ -45,7 +45,7 @@ interface MailAccount {
 
 export const Route = createFileRoute("/_authenticated/dashboard")({
   head: () => ({
-    meta: [{ title: "لوحة تحكم الشركة — Reemsoft Mail" }],
+    meta: [{ title: "لوحة تحكم الشركة — MailMaestro" }],
   }),
   component: CompanyDashboard,
 });
