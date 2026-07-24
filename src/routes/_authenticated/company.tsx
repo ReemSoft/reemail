@@ -90,15 +90,8 @@ function CompanyDashboard() {
       .eq("user_id", userRes.user.id);
 
     const adminRole = roles?.find((r) => r.role === "company_admin");
-    const isSuper = roles?.some((r) => r.role === "super_admin");
     setIsAdmin(!!adminRole);
 
-    // Bootstrap prompt if no roles at all
-    if (!roles || roles.length === 0) {
-      setNeedsBootstrap(true);
-      setLoading(false);
-      return;
-    }
 
     const companyId = adminRole?.company_id;
     if (!companyId) {
