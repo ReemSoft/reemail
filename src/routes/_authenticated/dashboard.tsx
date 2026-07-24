@@ -141,6 +141,12 @@ function CompanyDashboard() {
     if (error) return toast.error(error.message);
     toast.success("تم حفظ التغييرات");
   }
+
+  async function handleLogout() {
+    await supabase.auth.signOut();
+    navigate({ to: "/login" });
+  }
+
   if (loading) {
     return (
       <div className="flex min-h-screen items-center justify-center">
