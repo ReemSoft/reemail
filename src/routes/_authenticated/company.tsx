@@ -11,7 +11,6 @@ import {
   Plus,
   Trash2,
   Server,
-  ShieldCheck,
   X,
   Copy,
   Check,
@@ -23,7 +22,6 @@ import { useCompanyTheme } from "@/hooks/use-company-theme";
 import {
   createCompanyUser,
   deleteCompanyUser,
-  claimSuperAdmin,
 } from "@/lib/company-admin.functions";
 
 interface Company {
@@ -71,13 +69,11 @@ function CompanyDashboard() {
   const [users, setUsers] = useState<CompanyUser[]>([]);
   const [accounts, setAccounts] = useState<MailAccount[]>([]);
   const [isAdmin, setIsAdmin] = useState(false);
-  const [needsBootstrap, setNeedsBootstrap] = useState(false);
 
   useCompanyTheme(
     company ? { primary: company.brand_primary, accent: company.brand_accent } : null,
   );
 
-  const bootstrap = useServerFn(claimSuperAdmin);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -93,15 +89,8 @@ function CompanyDashboard() {
       .eq("user_id", userRes.user.id);
 
     const adminRole = roles?.find((r) => r.role === "company_admin");
-    const isSuper = roles?.some((r) => r.role === "super_admin");
     setIsAdmin(!!adminRole);
 
-    // Bootstrap prompt if no roles at all
-    if (!roles || roles.length === 0) {
-      setNeedsBootstrap(true);
-      setLoading(false);
-      return;
-    }
 
     const companyId = adminRole?.company_id;
     if (!companyId) {
@@ -127,7 +116,6 @@ function CompanyDashboard() {
     if (us) setUsers(us as CompanyUser[]);
     if (ma) setAccounts(ma as MailAccount[]);
     setLoading(false);
-    void isSuper;
   }, []);
 
   useEffect(() => {
@@ -151,18 +139,6 @@ function CompanyDashboard() {
     if (error) return toast.error(error.message);
     toast.success("تم حفظ التغييرات");
   }
-
-  async function handleBootstrap() {
-    try {
-      await bootstrap();
-      toast.success("تم تفعيل حسابك كمدير عام");
-      setNeedsBootstrap(false);
-      await load();
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "فشل التفعيل");
-    }
-  }
-
   if (loading) {
     return (
       <div className="flex min-h-screen items-center justify-center">
@@ -171,29 +147,6 @@ function CompanyDashboard() {
     );
   }
 
-  if (needsBootstrap) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-background p-6">
-        <div className="w-full max-w-md rounded-2xl border border-border bg-card p-8 text-center shadow-elevated">
-          <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-brand-gradient text-white shadow-brand">
-            <ShieldCheck className="h-7 w-7" />
-          </div>
-          <h1 className="text-2xl font-bold">فعّل حسابك كمدير عام</h1>
-          <p className="mt-2 text-sm text-muted-foreground">
-            أنت أول مستخدم في المنصّة. اضغط الزر لتصبح مدير عام (Super Admin) ومدير
-            شركة Reemsoft التجريبية. يعمل هذا الزر مرّة واحدة فقط.
-          </p>
-          <button
-            onClick={handleBootstrap}
-            className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-brand-gradient px-4 py-3 text-sm font-semibold text-white shadow-brand"
-          >
-            <ShieldCheck className="h-4 w-4" />
-            تفعيل حسابي الآن
-          </button>
-        </div>
-      </div>
-    );
-  }
 
   if (!isAdmin || !company) {
     return (
