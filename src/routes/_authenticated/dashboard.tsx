@@ -184,20 +184,30 @@ function CompanyDashboard() {
             </Link>
             <h1 className="text-lg font-bold">لوحة تحكم الشركة</h1>
           </div>
-          {tab === "branding" && (
+          <div className="flex items-center gap-2">
+            {tab === "branding" && (
+              <button
+                onClick={handleSave}
+                disabled={saving}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-brand-gradient px-4 py-2 text-sm font-semibold text-white shadow-soft disabled:opacity-60"
+              >
+                {saving ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Save className="h-4 w-4" />
+                )}
+                حفظ
+              </button>
+            )}
             <button
-              onClick={handleSave}
-              disabled={saving}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-brand-gradient px-4 py-2 text-sm font-semibold text-white shadow-soft disabled:opacity-60"
+              onClick={handleLogout}
+              className="inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium text-muted-foreground transition hover:bg-destructive hover:text-destructive-foreground"
+              title="تسجيل الخروج"
             >
-              {saving ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Save className="h-4 w-4" />
-              )}
-              حفظ
+              <LogOut className="h-4 w-4" />
+              <span className="hidden sm:inline">خروج</span>
             </button>
-          )}
+          </div>
         </div>
       </header>
 
