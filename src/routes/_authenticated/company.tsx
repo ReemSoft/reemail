@@ -23,7 +23,6 @@ import { useCompanyTheme } from "@/hooks/use-company-theme";
 import {
   createCompanyUser,
   deleteCompanyUser,
-  claimSuperAdmin,
 } from "@/lib/company-admin.functions";
 
 interface Company {
