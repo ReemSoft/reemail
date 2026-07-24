@@ -340,6 +340,73 @@ function MailApp() {
   );
 }
 
+function PasswordPrompt({
+  account,
+  password,
+  setPassword,
+  onUnlock,
+  onSignOut,
+}: {
+  account: MailAccount;
+  password: string;
+  setPassword: (v: string) => void;
+  onUnlock: () => void;
+  onSignOut: () => void;
+}) {
+  function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (password.length < 3) return;
+    onUnlock();
+  }
+
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-background p-6">
+      <div className="w-full max-w-sm rounded-2xl border border-border bg-card p-6 shadow-float">
+        <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-brand-gradient/10 text-brand-accent">
+          <Lock className="h-6 w-6" />
+        </div>
+        <h2 className="mt-4 text-xl font-bold">فتح صندوق البريد</h2>
+        <p className="mt-1 text-sm text-muted-foreground">
+          أدخل كلمة مرور بريدك <span dir="ltr">{account.email_address}</span> لفتح الجلسة.
+        </p>
+        <p className="text-xs text-muted-foreground">
+          لا نحفظ كلمة المرور؛ تُستخدم لمراسلة السيرفر مباشرة ثم تُمسح عند الخروج.
+        </p>
+
+        <form onSubmit={submit} className="mt-5 space-y-4">
+          <div>
+            <label className="mb-1.5 block text-sm font-medium">كلمة مرور البريد</label>
+            <input
+              type="password"
+              required
+              autoFocus
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="••••••••"
+              dir="ltr"
+              className="w-full rounded-lg border border-input bg-background px-4 py-2.5 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
+            />
+          </div>
+          <button
+            type="submit"
+            disabled={password.length < 3}
+            className="flex w-full items-center justify-center gap-2 rounded-lg bg-brand-gradient px-4 py-2.5 text-sm font-semibold text-white shadow-soft disabled:opacity-60"
+          >
+            فتح البريد
+          </button>
+          <button
+            type="button"
+            onClick={onSignOut}
+            className="flex w-full items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm text-muted-foreground hover:bg-muted"
+          >
+            <LogOut className="h-4 w-4" /> تسجيل الخروج
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 function MessageRow({
   message,
   active,
