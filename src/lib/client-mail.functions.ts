@@ -9,12 +9,23 @@ import { createServerFn } from "@tanstack/react-start";
  */
 export const clientLogin = createServerFn({ method: "POST" })
   .inputValidator((input: { email: string; password: string }) => {
-    if (!input.email || !input.email.includes("@")) throw new Error("بريد غير صالح");
-    if (!input.password || input.password.length < 3)
-      throw new Error("كلمة المرور مطلوبة");
+    if (!input.email || !input.email.includes("@")) {
+      return { email: "", password: input.password ?? "", validationError: "بريد غير صالح" };
+    }
+    if (!input.password || input.password.length < 3) {
+      return {
+        email: input.email.trim().toLowerCase(),
+        password: input.password ?? "",
+        validationError: "كلمة المرور مطلوبة",
+      };
+    }
     return { email: input.email.trim().toLowerCase(), password: input.password };
   })
   .handler(async ({ data }) => {
+    if ("validationError" in data) {
+      return { ok: false as const, message: data.validationError };
+    }
+
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
 
     const { data: account, error } = await supabaseAdmin
@@ -25,8 +36,12 @@ export const clientLogin = createServerFn({ method: "POST" })
       .ilike("email_address", data.email)
       .maybeSingle();
 
-    if (error) throw new Error(error.message);
-    if (!account) throw new Error("هذا البريد غير مُسجّل. تواصل مع شركتك.");
+    if (error) {
+      return { ok: false as const, message: "تعذر التحقق من البريد الآن. حاول مرة أخرى." };
+    }
+    if (!account) {
+      return { ok: false as const, message: "هذا البريد غير مُسجّل. تواصل مع شركتك." };
+    }
 
     // Load company branding for white-label display.
     const { data: company } = await supabaseAdmin
@@ -36,5 +51,5 @@ export const clientLogin = createServerFn({ method: "POST" })
       .maybeSingle();
 
     // TODO(phase-2): verify password against real IMAP server here.
-    return { account, company };
+    return { ok: true as const, account, company };
   });
