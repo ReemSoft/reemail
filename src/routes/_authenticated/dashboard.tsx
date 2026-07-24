@@ -798,9 +798,9 @@ function AccountsTab({
               </Field>
             </div>
 
-            <Field label="كلمة مرور البريد">
+            <Field label={editingId ? "كلمة مرور البريد (اتركها فارغة للاحتفاظ بالحالية)" : "كلمة مرور البريد"}>
               <input
-                required
+                required={!editingId}
                 type="password"
                 dir="ltr"
                 value={form.password}
