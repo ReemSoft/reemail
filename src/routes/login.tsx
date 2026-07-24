@@ -1,28 +1,26 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
-import { Mail, ArrowLeft, Loader2, Building2, LogIn } from "lucide-react";
+import { Mail, ArrowLeft, Loader2 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
-import { useServerFn } from "@tanstack/react-start";
-import { registerCompanyAdmin } from "@/lib/admin-signup.functions";
 import { toast } from "sonner";
 
 export const Route = createFileRoute("/login")({
   head: () => ({
     meta: [
-      { title: "دخول وتسجيل — Reemsoft Mail" },
+      { title: "دخول العملاء — Reemsoft Mail" },
       {
         name: "description",
         content:
-          "دخول العملاء إلى بريدهم، أو تسجيل شركتك على منصة Reemsoft Mail لإدارة إيميلات عملائك.",
+          "بوابة دخول العملاء إلى بريدهم الإلكتروني عبر منصة Reemsoft Mail.",
       },
-      { property: "og:title", content: "دخول وتسجيل — Reemsoft Mail" },
+      { property: "og:title", content: "دخول العملاء — Reemsoft Mail" },
       {
         property: "og:description",
-        content: "منصة SaaS لإدارة إيميلات الشركات وعملائها بسرعة البرق.",
+        content: "افتح بريدك الإلكتروني بسرعة البرق.",
       },
     ],
   }),
-  component: AuthPage,
+  component: LoginPage,
 });
 
 async function destinationForUser(userId: string): Promise<string> {
@@ -31,18 +29,17 @@ async function destinationForUser(userId: string): Promise<string> {
     .select("role")
     .eq("user_id", userId);
   const list = (roles ?? []).map((r) => r.role);
-  // company owners → dashboard, everyone else → their mailbox
   if (list.includes("company_admin") || list.includes("super_admin"))
-    return "/company";
+    return "/dashboard";
   return "/mail";
 }
 
-type Mode = "signin" | "register";
-
-function AuthPage() {
+function LoginPage() {
   const navigate = useNavigate();
-  const [mode, setMode] = useState<Mode>("signin");
   const [checkingSession, setCheckingSession] = useState(true);
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     supabase.auth.getSession().then(async ({ data }) => {
@@ -55,6 +52,26 @@ function AuthPage() {
     });
   }, [navigate]);
 
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setLoading(true);
+    try {
+      const { data: signIn, error } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
+      if (error) throw error;
+      const dest = await destinationForUser(signIn.user!.id);
+      toast.success("مرحباً بعودتك 👋");
+      navigate({ to: dest });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "حدث خطأ غير متوقع";
+      toast.error(msg);
+    } finally {
+      setLoading(false);
+    }
+  }
+
   if (checkingSession) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-background">
@@ -65,7 +82,6 @@ function AuthPage() {
 
   return (
     <div className="flex min-h-screen bg-background">
-      {/* Left brand panel */}
       <div className="relative hidden w-1/2 overflow-hidden bg-brand-gradient lg:block">
         <div
           className="absolute inset-0 opacity-20"
@@ -89,7 +105,7 @@ function AuthPage() {
               بسرعة البرق ⚡
             </h2>
             <p className="mt-4 text-lg text-white/85">
-              منصة واحدة لإدارة إيميلات شركتك وعملائك.
+              دخول العملاء إلى بريدهم في ثوانٍ.
             </p>
           </div>
           <p className="text-sm text-white/70">
@@ -98,7 +114,6 @@ function AuthPage() {
         </div>
       </div>
 
-      {/* Right form panel */}
       <div className="flex w-full items-center justify-center p-6 lg:w-1/2">
         <div className="w-full max-w-md">
           <Link
@@ -108,271 +123,62 @@ function AuthPage() {
             <ArrowLeft className="h-4 w-4" /> العودة
           </Link>
 
-          {/* Tabs */}
-          <div className="mb-8 grid grid-cols-2 gap-2 rounded-xl border border-border bg-card p-1.5">
-            <button
-              type="button"
-              onClick={() => setMode("signin")}
-              className={`flex items-center justify-center gap-2 rounded-lg px-3 py-2.5 text-sm font-medium transition ${
-                mode === "signin"
-                  ? "bg-brand-gradient text-white shadow-soft"
-                  : "text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              <LogIn className="h-4 w-4" /> تسجيل الدخول
-            </button>
-            <button
-              type="button"
-              onClick={() => setMode("register")}
-              className={`flex items-center justify-center gap-2 rounded-lg px-3 py-2.5 text-sm font-medium transition ${
-                mode === "register"
-                  ? "bg-brand-gradient text-white shadow-soft"
-                  : "text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              <Building2 className="h-4 w-4" /> تسجيل شركة جديدة
-            </button>
-          </div>
+          <h1 className="text-3xl font-bold tracking-tight">دخول العميل</h1>
+          <p className="mt-2 text-muted-foreground">
+            استخدم بيانات الدخول التي زوّدتك بها شركتك.
+          </p>
 
-          {mode === "signin" ? <SignInForm /> : <RegisterCompanyForm onDone={() => setMode("signin")} />}
+          <form onSubmit={handleSubmit} className="mt-8 space-y-4">
+            <div>
+              <label className="mb-1.5 block text-sm font-medium text-foreground">
+                البريد الإلكتروني
+              </label>
+              <input
+                type="email"
+                required
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="you@company.com"
+                dir="ltr"
+                className="w-full rounded-lg border border-input bg-card px-4 py-2.5 text-sm outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20"
+              />
+            </div>
+            <div>
+              <label className="mb-1.5 block text-sm font-medium text-foreground">
+                كلمة المرور
+              </label>
+              <input
+                type="password"
+                required
+                minLength={6}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="••••••••"
+                dir="ltr"
+                className="w-full rounded-lg border border-input bg-card px-4 py-2.5 text-sm outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20"
+              />
+            </div>
+            <button
+              type="submit"
+              disabled={loading}
+              className="mt-2 flex w-full items-center justify-center gap-2 rounded-lg bg-brand-gradient px-4 py-3 text-sm font-semibold text-white shadow-soft transition hover:shadow-elevated disabled:opacity-60"
+            >
+              {loading && <Loader2 className="h-4 w-4 animate-spin" />}
+              تسجيل الدخول
+            </button>
+          </form>
+
+          <div className="mt-8 rounded-xl border border-border bg-card p-4 text-center text-sm">
+            <p className="text-muted-foreground">هل أنت صاحب شركة؟</p>
+            <Link
+              to="/company"
+              className="mt-1 inline-block font-semibold text-primary hover:underline"
+            >
+              سجّل شركتك أو ادخل إلى لوحة التحكم ←
+            </Link>
+          </div>
         </div>
       </div>
     </div>
-  );
-}
-
-function SignInForm() {
-  const navigate = useNavigate();
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [loading, setLoading] = useState(false);
-
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    setLoading(true);
-    try {
-      const { data: signIn, error } = await supabase.auth.signInWithPassword({
-        email,
-        password,
-      });
-      if (error) throw error;
-      const dest = await destinationForUser(signIn.user!.id);
-      toast.success("مرحباً بعودتك 👋");
-      navigate({ to: dest });
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "حدث خطأ غير متوقع";
-      toast.error(msg);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  return (
-    <>
-      <h1 className="text-3xl font-bold tracking-tight">أهلاً بعودتك</h1>
-      <p className="mt-2 text-muted-foreground">
-        سجّل دخولك للوصول إلى بريدك أو لوحة تحكم شركتك.
-      </p>
-      <form onSubmit={handleSubmit} className="mt-8 space-y-4">
-        <Field
-          label="البريد الإلكتروني"
-          type="email"
-          value={email}
-          onChange={setEmail}
-          placeholder="you@company.com"
-          required
-        />
-        <Field
-          label="كلمة المرور"
-          type="password"
-          value={password}
-          onChange={setPassword}
-          placeholder="••••••••"
-          minLength={6}
-          required
-        />
-        <SubmitButton loading={loading}>تسجيل الدخول</SubmitButton>
-      </form>
-      <p className="mt-6 text-center text-xs text-muted-foreground">
-        العملاء يحصلون على بيانات الدخول من مدير شركتهم.
-      </p>
-    </>
-  );
-}
-
-function RegisterCompanyForm({ onDone }: { onDone: () => void }) {
-  const navigate = useNavigate();
-  const register = useServerFn(registerCompanyAdmin);
-  const [companyName, setCompanyName] = useState("");
-  const [companySlug, setCompanySlug] = useState("");
-  const [fullName, setFullName] = useState("");
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [loading, setLoading] = useState(false);
-
-  function handleNameChange(v: string) {
-    setCompanyName(v);
-    // auto-suggest slug
-    const auto = v
-      .toLowerCase()
-      .replace(/[^a-z0-9\s-]/g, "")
-      .trim()
-      .replace(/\s+/g, "-")
-      .slice(0, 40);
-    if (auto && (companySlug === "" || companySlug === v.slice(0, companySlug.length))) {
-      setCompanySlug(auto);
-    }
-  }
-
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    setLoading(true);
-    try {
-      await register({
-        data: {
-          company_name: companyName,
-          company_slug: companySlug,
-          full_name: fullName,
-          email,
-          password,
-        },
-      });
-      // auto sign-in
-      const { error: signErr } = await supabase.auth.signInWithPassword({
-        email,
-        password,
-      });
-      if (signErr) {
-        toast.success("تم إنشاء الشركة. سجّل الدخول الآن.");
-        onDone();
-        return;
-      }
-      toast.success("مرحباً بك! جاري تجهيز لوحة التحكم…");
-      navigate({ to: "/company" });
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "حدث خطأ غير متوقع";
-      toast.error(msg);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  return (
-    <>
-      <h1 className="text-3xl font-bold tracking-tight">سجّل شركتك</h1>
-      <p className="mt-2 text-muted-foreground">
-        أنشئ حساب شركتك في دقيقة، ثم أضف إيميلات عملائك.
-      </p>
-      <form onSubmit={handleSubmit} className="mt-8 space-y-4">
-        <Field
-          label="اسم الشركة"
-          type="text"
-          value={companyName}
-          onChange={handleNameChange}
-          placeholder="مثال: Reemsoft"
-          required
-        />
-        <Field
-          label="معرّف الشركة (بالإنجليزية)"
-          type="text"
-          value={companySlug}
-          onChange={(v) => setCompanySlug(v.toLowerCase().replace(/[^a-z0-9-]/g, ""))}
-          placeholder="reemsoft"
-          minLength={3}
-          maxLength={40}
-          required
-          ltr
-        />
-        <Field
-          label="اسمك الكامل"
-          type="text"
-          value={fullName}
-          onChange={setFullName}
-          placeholder="محمد أحمد"
-          required
-        />
-        <Field
-          label="بريدك الإلكتروني"
-          type="email"
-          value={email}
-          onChange={setEmail}
-          placeholder="you@company.com"
-          required
-        />
-        <Field
-          label="كلمة المرور"
-          type="password"
-          value={password}
-          onChange={setPassword}
-          placeholder="6 أحرف على الأقل"
-          minLength={6}
-          required
-        />
-        <SubmitButton loading={loading}>إنشاء الشركة</SubmitButton>
-      </form>
-      <p className="mt-6 text-center text-xs text-muted-foreground">
-        بالتسجيل أنت توافق على شروط الاستخدام.
-      </p>
-    </>
-  );
-}
-
-function Field({
-  label,
-  type,
-  value,
-  onChange,
-  placeholder,
-  required,
-  minLength,
-  maxLength,
-  ltr,
-}: {
-  label: string;
-  type: string;
-  value: string;
-  onChange: (v: string) => void;
-  placeholder?: string;
-  required?: boolean;
-  minLength?: number;
-  maxLength?: number;
-  ltr?: boolean;
-}) {
-  return (
-    <div>
-      <label className="mb-1.5 block text-sm font-medium text-foreground">
-        {label}
-      </label>
-      <input
-        type={type}
-        required={required}
-        minLength={minLength}
-        maxLength={maxLength}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder}
-        dir={ltr || type === "email" || type === "password" ? "ltr" : undefined}
-        className="w-full rounded-lg border border-input bg-card px-4 py-2.5 text-sm outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20"
-      />
-    </div>
-  );
-}
-
-function SubmitButton({
-  loading,
-  children,
-}: {
-  loading: boolean;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      type="submit"
-      disabled={loading}
-      className="mt-2 flex w-full items-center justify-center gap-2 rounded-lg bg-brand-gradient px-4 py-3 text-sm font-semibold text-white shadow-soft transition hover:shadow-elevated disabled:opacity-60"
-    >
-      {loading && <Loader2 className="h-4 w-4 animate-spin" />}
-      {children}
-    </button>
   );
 }
