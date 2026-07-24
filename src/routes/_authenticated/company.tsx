@@ -117,7 +117,6 @@ function CompanyDashboard() {
     if (us) setUsers(us as CompanyUser[]);
     if (ma) setAccounts(ma as MailAccount[]);
     setLoading(false);
-    void isSuper;
   }, []);
 
   useEffect(() => {
