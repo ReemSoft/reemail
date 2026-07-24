@@ -421,7 +421,7 @@ function MessageView({
 
           <article
             className="prose prose-sm mt-6 max-w-none text-foreground"
-            dangerouslySetInnerHTML={{ __html: message.bodyHtml }}
+            dangerouslySetInnerHTML={{ __html: message.body }}
           />
 
           {message.attachments && message.attachments.length > 0 && (
@@ -439,7 +439,7 @@ function MessageView({
                       <Paperclip className="h-4 w-4" />
                     </div>
                     <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-medium">{a.name}</p>
+                      <p className="truncate text-sm font-medium">{a.filename}</p>
                       <p className="text-xs text-muted-foreground">{formatSize(a.size)}</p>
                     </div>
                   </div>
