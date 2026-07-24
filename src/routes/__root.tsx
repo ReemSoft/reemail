@@ -8,9 +8,11 @@ import {
   Scripts,
 } from "@tanstack/react-router";
 import { useEffect, type ReactNode } from "react";
+import { Toaster } from "sonner";
 
 import appCss from "../styles.css?url";
 import { reportLovableError } from "../lib/lovable-error-reporting";
+
 
 function NotFoundComponent() {
   return (
@@ -77,21 +79,30 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
-      { title: "Lovable App" },
-      { name: "description", content: "Lovable Generated Project" },
-      { name: "author", content: "Lovable" },
-      { property: "og:title", content: "Lovable App" },
-      { property: "og:description", content: "Lovable Generated Project" },
+      { title: "Reemsoft Mail — بريدك المؤسسي بسرعة البرق" },
+      {
+        name: "description",
+        content:
+          "منصة SaaS متعددة الشركات لإدارة البريد الإلكتروني بواجهة حديثة. أدخل إعدادات بريدك وابدأ فوراً.",
+      },
+      { name: "author", content: "Reemsoft" },
+      { property: "og:title", content: "Reemsoft Mail" },
+      {
+        property: "og:description",
+        content: "بريدك المؤسسي بسرعة البرق — منصة SaaS متعددة الشركات.",
+      },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },
-      { name: "twitter:site", content: "@Lovable" },
     ],
     links: [
+      { rel: "stylesheet", href: appCss },
+      { rel: "icon", href: "/favicon.ico", type: "image/x-icon" },
+      { rel: "preconnect", href: "https://fonts.googleapis.com" },
+      { rel: "preconnect", href: "https://fonts.gstatic.com", crossOrigin: "" },
       {
         rel: "stylesheet",
-        href: appCss,
+        href: "https://fonts.googleapis.com/css2?family=Cairo:wght@300;400;500;600;700;800&family=Inter:wght@300;400;500;600;700;800&display=swap",
       },
-      { rel: "icon", href: "/favicon.ico", type: "image/x-icon" },
     ],
   }),
   shellComponent: RootShell,
@@ -102,7 +113,7 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
 
 function RootShell({ children }: { children: ReactNode }) {
   return (
-    <html lang="en">
+    <html lang="ar" dir="rtl">
       <head>
         <HeadContent />
       </head>
@@ -114,6 +125,7 @@ function RootShell({ children }: { children: ReactNode }) {
   );
 }
 
+
 function RootComponent() {
   const { queryClient } = Route.useRouteContext();
 
@@ -121,6 +133,8 @@ function RootComponent() {
     <QueryClientProvider client={queryClient}>
       {/* Required: nested routes render here. Removing <Outlet /> breaks all child routes. */}
       <Outlet />
+      <Toaster position="top-center" richColors dir="rtl" />
     </QueryClientProvider>
   );
 }
+
