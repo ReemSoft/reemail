@@ -422,7 +422,7 @@ function AccountsTab({
     await onChange();
   }
 
-  const usersById = new Map(users.map((u) => [u.id, u]));
+  
 
   function applyPreset(p: (typeof IMAP_PRESETS)[number]) {
     setForm({
