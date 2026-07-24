@@ -29,7 +29,7 @@ export interface MailSession {
   password: string;
 }
 
-const KEY = "reemsoft.mail.session";
+const KEY = "mailmaestro.mail.session";
 
 export function saveMailSession(session: MailSession) {
   if (typeof window === "undefined") return;

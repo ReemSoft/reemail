@@ -24,7 +24,7 @@ const subjects = [
   "اجتماع الغد — مراجعة استراتيجية الربع الثاني",
   "Your Stripe payment has been received",
   "Google Cloud: New security recommendation for your project",
-  "[reemsoft/mail] Pull request #142 needs your review",
+  "[mailmaestro/mail] Pull request #142 needs your review",
   "عرض شراكة جديد — يرجى المراجعة",
   "Weekly digest: 12 issues updated in your projects",
   "New page shared: Q1 2026 Product Roadmap",

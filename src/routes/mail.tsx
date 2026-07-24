@@ -51,7 +51,7 @@ import {
 export const Route = createFileRoute("/mail")({
   ssr: false,
   head: () => ({
-    meta: [{ title: "صندوق الوارد — Reemsoft Mail" }],
+    meta: [{ title: "صندوق الوارد — MailMaestro" }],
   }),
   component: MailApp,
 });
@@ -312,7 +312,7 @@ function MailApp() {
   }
   if (!session) return null;
 
-  const brandName = session.company?.app_name || session.company?.name || "Reemsoft Mail";
+  const brandName = session.company?.app_name || session.company?.name || "MailMaestro";
 
   return (
     <div className="flex h-screen w-full flex-col bg-background">

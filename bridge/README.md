@@ -1,6 +1,6 @@
-# Reemsoft Mail Bridge
+# MailMaestro Bridge
 
-خادم Node.js متوسط (bridge) للاتصال الحقيقي بخوادم IMAP/SMTP. يُستخدم مع تطبيق Reemsoft Mail المُشيّد في Lovable.
+خادم Node.js متوسط (bridge) للاتصال الحقيقي بخوادم IMAP/SMTP. يُستخدم مع تطبيق MailMaestro المُشيّد في Lovable.
 
 ## ما يفعله
 
@@ -14,14 +14,14 @@
 
 اضغط الزر أدناه:
 
-[![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/template?referralCode=reemsoft)
+[![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/template?referralCode=mailmaestro)
 
 ### بعد النشر:
 
 1. اذهب إلى **Variables** في مشروع Railway.
 2. أضف متغير: `BRIDGE_API_KEY` واجعل قيمته نفس `MAIL_BRIDGE_SECRET` الموجود في Lovable.
 3. انسخ رابط الخادم (مثل `https://mail-bridge.up.railway.app`).
-4. أخبر فريق Reemsoft Mail بالرابط ليضيفه في إعدادات Lovable كـ `MAIL_BRIDGE_URL`.
+4. أخبر فريق MailMaestro بالرابط ليضيفه في إعدادات Lovable كـ `MAIL_BRIDGE_URL`.
 
 ## تشغيل محلي
 
