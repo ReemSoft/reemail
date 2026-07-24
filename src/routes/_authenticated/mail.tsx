@@ -1,5 +1,5 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import {
   Inbox,
   Star,
@@ -60,25 +60,6 @@ function MailApp() {
   const [query, setQuery] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [composeOpen, setComposeOpen] = useState(false);
-
-  // حراسة الدور: /mail مخصّص للعملاء فقط (end_user). المدراء يُحوَّلون للوحاتهم.
-  useEffect(() => {
-    (async () => {
-      const { data: sess } = await supabase.auth.getSession();
-      const uid = sess.session?.user.id;
-      if (!uid) return;
-      const { data: roles } = await supabase
-        .from("user_roles")
-        .select("role")
-        .eq("user_id", uid);
-      const list = (roles ?? []).map((r) => r.role);
-      if (list.includes("super_admin")) {
-        navigate({ to: "/admin", replace: true });
-      } else if (list.includes("company_admin")) {
-        navigate({ to: "/company", replace: true });
-      }
-    })();
-  }, [navigate]);
 
   const counts = useMemo(() => getFolderCounts(), []);
   const messages = useMemo(() => {
