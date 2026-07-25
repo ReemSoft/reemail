@@ -1496,6 +1496,15 @@ function MessageView({
             <Forward className="h-4 w-4" />
           </button>
           <div className="mx-1 h-6 w-px bg-border" />
+          {isTrash && (
+            <button
+              onClick={onRestore}
+              className="rounded-lg p-2 hover:bg-muted"
+              title="استعادة إلى المجلد الأصلي"
+            >
+              <ArchiveRestore className="h-4 w-4" />
+            </button>
+          )}
           <button onClick={onArchive} className="rounded-lg p-2 hover:bg-muted" title="أرشفة">
             <Archive className="h-4 w-4" />
           </button>
