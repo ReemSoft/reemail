@@ -318,20 +318,47 @@ export async function getMessageBody(
       );
       if (!msg) return null;
 
-      const parsed = await parseMessageSource(msg.source as Buffer, folder);
+      const rawParsed = await simpleParser(msg.source as Buffer);
+      const parsed = parsedMailToMessage(rawParsed, folder);
       parsed.id = `${folder}:${uid}`;
       parsed.threadId = msg.envelope?.messageId || parsed.id;
       parsed.read = msg.flags?.has("\\Seen") || false;
       parsed.starred = msg.flags?.has("\\Flagged") || false;
       parsed.folder = folder;
-      // Override attachments with bodyStructure-based ones (real IMAP part
-      // numbers usable for on-demand download). Falls back to mailparser
-      // output only if bodyStructure yielded nothing (defensive).
-      const structural = collectAttachmentParts(msg.bodyStructure);
-      if (structural.length > 0) {
-        parsed.attachments = structural;
-        parsed.hasAttachments = true;
+
+      // 1) Inline images: replace cid: references in the HTML body with
+      // data URIs from mailparser (already parsed, zero extra IMAP calls).
+      const inlineCids = new Set<string>();
+      if (parsed.body && rawParsed.attachments?.length) {
+        let html = parsed.body;
+        for (const att of rawParsed.attachments) {
+          const cid = (att as any).cid as string | undefined;
+          if (!cid || !att.content) continue;
+          const b64 = Buffer.isBuffer(att.content)
+            ? att.content.toString("base64")
+            : Buffer.from(att.content as any).toString("base64");
+          const dataUri = `data:${att.contentType || "application/octet-stream"};base64,${b64}`;
+          const escaped = cid.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+          const re = new RegExp(`cid:${escaped}`, "gi");
+          if (re.test(html)) {
+            html = html.replace(new RegExp(`cid:${escaped}`, "gi"), dataUri);
+            inlineCids.add(cid.toLowerCase());
+          }
+        }
+        parsed.body = html;
       }
+
+      // 2) Attachments: always use bodyStructure (real IMAP part numbers).
+      // Hide inline images already embedded in the body.
+      const structural = collectAttachmentParts(msg.bodyStructure);
+      const visible = structural.filter((a) => {
+        const cid = (a.contentId || "").replace(/^<|>$/g, "").toLowerCase();
+        if (cid && inlineCids.has(cid)) return false;
+        if (a.disposition === "inline" && a.contentId) return false;
+        return true;
+      });
+      parsed.attachments = visible;
+      parsed.hasAttachments = visible.length > 0;
       return parsed;
     } finally {
       lock.release();
