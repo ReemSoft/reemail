@@ -364,6 +364,7 @@ function AccountsTab({
   companyId: string;
   onChange: () => Promise<void> | void;
 }) {
+  const { confirm } = useConfirm();
   const [open, setOpen] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
