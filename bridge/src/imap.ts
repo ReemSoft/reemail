@@ -118,16 +118,19 @@ export async function getMessages(
     await client.connect();
     const mailboxes = await listMailboxes(client);
     const path = resolveFolderPath(mailboxes, folder);
+    console.log(`[bridge] getMessages folder=${folder} resolvedPath=${path} availableMailboxes=${mailboxes.map(m => m.path).join("|")}`);
     if (!path) return [];
 
     const lock = await client.getMailboxLock(path);
     try {
       const total = (client.mailbox as any)?.exists ?? 0;
+      console.log(`[bridge] getMessages path=${path} exists=${total} limit=${limit} offset=${offset}`);
       if (total === 0) return [];
 
       const start = Math.max(1, total - offset - limit + 1);
       const end = total - offset;
       const range = `${start}:${end}`;
+      console.log(`[bridge] getMessages range=${range}`);
 
       const messages: MailMessage[] = [];
       for await (const msg of client.fetch(range, {
@@ -140,6 +143,7 @@ export async function getMessages(
         const parsed = await messageFromFetch(msg, folder, client);
         messages.push(parsed);
       }
+      console.log(`[bridge] getMessages fetched=${messages.length}`);
       if (messages.length === 0) return [];
 
       return messages.sort((a, b) => (a.date < b.date ? 1 : -1));
@@ -149,6 +153,7 @@ export async function getMessages(
   } finally {
     await client.logout().catch(() => {});
   }
+
 }
 
 export async function getMessageBody(
