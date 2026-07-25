@@ -565,7 +565,7 @@ function MailApp() {
             </span>
             {loading && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />}
           </div>
-          <div className="flex-1 overflow-y-auto">
+          <div className="flex-1 overflow-hidden">
             {loading && filteredMessages.length === 0 ? (
               <div className="flex h-full items-center justify-center">
                 <Loader2 className="h-6 w-6 animate-spin text-primary" />
@@ -576,13 +576,23 @@ function MailApp() {
                 <p className="text-sm">لا توجد رسائل هنا</p>
               </div>
             ) : (
-              filteredMessages.map((m) => (
-                <MessageRow
-                  key={m.id}
-                  message={m}
-                  active={m.id === selectedId}
-                  onClick={() => openMessage(m.id)}
-                  onToggleStar={(e) => toggleStar(e, m.id)}
+              <Virtuoso
+                style={{ height: "100%" }}
+                data={filteredMessages}
+                overscan={800}
+                increaseViewportBy={{ top: 400, bottom: 800 }}
+                computeItemKey={(_, m) => m.id}
+                itemContent={(_, m) => (
+                  <MessageRow
+                    message={m}
+                    active={m.id === selectedId}
+                    onClick={() => openMessage(m.id)}
+                    onPrefetch={() => prefetchMessage(m.id)}
+                    onToggleStar={(e) => toggleStar(e, m.id)}
+                  />
+                )}
+              />
+
                 />
               ))
             )}
