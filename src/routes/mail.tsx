@@ -1090,7 +1090,7 @@ function MessageRow({
       <div className="relative flex h-9 w-9 shrink-0 items-center justify-center">
         <div
           className={`flex h-9 w-9 items-center justify-center rounded-full bg-brand-gradient text-sm font-bold text-white transition ${
-            selected || anySelected ? "opacity-0" : "opacity-100 group-hover:opacity-0"
+            selectMode || selected ? "opacity-0" : "opacity-100"
           }`}
         >
           {message.from.name.charAt(0) || message.from.email.charAt(0)}
@@ -1111,7 +1111,7 @@ function MessageRow({
             }
           }}
           className={`absolute inset-0 z-10 flex items-center justify-center rounded-full transition ${
-            selected || anySelected ? "opacity-100" : "opacity-0 group-hover:opacity-100"
+            selectMode || selected ? "opacity-100" : "opacity-0"
           }`}
           title={selected ? "إلغاء التحديد" : "تحديد"}
         >
