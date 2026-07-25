@@ -1123,7 +1123,7 @@ function MessageView({
 
                         {message.mailedBy && (
                           <>
-                            <dt className="text-foreground/70 whitespace-nowrap">الخادم المُرسِل:</dt>
+                            <dt className="text-foreground/70 whitespace-nowrap">الخادم:</dt>
                             <dd className="min-w-0 break-all">
                               <span dir="ltr" style={{ unicodeBidi: "isolate" }}>{message.mailedBy}</span>
                             </dd>
@@ -1131,7 +1131,7 @@ function MessageView({
                         )}
                         {message.signedBy && (
                           <>
-                            <dt className="text-foreground/70 whitespace-nowrap">موقَّعة بواسطة:</dt>
+                            <dt className="text-foreground/70 whitespace-nowrap">التوقيع:</dt>
                             <dd className="min-w-0 break-all">
                               <span dir="ltr" style={{ unicodeBidi: "isolate" }}>{message.signedBy}</span>
                             </dd>
