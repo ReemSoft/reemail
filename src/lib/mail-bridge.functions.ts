@@ -113,6 +113,8 @@ export const bridgeGetFolderCounts = createServerFn({ method: "POST" })
     return { ok: true as const, counts: (result.counts ?? []) as FolderCount[] };
   });
 
+export type MailSortOption = "date-desc" | "date-asc" | "unread-first" | "starred-first";
+
 export const bridgeGetMessages = createServerFn({ method: "POST" })
   .inputValidator(
     (input: {
@@ -121,6 +123,7 @@ export const bridgeGetMessages = createServerFn({ method: "POST" })
       folder: MailFolder;
       limit?: number;
       offset?: number;
+      sort?: MailSortOption;
     }) => input,
   )
   .handler(async ({ data }) => {
