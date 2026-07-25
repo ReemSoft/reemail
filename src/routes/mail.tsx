@@ -1079,15 +1079,121 @@ function MailApp() {
           <span className="hidden text-base font-bold sm:inline">{brandName}</span>
         </Link>
 
-        <div className="mx-2 flex flex-1 items-center gap-2 rounded-xl bg-muted/70 px-3 py-2 transition focus-within:bg-card focus-within:shadow-elevated sm:mx-4 sm:max-w-xl">
-          <Search className="h-4 w-4 shrink-0 text-muted-foreground" />
+        <div className="mx-2 flex flex-1 items-center gap-1 rounded-xl bg-muted/70 pe-1 ps-3 py-1.5 transition focus-within:bg-card focus-within:shadow-elevated sm:mx-4 sm:max-w-xl">
+          {searchMode === "deep" ? (
+            deepLoading ? (
+              <Loader2 className="h-4 w-4 shrink-0 animate-spin text-primary" />
+            ) : (
+              <Globe className="h-4 w-4 shrink-0 text-primary" />
+            )
+          ) : (
+            <Search className="h-4 w-4 shrink-0 text-muted-foreground" />
+          )}
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="ابحث في البريد..."
-            className="w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+            placeholder={
+              searchMode === "deep"
+                ? "بحث شامل على السيرفر…"
+                : "ابحث في البريد..."
+            }
+            className="w-full bg-transparent px-1 text-sm outline-none placeholder:text-muted-foreground"
           />
+          {query && (
+            <button
+              onClick={() => setQuery("")}
+              className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+              title="مسح"
+              aria-label="مسح"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          )}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                className={`flex shrink-0 items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium transition ${
+                  searchMode === "deep"
+                    ? "bg-primary/10 text-primary hover:bg-primary/15"
+                    : "text-muted-foreground hover:bg-muted"
+                }`}
+                title="خيارات البحث"
+              >
+                {searchMode === "deep" ? (
+                  <Globe className="h-3.5 w-3.5" />
+                ) : (
+                  <Zap className="h-3.5 w-3.5" />
+                )}
+                <span className="hidden sm:inline">
+                  {searchMode === "deep" ? "شامل" : "سريع"}
+                </span>
+                <ChevronDown className="h-3 w-3 opacity-60" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-64">
+              <div className="px-2 pb-1 pt-1 text-[11px] font-semibold text-muted-foreground">
+                نمط البحث
+              </div>
+              <DropdownMenuItem
+                onSelect={() => setSearchMode("quick")}
+                className="flex items-start gap-2"
+              >
+                <Zap className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
+                <div className="flex-1">
+                  <div className="flex items-center justify-between">
+                    <span className="font-medium">بحث سريع</span>
+                    {searchMode === "quick" && (
+                      <Check className="h-3.5 w-3.5 text-primary" />
+                    )}
+                  </div>
+                  <div className="text-[11px] text-muted-foreground">
+                    فوري في الرسائل المعروضة — دون أي طلب للسيرفر
+                  </div>
+                </div>
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onSelect={() => setSearchMode("deep")}
+                className="flex items-start gap-2"
+              >
+                <Globe className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+                <div className="flex-1">
+                  <div className="flex items-center justify-between">
+                    <span className="font-medium">بحث شامل على السيرفر</span>
+                    {searchMode === "deep" && (
+                      <Check className="h-3.5 w-3.5 text-primary" />
+                    )}
+                  </div>
+                  <div className="text-[11px] text-muted-foreground">
+                    IMAP SEARCH على كامل المجلد الحالي (الموضوع + المرسل + المستلمين)
+                  </div>
+                </div>
+              </DropdownMenuItem>
+              {searchMode === "deep" && (
+                <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    onSelect={(e) => {
+                      e.preventDefault();
+                      setDeepIncludeBody((v) => !v);
+                    }}
+                    className="flex items-start gap-2"
+                  >
+                    <div className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded border border-border">
+                      {deepIncludeBody && <Check className="h-3 w-3 text-primary" />}
+                    </div>
+                    <div className="flex-1">
+                      <div className="font-medium">تضمين نص الرسالة</div>
+                      <div className="text-[11px] text-muted-foreground">
+                        أبطأ لكنه يبحث داخل محتوى الرسائل أيضاً
+                      </div>
+                    </div>
+                  </DropdownMenuItem>
+                </>
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
+
 
         <div className="ms-auto flex shrink-0 items-center gap-1.5">
           <div
