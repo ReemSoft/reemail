@@ -1433,14 +1433,32 @@ function MailApp() {
             </div>
           )}
           <div className="flex-1 overflow-hidden">
-            {loading && filteredMessages.length === 0 ? (
-              <div className="flex h-full items-center justify-center">
+            {(loading || (inDeepSearch && deepLoading)) && filteredMessages.length === 0 ? (
+              <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
                 <Loader2 className="h-6 w-6 animate-spin text-primary" />
+                {inDeepSearch && (
+                  <p className="text-xs text-muted-foreground">
+                    جاري البحث على السيرفر…
+                  </p>
+                )}
               </div>
             ) : filteredMessages.length === 0 ? (
               <div className="flex h-full flex-col items-center justify-center gap-2 p-8 text-center text-muted-foreground">
                 <MailIcon className="h-10 w-10 opacity-30" />
-                <p className="text-sm">لا توجد رسائل هنا</p>
+                {inDeepSearch ? (
+                  <>
+                    <p className="text-sm">
+                      {deepError ? deepError : "لا توجد نتائج على السيرفر"}
+                    </p>
+                    {!deepError && !deepIncludeBody && (
+                      <p className="text-[11px] text-muted-foreground/70">
+                        جرّب تفعيل «تضمين نص الرسالة» من خيارات البحث
+                      </p>
+                    )}
+                  </>
+                ) : (
+                  <p className="text-sm">لا توجد رسائل هنا</p>
+                )}
               </div>
             ) : (
               <Virtuoso
@@ -1450,7 +1468,7 @@ function MailApp() {
                 increaseViewportBy={{ top: 400, bottom: 800 }}
                 computeItemKey={(_, m) => m.id}
                 endReached={() => {
-                  if (!query.trim()) void loadMore();
+                  if (!query.trim() && !inDeepSearch) void loadMore();
                 }}
                 itemContent={(_, m) => (
                   <MessageRow
