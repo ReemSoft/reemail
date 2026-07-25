@@ -126,8 +126,12 @@ export function formatDate(iso: string): string {
     return d.toLocaleTimeString("ar-SA", { hour: "2-digit", minute: "2-digit" });
   }
   const diffDays = Math.floor((now.getTime() - d.getTime()) / 86400_000);
-  if (diffDays < 7) {
+  if (diffDays < 7 && d.getFullYear() === now.getFullYear()) {
     return d.toLocaleDateString("ar-SA", { weekday: "short" });
   }
-  return d.toLocaleDateString("ar-SA", { day: "numeric", month: "short" });
+  if (d.getFullYear() === now.getFullYear()) {
+    return d.toLocaleDateString("ar-SA", { day: "numeric", month: "short" });
+  }
+  // Different year — always include the year (Roundcube nice_date behavior)
+  return d.toLocaleDateString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric" });
 }
