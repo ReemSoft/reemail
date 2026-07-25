@@ -69,16 +69,29 @@ export const clientLogin = createServerFn({ method: "POST" })
         },
         body: JSON.stringify({ account, password: data.password }),
       });
-      const json = await res.json().catch(() => ({ ok: false, error: "Bridge error" }));
+      const rawText = await res.text();
+      let json: any = {};
+      try { json = JSON.parse(rawText); } catch { /* not json */ }
       if (!res.ok || !json.ok) {
-        return { ok: false as const, message: "كلمة مرور البريد غير صحيحة أو خادم البريد غير متاح" };
+        console.error("[clientLogin] bridge verify failed", {
+          status: res.status,
+          bridgeUrl,
+          bridgeKeyPrefix: bridgeKey.slice(0, 6),
+          body: rawText.slice(0, 300),
+        });
+        return {
+          ok: false as const,
+          message: `فشل التحقق (${res.status}): ${json.error || rawText.slice(0, 120) || "خطأ غير معروف"}`,
+        };
       }
     } catch (err) {
+      console.error("[clientLogin] bridge fetch threw", err);
       return {
         ok: false as const,
-        message: "تعذر الاتصال بخادم البريد. تأكد من إعدادات الشركة.",
+        message: `تعذر الاتصال بخادم البريد: ${err instanceof Error ? err.message : String(err)}`,
       };
     }
+
 
     return { ok: true as const, account, company };
   });
