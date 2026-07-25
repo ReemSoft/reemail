@@ -276,7 +276,7 @@ async function messageFromFetch(
     preview,
     body: "",
     date,
-    read: !msg.flags?.has("\\Seen"),
+    read: msg.flags?.has("\\Seen") || false,
     starred: msg.flags?.has("\\Flagged") || false,
     hasAttachments,
     attachments: undefined,
