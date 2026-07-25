@@ -934,8 +934,7 @@ function MessageView({
             align="end"
             sideOffset={8}
             collisionPadding={12}
-            dir="rtl"
-            className="w-56"
+            className="w-56 [direction:rtl] [&_[role=menuitem]]:flex-row [&_[role=menuitem]]:justify-start [&_[role=menuitem]]:text-right"
           >
             <DropdownMenuItem onClick={onReply}>
               <Reply className="h-4 w-4" /> رد
