@@ -1062,35 +1062,41 @@ function MessageRow({
         active ? "bg-accent" : ""
       } ${selected ? "bg-primary/5" : ""} ${!message.read ? "bg-card" : "bg-card/70"}`}
     >
-      <div
-        role="checkbox"
-        aria-checked={selected}
-        tabIndex={0}
-        onClick={(e) => {
-          e.stopPropagation();
-          onToggleSelect();
-        }}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
+      {/* Avatar doubles as selection checkbox so no extra layout shift occurs */}
+      <div className="relative flex h-9 w-9 shrink-0 items-center justify-center">
+        <div
+          className={`flex h-9 w-9 items-center justify-center rounded-full bg-brand-gradient text-sm font-bold text-white transition ${
+            selected || anySelected ? "opacity-0" : "opacity-100 group-hover:opacity-0"
+          }`}
+        >
+          {message.from.name.charAt(0) || message.from.email.charAt(0)}
+        </div>
+        <div
+          role="checkbox"
+          aria-checked={selected}
+          tabIndex={0}
+          onClick={(e) => {
             e.stopPropagation();
             onToggleSelect();
-          }
-        }}
-        className={`mt-1 flex h-5 w-5 shrink-0 items-center justify-center rounded transition ${
-          selected || anySelected ? "opacity-100" : "opacity-0 group-hover:opacity-100"
-        }`}
-        title={selected ? "إلغاء التحديد" : "تحديد"}
-      >
-        {selected ? (
-          <CheckSquare className="h-4 w-4 text-primary" />
-        ) : (
-          <Square className="h-4 w-4 text-muted-foreground" />
-        )}
-      </div>
-
-      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-brand-gradient text-sm font-bold text-white">
-        {message.from.name.charAt(0) || message.from.email.charAt(0)}
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              e.stopPropagation();
+              onToggleSelect();
+            }
+          }}
+          className={`absolute inset-0 z-10 flex items-center justify-center rounded-full transition ${
+            selected || anySelected ? "opacity-100" : "opacity-0 group-hover:opacity-100"
+          }`}
+          title={selected ? "إلغاء التحديد" : "تحديد"}
+        >
+          {selected ? (
+            <CheckSquare className="h-5 w-5 text-primary" />
+          ) : (
+            <Square className="h-5 w-5 text-muted-foreground" />
+          )}
+        </div>
       </div>
       <div className="flex-1 overflow-hidden">
         <div className="mb-0.5 flex items-baseline justify-between gap-2">
