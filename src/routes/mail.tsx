@@ -34,6 +34,7 @@ import {
   CheckSquare,
   Square,
   MinusSquare,
+  ArchiveRestore,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -94,6 +95,45 @@ function parseMessageId(id: string): { folder: MailFolder; uid: number } | null 
   const uid = Number(uidStr);
   if (!folder || !uidStr || Number.isNaN(uid)) return null;
   return { folder: folder as MailFolder, uid };
+}
+
+// ---- Trash origin tracking (for restore-to-original-folder) ----
+const TRASH_ORIGIN_KEY = "mailmaestro:trash-origin";
+type OriginMap = Record<string, MailFolder>;
+function loadOriginMap(): OriginMap {
+  if (typeof localStorage === "undefined") return {};
+  try {
+    return JSON.parse(localStorage.getItem(TRASH_ORIGIN_KEY) || "{}") as OriginMap;
+  } catch {
+    return {};
+  }
+}
+function saveOriginMap(map: OriginMap) {
+  if (typeof localStorage === "undefined") return;
+  try {
+    localStorage.setItem(TRASH_ORIGIN_KEY, JSON.stringify(map));
+  } catch {
+    /* ignore quota errors */
+  }
+}
+function rememberOrigin(threadId: string | undefined, folder: MailFolder) {
+  if (!threadId || folder === "trash") return;
+  const m = loadOriginMap();
+  m[threadId] = folder;
+  saveOriginMap(m);
+}
+function getOrigin(threadId: string | undefined): MailFolder {
+  if (!threadId) return "inbox";
+  const m = loadOriginMap();
+  return m[threadId] || "inbox";
+}
+function forgetOrigin(threadId: string | undefined) {
+  if (!threadId) return;
+  const m = loadOriginMap();
+  if (threadId in m) {
+    delete m[threadId];
+    saveOriginMap(m);
+  }
 }
 
 type ComposeInitial = {
@@ -469,6 +509,7 @@ function MailApp() {
   async function handleMove(id: string, toFolder: MailFolder) {
     const parsed = parseMessageId(id);
     if (!parsed || !session) return;
+    const msg = messages.find((m) => m.id === id);
     // Snapshot for rollback
     const snapshot = messages;
     const prevSelectedId = selectedId;
@@ -488,6 +529,12 @@ function MailApp() {
           toFolder,
         },
       });
+      // Track origin for restore-from-trash
+      if (toFolder === "trash") {
+        rememberOrigin(msg?.threadId, parsed.folder);
+      } else {
+        forgetOrigin(msg?.threadId);
+      }
       toast.success("تم نقل الرسالة");
     } catch (err: any) {
       // Revert
@@ -501,6 +548,7 @@ function MailApp() {
   async function handleDelete(id: string) {
     const parsed = parseMessageId(id);
     if (!parsed || !session) return;
+    const msg = messages.find((m) => m.id === id);
     const isTrash = parsed.folder === "trash";
     const confirmed = await confirm({
       title: isTrash ? "حذف نهائي" : "نقل إلى المهملات",
@@ -524,6 +572,7 @@ function MailApp() {
         await deleteFn({
           data: { account: session.account, password: session.password, folder: parsed.folder, uid: parsed.uid },
         });
+        forgetOrigin(msg?.threadId);
         toast.success("تم حذف الرسالة نهائياً");
       } else {
         await move({
@@ -535,6 +584,7 @@ function MailApp() {
             toFolder: "trash",
           },
         });
+        rememberOrigin(msg?.threadId, parsed.folder);
         toast.success("تم نقل الرسالة إلى المهملات");
       }
     } catch (err: any) {
@@ -544,6 +594,43 @@ function MailApp() {
       toast.error(err?.message || (isTrash ? "فشل حذف الرسالة" : "فشل نقل الرسالة إلى المهملات"));
     }
   }
+
+  async function handleRestore(id: string) {
+    const parsed = parseMessageId(id);
+    if (!parsed || !session) return;
+    if (parsed.folder !== "trash") return;
+    const msg = messages.find((m) => m.id === id);
+    const target = getOrigin(msg?.threadId);
+    const snapshot = messages;
+    const prevSelectedId = selectedId;
+    const prevSelected = selectedMessage;
+    setMessages((prev) => prev.filter((m) => m.id !== id));
+    setSelectedId(null);
+    setSelectedMessage(null);
+    messageCache.current.delete(id);
+    try {
+      await move({
+        data: {
+          account: session.account,
+          password: session.password,
+          folder: parsed.folder,
+          uid: parsed.uid,
+          toFolder: target,
+        },
+      });
+      forgetOrigin(msg?.threadId);
+      const label = FOLDER_META[target]?.label || target;
+      toast.success(`تم استعادة الرسالة إلى ${label}`);
+      loadCountsSoft();
+    } catch (err: any) {
+      setMessages(snapshot);
+      setSelectedId(prevSelectedId);
+      setSelectedMessage(prevSelected);
+      toast.error(err?.message || "فشل استعادة الرسالة");
+    }
+  }
+
+
 
 
   async function handleMarkUnread(id: string) {
@@ -636,6 +723,9 @@ function MailApp() {
     }
     ids.forEach((id) => messageCache.current.delete(id));
     clearSelection();
+    const idsToThread = new Map<string, string | undefined>(
+      snapshot.filter((m) => selection.has(m.id)).map((m) => [m.id, m.threadId]),
+    );
     const { failed } = await runBatch(ids, 5, async (id) => {
       const parsed = parseMessageId(id);
       if (!parsed) return;
@@ -648,6 +738,11 @@ function MailApp() {
           toFolder,
         },
       });
+      if (toFolder === "trash") {
+        rememberOrigin(idsToThread.get(id), parsed.folder);
+      } else {
+        forgetOrigin(idsToThread.get(id));
+      }
     });
     setBulkBusy(false);
     if (failed > 0) {
@@ -686,6 +781,9 @@ function MailApp() {
     }
     ids.forEach((id) => messageCache.current.delete(id));
     clearSelection();
+    const idsToThread = new Map<string, string | undefined>(
+      snapshot.filter((m) => selection.has(m.id)).map((m) => [m.id, m.threadId]),
+    );
     const { failed } = await runBatch(ids, 5, async (id) => {
       const parsed = parseMessageId(id);
       if (!parsed) return;
@@ -698,6 +796,7 @@ function MailApp() {
             uid: parsed.uid,
           },
         });
+        forgetOrigin(idsToThread.get(id));
       } else {
         await move({
           data: {
@@ -708,6 +807,7 @@ function MailApp() {
             toFolder: "trash",
           },
         });
+        rememberOrigin(idsToThread.get(id), parsed.folder);
       }
     });
     setBulkBusy(false);
@@ -721,6 +821,52 @@ function MailApp() {
       loadCountsSoft();
     }
   }
+
+  async function bulkRestore() {
+    if (!session || selection.size === 0 || bulkBusy) return;
+    if (folder !== "trash") return;
+    const ids = Array.from(selection);
+    const snapshot = messages;
+    const prevSelectedId = selectedId;
+    const prevSelected = selectedMessage;
+    const idsToThread = new Map<string, string | undefined>(
+      snapshot.filter((m) => selection.has(m.id)).map((m) => [m.id, m.threadId]),
+    );
+    setBulkBusy(true);
+    setMessages((prev) => prev.filter((m) => !selection.has(m.id)));
+    if (prevSelectedId && selection.has(prevSelectedId)) {
+      setSelectedId(null);
+      setSelectedMessage(null);
+    }
+    ids.forEach((id) => messageCache.current.delete(id));
+    clearSelection();
+    const { failed } = await runBatch(ids, 5, async (id) => {
+      const parsed = parseMessageId(id);
+      if (!parsed) return;
+      const target = getOrigin(idsToThread.get(id));
+      await move({
+        data: {
+          account: session.account,
+          password: session.password,
+          folder: parsed.folder,
+          uid: parsed.uid,
+          toFolder: target,
+        },
+      });
+      forgetOrigin(idsToThread.get(id));
+    });
+    setBulkBusy(false);
+    if (failed > 0) {
+      setMessages(snapshot);
+      setSelectedId(prevSelectedId);
+      setSelectedMessage(prevSelected);
+      toast.error(`فشل استعادة ${failed} من ${ids.length} رسالة`);
+    } else {
+      toast.success(`تم استعادة ${ids.length} رسالة`);
+      loadCountsSoft();
+    }
+  }
+
 
   async function bulkMarkUnread() {
     if (!session || selection.size === 0 || bulkBusy) return;
@@ -929,6 +1075,16 @@ function MailApp() {
                 {selection.size} محددة
               </span>
               <div className="mx-1 h-5 w-px bg-border" />
+              {folder === "trash" && (
+                <button
+                  onClick={bulkRestore}
+                  disabled={bulkBusy}
+                  className="flex h-8 w-8 items-center justify-center rounded hover:bg-muted disabled:opacity-50"
+                  title="استعادة المحدد"
+                >
+                  <ArchiveRestore className="h-4 w-4" />
+                </button>
+              )}
               <button
                 onClick={() => bulkMove("archive")}
                 disabled={bulkBusy}
@@ -1083,6 +1239,7 @@ function MailApp() {
               onDelete={() => handleDelete(selectedMessage.id)}
               onSpam={() => handleMove(selectedMessage.id, "spam")}
               onMarkUnread={() => handleMarkUnread(selectedMessage.id)}
+              onRestore={() => handleRestore(selectedMessage.id)}
               onPrint={() => { /* handled inside MessageView */ }}
             />
           ) : (
@@ -1236,6 +1393,7 @@ function MessageView({
   onDelete,
   onSpam,
   onMarkUnread,
+  onRestore,
   onPrint,
 }: {
   message: MailMessage;
@@ -1249,6 +1407,7 @@ function MessageView({
   onDelete: () => void;
   onSpam: () => void;
   onMarkUnread: () => void;
+  onRestore: () => void;
   onPrint: () => void;
 }) {
   const [detailsOpen, setDetailsOpen] = useState(false);
@@ -1337,6 +1496,15 @@ function MessageView({
             <Forward className="h-4 w-4" />
           </button>
           <div className="mx-1 h-6 w-px bg-border" />
+          {isTrash && (
+            <button
+              onClick={onRestore}
+              className="rounded-lg p-2 hover:bg-muted"
+              title="استعادة إلى المجلد الأصلي"
+            >
+              <ArchiveRestore className="h-4 w-4" />
+            </button>
+          )}
           <button onClick={onArchive} className="rounded-lg p-2 hover:bg-muted" title="أرشفة">
             <Archive className="h-4 w-4" />
           </button>
@@ -1400,6 +1568,11 @@ function MessageView({
               <Copy className="h-4 w-4" /> نسخ عنوان المرسل
             </DropdownMenuItem>
             <DropdownMenuSeparator />
+            {isTrash && (
+              <DropdownMenuItem onClick={onRestore}>
+                <ArchiveRestore className="h-4 w-4" /> استعادة إلى المجلد الأصلي
+              </DropdownMenuItem>
+            )}
             <DropdownMenuItem onClick={onArchive} className="md:hidden">
               <Archive className="h-4 w-4" /> أرشفة
             </DropdownMenuItem>
