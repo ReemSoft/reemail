@@ -28,6 +28,8 @@ export const clientLogin = createServerFn({ method: "POST" })
 
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
 
+    const domainPart = data.email.split("@")[1]?.toLowerCase() ?? "";
+
     const { data: account, error } = await supabaseAdmin
       .from("mail_accounts")
       .select(
@@ -39,16 +41,82 @@ export const clientLogin = createServerFn({ method: "POST" })
     if (error) {
       return { ok: false as const, message: "تعذر التحقق من البريد الآن. حاول مرة أخرى." };
     }
-    if (!account) {
-      return { ok: false as const, message: "هذا البريد غير مُسجّل. تواصل مع شركتك." };
+
+    async function loadDomainDefaults(companyId?: string | null) {
+      let q = supabaseAdmin
+        .from("email_domains")
+        .select(
+          "id, company_id, domain, imap_host, imap_port, imap_secure, smtp_host, smtp_port, smtp_secure",
+        )
+        .ilike("domain", domainPart);
+      if (companyId) q = q.eq("company_id", companyId);
+      const { data: rows } = await q;
+      return rows ?? [];
     }
+
+    let resolved: {
+      id: string;
+      company_id: string;
+      email_address: string;
+      display_name: string | null;
+      imap_host: string | null;
+      imap_port: number | null;
+      imap_secure: boolean | null;
+      smtp_host: string | null;
+      smtp_port: number | null;
+      smtp_secure: boolean | null;
+    } | null = account ? { ...account } : null;
+
+    // Fill missing per-account settings from the domain defaults for the same company.
+    if (resolved && (!resolved.imap_host || !resolved.smtp_host)) {
+      const d = (await loadDomainDefaults(resolved.company_id))[0];
+      if (d) {
+        resolved.imap_host = resolved.imap_host ?? d.imap_host;
+        resolved.imap_port = resolved.imap_port ?? d.imap_port;
+        resolved.imap_secure = resolved.imap_secure ?? d.imap_secure;
+        resolved.smtp_host = resolved.smtp_host ?? d.smtp_host;
+        resolved.smtp_port = resolved.smtp_port ?? d.smtp_port;
+        resolved.smtp_secure = resolved.smtp_secure ?? d.smtp_secure;
+      }
+    }
+
+    // No account row → synthesize from a registered domain (shared-domain feature).
+    if (!resolved) {
+      if (!domainPart) {
+        return { ok: false as const, message: "بريد غير صالح" };
+      }
+      const defaults = await loadDomainDefaults();
+      if (defaults.length === 0) {
+        return { ok: false as const, message: "هذا البريد غير مُسجّل. تواصل مع شركتك." };
+      }
+      if (defaults.length > 1) {
+        return {
+          ok: false as const,
+          message: "هذا الدومين مُسجّل لدى أكثر من شركة. اطلب من شركتك إضافة بريدك.",
+        };
+      }
+      const d = defaults[0];
+      resolved = {
+        id: `domain:${d.id}`,
+        company_id: d.company_id,
+        email_address: data.email,
+        display_name: null,
+        imap_host: d.imap_host,
+        imap_port: d.imap_port,
+        imap_secure: d.imap_secure,
+        smtp_host: d.smtp_host,
+        smtp_port: d.smtp_port,
+        smtp_secure: d.smtp_secure,
+      };
+    }
+
     if (
-      !account.imap_host ||
-      !account.imap_port ||
-      account.imap_secure == null ||
-      !account.smtp_host ||
-      !account.smtp_port ||
-      account.smtp_secure == null
+      !resolved.imap_host ||
+      !resolved.imap_port ||
+      resolved.imap_secure == null ||
+      !resolved.smtp_host ||
+      !resolved.smtp_port ||
+      resolved.smtp_secure == null
     ) {
       return {
         ok: false as const,
@@ -57,19 +125,22 @@ export const clientLogin = createServerFn({ method: "POST" })
     }
 
     const configuredAccount = {
-      ...account,
-      imap_host: account.imap_host,
-      imap_port: account.imap_port,
-      imap_secure: account.imap_secure,
-      smtp_host: account.smtp_host,
-      smtp_port: account.smtp_port,
-      smtp_secure: account.smtp_secure,
+      id: resolved.id,
+      company_id: resolved.company_id,
+      email_address: resolved.email_address,
+      display_name: resolved.display_name,
+      imap_host: resolved.imap_host,
+      imap_port: resolved.imap_port,
+      imap_secure: resolved.imap_secure,
+      smtp_host: resolved.smtp_host,
+      smtp_port: resolved.smtp_port,
+      smtp_secure: resolved.smtp_secure,
     };
 
     const { data: company } = await supabaseAdmin
       .from("companies")
       .select("id, name, app_name, logo_url, brand_primary, brand_accent")
-      .eq("id", account.company_id)
+      .eq("id", configuredAccount.company_id)
       .maybeSingle();
 
     // Verify credentials against the real IMAP server.
