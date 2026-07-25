@@ -368,6 +368,7 @@ function MailApp() {
     messageCache.current.clear();
     inflight.current.clear();
     setSelection(new Set());
+    setSelectMode(false);
   }, [folder]);
 
   const filteredMessages = useMemo(() => {
