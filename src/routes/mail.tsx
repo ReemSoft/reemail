@@ -1315,28 +1315,30 @@ function MailApp() {
             selectedMessage ? "hidden md:flex" : "flex"
           }`}
         >
-          {selection.size > 0 ? (
+          {selectMode || selection.size > 0 ? (
             <div className="flex h-11 shrink-0 items-center gap-2 border-b border-border bg-accent/40 px-4 text-xs">
               <button
                 onClick={toggleSelectAllVisible}
                 className="flex h-9 w-9 shrink-0 items-center justify-center rounded hover:bg-muted"
-                title={selection.size >= filteredMessages.length ? "إلغاء التحديد" : "تحديد الكل"}
+                title={selection.size >= filteredMessages.length && filteredMessages.length > 0 ? "إلغاء التحديد" : "تحديد الكل"}
               >
                 {selection.size >= filteredMessages.length && filteredMessages.length > 0 ? (
                   <CheckSquare className="h-5 w-5 text-primary" />
-                ) : (
+                ) : selection.size > 0 ? (
                   <MinusSquare className="h-5 w-5 text-primary" />
+                ) : (
+                  <Square className="h-5 w-5 text-muted-foreground" />
                 )}
               </button>
               <span className="font-semibold text-foreground">
-                {selection.size} محددة
+                {selection.size > 0 ? `${selection.size} محددة` : "اختر الرسائل"}
               </span>
               <div className="flex-1" />
               {bulkBusy && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />}
               <DropdownMenu dir="rtl">
                 <DropdownMenuTrigger asChild>
                   <button
-                    disabled={bulkBusy}
+                    disabled={bulkBusy || selection.size === 0}
                     className="flex items-center gap-1.5 rounded px-2.5 py-1.5 text-xs font-medium text-foreground transition hover:bg-muted disabled:opacity-50"
                     title="إجراءات"
                   >
@@ -1344,6 +1346,7 @@ function MailApp() {
                     <span>إجراءات</span>
                   </button>
                 </DropdownMenuTrigger>
+
                 <DropdownMenuContent align="start" className="w-56">
                   {folder === "trash" && (
                     <>
