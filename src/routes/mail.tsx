@@ -289,6 +289,7 @@ function MailApp() {
   const [reading, setReading] = useState(false);
   const [selection, setSelection] = useState<Set<string>>(() => new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
+  const [selectMode, setSelectMode] = useState(false);
 
   const { folder, setFolder, counts, setCounts, messages, setMessages, loading, loadingMore, hasMore, loadMore, bridgeError, useMock, refresh } =
     useMailData(session || null);
@@ -367,6 +368,7 @@ function MailApp() {
     messageCache.current.clear();
     inflight.current.clear();
     setSelection(new Set());
+    setSelectMode(false);
   }, [folder]);
 
   const filteredMessages = useMemo(() => {
@@ -566,6 +568,13 @@ function MailApp() {
 
   function clearSelection() {
     setSelection(new Set());
+  }
+
+  function toggleSelectMode() {
+    setSelectMode((v) => {
+      if (v) clearSelection();
+      return !v;
+    });
   }
 
   // Run async ops with limited concurrency to stay fast without hammering the bridge
@@ -914,6 +923,13 @@ function MailApp() {
               >
                 <X className="h-4 w-4" />
               </button>
+              <button
+                onClick={toggleSelectMode}
+                disabled={bulkBusy}
+                className="rounded px-2 py-1.5 text-xs font-medium text-foreground transition hover:bg-muted disabled:opacity-50"
+              >
+                إلغاء
+              </button>
             </div>
           ) : (
             <div className="flex h-11 shrink-0 items-center justify-between border-b border-border px-4 text-xs">
@@ -930,7 +946,17 @@ function MailApp() {
                   {FOLDER_META[folder].label} · {filteredMessages.length}
                 </span>
               </div>
-              {loading && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />}
+              <div className="flex items-center gap-1">
+                {loading && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />}
+                <button
+                  onClick={toggleSelectMode}
+                  className={`rounded px-2 py-1.5 text-xs font-medium transition ${
+                    selectMode ? "bg-primary text-primary-foreground hover:bg-primary/90" : "text-foreground hover:bg-muted"
+                  }`}
+                >
+                  {selectMode ? "إلغاء" : "تحديد"}
+                </button>
+              </div>
             </div>
           )}
           <div className="flex-1 overflow-hidden">
@@ -959,7 +985,11 @@ function MailApp() {
                     active={m.id === selectedId}
                     selected={selection.has(m.id)}
                     anySelected={selection.size > 0}
-                    onClick={() => openMessage(m.id)}
+                    selectMode={selectMode}
+                    onClick={() => {
+                      if (selectMode) toggleSelect(m.id);
+                      else openMessage(m.id);
+                    }}
                     onPrefetch={() => prefetchMessage(m.id)}
                     onToggleStar={(e) => toggleStar(e, m.id)}
                     onToggleSelect={() => toggleSelect(m.id)}
@@ -1030,6 +1060,7 @@ function MessageRow({
   active,
   selected,
   anySelected,
+  selectMode,
   onClick,
   onPrefetch,
   onToggleStar,
@@ -1039,6 +1070,7 @@ function MessageRow({
   active: boolean;
   selected: boolean;
   anySelected: boolean;
+  selectMode: boolean;
   onClick: () => void;
   onPrefetch?: () => void;
   onToggleStar: (e: React.MouseEvent) => void;
@@ -1066,7 +1098,7 @@ function MessageRow({
       <div className="relative flex h-9 w-9 shrink-0 items-center justify-center">
         <div
           className={`flex h-9 w-9 items-center justify-center rounded-full bg-brand-gradient text-sm font-bold text-white transition ${
-            selected || anySelected ? "opacity-0" : "opacity-100 group-hover:opacity-0"
+            selectMode || selected ? "opacity-0" : "opacity-100"
           }`}
         >
           {message.from.name.charAt(0) || message.from.email.charAt(0)}
@@ -1087,7 +1119,7 @@ function MessageRow({
             }
           }}
           className={`absolute inset-0 z-10 flex items-center justify-center rounded-full transition ${
-            selected || anySelected ? "opacity-100" : "opacity-0 group-hover:opacity-100"
+            selectMode || selected ? "opacity-100" : "opacity-0"
           }`}
           title={selected ? "إلغاء التحديد" : "تحديد"}
         >
