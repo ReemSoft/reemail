@@ -814,26 +814,50 @@ function MessageRow({
 function MessageView({
   message,
   loading,
+  myEmail,
   onBack,
   onReply,
+  onReplyAll,
+  onForward,
   onArchive,
   onDelete,
   onSpam,
+  onMarkUnread,
+  onPrint,
 }: {
   message: MailMessage;
   loading: boolean;
+  myEmail: string;
   onBack: () => void;
   onReply: () => void;
+  onReplyAll: () => void;
+  onForward: () => void;
   onArchive: () => void;
   onDelete: () => void;
   onSpam: () => void;
+  onMarkUnread: () => void;
+  onPrint: () => void;
 }) {
+  const recipients = message.to.map((t) => t.name || t.email).join(", ");
+  const isMeOnly =
+    message.to.length === 1 && message.to[0].email.toLowerCase() === myEmail.toLowerCase();
+
+  async function copyEmail() {
+    try {
+      await navigator.clipboard.writeText(message.from.email);
+      toast.success("تم نسخ البريد");
+    } catch {
+      toast.error("تعذّر النسخ");
+    }
+  }
+
   return (
     <>
-      <div className="flex h-12 shrink-0 items-center justify-between border-b border-border bg-card px-3">
+      <div className="flex h-12 shrink-0 items-center justify-between gap-2 border-b border-border bg-card px-2 sm:px-3">
         <button
           onClick={onBack}
           className="flex items-center gap-1.5 rounded-lg p-2 text-sm hover:bg-muted md:hidden"
+          aria-label="رجوع"
         >
           <ChevronLeft className="h-4 w-4" /> رجوع
         </button>
@@ -847,10 +871,62 @@ function MessageView({
           <button onClick={onSpam} className="rounded-lg p-2 hover:bg-muted" title="مزعج">
             <AlertOctagon className="h-4 w-4" />
           </button>
+          <div className="mx-1 h-6 w-px bg-border" />
+          <button
+            onClick={onMarkUnread}
+            className="rounded-lg p-2 hover:bg-muted"
+            title="تعليم كغير مقروءة"
+          >
+            <MailOpen className="h-4 w-4" />
+          </button>
+          <button onClick={onPrint} className="rounded-lg p-2 hover:bg-muted" title="طباعة">
+            <Printer className="h-4 w-4" />
+          </button>
         </div>
-        <button className="rounded-lg p-2 hover:bg-muted">
-          <MoreVertical className="h-4 w-4" />
-        </button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button
+              className="rounded-lg p-2 hover:bg-muted"
+              aria-label="خيارات أكثر"
+            >
+              <MoreVertical className="h-4 w-4" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-56">
+            <DropdownMenuItem onClick={onReply}>
+              <Reply className="h-4 w-4" /> رد
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={onReplyAll}>
+              <ReplyAll className="h-4 w-4" /> رد على الكل
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={onForward}>
+              <Forward className="h-4 w-4" /> إعادة توجيه
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onClick={onMarkUnread}>
+              <MailOpen className="h-4 w-4" /> تعليم كغير مقروءة
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={onPrint}>
+              <Printer className="h-4 w-4" /> طباعة
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={copyEmail}>
+              <Copy className="h-4 w-4" /> نسخ عنوان المرسل
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onClick={onArchive} className="md:hidden">
+              <Archive className="h-4 w-4" /> أرشفة
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={onSpam} className="md:hidden">
+              <AlertOctagon className="h-4 w-4" /> مزعج
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onClick={onDelete}
+              className="text-destructive focus:text-destructive"
+            >
+              <Trash2 className="h-4 w-4" /> حذف
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
       <div className="flex-1 overflow-y-auto">
         {loading ? (
@@ -859,29 +935,43 @@ function MessageView({
           </div>
         ) : (
           <div className="mx-auto max-w-3xl p-4 sm:p-6">
-            <h1 className="text-xl font-bold sm:text-2xl">{message.subject}</h1>
+            <h1 className="break-words text-xl font-bold leading-snug sm:text-2xl">
+              {message.subject || "(بدون موضوع)"}
+            </h1>
+
             <div className="mt-4 flex items-start gap-3 border-b border-border pb-4">
               <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-brand-gradient text-sm font-bold text-white">
-                {message.from.name.charAt(0) || message.from.email.charAt(0)}
+                {(message.from.name || message.from.email).charAt(0).toUpperCase()}
               </div>
-              <div className="flex-1">
-                <div className="flex flex-wrap items-baseline justify-between gap-2">
-                  <div>
-                    <span className="font-semibold">{message.from.name || message.from.email}</span>
-                    <span className="mr-2 text-xs text-muted-foreground" dir="ltr">
-                      &lt;{message.from.email}&gt;
-                    </span>
-                  </div>
-                  <span className="text-xs text-muted-foreground">{formatDate(message.date)}</span>
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                  <span className="truncate font-semibold">
+                    {message.from.name || message.from.email}
+                  </span>
+                  <span
+                    className="truncate text-xs text-muted-foreground"
+                    dir="ltr"
+                    title={message.from.email}
+                  >
+                    {message.from.email}
+                  </span>
                 </div>
                 <p className="mt-0.5 text-xs text-muted-foreground">
-                  إليّ · {message.to.map((t) => t.email).join(", ")}
+                  {isMeOnly ? "إليّ" : <>إلى: <span dir="ltr">{recipients}</span></>}
+                  {message.cc && message.cc.length > 0 && (
+                    <>
+                      {" · "}نسخة: <span dir="ltr">{message.cc.map((c) => c.email).join(", ")}</span>
+                    </>
+                  )}
                 </p>
               </div>
+              <span className="shrink-0 text-xs text-muted-foreground">
+                {formatDate(message.date)}
+              </span>
             </div>
 
             <article
-              className="prose prose-sm mt-6 max-w-none text-foreground"
+              className="prose prose-sm mt-6 max-w-none break-words text-foreground prose-a:text-brand-accent prose-img:rounded-lg"
               dangerouslySetInnerHTML={{ __html: message.body || message.preview }}
             />
 
@@ -909,12 +999,24 @@ function MessageView({
               </div>
             )}
 
-            <div className="mt-6 flex gap-2">
+            <div className="mt-6 flex flex-wrap gap-2">
               <button
                 onClick={onReply}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-4 py-2 text-sm font-medium hover:bg-muted"
+                className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-4 py-2 text-sm font-medium hover:bg-muted"
               >
-                <Pencil className="h-4 w-4" /> رد
+                <Reply className="h-4 w-4" /> رد
+              </button>
+              <button
+                onClick={onReplyAll}
+                className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-4 py-2 text-sm font-medium hover:bg-muted"
+              >
+                <ReplyAll className="h-4 w-4" /> رد على الكل
+              </button>
+              <button
+                onClick={onForward}
+                className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-4 py-2 text-sm font-medium hover:bg-muted"
+              >
+                <Forward className="h-4 w-4" /> إعادة توجيه
               </button>
             </div>
           </div>
