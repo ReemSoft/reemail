@@ -1069,21 +1069,72 @@ function MessageView({
                     {formatDate(message.date)}
                   </span>
                 </div>
-                <div className="mt-1 space-y-0.5 text-xs text-muted-foreground">
-                  <div className="truncate">
-                    <span className="text-foreground/70">إلى: </span>
-                    {isMeOnly ? (
-                      "إليّ"
-                    ) : message.to.length > 0 ? (
-                      <span dir="ltr">{message.to.map((t) => t.email).join(", ")}</span>
-                    ) : (
-                      "—"
-                    )}
-                  </div>
-                  {message.cc && message.cc.length > 0 && (
-                    <div className="truncate">
-                      <span className="text-foreground/70">نسخة: </span>
-                      <span dir="ltr">{message.cc.map((c) => c.email).join(", ")}</span>
+                <div className="mt-1 text-xs text-muted-foreground">
+                  <button
+                    type="button"
+                    onClick={() => setDetailsOpen((v) => !v)}
+                    aria-expanded={detailsOpen}
+                    className="inline-flex max-w-full items-center gap-1 rounded hover:text-foreground"
+                    title="تفاصيل الرسالة"
+                  >
+                    <span className="truncate">
+                      <span className="text-foreground/70">إلى </span>
+                      <span>{toSummary}</span>
+                    </span>
+                    <ChevronDown
+                      className={`h-3.5 w-3.5 shrink-0 transition-transform ${detailsOpen ? "rotate-180" : ""}`}
+                    />
+                  </button>
+                  {detailsOpen && (
+                    <div className="mt-2 rounded-lg border border-border bg-muted/40 p-3">
+                      <dl className="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1.5 text-xs">
+                        <dt className="text-foreground/70">من:</dt>
+                        <dd className="min-w-0 break-all">
+                          {message.from.name ? `${message.from.name} ` : ""}
+                          <span dir="ltr" className="text-muted-foreground">
+                            &lt;{message.from.email || "—"}&gt;
+                          </span>
+                        </dd>
+                        <dt className="text-foreground/70">إلى:</dt>
+                        <dd className="min-w-0 break-all" dir="ltr">
+                          {message.to.length > 0 ? message.to.map((t) => t.email).join(", ") : "—"}
+                        </dd>
+                        {message.cc && message.cc.length > 0 && (
+                          <>
+                            <dt className="text-foreground/70">نسخة:</dt>
+                            <dd className="min-w-0 break-all" dir="ltr">
+                              {message.cc.map((c) => c.email).join(", ")}
+                            </dd>
+                          </>
+                        )}
+                        <dt className="text-foreground/70">التاريخ:</dt>
+                        <dd className="min-w-0">{fullDate}</dd>
+                        {message.mailedBy && (
+                          <>
+                            <dt className="text-foreground/70">mailed-by:</dt>
+                            <dd className="min-w-0 break-all" dir="ltr">{message.mailedBy}</dd>
+                          </>
+                        )}
+                        {message.signedBy && (
+                          <>
+                            <dt className="text-foreground/70">signed-by:</dt>
+                            <dd className="min-w-0 break-all" dir="ltr">{message.signedBy}</dd>
+                          </>
+                        )}
+                        {message.security && (
+                          <>
+                            <dt className="text-foreground/70">الأمان:</dt>
+                            <dd className="min-w-0 inline-flex items-center gap-1">
+                              {isSecure ? (
+                                <ShieldCheck className="h-3.5 w-3.5 text-emerald-600" />
+                              ) : (
+                                <ShieldAlert className="h-3.5 w-3.5 text-amber-600" />
+                              )}
+                              <span>{message.security}</span>
+                            </dd>
+                          </>
+                        )}
+                      </dl>
                     </div>
                   )}
                 </div>
