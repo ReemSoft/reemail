@@ -507,6 +507,50 @@ function MailApp() {
     }
   }
 
+  async function toggleRead(e: React.MouseEvent, id: string) {
+    e.stopPropagation();
+    const parsed = parseMessageId(id);
+    if (!parsed || !session) return;
+    const msg = messages.find((m) => m.id === id);
+    if (!msg) return;
+    const nextRead = !msg.read;
+    // Optimistic
+    setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, read: nextRead } : m)));
+    const cached = messageCache.current.get(id);
+    if (cached) messageCache.current.set(id, { ...cached, read: nextRead });
+    setCounts((prev) => {
+      const cur = prev[parsed.folder];
+      if (!cur) return prev;
+      const delta = nextRead ? -1 : 1;
+      const unread = Math.max(0, cur.unread + delta);
+      return { ...prev, [parsed.folder]: { ...cur, unread } };
+    });
+    try {
+      await markRead({
+        data: {
+          account: session.account,
+          password: session.password,
+          folder: parsed.folder,
+          uid: parsed.uid,
+          read: nextRead,
+        },
+      });
+    } catch (err: any) {
+      // Revert
+      setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, read: !nextRead } : m)));
+      const c = messageCache.current.get(id);
+      if (c) messageCache.current.set(id, { ...c, read: !nextRead });
+      setCounts((prev) => {
+        const cur = prev[parsed.folder];
+        if (!cur) return prev;
+        const delta = nextRead ? 1 : -1;
+        const unread = Math.max(0, cur.unread + delta);
+        return { ...prev, [parsed.folder]: { ...cur, unread } };
+      });
+      toast.error(err?.message || "فشل تحديث حالة القراءة");
+    }
+  }
+
   async function handleMove(id: string, toFolder: MailFolder) {
     const parsed = parseMessageId(id);
     if (!parsed || !session) return;
@@ -1197,6 +1241,7 @@ function MailApp() {
                     }}
                     onPrefetch={() => prefetchMessage(m.id)}
                     onToggleStar={(e) => toggleStar(e, m.id)}
+                    onToggleRead={(e) => toggleRead(e, m.id)}
                     onToggleSelect={() => toggleSelect(m.id)}
                   />
                 )}
@@ -1270,6 +1315,7 @@ function MessageRow({
   onClick,
   onPrefetch,
   onToggleStar,
+  onToggleRead,
   onToggleSelect,
 }: {
   message: MailMessage;
@@ -1280,6 +1326,7 @@ function MessageRow({
   onClick: () => void;
   onPrefetch?: () => void;
   onToggleStar: (e: React.MouseEvent) => void;
+  onToggleRead: (e: React.MouseEvent) => void;
   onToggleSelect: () => void;
 }) {
   return (
@@ -1366,6 +1413,21 @@ function MessageRow({
             title={message.starred ? "إزالة المميّز" : "تمييز"}
           >
             <Star className={`h-3.5 w-3.5 ${message.starred ? "fill-star" : ""}`} />
+          </button>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggleRead(e);
+            }}
+            className="rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+            title={message.read ? "تعليم كغير مقروءة" : "تعليم كمقروءة"}
+          >
+            {message.read ? (
+              <MailIcon className="h-3.5 w-3.5" />
+            ) : (
+              <MailOpen className="h-3.5 w-3.5" />
+            )}
           </button>
           {message.hasAttachments && <Paperclip className="h-3 w-3 text-muted-foreground" />}
           {message.labels?.map((l) => (
