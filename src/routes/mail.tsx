@@ -1053,7 +1053,9 @@ function MailApp() {
           </div>
 
           <nav className="px-2">
-            {(Object.keys(FOLDER_META) as MailFolder[]).map((f) => {
+            {(Object.keys(FOLDER_META) as MailFolder[])
+              .filter((f) => counts[f]?.supported !== false)
+              .map((f) => {
               const meta = FOLDER_META[f];
               const active = f === folder;
               const Icon = meta.icon;
