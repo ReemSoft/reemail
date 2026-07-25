@@ -38,6 +38,9 @@ export interface MailMessage {
   hasAttachments: boolean;
   attachments?: MailAttachment[];
   labels?: string[];
+  mailedBy?: string;
+  signedBy?: string;
+  security?: string;
 }
 
 export interface FolderCount {
