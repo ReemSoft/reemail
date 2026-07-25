@@ -31,6 +31,9 @@ import {
   Copy,
   ShieldCheck,
   ShieldAlert,
+  CheckSquare,
+  Square,
+  MinusSquare,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -284,6 +287,8 @@ function MailApp() {
   const [compose, setCompose] = useState<ComposeInitial | null>(null);
   const [selectedMessage, setSelectedMessage] = useState<MailMessage | null>(null);
   const [reading, setReading] = useState(false);
+  const [selection, setSelection] = useState<Set<string>>(() => new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
 
   const { folder, setFolder, counts, setCounts, messages, setMessages, loading, loadingMore, hasMore, loadMore, bridgeError, useMock, refresh } =
     useMailData(session || null);
@@ -361,6 +366,7 @@ function MailApp() {
   useEffect(() => {
     messageCache.current.clear();
     inflight.current.clear();
+    setSelection(new Set());
   }, [folder]);
 
   const filteredMessages = useMemo(() => {
@@ -540,6 +546,159 @@ function MailApp() {
     }
   }
 
+  function toggleSelect(id: string) {
+    setSelection((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleSelectAllVisible() {
+    setSelection((prev) => {
+      if (prev.size >= filteredMessages.length && filteredMessages.length > 0) {
+        return new Set();
+      }
+      return new Set(filteredMessages.map((m) => m.id));
+    });
+  }
+
+  function clearSelection() {
+    setSelection(new Set());
+  }
+
+  // Run async ops with limited concurrency to stay fast without hammering the bridge
+  async function runBatch<T>(items: T[], limit: number, worker: (item: T) => Promise<any>) {
+    let idx = 0;
+    let failed = 0;
+    const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
+      while (idx < items.length) {
+        const i = idx++;
+        try {
+          await worker(items[i]);
+        } catch {
+          failed++;
+        }
+      }
+    });
+    await Promise.all(runners);
+    return { failed };
+  }
+
+  async function bulkMove(toFolder: MailFolder) {
+    if (!session || selection.size === 0 || bulkBusy) return;
+    const ids = Array.from(selection);
+    const snapshot = messages;
+    const prevSelectedId = selectedId;
+    const prevSelected = selectedMessage;
+    setBulkBusy(true);
+    // Optimistic remove from list
+    setMessages((prev) => prev.filter((m) => !selection.has(m.id)));
+    if (prevSelectedId && selection.has(prevSelectedId)) {
+      setSelectedId(null);
+      setSelectedMessage(null);
+    }
+    ids.forEach((id) => messageCache.current.delete(id));
+    clearSelection();
+    const { failed } = await runBatch(ids, 5, async (id) => {
+      const parsed = parseMessageId(id);
+      if (!parsed) return;
+      await move({
+        data: {
+          account: session.account,
+          password: session.password,
+          folder: parsed.folder,
+          uid: parsed.uid,
+          toFolder,
+        },
+      });
+    });
+    setBulkBusy(false);
+    if (failed > 0) {
+      setMessages(snapshot);
+      setSelectedId(prevSelectedId);
+      setSelectedMessage(prevSelected);
+      toast.error(`فشل نقل ${failed} من ${ids.length} رسالة`);
+    } else {
+      toast.success(`تم نقل ${ids.length} رسالة`);
+      loadCountsSoft();
+    }
+  }
+
+  async function bulkDelete() {
+    if (!session || selection.size === 0 || bulkBusy) return;
+    const ids = Array.from(selection);
+    if (!window.confirm(`تأكيد حذف ${ids.length} رسالة نهائياً؟`)) return;
+    const snapshot = messages;
+    const prevSelectedId = selectedId;
+    const prevSelected = selectedMessage;
+    setBulkBusy(true);
+    setMessages((prev) => prev.filter((m) => !selection.has(m.id)));
+    if (prevSelectedId && selection.has(prevSelectedId)) {
+      setSelectedId(null);
+      setSelectedMessage(null);
+    }
+    ids.forEach((id) => messageCache.current.delete(id));
+    clearSelection();
+    const { failed } = await runBatch(ids, 5, async (id) => {
+      const parsed = parseMessageId(id);
+      if (!parsed) return;
+      await deleteFn({
+        data: {
+          account: session.account,
+          password: session.password,
+          folder: parsed.folder,
+          uid: parsed.uid,
+        },
+      });
+    });
+    setBulkBusy(false);
+    if (failed > 0) {
+      setMessages(snapshot);
+      setSelectedId(prevSelectedId);
+      setSelectedMessage(prevSelected);
+      toast.error(`فشل حذف ${failed} من ${ids.length} رسالة`);
+    } else {
+      toast.success(`تم حذف ${ids.length} رسالة`);
+      loadCountsSoft();
+    }
+  }
+
+  async function bulkMarkUnread() {
+    if (!session || selection.size === 0 || bulkBusy) return;
+    const ids = Array.from(selection);
+    setBulkBusy(true);
+    setMessages((prev) => prev.map((m) => (selection.has(m.id) ? { ...m, read: false } : m)));
+    ids.forEach((id) => {
+      const c = messageCache.current.get(id);
+      if (c) messageCache.current.set(id, { ...c, read: false });
+    });
+    clearSelection();
+    const { failed } = await runBatch(ids, 5, async (id) => {
+      const parsed = parseMessageId(id);
+      if (!parsed) return;
+      await markRead({
+        data: {
+          account: session.account,
+          password: session.password,
+          folder: parsed.folder,
+          uid: parsed.uid,
+          read: false,
+        },
+      });
+    });
+    setBulkBusy(false);
+    if (failed > 0) toast.error(`فشل تعليم ${failed} رسالة`);
+    else toast.success(`تم تعليم ${ids.length} رسالة كغير مقروءة`);
+    loadCountsSoft();
+  }
+
+  function loadCountsSoft() {
+    // Refresh counts silently after bulk actions
+    setTimeout(() => refresh(), 300);
+  }
+
   function handleSignOut() {
     clearMailSession();
     navigate({ to: "/login" });
@@ -696,12 +855,84 @@ function MailApp() {
             selectedMessage ? "hidden md:flex" : "flex"
           }`}
         >
-          <div className="flex h-11 shrink-0 items-center justify-between border-b border-border px-4 text-xs">
-            <span className="font-semibold text-muted-foreground">
-              {FOLDER_META[folder].label} · {filteredMessages.length}
-            </span>
-            {loading && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />}
-          </div>
+          {selection.size > 0 ? (
+            <div className="flex h-11 shrink-0 items-center gap-1 border-b border-border bg-accent/40 px-2 text-xs">
+              <button
+                onClick={toggleSelectAllVisible}
+                className="flex h-8 w-8 items-center justify-center rounded hover:bg-muted"
+                title={selection.size >= filteredMessages.length ? "إلغاء التحديد" : "تحديد الكل"}
+              >
+                {selection.size >= filteredMessages.length && filteredMessages.length > 0 ? (
+                  <CheckSquare className="h-4 w-4 text-primary" />
+                ) : (
+                  <MinusSquare className="h-4 w-4 text-primary" />
+                )}
+              </button>
+              <span className="ml-1 font-semibold text-foreground">
+                {selection.size} محددة
+              </span>
+              <div className="mx-1 h-5 w-px bg-border" />
+              <button
+                onClick={() => bulkMove("archive")}
+                disabled={bulkBusy}
+                className="flex h-8 w-8 items-center justify-center rounded hover:bg-muted disabled:opacity-50"
+                title="أرشفة المحدد"
+              >
+                <Archive className="h-4 w-4" />
+              </button>
+              <button
+                onClick={() => bulkMove("spam")}
+                disabled={bulkBusy}
+                className="flex h-8 w-8 items-center justify-center rounded hover:bg-muted disabled:opacity-50"
+                title="نقل إلى المزعج"
+              >
+                <AlertOctagon className="h-4 w-4" />
+              </button>
+              <button
+                onClick={bulkMarkUnread}
+                disabled={bulkBusy}
+                className="flex h-8 w-8 items-center justify-center rounded hover:bg-muted disabled:opacity-50"
+                title="تعليم كغير مقروءة"
+              >
+                <MailIcon className="h-4 w-4" />
+              </button>
+              <button
+                onClick={bulkDelete}
+                disabled={bulkBusy}
+                className="flex h-8 w-8 items-center justify-center rounded text-destructive hover:bg-destructive/10 disabled:opacity-50"
+                title="حذف المحدد"
+              >
+                <Trash2 className="h-4 w-4" />
+              </button>
+              <div className="flex-1" />
+              {bulkBusy && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />}
+              <button
+                onClick={clearSelection}
+                disabled={bulkBusy}
+                className="flex h-8 w-8 items-center justify-center rounded hover:bg-muted disabled:opacity-50"
+                title="إلغاء التحديد"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          ) : (
+            <div className="flex h-11 shrink-0 items-center justify-between border-b border-border px-4 text-xs">
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={toggleSelectAllVisible}
+                  disabled={filteredMessages.length === 0}
+                  className="flex h-7 w-7 items-center justify-center rounded hover:bg-muted disabled:opacity-40"
+                  title="تحديد الكل"
+                >
+                  <Square className="h-4 w-4 text-muted-foreground" />
+                </button>
+                <span className="font-semibold text-muted-foreground">
+                  {FOLDER_META[folder].label} · {filteredMessages.length}
+                </span>
+              </div>
+              {loading && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />}
+            </div>
+          )}
           <div className="flex-1 overflow-hidden">
             {loading && filteredMessages.length === 0 ? (
               <div className="flex h-full items-center justify-center">
@@ -726,9 +957,12 @@ function MailApp() {
                   <MessageRow
                     message={m}
                     active={m.id === selectedId}
+                    selected={selection.has(m.id)}
+                    anySelected={selection.size > 0}
                     onClick={() => openMessage(m.id)}
                     onPrefetch={() => prefetchMessage(m.id)}
                     onToggleStar={(e) => toggleStar(e, m.id)}
+                    onToggleSelect={() => toggleSelect(m.id)}
                   />
                 )}
                 components={{
@@ -794,26 +1028,66 @@ function MailApp() {
 function MessageRow({
   message,
   active,
+  selected,
+  anySelected,
   onClick,
   onPrefetch,
   onToggleStar,
+  onToggleSelect,
 }: {
   message: MailMessage;
   active: boolean;
+  selected: boolean;
+  anySelected: boolean;
   onClick: () => void;
   onPrefetch?: () => void;
   onToggleStar: (e: React.MouseEvent) => void;
+  onToggleSelect: () => void;
 }) {
   return (
-    <button
+    <div
+      role="button"
+      tabIndex={0}
       onClick={onClick}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onClick();
+        }
+      }}
       onMouseEnter={onPrefetch}
       onFocus={onPrefetch}
       onTouchStart={onPrefetch}
-      className={`flex w-full items-start gap-3 border-b border-border/60 px-4 py-3 text-right transition hover:bg-muted/50 ${
+      className={`group flex w-full cursor-pointer items-start gap-3 border-b border-border/60 px-4 py-3 text-right transition hover:bg-muted/50 ${
         active ? "bg-accent" : ""
-      } ${!message.read ? "bg-card" : "bg-card/70"}`}
+      } ${selected ? "bg-primary/5" : ""} ${!message.read ? "bg-card" : "bg-card/70"}`}
     >
+      <div
+        role="checkbox"
+        aria-checked={selected}
+        tabIndex={0}
+        onClick={(e) => {
+          e.stopPropagation();
+          onToggleSelect();
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            e.stopPropagation();
+            onToggleSelect();
+          }
+        }}
+        className={`mt-1 flex h-5 w-5 shrink-0 items-center justify-center rounded transition ${
+          selected || anySelected ? "opacity-100" : "opacity-0 group-hover:opacity-100"
+        }`}
+        title={selected ? "إلغاء التحديد" : "تحديد"}
+      >
+        {selected ? (
+          <CheckSquare className="h-4 w-4 text-primary" />
+        ) : (
+          <Square className="h-4 w-4 text-muted-foreground" />
+        )}
+      </div>
 
       <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-brand-gradient text-sm font-bold text-white">
         {message.from.name.charAt(0) || message.from.email.charAt(0)}
@@ -839,7 +1113,11 @@ function MessageRow({
         <p className="mt-0.5 truncate text-xs text-muted-foreground">{message.preview}</p>
         <div className="mt-1 flex items-center gap-2">
           <button
-            onClick={onToggleStar}
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggleStar(e);
+            }}
             className={`rounded p-0.5 hover:bg-muted ${message.starred ? "text-star" : "text-muted-foreground"}`}
             title={message.starred ? "إزالة المميّز" : "تمييز"}
           >
@@ -856,7 +1134,7 @@ function MessageRow({
           ))}
         </div>
       </div>
-    </button>
+    </div>
   );
 }
 
