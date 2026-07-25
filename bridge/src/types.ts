@@ -17,9 +17,13 @@ export interface MailAddress {
 
 export interface MailAttachment {
   id: string;
+  /** IMAP BODYSTRUCTURE part number (e.g. "2", "1.2"). */
+  part?: string;
   filename: string;
   size: number;
   mimeType: string;
+  disposition?: string;
+  contentId?: string;
 }
 
 export interface MailMessage {

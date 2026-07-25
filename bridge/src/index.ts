@@ -12,6 +12,7 @@ import {
   moveMessage,
   deleteMessage,
   searchMessages,
+  downloadAttachment,
 } from "./imap.js";
 import { sendMessage } from "./smtp.js";
 import type { MailAccount, MailFolder } from "./types.js";
@@ -249,6 +250,86 @@ app.post("/api/send", requireKey, async (req, res) => {
   }
 });
 
+// ---- Attachment download (streamed) ----
+const ATTACHMENT_MAX_BYTES = Number(process.env.ATTACHMENT_MAX_BYTES || 50 * 1024 * 1024);
+const INLINE_MIME_ALLOWLIST = new Set<string>([
+  "image/png",
+  "image/jpeg",
+  "image/jpg",
+  "image/gif",
+  "image/webp",
+  "application/pdf",
+]);
+
+function sanitizeFilename(name: string | undefined | null): string {
+  if (!name) return "attachment";
+  // Strip path separators, control chars, CR/LF (header injection).
+  const cleaned = name
+    .replace(/[\r\n]/g, "")
+    .replace(/[/\\]/g, "_")
+    .replace(/[\x00-\x1f\x7f]/g, "")
+    .trim();
+  return cleaned.slice(0, 200) || "attachment";
+}
+
+function contentDispositionHeader(filename: string, mimeType: string): string {
+  const disposition = INLINE_MIME_ALLOWLIST.has(mimeType.toLowerCase()) ? "inline" : "attachment";
+  const asciiSafe = filename.replace(/[^\x20-\x7e]/g, "_").replace(/["\\]/g, "_");
+  // RFC 5987 encoding for the real UTF-8 filename (Arabic names).
+  const encoded = encodeURIComponent(filename);
+  return `${disposition}; filename="${asciiSafe}"; filename*=UTF-8''${encoded}`;
+}
+
+const AttachmentPayloadSchema = MessagePayloadSchema.extend({
+  part: z.string().min(1).max(50),
+});
+
+app.post("/api/attachment", requireKey, async (req, res) => {
+  try {
+    const payload = AttachmentPayloadSchema.parse(req.body);
+    const result = await downloadAttachment(
+      payload.account as any,
+      payload.password,
+      payload.folder,
+      payload.uid,
+      payload.part,
+      ATTACHMENT_MAX_BYTES,
+    );
+    if (!result) {
+      return res.status(404).json({ ok: false, error: "Attachment not found" });
+    }
+    const { meta, content, cleanup } = result;
+    const mimeType = (meta.contentType || "application/octet-stream").toLowerCase();
+    const filename = sanitizeFilename(meta.filename);
+    res.setHeader("Content-Type", mimeType);
+    res.setHeader("Content-Disposition", contentDispositionHeader(filename, mimeType));
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("Cache-Control", "private, no-store");
+    if (typeof meta.expectedSize === "number" && meta.expectedSize > 0) {
+      res.setHeader("Content-Length", String(meta.expectedSize));
+    }
+    // Cancel IMAP read if client disconnects early.
+    res.on("close", () => {
+      if (!res.writableEnded) {
+        try { content.destroy(); } catch {}
+        cleanup().catch(() => {});
+      }
+    });
+    content.on("error", (err) => {
+      console.error("[bridge] attachment stream error:", err);
+      if (!res.headersSent) res.status(500).end("Stream error");
+      else res.end();
+      cleanup().catch(() => {});
+    });
+    content.pipe(res);
+  } catch (err: any) {
+    console.error("[bridge] /api/attachment error:", err);
+    if (!res.headersSent) {
+      return res.status(500).json({ ok: false, error: err?.message || "Failed to download attachment" });
+    }
+    res.end();
+  }
+});
 const HOST = process.env.HOST || "127.0.0.1";
 app.listen(PORT, HOST, () => {
   console.log(`[bridge] MailMaestro Bridge running on ${HOST}:${PORT}`);

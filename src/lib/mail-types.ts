@@ -16,10 +16,15 @@ export interface MailAddress {
 }
 
 export interface MailAttachment {
+  /** Legacy id (checksum / index). Kept for compat; not usable for IMAP fetch. */
   id: string;
+  /** IMAP BODYSTRUCTURE part number (e.g. "2", "1.2"). Required for download. */
+  part?: string;
   filename: string;
   size: number; // bytes
   mimeType: string;
+  disposition?: "attachment" | "inline" | string;
+  contentId?: string;
 }
 
 export interface MailMessage {
