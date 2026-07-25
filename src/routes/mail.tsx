@@ -1400,7 +1400,23 @@ function MailApp() {
                   <Square className="h-4 w-4 text-muted-foreground" />
                 </button>
                 <span className="font-semibold text-muted-foreground">
-                  {FOLDER_META[folder].label} · {filteredMessages.length}
+                  {inDeepSearch ? (
+                    <span className="flex items-center gap-1.5">
+                      <Globe className="h-3.5 w-3.5 text-primary" />
+                      <span>
+                        نتائج السيرفر · {filteredMessages.length}
+                        {deepIncludeBody && (
+                          <span className="ms-1 text-[10px] text-primary/70">
+                            (يشمل المحتوى)
+                          </span>
+                        )}
+                      </span>
+                    </span>
+                  ) : (
+                    <>
+                      {FOLDER_META[folder].label} · {filteredMessages.length}
+                    </>
+                  )}
                 </span>
               </div>
               <div className="flex items-center gap-1">
