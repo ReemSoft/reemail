@@ -1039,9 +1039,10 @@ function MailApp() {
   }
 
   function loadCountsSoft() {
-    // Refresh counts silently after bulk actions
-    setTimeout(() => refresh(), 300);
+    // Refresh counters only — never touch messages or sort order.
+    setTimeout(() => loadCounts(), 300);
   }
+
 
   function handleSignOut() {
     clearMailSession();
