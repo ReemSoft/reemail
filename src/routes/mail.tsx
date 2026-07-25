@@ -1012,7 +1012,7 @@ function MailApp() {
               const meta = FOLDER_META[f];
               const active = f === folder;
               const Icon = meta.icon;
-              const { unread } = counts[f] || { unread: 0 };
+              const { total } = counts[f] || { total: 0 };
               return (
                 <button
                   key={f}
@@ -1030,13 +1030,13 @@ function MailApp() {
                 >
                   <Icon className={`h-4 w-4 ${active ? "text-primary" : ""}`} />
                   <span className="flex-1 text-right">{meta.label}</span>
-                  {unread > 0 && (
+                  {total > 0 && (
                     <span
                       className={`rounded-full px-1.5 text-[11px] font-bold ${
                         active ? "text-primary" : "text-muted-foreground"
                       }`}
                     >
-                      {unread}
+                      {total}
                     </span>
                   )}
                 </button>
