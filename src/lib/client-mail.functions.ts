@@ -116,5 +116,5 @@ export const clientLogin = createServerFn({ method: "POST" })
     }
 
 
-    return { ok: true as const, account, company };
+    return { ok: true as const, account: configuredAccount, company };
   });
