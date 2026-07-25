@@ -490,6 +490,10 @@ function MailApp() {
   }, [query, searchMode, deepIncludeBody, folder, session, searchFn]);
 
   const filteredMessages = useMemo(() => {
+    // Deep server-side search: always show server results (even empty).
+    if (searchMode === "deep" && query.trim().length >= 2) {
+      return deepResults ?? [];
+    }
     if (!query.trim()) return messages;
     const q = query.toLowerCase();
     return messages.filter(
@@ -499,7 +503,8 @@ function MailApp() {
         m.from.email.toLowerCase().includes(q) ||
         m.preview.toLowerCase().includes(q),
     );
-  }, [messages, query]);
+  }, [messages, query, searchMode, deepResults]);
+  const inDeepSearch = searchMode === "deep" && query.trim().length >= 2;
 
   async function openMessage(id: string) {
     setSelectedId(id);
