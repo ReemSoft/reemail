@@ -167,8 +167,11 @@ function useMailData(session: MailSession | null) {
   });
   const [messages, setMessages] = useState<MailMessage[]>([]);
   const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(false);
   const [bridgeError, setBridgeError] = useState<string | null>(null);
   const [useMock, setUseMock] = useState(false);
+  const PAGE = 50;
 
   const loadCounts = useCallback(async () => {
     if (!session) return;
@@ -199,21 +202,46 @@ function useMailData(session: MailSession | null) {
     setLoading(true);
     try {
       const result = await getMessages({
-        data: { account: session.account, password: session.password, folder },
+        data: { account: session.account, password: session.password, folder, limit: PAGE, offset: 0 },
       });
       if (!result.ok) throw new Error(result.error);
       setMessages(result.messages);
+      setHasMore(result.messages.length >= PAGE);
       setBridgeError(null);
       setUseMock(false);
     } catch (err: any) {
       setBridgeError(err?.message || "فشل جلب الرسائل");
       setMessages(getMockMessages(folder));
+      setHasMore(false);
       setUseMock(true);
     } finally {
       setLoading(false);
     }
 
   }, [session, folder, getMessages]);
+
+  const loadMore = useCallback(async () => {
+    if (!session || loadingMore || loading || !hasMore) return;
+    setLoadingMore(true);
+    try {
+      const offset = messages.length;
+      const result = await getMessages({
+        data: { account: session.account, password: session.password, folder, limit: PAGE, offset },
+      });
+      if (!result.ok) throw new Error(result.error);
+      setMessages((prev) => {
+        const seen = new Set(prev.map((m) => m.id));
+        const merged = [...prev];
+        for (const m of result.messages) if (!seen.has(m.id)) merged.push(m);
+        return merged;
+      });
+      setHasMore(result.messages.length >= PAGE);
+    } catch {
+      setHasMore(false);
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [session, folder, getMessages, messages.length, loadingMore, loading, hasMore]);
 
   useEffect(() => {
     loadCounts();
@@ -231,6 +259,9 @@ function useMailData(session: MailSession | null) {
     messages,
     setMessages,
     loading,
+    loadingMore,
+    hasMore,
+    loadMore,
     bridgeError,
     useMock,
     refresh: () => {
