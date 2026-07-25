@@ -221,6 +221,7 @@ app.post("/api/send", requireKey, async (req, res) => {
   }
 });
 
-app.listen(PORT, "0.0.0.0", () => {
-  console.log(`[bridge] MailMaestro Bridge running on port ${PORT}`);
+const HOST = process.env.HOST || "127.0.0.1";
+app.listen(PORT, HOST, () => {
+  console.log(`[bridge] MailMaestro Bridge running on ${HOST}:${PORT}`);
 });
