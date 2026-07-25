@@ -1048,6 +1048,7 @@ function MessageRow({
   active,
   selected,
   anySelected,
+  selectMode,
   onClick,
   onPrefetch,
   onToggleStar,
@@ -1057,6 +1058,7 @@ function MessageRow({
   active: boolean;
   selected: boolean;
   anySelected: boolean;
+  selectMode: boolean;
   onClick: () => void;
   onPrefetch?: () => void;
   onToggleStar: (e: React.MouseEvent) => void;
