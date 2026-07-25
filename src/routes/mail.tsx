@@ -781,6 +781,9 @@ function MailApp() {
     }
     ids.forEach((id) => messageCache.current.delete(id));
     clearSelection();
+    const idsToThread = new Map<string, string | undefined>(
+      snapshot.filter((m) => selection.has(m.id)).map((m) => [m.id, m.threadId]),
+    );
     const { failed } = await runBatch(ids, 5, async (id) => {
       const parsed = parseMessageId(id);
       if (!parsed) return;
@@ -793,6 +796,7 @@ function MailApp() {
             uid: parsed.uid,
           },
         });
+        forgetOrigin(idsToThread.get(id));
       } else {
         await move({
           data: {
@@ -803,6 +807,7 @@ function MailApp() {
             toFolder: "trash",
           },
         });
+        rememberOrigin(idsToThread.get(id), parsed.folder);
       }
     });
     setBulkBusy(false);
@@ -816,6 +821,52 @@ function MailApp() {
       loadCountsSoft();
     }
   }
+
+  async function bulkRestore() {
+    if (!session || selection.size === 0 || bulkBusy) return;
+    if (folder !== "trash") return;
+    const ids = Array.from(selection);
+    const snapshot = messages;
+    const prevSelectedId = selectedId;
+    const prevSelected = selectedMessage;
+    const idsToThread = new Map<string, string | undefined>(
+      snapshot.filter((m) => selection.has(m.id)).map((m) => [m.id, m.threadId]),
+    );
+    setBulkBusy(true);
+    setMessages((prev) => prev.filter((m) => !selection.has(m.id)));
+    if (prevSelectedId && selection.has(prevSelectedId)) {
+      setSelectedId(null);
+      setSelectedMessage(null);
+    }
+    ids.forEach((id) => messageCache.current.delete(id));
+    clearSelection();
+    const { failed } = await runBatch(ids, 5, async (id) => {
+      const parsed = parseMessageId(id);
+      if (!parsed) return;
+      const target = getOrigin(idsToThread.get(id));
+      await move({
+        data: {
+          account: session.account,
+          password: session.password,
+          folder: parsed.folder,
+          uid: parsed.uid,
+          toFolder: target,
+        },
+      });
+      forgetOrigin(idsToThread.get(id));
+    });
+    setBulkBusy(false);
+    if (failed > 0) {
+      setMessages(snapshot);
+      setSelectedId(prevSelectedId);
+      setSelectedMessage(prevSelected);
+      toast.error(`فشل استعادة ${failed} من ${ids.length} رسالة`);
+    } else {
+      toast.success(`تم استعادة ${ids.length} رسالة`);
+      loadCountsSoft();
+    }
+  }
+
 
   async function bulkMarkUnread() {
     if (!session || selection.size === 0 || bulkBusy) return;
