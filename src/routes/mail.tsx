@@ -1057,12 +1057,14 @@ function MessageView({
                     {message.from.name && message.from.email && (
                       <div
                         className="truncate text-xs text-muted-foreground"
-                        dir="ltr"
                         title={message.from.email}
                       >
-                        {message.from.email}
+                        <span dir="ltr" style={{ unicodeBidi: "isolate" }}>
+                          {message.from.email}
+                        </span>
                       </div>
                     )}
+
                   </div>
                   <span
                     className="shrink-0 whitespace-nowrap text-xs text-muted-foreground"
