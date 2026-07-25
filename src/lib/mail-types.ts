@@ -47,4 +47,10 @@ export interface FolderCount {
   folder: MailFolder;
   total: number;
   unread: number;
+  /**
+   * Whether the folder is actually available on the underlying mail server.
+   * `starred` is a virtual folder (\Flagged in INBOX) and is always supported.
+   * `archive` / `all` are only supported when a matching mailbox exists.
+   */
+  supported?: boolean;
 }
