@@ -20,6 +20,7 @@ import {
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { useCompanyTheme } from "@/hooks/use-company-theme";
+import { useConfirm } from "@/components/ui/confirm-provider";
 
 interface Company {
   id: string;
