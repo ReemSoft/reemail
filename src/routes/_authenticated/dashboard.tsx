@@ -223,7 +223,8 @@ function CompanyDashboard() {
         <nav className="flex gap-2 overflow-x-auto md:flex-col">
           {[
             { id: "branding", label: "العلامة التجارية", icon: Palette },
-            { id: "accounts", label: "حسابات البريد", icon: MailIcon, count: accounts.length },
+            { id: "domains", label: "دوماينات البريد", icon: Globe, count: domains.length },
+            { id: "accounts", label: "تخصيصات الحسابات", icon: MailIcon, count: accounts.length },
           ].map((t) => (
             <button
               key={t.id}
@@ -251,9 +252,13 @@ function CompanyDashboard() {
           {tab === "branding" && (
             <BrandingTab company={company} setCompany={setCompany} />
           )}
+          {tab === "domains" && (
+            <DomainsTab domains={domains} companyId={company.id} onChange={load} />
+          )}
           {tab === "accounts" && (
             <AccountsTab
               accounts={accounts}
+              domains={domains}
               companyId={company.id}
               onChange={load}
             />
