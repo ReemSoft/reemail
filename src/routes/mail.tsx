@@ -1315,6 +1315,7 @@ function MessageRow({
   onClick,
   onPrefetch,
   onToggleStar,
+  onToggleRead,
   onToggleSelect,
 }: {
   message: MailMessage;
@@ -1325,6 +1326,7 @@ function MessageRow({
   onClick: () => void;
   onPrefetch?: () => void;
   onToggleStar: (e: React.MouseEvent) => void;
+  onToggleRead: (e: React.MouseEvent) => void;
   onToggleSelect: () => void;
 }) {
   return (
