@@ -957,7 +957,7 @@ function MailApp() {
                 onClick={bulkDelete}
                 disabled={bulkBusy}
                 className="flex h-8 w-8 items-center justify-center rounded text-destructive hover:bg-destructive/10 disabled:opacity-50"
-                title="حذف المحدد"
+                title={folder === "trash" ? "حذف المحدد نهائياً" : "نقل المحدد إلى المهملات"}
               >
                 <Trash2 className="h-4 w-4" />
               </button>
