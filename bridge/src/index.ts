@@ -12,6 +12,7 @@ import {
   moveMessage,
   deleteMessage,
   searchMessages,
+  downloadAttachment,
 } from "./imap.js";
 import { sendMessage } from "./smtp.js";
 import type { MailAccount, MailFolder } from "./types.js";
