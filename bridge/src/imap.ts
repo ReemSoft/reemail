@@ -285,18 +285,31 @@ export function parsedMailToMessage(parsed: ParsedMail, folder: MailFolder): Mai
   };
 }
 
+function flattenAddressObject(obj: AddressObject | AddressObject[]): { name: string; email: string }[] {
+  const arr = Array.isArray(obj) ? obj : [obj];
+  const out: { name: string; email: string }[] = [];
+  for (const item of arr) {
+    if (!item) continue;
+    const values = (item as any).value as Array<{ name?: string; address?: string; group?: any[] }> | undefined;
+    if (Array.isArray(values) && values.length) {
+      for (const v of values) {
+        if (v?.address || v?.name) {
+          out.push({ name: v.name || "", email: v.address || "" });
+        }
+      }
+    } else if ((item as any).address || (item as any).name) {
+      out.push({ name: (item as any).name || "", email: (item as any).address || "" });
+    }
+  }
+  return out;
+}
+
 function addressFromAddressObject(obj: AddressObject): { name: string; email: string } {
-  const first = Array.isArray(obj) ? obj[0] : obj;
-  if (!first) return { name: "", email: "" };
-  return {
-    name: first.name || "",
-    email: first.address || "",
-  };
+  return flattenAddressObject(obj)[0] || { name: "", email: "" };
 }
 
 function addressesFromAddressObject(obj: AddressObject | AddressObject[]): { name: string; email: string }[] {
-  const arr = Array.isArray(obj) ? obj : [obj];
-  return arr.map((a) => addressFromAddressObject(a));
+  return flattenAddressObject(obj);
 }
 
 function makePreview(text: string): string {
