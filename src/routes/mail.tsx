@@ -938,7 +938,17 @@ function MailApp() {
                   {FOLDER_META[folder].label} · {filteredMessages.length}
                 </span>
               </div>
-              {loading && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />}
+              <div className="flex items-center gap-1">
+                {loading && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />}
+                <button
+                  onClick={toggleSelectMode}
+                  className={`rounded px-2 py-1.5 text-xs font-medium transition ${
+                    selectMode ? "bg-primary text-primary-foreground hover:bg-primary/90" : "text-foreground hover:bg-muted"
+                  }`}
+                >
+                  {selectMode ? "إلغاء" : "تحديد"}
+                </button>
+              </div>
             </div>
           )}
           <div className="flex-1 overflow-hidden">
