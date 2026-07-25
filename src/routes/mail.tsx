@@ -478,6 +478,34 @@ function MailApp() {
   }
 
 
+  async function handleMarkUnread(id: string) {
+    const parsed = parseMessageId(id);
+    if (!parsed || !session) return;
+    setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, read: false } : m)));
+    setCounts((prev) => {
+      const cur = prev[parsed.folder];
+      if (!cur) return prev;
+      return { ...prev, [parsed.folder]: { ...cur, unread: cur.unread + 1 } };
+    });
+    const c = messageCache.current.get(id);
+    if (c) messageCache.current.set(id, { ...c, read: false });
+    setSelectedId(null);
+    setSelectedMessage(null);
+    try {
+      await markRead({
+        data: {
+          account: session.account,
+          password: session.password,
+          folder: parsed.folder,
+          uid: parsed.uid,
+          read: false,
+        },
+      });
+    } catch (err: any) {
+      toast.error(err?.message || "فشل التعليم كغير مقروءة");
+    }
+  }
+
   function handleSignOut() {
     clearMailSession();
     navigate({ to: "/login" });
