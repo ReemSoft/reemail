@@ -1393,6 +1393,7 @@ function MessageView({
   onDelete,
   onSpam,
   onMarkUnread,
+  onRestore,
   onPrint,
 }: {
   message: MailMessage;
@@ -1406,6 +1407,7 @@ function MessageView({
   onDelete: () => void;
   onSpam: () => void;
   onMarkUnread: () => void;
+  onRestore: () => void;
   onPrint: () => void;
 }) {
   const [detailsOpen, setDetailsOpen] = useState(false);
