@@ -122,7 +122,7 @@ export async function getMessages(
 
     const lock = await client.getMailboxLock(path);
     try {
-      const total = client.mailbox.exists ?? 0;
+      const total = (client.mailbox as any)?.exists ?? 0;
       if (total === 0) return [];
 
       const start = Math.max(1, total - offset - limit + 1);
@@ -138,7 +138,7 @@ export async function getMessages(
       // Fetch structure for attachment detection
       const messages: MailMessage[] = [];
       for await (const msg of client.fetch(
-        { uid: ids, all: true },
+        { uid: ids, all: true } as any,
         { uid: true, envelope: true, internalDate: true, flags: true, bodyStructure: true },
       )) {
         const parsed = await messageFromFetch(msg, folder, client);
@@ -176,7 +176,7 @@ export async function getMessageBody(
       );
       if (!msg) return null;
 
-      const parsed = await parseMessageSource(msg.source, folder);
+      const parsed = await parseMessageSource(msg.source as Buffer, folder);
       parsed.id = `${folder}:${uid}`;
       parsed.threadId = msg.envelope?.messageId || parsed.id;
       parsed.read = !msg.flags?.has("\\Seen");
@@ -323,9 +323,9 @@ export async function markRead(
     const lock = await client.getMailboxLock(path);
     try {
       if (read) {
-        await client.messageFlagsAdd({ uid: [uid] }, ["\\Seen"], { uid: true });
+        await client.messageFlagsAdd({ uid: [uid] } as any, ["\\Seen"], { uid: true });
       } else {
-        await client.messageFlagsRemove({ uid: [uid] }, ["\\Seen"], { uid: true });
+        await client.messageFlagsRemove({ uid: [uid] } as any, ["\\Seen"], { uid: true });
       }
     } finally {
       lock.release();
@@ -351,9 +351,9 @@ export async function starMessage(
     const lock = await client.getMailboxLock(path);
     try {
       if (starred) {
-        await client.messageFlagsAdd({ uid: [uid] }, ["\\Flagged"], { uid: true });
+        await client.messageFlagsAdd({ uid: [uid] } as any, ["\\Flagged"], { uid: true });
       } else {
-        await client.messageFlagsRemove({ uid: [uid] }, ["\\Flagged"], { uid: true });
+        await client.messageFlagsRemove({ uid: [uid] } as any, ["\\Flagged"], { uid: true });
       }
     } finally {
       lock.release();
@@ -379,7 +379,7 @@ export async function moveMessage(
     if (!fromPath || !toPath) throw new Error("Folder not found");
     const lock = await client.getMailboxLock(fromPath);
     try {
-      await client.messageMove({ uid: [uid] }, toPath, { uid: true });
+      await client.messageMove({ uid: [uid] } as any, toPath, { uid: true });
     } finally {
       lock.release();
     }

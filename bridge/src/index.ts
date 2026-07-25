@@ -106,8 +106,8 @@ app.get("/health", (_req, res) => {
 app.post("/api/verify", requireKey, async (req, res) => {
   try {
     const payload = AuthPayloadSchema.parse(req.body);
-    const result = await verifyCredentials(payload.account, payload.password);
-    if (!result.ok) {
+    const result = await verifyCredentials(payload.account as any, payload.password);
+    if (!result.ok && "error" in result) {
       return res.status(401).json({ ok: false, error: result.error });
     }
     return res.json({ ok: true, displayName: result.displayName });
@@ -119,7 +119,7 @@ app.post("/api/verify", requireKey, async (req, res) => {
 app.post("/api/folders", requireKey, async (req, res) => {
   try {
     const payload = AuthPayloadSchema.parse(req.body);
-    const counts = await getFolderCounts(payload.account, payload.password);
+    const counts = await getFolderCounts(payload.account as any, payload.password);
     return res.json({ ok: true, counts });
   } catch (err: any) {
     console.error("[bridge] /api/folders error:", err);
@@ -130,7 +130,7 @@ app.post("/api/folders", requireKey, async (req, res) => {
 app.post("/api/messages", requireKey, async (req, res) => {
   try {
     const payload = FolderPayloadSchema.parse(req.body);
-    const messages = await getMessages(payload.account, payload.password, payload.folder, {
+    const messages = await getMessages(payload.account as any, payload.password, payload.folder, {
       limit: req.body.limit ?? 50,
       offset: req.body.offset ?? 0,
     });
@@ -144,7 +144,7 @@ app.post("/api/messages", requireKey, async (req, res) => {
 app.post("/api/message", requireKey, async (req, res) => {
   try {
     const payload = MessagePayloadSchema.parse(req.body);
-    const message = await getMessageBody(payload.account, payload.password, payload.folder, payload.uid);
+    const message = await getMessageBody(payload.account as any, payload.password, payload.folder, payload.uid);
     if (!message) {
       return res.status(404).json({ ok: false, error: "Message not found" });
     }
@@ -158,7 +158,7 @@ app.post("/api/message", requireKey, async (req, res) => {
 app.post("/api/mark-read", requireKey, async (req, res) => {
   try {
     const payload = MarkReadPayloadSchema.parse(req.body);
-    await markRead(payload.account, payload.password, payload.folder, payload.uid, payload.read);
+    await markRead(payload.account as any, payload.password, payload.folder, payload.uid, payload.read);
     return res.json({ ok: true });
   } catch (err: any) {
     console.error("[bridge] /api/mark-read error:", err);
@@ -169,7 +169,7 @@ app.post("/api/mark-read", requireKey, async (req, res) => {
 app.post("/api/star", requireKey, async (req, res) => {
   try {
     const payload = StarPayloadSchema.parse(req.body);
-    await starMessage(payload.account, payload.password, payload.folder, payload.uid, payload.starred);
+    await starMessage(payload.account as any, payload.password, payload.folder, payload.uid, payload.starred);
     return res.json({ ok: true });
   } catch (err: any) {
     console.error("[bridge] /api/star error:", err);
@@ -180,7 +180,7 @@ app.post("/api/star", requireKey, async (req, res) => {
 app.post("/api/move", requireKey, async (req, res) => {
   try {
     const payload = MovePayloadSchema.parse(req.body);
-    await moveMessage(payload.account, payload.password, payload.folder, payload.uid, payload.toFolder);
+    await moveMessage(payload.account as any, payload.password, payload.folder, payload.uid, payload.toFolder);
     return res.json({ ok: true });
   } catch (err: any) {
     console.error("[bridge] /api/move error:", err);
@@ -191,7 +191,7 @@ app.post("/api/move", requireKey, async (req, res) => {
 app.post("/api/delete", requireKey, async (req, res) => {
   try {
     const payload = MessagePayloadSchema.parse(req.body);
-    await deleteMessage(payload.account, payload.password, payload.folder, payload.uid);
+    await deleteMessage(payload.account as any, payload.password, payload.folder, payload.uid);
     return res.json({ ok: true });
   } catch (err: any) {
     console.error("[bridge] /api/delete error:", err);
@@ -202,16 +202,16 @@ app.post("/api/delete", requireKey, async (req, res) => {
 app.post("/api/send", requireKey, async (req, res) => {
   try {
     const payload = SendPayloadSchema.parse(req.body);
-    const result = await sendMessage(payload.account, payload.password, {
+    const result = await sendMessage(payload.account as any, payload.password, {
       from: { name: payload.account.display_name || payload.account.email_address, email: payload.account.email_address },
-      to: payload.to,
-      cc: payload.cc,
-      bcc: payload.bcc,
+      to: payload.to as any,
+      cc: payload.cc as any,
+      bcc: payload.bcc as any,
       subject: payload.subject,
       bodyHtml: payload.bodyHtml,
       bodyText: payload.bodyText,
     });
-    if (!result.ok) {
+    if (!result.ok && "error" in result) {
       return res.status(500).json({ ok: false, error: result.error });
     }
     return res.json({ ok: true, messageId: result.messageId });
