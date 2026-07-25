@@ -930,7 +930,13 @@ function MessageView({
               <MoreVertical className="h-4 w-4" />
             </button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-56">
+          <DropdownMenuContent
+            align="end"
+            sideOffset={8}
+            collisionPadding={12}
+            dir="rtl"
+            className="w-56"
+          >
             <DropdownMenuItem onClick={onReply}>
               <Reply className="h-4 w-4" /> رد
             </DropdownMenuItem>
