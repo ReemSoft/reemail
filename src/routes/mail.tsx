@@ -631,20 +631,26 @@ function MessageRow({
   message,
   active,
   onClick,
+  onPrefetch,
   onToggleStar,
 }: {
   message: MailMessage;
   active: boolean;
   onClick: () => void;
+  onPrefetch?: () => void;
   onToggleStar: (e: React.MouseEvent) => void;
 }) {
   return (
     <button
       onClick={onClick}
+      onMouseEnter={onPrefetch}
+      onFocus={onPrefetch}
+      onTouchStart={onPrefetch}
       className={`flex w-full items-start gap-3 border-b border-border/60 px-4 py-3 text-right transition hover:bg-muted/50 ${
         active ? "bg-accent" : ""
       } ${!message.read ? "bg-card" : "bg-card/70"}`}
     >
+
       <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-brand-gradient text-sm font-bold text-white">
         {message.from.name.charAt(0) || message.from.email.charAt(0)}
       </div>
