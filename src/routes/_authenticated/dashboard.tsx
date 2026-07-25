@@ -384,12 +384,12 @@ function AccountsTab({
     setForm({
       display_name: account.display_name || "",
       email_address: account.email_address,
-      imap_host: account.imap_host,
-      imap_port: account.imap_port,
-      imap_secure: account.imap_secure,
-      smtp_host: account.smtp_host,
-      smtp_port: account.smtp_port,
-      smtp_secure: account.smtp_secure,
+      imap_host: account.imap_host ?? "",
+      imap_port: account.imap_port ?? 993,
+      imap_secure: account.imap_secure ?? true,
+      smtp_host: account.smtp_host ?? "",
+      smtp_port: account.smtp_port ?? 465,
+      smtp_secure: account.smtp_secure ?? true,
     });
     setOpen(true);
   }
@@ -398,15 +398,17 @@ function AccountsTab({
     e.preventDefault();
     setSubmitting(true);
 
+    // Empty host means "inherit from the domain's settings".
+    const hostOrNull = (v: string) => (v.trim() === "" ? null : v.trim());
     const basePayload = {
       display_name: form.display_name || null,
       email_address: form.email_address,
-      imap_host: form.imap_host,
-      imap_port: form.imap_port,
-      imap_secure: form.imap_secure,
-      smtp_host: form.smtp_host,
-      smtp_port: form.smtp_port,
-      smtp_secure: form.smtp_secure,
+      imap_host: hostOrNull(form.imap_host),
+      imap_port: hostOrNull(form.imap_host) ? form.imap_port : null,
+      imap_secure: hostOrNull(form.imap_host) ? form.imap_secure : null,
+      smtp_host: hostOrNull(form.smtp_host),
+      smtp_port: hostOrNull(form.smtp_host) ? form.smtp_port : null,
+      smtp_secure: hostOrNull(form.smtp_host) ? form.smtp_secure : null,
     };
 
     if (editingId) {
@@ -427,6 +429,8 @@ function AccountsTab({
       if (error) return toast.error(error.message);
       toast.success("تمت إضافة الحساب");
     }
+
+
 
     closeModal();
     await onChange();
