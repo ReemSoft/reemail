@@ -204,9 +204,9 @@ app.post("/api/send", requireKey, async (req, res) => {
     const payload = SendPayloadSchema.parse(req.body);
     const result = await sendMessage(payload.account as any, payload.password, {
       from: { name: payload.account.display_name || payload.account.email_address, email: payload.account.email_address },
-      to: payload.to,
-      cc: payload.cc,
-      bcc: payload.bcc,
+      to: payload.to as any,
+      cc: payload.cc as any,
+      bcc: payload.bcc as any,
       subject: payload.subject,
       bodyHtml: payload.bodyHtml,
       bodyText: payload.bodyText,
