@@ -40,6 +40,20 @@ export function resolveFolderPath(
   mailboxes: ListResponse[],
   folder: MailFolder,
 ): string | undefined {
+  // Starred is not a real folder on most IMAP servers — it's the \Flagged
+  // flag inside INBOX. Map it to INBOX so per-UID operations (mark read,
+  // star/unstar, move, delete, fetch body) target the correct mailbox.
+  if (folder === "starred") {
+    const inbox = mailboxes.find((m) => m.path.toUpperCase() === "INBOX");
+    if (inbox) return inbox.path;
+    // Fall back to a real Starred mailbox if the server exposes one (Gmail).
+    const gmailStarred = mailboxes.find((m) =>
+      m.path.toLowerCase().includes("starred"),
+    );
+    if (gmailStarred) return gmailStarred.path;
+    return "INBOX";
+  }
+
   const candidates = WELL_KNOWN_FOLDERS[folder] || [];
 
   // Direct path match
