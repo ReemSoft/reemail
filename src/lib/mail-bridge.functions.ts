@@ -150,7 +150,9 @@ export const bridgeMarkRead = createServerFn({ method: "POST" })
     }) => input,
   )
   .handler(async ({ data }) => {
-    return bridgePost("/api/mark-read", data);
+    const result = await bridgePost("/api/mark-read", data);
+    if (!result.ok) throw new Error((result.error as string) || "فشل تحديث حالة القراءة على الخادم");
+    return result;
   });
 
 export const bridgeStar = createServerFn({ method: "POST" })

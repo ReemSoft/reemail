@@ -239,7 +239,7 @@ export async function getMessageBody(
       const parsed = await parseMessageSource(msg.source as Buffer, folder);
       parsed.id = `${folder}:${uid}`;
       parsed.threadId = msg.envelope?.messageId || parsed.id;
-      parsed.read = !msg.flags?.has("\\Seen");
+      parsed.read = msg.flags?.has("\\Seen") || false;
       parsed.starred = msg.flags?.has("\\Flagged") || false;
       parsed.folder = folder;
       return parsed;
@@ -276,7 +276,7 @@ async function messageFromFetch(
     preview,
     body: "",
     date,
-    read: !msg.flags?.has("\\Seen"),
+    read: msg.flags?.has("\\Seen") || false,
     starred: msg.flags?.has("\\Flagged") || false,
     hasAttachments,
     attachments: undefined,
@@ -342,7 +342,7 @@ export function parsedMailToMessage(parsed: ParsedMail, folder: MailFolder): Mai
     preview,
     body,
     date: parsed.date ? parsed.date.toISOString() : new Date().toISOString(),
-    read: !parsed.flags?.includes("\\Seen"),
+    read: parsed.flags?.includes("\\Seen") || false,
     starred: parsed.flags?.includes("\\Flagged") || false,
     hasAttachments,
     attachments,
