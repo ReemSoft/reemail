@@ -10,6 +10,7 @@ import {
   Plus,
   Trash2,
   Server,
+  Globe,
   X,
   Copy,
   Check,
