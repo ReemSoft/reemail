@@ -1137,7 +1137,7 @@ function MailApp() {
               </div>
               <DropdownMenuItem
                 onSelect={() => setSearchMode("quick")}
-                className="flex items-start gap-2"
+                className="flex items-start gap-2 cursor-pointer hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground"
               >
                 <Zap className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
                 <div className="flex-1">
@@ -1154,7 +1154,7 @@ function MailApp() {
               </DropdownMenuItem>
               <DropdownMenuItem
                 onSelect={() => setSearchMode("deep")}
-                className="flex items-start gap-2"
+                className="flex items-start gap-2 cursor-pointer hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground"
               >
                 <Globe className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
                 <div className="flex-1">
@@ -1177,7 +1177,7 @@ function MailApp() {
                       e.preventDefault();
                       setDeepIncludeBody((v) => !v);
                     }}
-                    className="flex items-start gap-2"
+                    className="flex items-start gap-2 cursor-pointer hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground"
                   >
                     <div className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded border border-border">
                       {deepIncludeBody && <Check className="h-3 w-3 text-primary" />}
