@@ -332,9 +332,22 @@ function MailApp() {
   const [selection, setSelection] = useState<Set<string>>(() => new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
   const [selectMode, setSelectMode] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
 
-  const { folder, setFolder, counts, setCounts, messages, setMessages, loading, loadingMore, hasMore, loadMore, bridgeError, useMock, refresh } =
+  const { folder, setFolder, counts, setCounts, messages, setMessages, loading, loadingMore, hasMore, loadMore, bridgeError, useMock, refresh: rawRefresh } =
     useMailData(session || null);
+
+  const refresh = useCallback(async () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    try {
+      await Promise.resolve(rawRefresh());
+      // keep spinner at least 600ms so it always feels intentional
+      await new Promise((r) => setTimeout(r, 600));
+    } finally {
+      setRefreshing(false);
+    }
+  }, [rawRefresh, refreshing]);
 
 
   const getOne = useServerFn(bridgeGetMessage);
@@ -1018,18 +1031,20 @@ function MailApp() {
           </div>
           <button
             onClick={refresh}
-            className="hidden items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm font-medium text-muted-foreground hover:bg-muted hover:text-foreground sm:inline-flex"
+            disabled={refreshing}
+            className="hidden items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm font-medium text-muted-foreground transition hover:bg-muted hover:text-foreground disabled:opacity-70 sm:inline-flex"
             title="تحديث البريد"
           >
-            <RefreshCw className="h-4 w-4" />
-            <span className="hidden lg:inline">تحديث</span>
+            <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin text-primary" : ""}`} />
+            <span className="hidden lg:inline">{refreshing ? "جاري التحديث..." : "تحديث"}</span>
           </button>
           <button
             onClick={refresh}
-            className="rounded-lg p-2 hover:bg-muted sm:hidden"
+            disabled={refreshing}
+            className="rounded-lg p-2 hover:bg-muted disabled:opacity-70 sm:hidden"
             aria-label="تحديث"
           >
-            <RefreshCw className="h-4 w-4" />
+            <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin text-primary" : ""}`} />
           </button>
           <button
             onClick={handleSignOut}
