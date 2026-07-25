@@ -1,5 +1,7 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { useEffect, useMemo, useState, useCallback } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import { Virtuoso } from "react-virtuoso";
+
 import {
   Inbox,
   Star,
@@ -150,6 +152,7 @@ function useMailData(session: MailSession | null) {
     folder,
     setFolder,
     counts,
+    setCounts,
     messages,
     setMessages,
     loading,
@@ -162,6 +165,7 @@ function useMailData(session: MailSession | null) {
   };
 }
 
+
 function MailApp() {
   const navigate = useNavigate();
   const [session, setSession] = useState<MailSession | null | undefined>(undefined);
@@ -172,14 +176,62 @@ function MailApp() {
   const [selectedMessage, setSelectedMessage] = useState<MailMessage | null>(null);
   const [reading, setReading] = useState(false);
 
-  const { folder, setFolder, counts, messages, setMessages, loading, bridgeError, useMock, refresh } =
+  const { folder, setFolder, counts, setCounts, messages, setMessages, loading, bridgeError, useMock, refresh } =
     useMailData(session || null);
+
 
   const getOne = useServerFn(bridgeGetMessage);
   const markRead = useServerFn(bridgeMarkRead);
   const star = useServerFn(bridgeStar);
   const move = useServerFn(bridgeMove);
   const deleteFn = useServerFn(bridgeDelete);
+
+  // In-memory caches for instant open (prefetch on hover)
+  const messageCache = useRef<Map<string, MailMessage>>(new Map());
+  const inflight = useRef<Map<string, Promise<MailMessage | null>>>(new Map());
+
+  const fetchMessage = useCallback(
+    (id: string): Promise<MailMessage | null> => {
+      if (!session) return Promise.resolve(null);
+      const cached = messageCache.current.get(id);
+      if (cached) return Promise.resolve(cached);
+      const existing = inflight.current.get(id);
+      if (existing) return existing;
+      const parsed = parseMessageId(id);
+      if (!parsed) return Promise.resolve(null);
+      const p = getOne({
+        data: {
+          account: session.account,
+          password: session.password,
+          folder: parsed.folder,
+          uid: parsed.uid,
+        },
+      })
+        .then((result) => {
+          if (result.ok && result.message) {
+            messageCache.current.set(id, result.message);
+            return result.message;
+          }
+          return null;
+        })
+        .catch(() => null)
+        .finally(() => {
+          inflight.current.delete(id);
+        });
+      inflight.current.set(id, p);
+      return p;
+    },
+    [session, getOne],
+  );
+
+  const prefetchMessage = useCallback(
+    (id: string) => {
+      if (!messageCache.current.has(id) && !inflight.current.has(id)) {
+        void fetchMessage(id);
+      }
+    },
+    [fetchMessage],
+  );
 
   useCompanyTheme(
     session?.company
@@ -195,6 +247,12 @@ function MailApp() {
     }
     setSession(s);
   }, [navigate]);
+
+  // Clear message cache when switching folders (memory hygiene)
+  useEffect(() => {
+    messageCache.current.clear();
+    inflight.current.clear();
+  }, [folder]);
 
   const filteredMessages = useMemo(() => {
     if (!query.trim()) return messages;
@@ -215,24 +273,44 @@ function MailApp() {
       setSelectedMessage(getMockMessage(id) ?? null);
       return;
     }
-    setReading(true);
+    const cached = messageCache.current.get(id);
+    if (cached) {
+      // Instant open (0ms perceived latency)
+      setSelectedMessage(cached);
+      setReading(false);
+    } else {
+      setSelectedMessage(null);
+      setReading(true);
+    }
     try {
-      const result = await getOne({
-        data: { account: session.account, password: session.password, folder: parsed.folder, uid: parsed.uid },
-      });
-      if (!result.ok) throw new Error(result.error);
-      setSelectedMessage(result.message);
-      if (result.message && !result.message.read) {
+      const msg = await fetchMessage(id);
+      if (msg) setSelectedMessage(msg);
+      else if (!cached) throw new Error("فشل فتح الرسالة");
 
-        await markRead({
-          data: { account: session.account, password: session.password, folder: parsed.folder, uid: parsed.uid, read: true },
-        });
-        // Optimistically update local read state
+      const listMsg = messages.find((m) => m.id === id);
+      if (listMsg && !listMsg.read) {
+        // Optimistic read
         setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, read: true } : m)));
+        setCounts((prev) => {
+          const cur = prev[parsed.folder];
+          if (!cur || cur.unread <= 0) return prev;
+          return { ...prev, [parsed.folder]: { ...cur, unread: cur.unread - 1 } };
+        });
+        markRead({
+          data: {
+            account: session.account,
+            password: session.password,
+            folder: parsed.folder,
+            uid: parsed.uid,
+            read: true,
+          },
+        }).catch(() => {});
       }
     } catch (err: any) {
-      toast.error(err?.message || "فشل فتح الرسالة");
-      setSelectedMessage(getMockMessage(id) ?? null);
+      if (!cached) {
+        toast.error(err?.message || "فشل فتح الرسالة");
+        setSelectedMessage(getMockMessage(id) ?? null);
+      }
     } finally {
       setReading(false);
     }
@@ -244,6 +322,10 @@ function MailApp() {
     if (!parsed || !session) return;
     const msg = messages.find((m) => m.id === id);
     const nextStarred = !msg?.starred;
+    // Optimistic
+    setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, starred: nextStarred } : m)));
+    const cached = messageCache.current.get(id);
+    if (cached) messageCache.current.set(id, { ...cached, starred: nextStarred });
     try {
       await star({
         data: {
@@ -254,8 +336,13 @@ function MailApp() {
           starred: nextStarred,
         },
       });
-      setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, starred: nextStarred } : m)));
     } catch (err: any) {
+      // Revert
+      setMessages((prev) =>
+        prev.map((m) => (m.id === id ? { ...m, starred: !nextStarred } : m)),
+      );
+      const c = messageCache.current.get(id);
+      if (c) messageCache.current.set(id, { ...c, starred: !nextStarred });
       toast.error(err?.message || "فشل تحديث المميّز");
     }
   }
@@ -263,6 +350,15 @@ function MailApp() {
   async function handleMove(id: string, toFolder: MailFolder) {
     const parsed = parseMessageId(id);
     if (!parsed || !session) return;
+    // Snapshot for rollback
+    const snapshot = messages;
+    const prevSelectedId = selectedId;
+    const prevSelected = selectedMessage;
+    // Optimistic
+    setMessages((prev) => prev.filter((m) => m.id !== id));
+    setSelectedId(null);
+    setSelectedMessage(null);
+    messageCache.current.delete(id);
     try {
       await move({
         data: {
@@ -274,10 +370,11 @@ function MailApp() {
         },
       });
       toast.success("تم نقل الرسالة");
-      setMessages((prev) => prev.filter((m) => m.id !== id));
-      setSelectedId(null);
-      setSelectedMessage(null);
     } catch (err: any) {
+      // Revert
+      setMessages(snapshot);
+      setSelectedId(prevSelectedId);
+      setSelectedMessage(prevSelected);
       toast.error(err?.message || "فشل نقل الرسالة");
     }
   }
@@ -285,18 +382,26 @@ function MailApp() {
   async function handleDelete(id: string) {
     const parsed = parseMessageId(id);
     if (!parsed || !session) return;
+    const snapshot = messages;
+    const prevSelectedId = selectedId;
+    const prevSelected = selectedMessage;
+    setMessages((prev) => prev.filter((m) => m.id !== id));
+    setSelectedId(null);
+    setSelectedMessage(null);
+    messageCache.current.delete(id);
     try {
       await deleteFn({
         data: { account: session.account, password: session.password, folder: parsed.folder, uid: parsed.uid },
       });
       toast.success("تم حذف الرسالة");
-      setMessages((prev) => prev.filter((m) => m.id !== id));
-      setSelectedId(null);
-      setSelectedMessage(null);
     } catch (err: any) {
+      setMessages(snapshot);
+      setSelectedId(prevSelectedId);
+      setSelectedMessage(prevSelected);
       toast.error(err?.message || "فشل حذف الرسالة");
     }
   }
+
 
   function handleSignOut() {
     clearMailSession();
@@ -460,7 +565,7 @@ function MailApp() {
             </span>
             {loading && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />}
           </div>
-          <div className="flex-1 overflow-y-auto">
+          <div className="flex-1 overflow-hidden">
             {loading && filteredMessages.length === 0 ? (
               <div className="flex h-full items-center justify-center">
                 <Loader2 className="h-6 w-6 animate-spin text-primary" />
@@ -471,16 +576,24 @@ function MailApp() {
                 <p className="text-sm">لا توجد رسائل هنا</p>
               </div>
             ) : (
-              filteredMessages.map((m) => (
-                <MessageRow
-                  key={m.id}
-                  message={m}
-                  active={m.id === selectedId}
-                  onClick={() => openMessage(m.id)}
-                  onToggleStar={(e) => toggleStar(e, m.id)}
-                />
-              ))
+              <Virtuoso
+                style={{ height: "100%" }}
+                data={filteredMessages}
+                overscan={800}
+                increaseViewportBy={{ top: 400, bottom: 800 }}
+                computeItemKey={(_, m) => m.id}
+                itemContent={(_, m) => (
+                  <MessageRow
+                    message={m}
+                    active={m.id === selectedId}
+                    onClick={() => openMessage(m.id)}
+                    onPrefetch={() => prefetchMessage(m.id)}
+                    onToggleStar={(e) => toggleStar(e, m.id)}
+                  />
+                )}
+              />
             )}
+
           </div>
         </div>
 
@@ -518,20 +631,26 @@ function MessageRow({
   message,
   active,
   onClick,
+  onPrefetch,
   onToggleStar,
 }: {
   message: MailMessage;
   active: boolean;
   onClick: () => void;
+  onPrefetch?: () => void;
   onToggleStar: (e: React.MouseEvent) => void;
 }) {
   return (
     <button
       onClick={onClick}
+      onMouseEnter={onPrefetch}
+      onFocus={onPrefetch}
+      onTouchStart={onPrefetch}
       className={`flex w-full items-start gap-3 border-b border-border/60 px-4 py-3 text-right transition hover:bg-muted/50 ${
         active ? "bg-accent" : ""
       } ${!message.read ? "bg-card" : "bg-card/70"}`}
     >
+
       <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-brand-gradient text-sm font-bold text-white">
         {message.from.name.charAt(0) || message.from.email.charAt(0)}
       </div>
