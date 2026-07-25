@@ -1,6 +1,7 @@
 import { ImapFlow, type ListResponse, type SearchObject } from "imapflow";
 import { simpleParser, type AddressObject, type ParsedMail } from "mailparser";
-import type { MailAccount, MailFolder, FolderCount, MailMessage } from "./types.js";
+import type { Readable } from "node:stream";
+import type { MailAccount, MailFolder, FolderCount, MailMessage, MailAttachment } from "./types.js";
 
 const IMAP_TIMEOUT_MS = 30_000;
 
