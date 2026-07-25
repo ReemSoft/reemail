@@ -571,3 +571,86 @@ export async function verifyCredentials(
     await client.logout().catch(() => {});
   }
 }
+
+// ---------------------------------------------------------------------------
+// Server-side search (IMAP SEARCH — matches the Roundcube/RFC 3501 approach).
+// Default scope: subject + from + to + cc (headers only, near-instant on any
+// modern IMAP server, no BODY parsing). When `includeBody` is true we also
+// include IMAP BODY, which asks the server to scan message bodies — slower
+// but correct. Uses server-side ESEARCH transparently via imapflow when the
+// server supports it. Returns at most `limit` newest matches with envelopes.
+// ---------------------------------------------------------------------------
+
+function orChain(items: SearchObject[]): SearchObject {
+  if (items.length === 0) return {} as SearchObject;
+  if (items.length === 1) return items[0];
+  return { or: [items[0], orChain(items.slice(1))] } as unknown as SearchObject;
+}
+
+export async function searchMessages(
+  account: MailAccount,
+  password: string,
+  folder: MailFolder,
+  query: string,
+  options: { includeBody?: boolean; limit?: number } = {},
+): Promise<MailMessage[]> {
+  const q = (query || "").trim();
+  if (q.length < 2) return [];
+  const limit = Math.min(Math.max(options.limit ?? 100, 1), 200);
+  const includeBody = !!options.includeBody;
+
+  const client = makeImapClient(account, password);
+  try {
+    await client.connect();
+    const mailboxes = await listMailboxes(client);
+
+    // Starred is virtual (\Flagged in INBOX) — search there.
+    let path: string | undefined;
+    let extraCriteria: SearchObject | null = null;
+    if (folder === "starred") {
+      path = resolveFolderPath(mailboxes, "inbox") || "INBOX";
+      extraCriteria = { flagged: true } as SearchObject;
+    } else {
+      path = resolveFolderPath(mailboxes, folder);
+    }
+    if (!path) return [];
+
+    const branches: SearchObject[] = [
+      { header: { subject: q } } as unknown as SearchObject,
+      { header: { from: q } } as unknown as SearchObject,
+      { header: { to: q } } as unknown as SearchObject,
+      { header: { cc: q } } as unknown as SearchObject,
+    ];
+    if (includeBody) {
+      branches.push({ body: q } as SearchObject);
+    }
+
+    const criteria: SearchObject = extraCriteria
+      ? ({ ...extraCriteria, ...(orChain(branches) as any) } as SearchObject)
+      : orChain(branches);
+
+    const lock = await client.getMailboxLock(path);
+    try {
+      const uids = ((await client.search(criteria, { uid: true })) as number[]) || [];
+      if (uids.length === 0) return [];
+      const sorted = uids.slice().sort((a, b) => b - a).slice(0, limit);
+
+      const messages: MailMessage[] = [];
+      for await (const msg of client.fetch(sorted as any, {
+        uid: true,
+        envelope: true,
+        internalDate: true,
+        flags: true,
+        bodyStructure: true,
+      }, { uid: true })) {
+        const parsed = await messageFromFetch(msg, folder, client);
+        messages.push(parsed);
+      }
+      return messages.sort((a, b) => (a.date < b.date ? 1 : -1));
+    } finally {
+      lock.release();
+    }
+  } finally {
+    await client.logout().catch(() => {});
+  }
+}
