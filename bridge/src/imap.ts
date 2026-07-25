@@ -82,6 +82,24 @@ export async function getFolderCounts(
 
     const counts: FolderCount[] = [];
     for (const folder of allFolders) {
+      // Starred is a flag, not a folder on most IMAP servers.
+      // Count \Flagged messages in INBOX (fast SEARCH, no fetch).
+      if (folder === "starred") {
+        try {
+          const inboxPath = resolveFolderPath(mailboxes, "inbox") || "INBOX";
+          const lock = await client.getMailboxLock(inboxPath);
+          try {
+            const uids = (await client.search({ flagged: true } as SearchObject, { uid: true })) as number[];
+            const unseen = (await client.search({ flagged: true, seen: false } as SearchObject, { uid: true })) as number[];
+            counts.push({ folder, total: uids?.length ?? 0, unread: unseen?.length ?? 0 });
+          } finally {
+            lock.release();
+          }
+        } catch {
+          counts.push({ folder, total: 0, unread: 0 });
+        }
+        continue;
+      }
       const path = resolveFolderPath(mailboxes, folder);
       if (!path) {
         counts.push({ folder, total: 0, unread: 0 });
