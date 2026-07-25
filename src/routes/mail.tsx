@@ -887,8 +887,20 @@ function MessageView({
   onMarkUnread: () => void;
   onPrint: () => void;
 }) {
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const isMeOnly =
     message.to.length === 1 && message.to[0].email.toLowerCase() === myEmail.toLowerCase();
+  const toSummary = isMeOnly
+    ? "إليّ"
+    : message.to.length > 0
+      ? message.to.map((t) => t.name || t.email).join(", ")
+      : "—";
+  const fullDate = new Date(message.date).toLocaleString("ar", {
+    dateStyle: "full",
+    timeStyle: "short",
+  });
+  const isSecure =
+    !!message.security && !/غير/.test(message.security);
 
   async function copyEmail() {
     try {
