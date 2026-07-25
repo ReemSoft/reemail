@@ -35,6 +35,9 @@ import {
   Square,
   MinusSquare,
   ArchiveRestore,
+  Zap,
+  Globe,
+  Check,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -56,6 +59,7 @@ import {
   bridgeMove,
   bridgeDelete,
   bridgeSend,
+  bridgeSearch,
 } from "@/lib/mail-bridge.functions";
 import {
   formatDate,
@@ -333,6 +337,11 @@ function MailApp() {
   const [bulkBusy, setBulkBusy] = useState(false);
   const [selectMode, setSelectMode] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [searchMode, setSearchMode] = useState<"quick" | "deep">("quick");
+  const [deepIncludeBody, setDeepIncludeBody] = useState(false);
+  const [deepResults, setDeepResults] = useState<MailMessage[] | null>(null);
+  const [deepLoading, setDeepLoading] = useState(false);
+  const [deepError, setDeepError] = useState<string | null>(null);
 
   const { folder, setFolder, counts, setCounts, messages, setMessages, loading, loadingMore, hasMore, loadMore, bridgeError, useMock, refresh: rawRefresh } =
     useMailData(session || null);
@@ -355,6 +364,7 @@ function MailApp() {
   const star = useServerFn(bridgeStar);
   const move = useServerFn(bridgeMove);
   const deleteFn = useServerFn(bridgeDelete);
+  const searchFn = useServerFn(bridgeSearch);
 
   // In-memory caches for instant open (prefetch on hover)
   const messageCache = useRef<Map<string, MailMessage>>(new Map());
@@ -426,7 +436,64 @@ function MailApp() {
     setSelectMode(false);
   }, [folder]);
 
+  // Clear deep search results when leaving deep mode or switching folder.
+  useEffect(() => {
+    setDeepResults(null);
+    setDeepError(null);
+  }, [folder, searchMode]);
+
+  // Debounced server-side search — only fires in "deep" mode with 2+ chars.
+  // Uses IMAP SEARCH on the origin server (headers by default, optional BODY).
+  useEffect(() => {
+    if (searchMode !== "deep" || !session) return;
+    const q = query.trim();
+    if (q.length < 2) {
+      setDeepResults(null);
+      setDeepError(null);
+      setDeepLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setDeepLoading(true);
+    setDeepError(null);
+    const t = setTimeout(async () => {
+      try {
+        const res = await searchFn({
+          data: {
+            account: session.account,
+            password: session.password,
+            folder,
+            query: q,
+            includeBody: deepIncludeBody,
+            limit: 100,
+          },
+        });
+        if (cancelled) return;
+        if (res.ok) setDeepResults(res.messages);
+        else {
+          setDeepResults([]);
+          setDeepError(res.error || "فشل البحث على السيرفر");
+        }
+      } catch (err: any) {
+        if (!cancelled) {
+          setDeepResults([]);
+          setDeepError(err?.message || "فشل البحث على السيرفر");
+        }
+      } finally {
+        if (!cancelled) setDeepLoading(false);
+      }
+    }, 400);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [query, searchMode, deepIncludeBody, folder, session, searchFn]);
+
   const filteredMessages = useMemo(() => {
+    // Deep server-side search: always show server results (even empty).
+    if (searchMode === "deep" && query.trim().length >= 2) {
+      return deepResults ?? [];
+    }
     if (!query.trim()) return messages;
     const q = query.toLowerCase();
     return messages.filter(
@@ -436,7 +503,8 @@ function MailApp() {
         m.from.email.toLowerCase().includes(q) ||
         m.preview.toLowerCase().includes(q),
     );
-  }, [messages, query]);
+  }, [messages, query, searchMode, deepResults]);
+  const inDeepSearch = searchMode === "deep" && query.trim().length >= 2;
 
   async function openMessage(id: string) {
     setSelectedId(id);
@@ -1011,15 +1079,121 @@ function MailApp() {
           <span className="hidden text-base font-bold sm:inline">{brandName}</span>
         </Link>
 
-        <div className="mx-2 flex flex-1 items-center gap-2 rounded-xl bg-muted/70 px-3 py-2 transition focus-within:bg-card focus-within:shadow-elevated sm:mx-4 sm:max-w-xl">
-          <Search className="h-4 w-4 shrink-0 text-muted-foreground" />
+        <div className="mx-2 flex flex-1 items-center gap-1 rounded-xl bg-muted/70 pe-1 ps-3 py-1.5 transition focus-within:bg-card focus-within:shadow-elevated sm:mx-4 sm:max-w-xl">
+          {searchMode === "deep" ? (
+            deepLoading ? (
+              <Loader2 className="h-4 w-4 shrink-0 animate-spin text-primary" />
+            ) : (
+              <Globe className="h-4 w-4 shrink-0 text-primary" />
+            )
+          ) : (
+            <Search className="h-4 w-4 shrink-0 text-muted-foreground" />
+          )}
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="ابحث في البريد..."
-            className="w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+            placeholder={
+              searchMode === "deep"
+                ? "بحث شامل على السيرفر…"
+                : "ابحث في البريد..."
+            }
+            className="w-full bg-transparent px-1 text-sm outline-none placeholder:text-muted-foreground"
           />
+          {query && (
+            <button
+              onClick={() => setQuery("")}
+              className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+              title="مسح"
+              aria-label="مسح"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          )}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                className={`flex shrink-0 items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium transition ${
+                  searchMode === "deep"
+                    ? "bg-primary/10 text-primary hover:bg-primary/15"
+                    : "text-muted-foreground hover:bg-muted"
+                }`}
+                title="خيارات البحث"
+              >
+                {searchMode === "deep" ? (
+                  <Globe className="h-3.5 w-3.5" />
+                ) : (
+                  <Zap className="h-3.5 w-3.5" />
+                )}
+                <span className="hidden sm:inline">
+                  {searchMode === "deep" ? "شامل" : "سريع"}
+                </span>
+                <ChevronDown className="h-3 w-3 opacity-60" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-64">
+              <div className="px-2 pb-1 pt-1 text-[11px] font-semibold text-muted-foreground">
+                نمط البحث
+              </div>
+              <DropdownMenuItem
+                onSelect={() => setSearchMode("quick")}
+                className="flex items-start gap-2"
+              >
+                <Zap className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
+                <div className="flex-1">
+                  <div className="flex items-center justify-between">
+                    <span className="font-medium">بحث سريع</span>
+                    {searchMode === "quick" && (
+                      <Check className="h-3.5 w-3.5 text-primary" />
+                    )}
+                  </div>
+                  <div className="text-[11px] text-muted-foreground">
+                    فوري في الرسائل المعروضة — دون أي طلب للسيرفر
+                  </div>
+                </div>
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onSelect={() => setSearchMode("deep")}
+                className="flex items-start gap-2"
+              >
+                <Globe className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+                <div className="flex-1">
+                  <div className="flex items-center justify-between">
+                    <span className="font-medium">بحث شامل على السيرفر</span>
+                    {searchMode === "deep" && (
+                      <Check className="h-3.5 w-3.5 text-primary" />
+                    )}
+                  </div>
+                  <div className="text-[11px] text-muted-foreground">
+                    IMAP SEARCH على كامل المجلد الحالي (الموضوع + المرسل + المستلمين)
+                  </div>
+                </div>
+              </DropdownMenuItem>
+              {searchMode === "deep" && (
+                <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    onSelect={(e) => {
+                      e.preventDefault();
+                      setDeepIncludeBody((v) => !v);
+                    }}
+                    className="flex items-start gap-2"
+                  >
+                    <div className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded border border-border">
+                      {deepIncludeBody && <Check className="h-3 w-3 text-primary" />}
+                    </div>
+                    <div className="flex-1">
+                      <div className="font-medium">تضمين نص الرسالة</div>
+                      <div className="text-[11px] text-muted-foreground">
+                        أبطأ لكنه يبحث داخل محتوى الرسائل أيضاً
+                      </div>
+                    </div>
+                  </DropdownMenuItem>
+                </>
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
+
 
         <div className="ms-auto flex shrink-0 items-center gap-1.5">
           <div
@@ -1226,7 +1400,23 @@ function MailApp() {
                   <Square className="h-4 w-4 text-muted-foreground" />
                 </button>
                 <span className="font-semibold text-muted-foreground">
-                  {FOLDER_META[folder].label} · {filteredMessages.length}
+                  {inDeepSearch ? (
+                    <span className="flex items-center gap-1.5">
+                      <Globe className="h-3.5 w-3.5 text-primary" />
+                      <span>
+                        نتائج السيرفر · {filteredMessages.length}
+                        {deepIncludeBody && (
+                          <span className="ms-1 text-[10px] text-primary/70">
+                            (يشمل المحتوى)
+                          </span>
+                        )}
+                      </span>
+                    </span>
+                  ) : (
+                    <>
+                      {FOLDER_META[folder].label} · {filteredMessages.length}
+                    </>
+                  )}
                 </span>
               </div>
               <div className="flex items-center gap-1">
@@ -1243,14 +1433,32 @@ function MailApp() {
             </div>
           )}
           <div className="flex-1 overflow-hidden">
-            {loading && filteredMessages.length === 0 ? (
-              <div className="flex h-full items-center justify-center">
+            {(loading || (inDeepSearch && deepLoading)) && filteredMessages.length === 0 ? (
+              <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
                 <Loader2 className="h-6 w-6 animate-spin text-primary" />
+                {inDeepSearch && (
+                  <p className="text-xs text-muted-foreground">
+                    جاري البحث على السيرفر…
+                  </p>
+                )}
               </div>
             ) : filteredMessages.length === 0 ? (
               <div className="flex h-full flex-col items-center justify-center gap-2 p-8 text-center text-muted-foreground">
                 <MailIcon className="h-10 w-10 opacity-30" />
-                <p className="text-sm">لا توجد رسائل هنا</p>
+                {inDeepSearch ? (
+                  <>
+                    <p className="text-sm">
+                      {deepError ? deepError : "لا توجد نتائج على السيرفر"}
+                    </p>
+                    {!deepError && !deepIncludeBody && (
+                      <p className="text-[11px] text-muted-foreground/70">
+                        جرّب تفعيل «تضمين نص الرسالة» من خيارات البحث
+                      </p>
+                    )}
+                  </>
+                ) : (
+                  <p className="text-sm">لا توجد رسائل هنا</p>
+                )}
               </div>
             ) : (
               <Virtuoso
@@ -1260,7 +1468,7 @@ function MailApp() {
                 increaseViewportBy={{ top: 400, bottom: 800 }}
                 computeItemKey={(_, m) => m.id}
                 endReached={() => {
-                  if (!query.trim()) void loadMore();
+                  if (!query.trim() && !inDeepSearch) void loadMore();
                 }}
                 itemContent={(_, m) => (
                   <MessageRow

@@ -11,6 +11,7 @@ import {
   starMessage,
   moveMessage,
   deleteMessage,
+  searchMessages,
 } from "./imap.js";
 import { sendMessage } from "./smtp.js";
 import type { MailAccount, MailFolder } from "./types.js";
@@ -196,6 +197,29 @@ app.post("/api/delete", requireKey, async (req, res) => {
   } catch (err: any) {
     console.error("[bridge] /api/delete error:", err);
     return res.status(500).json({ ok: false, error: err?.message || "Failed to delete message" });
+  }
+});
+
+const SearchPayloadSchema = FolderPayloadSchema.extend({
+  query: z.string().min(1).max(200),
+  includeBody: z.boolean().optional().default(false),
+  limit: z.number().int().positive().max(200).optional().default(100),
+});
+
+app.post("/api/search", requireKey, async (req, res) => {
+  try {
+    const payload = SearchPayloadSchema.parse(req.body);
+    const messages = await searchMessages(
+      payload.account as any,
+      payload.password,
+      payload.folder,
+      payload.query,
+      { includeBody: payload.includeBody, limit: payload.limit },
+    );
+    return res.json({ ok: true, messages });
+  } catch (err: any) {
+    console.error("[bridge] /api/search error:", err);
+    return res.status(500).json({ ok: false, error: err?.message || "Failed to search" });
   }
 });
 
