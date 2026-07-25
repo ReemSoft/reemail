@@ -592,10 +592,8 @@ function MailApp() {
                   />
                 )}
               />
-
-                />
-              ))
             )}
+
           </div>
         </div>
 
