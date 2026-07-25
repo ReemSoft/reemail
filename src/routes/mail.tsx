@@ -573,7 +573,7 @@ function MailApp() {
           <div className="p-4">
             <button
               onClick={() => {
-                setComposeOpen(true);
+                setCompose({});
                 setSidebarOpen(false);
               }}
               className="flex w-full items-center gap-3 rounded-2xl bg-brand-gradient px-5 py-3.5 text-sm font-semibold text-white shadow-brand transition hover:scale-[1.02]"
