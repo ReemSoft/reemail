@@ -1037,18 +1037,20 @@ function EmptyViewer() {
 
 function Composer({
   session,
+  initial,
   onClose,
   onSent,
 }: {
   session: MailSession;
+  initial?: ComposeInitial | null;
   onClose: () => void;
   onSent: () => void;
 }) {
   const send = useServerFn(bridgeSend);
-  const [to, setTo] = useState("");
-  const [cc, setCc] = useState("");
-  const [subject, setSubject] = useState("");
-  const [body, setBody] = useState("");
+  const [to, setTo] = useState(initial?.to ?? "");
+  const [cc, setCc] = useState(initial?.cc ?? "");
+  const [subject, setSubject] = useState(initial?.subject ?? "");
+  const [body, setBody] = useState(initial?.body ?? "");
   const [sending, setSending] = useState(false);
 
   async function handleSend() {
