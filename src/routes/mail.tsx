@@ -2109,18 +2109,7 @@ function MessageView({
                 </p>
                 <div className="grid gap-2 sm:grid-cols-2">
                   {message.attachments.map((a) => (
-                    <div
-                      key={a.id}
-                      className="flex items-center gap-3 rounded-xl border border-border bg-card p-3"
-                    >
-                      <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-brand-gradient/10 text-brand-accent">
-                        <Paperclip className="h-4 w-4" />
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <p className="truncate text-sm font-medium">{a.filename}</p>
-                        <p className="text-xs text-muted-foreground">{formatSize(a.size)}</p>
-                      </div>
-                    </div>
+                    <AttachmentCard key={a.id} attachment={a} message={message} />
                   ))}
                 </div>
               </div>
