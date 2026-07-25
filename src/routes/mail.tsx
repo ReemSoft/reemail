@@ -22,12 +22,15 @@ import {
   Mail as MailIcon,
   Loader2,
   ChevronLeft,
+  ChevronDown,
   Reply,
   ReplyAll,
   Forward,
   Printer,
   MailOpen,
   Copy,
+  ShieldCheck,
+  ShieldAlert,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -167,8 +170,11 @@ function useMailData(session: MailSession | null) {
   });
   const [messages, setMessages] = useState<MailMessage[]>([]);
   const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(false);
   const [bridgeError, setBridgeError] = useState<string | null>(null);
   const [useMock, setUseMock] = useState(false);
+  const PAGE = 50;
 
   const loadCounts = useCallback(async () => {
     if (!session) return;
@@ -199,21 +205,46 @@ function useMailData(session: MailSession | null) {
     setLoading(true);
     try {
       const result = await getMessages({
-        data: { account: session.account, password: session.password, folder },
+        data: { account: session.account, password: session.password, folder, limit: PAGE, offset: 0 },
       });
       if (!result.ok) throw new Error(result.error);
       setMessages(result.messages);
+      setHasMore(result.messages.length >= PAGE);
       setBridgeError(null);
       setUseMock(false);
     } catch (err: any) {
       setBridgeError(err?.message || "فشل جلب الرسائل");
       setMessages(getMockMessages(folder));
+      setHasMore(false);
       setUseMock(true);
     } finally {
       setLoading(false);
     }
 
   }, [session, folder, getMessages]);
+
+  const loadMore = useCallback(async () => {
+    if (!session || loadingMore || loading || !hasMore) return;
+    setLoadingMore(true);
+    try {
+      const offset = messages.length;
+      const result = await getMessages({
+        data: { account: session.account, password: session.password, folder, limit: PAGE, offset },
+      });
+      if (!result.ok) throw new Error(result.error);
+      setMessages((prev) => {
+        const seen = new Set(prev.map((m) => m.id));
+        const merged = [...prev];
+        for (const m of result.messages) if (!seen.has(m.id)) merged.push(m);
+        return merged;
+      });
+      setHasMore(result.messages.length >= PAGE);
+    } catch {
+      setHasMore(false);
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [session, folder, getMessages, messages.length, loadingMore, loading, hasMore]);
 
   useEffect(() => {
     loadCounts();
@@ -231,6 +262,9 @@ function useMailData(session: MailSession | null) {
     messages,
     setMessages,
     loading,
+    loadingMore,
+    hasMore,
+    loadMore,
     bridgeError,
     useMock,
     refresh: () => {
@@ -251,7 +285,7 @@ function MailApp() {
   const [selectedMessage, setSelectedMessage] = useState<MailMessage | null>(null);
   const [reading, setReading] = useState(false);
 
-  const { folder, setFolder, counts, setCounts, messages, setMessages, loading, bridgeError, useMock, refresh } =
+  const { folder, setFolder, counts, setCounts, messages, setMessages, loading, loadingMore, hasMore, loadMore, bridgeError, useMock, refresh } =
     useMailData(session || null);
 
 
@@ -685,6 +719,9 @@ function MailApp() {
                 overscan={800}
                 increaseViewportBy={{ top: 400, bottom: 800 }}
                 computeItemKey={(_, m) => m.id}
+                endReached={() => {
+                  if (!query.trim()) void loadMore();
+                }}
                 itemContent={(_, m) => (
                   <MessageRow
                     message={m}
@@ -694,6 +731,18 @@ function MailApp() {
                     onToggleStar={(e) => toggleStar(e, m.id)}
                   />
                 )}
+                components={{
+                  Footer: () =>
+                    loadingMore ? (
+                      <div className="flex items-center justify-center gap-2 py-4 text-xs text-muted-foreground">
+                        <Loader2 className="h-4 w-4 animate-spin" /> جاري تحميل المزيد…
+                      </div>
+                    ) : !hasMore && filteredMessages.length > 0 ? (
+                      <div className="py-4 text-center text-[11px] text-muted-foreground">
+                        — نهاية الرسائل —
+                      </div>
+                    ) : null,
+                }}
               />
             )}
 
@@ -838,8 +887,20 @@ function MessageView({
   onMarkUnread: () => void;
   onPrint: () => void;
 }) {
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const isMeOnly =
     message.to.length === 1 && message.to[0].email.toLowerCase() === myEmail.toLowerCase();
+  const toSummary = isMeOnly
+    ? "إليّ"
+    : message.to.length > 0
+      ? message.to.map((t) => t.name || t.email).join(", ")
+      : "—";
+  const fullDate = new Date(message.date).toLocaleString("ar", {
+    dateStyle: "full",
+    timeStyle: "short",
+  });
+  const isSecure =
+    !!message.security && !/غير/.test(message.security);
 
   async function copyEmail() {
     try {
@@ -1008,21 +1069,72 @@ function MessageView({
                     {formatDate(message.date)}
                   </span>
                 </div>
-                <div className="mt-1 space-y-0.5 text-xs text-muted-foreground">
-                  <div className="truncate">
-                    <span className="text-foreground/70">إلى: </span>
-                    {isMeOnly ? (
-                      "إليّ"
-                    ) : message.to.length > 0 ? (
-                      <span dir="ltr">{message.to.map((t) => t.email).join(", ")}</span>
-                    ) : (
-                      "—"
-                    )}
-                  </div>
-                  {message.cc && message.cc.length > 0 && (
-                    <div className="truncate">
-                      <span className="text-foreground/70">نسخة: </span>
-                      <span dir="ltr">{message.cc.map((c) => c.email).join(", ")}</span>
+                <div className="mt-1 text-xs text-muted-foreground">
+                  <button
+                    type="button"
+                    onClick={() => setDetailsOpen((v) => !v)}
+                    aria-expanded={detailsOpen}
+                    className="inline-flex max-w-full items-center gap-1 rounded hover:text-foreground"
+                    title="تفاصيل الرسالة"
+                  >
+                    <span className="truncate">
+                      <span className="text-foreground/70">إلى </span>
+                      <span>{toSummary}</span>
+                    </span>
+                    <ChevronDown
+                      className={`h-3.5 w-3.5 shrink-0 transition-transform ${detailsOpen ? "rotate-180" : ""}`}
+                    />
+                  </button>
+                  {detailsOpen && (
+                    <div className="mt-2 rounded-lg border border-border bg-muted/40 p-3">
+                      <dl className="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1.5 text-xs">
+                        <dt className="text-foreground/70">من:</dt>
+                        <dd className="min-w-0 break-all">
+                          {message.from.name ? `${message.from.name} ` : ""}
+                          <span dir="ltr" className="text-muted-foreground">
+                            &lt;{message.from.email || "—"}&gt;
+                          </span>
+                        </dd>
+                        <dt className="text-foreground/70">إلى:</dt>
+                        <dd className="min-w-0 break-all" dir="ltr">
+                          {message.to.length > 0 ? message.to.map((t) => t.email).join(", ") : "—"}
+                        </dd>
+                        {message.cc && message.cc.length > 0 && (
+                          <>
+                            <dt className="text-foreground/70">نسخة:</dt>
+                            <dd className="min-w-0 break-all" dir="ltr">
+                              {message.cc.map((c) => c.email).join(", ")}
+                            </dd>
+                          </>
+                        )}
+                        <dt className="text-foreground/70">التاريخ:</dt>
+                        <dd className="min-w-0">{fullDate}</dd>
+                        {message.mailedBy && (
+                          <>
+                            <dt className="text-foreground/70">mailed-by:</dt>
+                            <dd className="min-w-0 break-all" dir="ltr">{message.mailedBy}</dd>
+                          </>
+                        )}
+                        {message.signedBy && (
+                          <>
+                            <dt className="text-foreground/70">signed-by:</dt>
+                            <dd className="min-w-0 break-all" dir="ltr">{message.signedBy}</dd>
+                          </>
+                        )}
+                        {message.security && (
+                          <>
+                            <dt className="text-foreground/70">الأمان:</dt>
+                            <dd className="min-w-0 inline-flex items-center gap-1">
+                              {isSecure ? (
+                                <ShieldCheck className="h-3.5 w-3.5 text-emerald-600" />
+                              ) : (
+                                <ShieldAlert className="h-3.5 w-3.5 text-amber-600" />
+                              )}
+                              <span>{message.security}</span>
+                            </dd>
+                          </>
+                        )}
+                      </dl>
                     </div>
                   )}
                 </div>
