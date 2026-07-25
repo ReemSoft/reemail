@@ -1075,6 +1075,16 @@ function MailApp() {
                 {selection.size} محددة
               </span>
               <div className="mx-1 h-5 w-px bg-border" />
+              {folder === "trash" && (
+                <button
+                  onClick={bulkRestore}
+                  disabled={bulkBusy}
+                  className="flex h-8 w-8 items-center justify-center rounded hover:bg-muted disabled:opacity-50"
+                  title="استعادة المحدد"
+                >
+                  <ArchiveRestore className="h-4 w-4" />
+                </button>
+              )}
               <button
                 onClick={() => bulkMove("archive")}
                 disabled={bulkBusy}
