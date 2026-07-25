@@ -716,6 +716,9 @@ function MailApp() {
                 overscan={800}
                 increaseViewportBy={{ top: 400, bottom: 800 }}
                 computeItemKey={(_, m) => m.id}
+                endReached={() => {
+                  if (!query.trim()) void loadMore();
+                }}
                 itemContent={(_, m) => (
                   <MessageRow
                     message={m}
@@ -725,6 +728,18 @@ function MailApp() {
                     onToggleStar={(e) => toggleStar(e, m.id)}
                   />
                 )}
+                components={{
+                  Footer: () =>
+                    loadingMore ? (
+                      <div className="flex items-center justify-center gap-2 py-4 text-xs text-muted-foreground">
+                        <Loader2 className="h-4 w-4 animate-spin" /> جاري تحميل المزيد…
+                      </div>
+                    ) : !hasMore && filteredMessages.length > 0 ? (
+                      <div className="py-4 text-center text-[11px] text-muted-foreground">
+                        — نهاية الرسائل —
+                      </div>
+                    ) : null,
+                }}
               />
             )}
 
