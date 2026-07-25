@@ -35,6 +35,9 @@ import {
   Square,
   MinusSquare,
   ArchiveRestore,
+  Zap,
+  Globe,
+  Check,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -334,6 +337,11 @@ function MailApp() {
   const [bulkBusy, setBulkBusy] = useState(false);
   const [selectMode, setSelectMode] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [searchMode, setSearchMode] = useState<"quick" | "deep">("quick");
+  const [deepIncludeBody, setDeepIncludeBody] = useState(false);
+  const [deepResults, setDeepResults] = useState<MailMessage[] | null>(null);
+  const [deepLoading, setDeepLoading] = useState(false);
+  const [deepError, setDeepError] = useState<string | null>(null);
 
   const { folder, setFolder, counts, setCounts, messages, setMessages, loading, loadingMore, hasMore, loadMore, bridgeError, useMock, refresh: rawRefresh } =
     useMailData(session || null);
@@ -356,6 +364,7 @@ function MailApp() {
   const star = useServerFn(bridgeStar);
   const move = useServerFn(bridgeMove);
   const deleteFn = useServerFn(bridgeDelete);
+  const searchFn = useServerFn(bridgeSearch);
 
   // In-memory caches for instant open (prefetch on hover)
   const messageCache = useRef<Map<string, MailMessage>>(new Map());
@@ -426,6 +435,59 @@ function MailApp() {
     setSelection(new Set());
     setSelectMode(false);
   }, [folder]);
+
+  // Clear deep search results when leaving deep mode or switching folder.
+  useEffect(() => {
+    setDeepResults(null);
+    setDeepError(null);
+  }, [folder, searchMode]);
+
+  // Debounced server-side search — only fires in "deep" mode with 2+ chars.
+  // Uses IMAP SEARCH on the origin server (headers by default, optional BODY).
+  useEffect(() => {
+    if (searchMode !== "deep" || !session) return;
+    const q = query.trim();
+    if (q.length < 2) {
+      setDeepResults(null);
+      setDeepError(null);
+      setDeepLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setDeepLoading(true);
+    setDeepError(null);
+    const t = setTimeout(async () => {
+      try {
+        const res = await searchFn({
+          data: {
+            account: session.account,
+            password: session.password,
+            folder,
+            query: q,
+            includeBody: deepIncludeBody,
+            limit: 100,
+          },
+        });
+        if (cancelled) return;
+        if (res.ok) setDeepResults(res.messages);
+        else {
+          setDeepResults([]);
+          setDeepError(res.error || "فشل البحث على السيرفر");
+        }
+      } catch (err: any) {
+        if (!cancelled) {
+          setDeepResults([]);
+          setDeepError(err?.message || "فشل البحث على السيرفر");
+        }
+      } finally {
+        if (!cancelled) setDeepLoading(false);
+      }
+    }, 400);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [query, searchMode, deepIncludeBody, folder, session, searchFn]);
 
   const filteredMessages = useMemo(() => {
     if (!query.trim()) return messages;
