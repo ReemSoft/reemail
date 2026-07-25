@@ -501,10 +501,7 @@ export function collectAttachmentParts(structure: any, acc: MailAttachment[] = [
       (disp === "inline" && !!filename) ||
       // Fallback: leaf part with a filename but no explicit disposition
       // (common for .zip / application/octet-stream from some clients).
-      (!disp && !!filename) ||
-      // Fallback: leaf part that is not text/* and not the body — treat
-      // as attachment so it can be downloaded.
-      (!disp && !mime.startsWith("text/") && !mime.startsWith("multipart/"));
+      (!disp && !!filename);
 
     if (isAttachment) {
       acc.push({
