@@ -44,6 +44,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { useServerFn } from "@tanstack/react-start";
 import { toast } from "sonner";
+import { useConfirm } from "@/components/ui/confirm-provider";
 import { useCompanyTheme } from "@/hooks/use-company-theme";
 import {
   bridgeGetFolderCounts,
@@ -280,6 +281,7 @@ function useMailData(session: MailSession | null) {
 
 function MailApp() {
   const navigate = useNavigate();
+  const { confirm } = useConfirm();
   const [session, setSession] = useState<MailSession | null | undefined>(undefined);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
@@ -638,7 +640,14 @@ function MailApp() {
   async function bulkDelete() {
     if (!session || selection.size === 0 || bulkBusy) return;
     const ids = Array.from(selection);
-    if (!window.confirm(`تأكيد حذف ${ids.length} رسالة نهائياً؟`)) return;
+    const confirmed = await confirm({
+      title: "حذف الرسائل",
+      description: `هل أنت متأكد من حذف ${ids.length} رسالة نهائياً؟`,
+      confirmLabel: "حذف",
+      cancelLabel: "إلغاء",
+      variant: "destructive",
+    });
+    if (!confirmed) return;
     const snapshot = messages;
     const prevSelectedId = selectedId;
     const prevSelected = selectedMessage;

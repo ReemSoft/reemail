@@ -20,6 +20,7 @@ import {
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { useCompanyTheme } from "@/hooks/use-company-theme";
+import { useConfirm } from "@/components/ui/confirm-provider";
 
 interface Company {
   id: string;
@@ -363,6 +364,7 @@ function AccountsTab({
   companyId: string;
   onChange: () => Promise<void> | void;
 }) {
+  const { confirm } = useConfirm();
   const [open, setOpen] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -440,7 +442,14 @@ function AccountsTab({
   }
 
   async function handleDelete(id: string) {
-    if (!confirm("حذف هذا الحساب؟")) return;
+    const confirmed = await confirm({
+      title: "حذف الحساب",
+      description: "هل أنت متأكد من حذف هذا الحساب؟ لا يمكن التراجع عن هذا الإجراء.",
+      confirmLabel: "حذف",
+      cancelLabel: "إلغاء",
+      variant: "destructive",
+    });
+    if (!confirmed) return;
     setBusyId(id);
     const { error } = await supabase.from("mail_accounts").delete().eq("id", id);
     setBusyId(null);
@@ -691,6 +700,7 @@ function DomainsTab({
   companyId: string;
   onChange: () => Promise<void> | void;
 }) {
+  const { confirm } = useConfirm();
   const [open, setOpen] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -763,7 +773,14 @@ function DomainsTab({
   }
 
   async function handleDelete(id: string) {
-    if (!confirm("حذف إعدادات هذا الدومين؟")) return;
+    const confirmed = await confirm({
+      title: "حذف إعدادات الدومين",
+      description: "هل أنت متأكد من حذف إعدادات هذا الدومين؟ لا يمكن التراجع عن هذا الإجراء.",
+      confirmLabel: "حذف",
+      cancelLabel: "إلغاء",
+      variant: "destructive",
+    });
+    if (!confirmed) return;
     setBusyId(id);
     const { error } = await supabase.from("email_domains").delete().eq("id", id);
     setBusyId(null);
