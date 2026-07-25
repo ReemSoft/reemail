@@ -56,6 +56,7 @@ import {
   bridgeMove,
   bridgeDelete,
   bridgeSend,
+  bridgeSearch,
 } from "@/lib/mail-bridge.functions";
 import {
   formatDate,
