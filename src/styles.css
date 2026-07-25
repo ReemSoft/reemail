@@ -51,9 +51,9 @@
   --color-unread: hsl(var(--unread));
   --color-star: hsl(var(--star));
 
-  --font-sans: "Inter", "Cairo", ui-sans-serif, system-ui, sans-serif;
-  --font-arabic: "Cairo", "Inter", sans-serif;
-  --font-display: "Cairo", "Inter", sans-serif;
+  --font-sans: "IBM Plex Sans Arabic", ui-sans-serif, system-ui, sans-serif;
+  --font-arabic: "IBM Plex Sans Arabic", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "IBM Plex Sans Arabic", ui-sans-serif, system-ui, sans-serif;
 
   --shadow-soft: 0 1px 2px 0 hsl(220 43% 11% / 0.04), 0 1px 3px 0 hsl(220 43% 11% / 0.06);
   --shadow-elevated: 0 4px 6px -1px hsl(220 43% 11% / 0.08), 0 2px 4px -2px hsl(220 43% 11% / 0.06);
