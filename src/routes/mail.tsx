@@ -495,6 +495,7 @@ function MailApp() {
           starred: nextStarred,
         },
       });
+      loadCountsSoft();
     } catch (err: any) {
       // Revert
       setMessages((prev) =>
