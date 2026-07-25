@@ -723,6 +723,9 @@ function MailApp() {
     }
     ids.forEach((id) => messageCache.current.delete(id));
     clearSelection();
+    const idsToThread = new Map<string, string | undefined>(
+      snapshot.filter((m) => selection.has(m.id)).map((m) => [m.id, m.threadId]),
+    );
     const { failed } = await runBatch(ids, 5, async (id) => {
       const parsed = parseMessageId(id);
       if (!parsed) return;
@@ -735,6 +738,11 @@ function MailApp() {
           toFolder,
         },
       });
+      if (toFolder === "trash") {
+        rememberOrigin(idsToThread.get(id), parsed.folder);
+      } else {
+        forgetOrigin(idsToThread.get(id));
+      }
     });
     setBulkBusy(false);
     if (failed > 0) {
