@@ -342,7 +342,7 @@ export function parsedMailToMessage(parsed: ParsedMail, folder: MailFolder): Mai
     preview,
     body,
     date: parsed.date ? parsed.date.toISOString() : new Date().toISOString(),
-    read: !parsed.flags?.includes("\\Seen"),
+    read: parsed.flags?.includes("\\Seen") || false,
     starred: parsed.flags?.includes("\\Flagged") || false,
     hasAttachments,
     attachments,
