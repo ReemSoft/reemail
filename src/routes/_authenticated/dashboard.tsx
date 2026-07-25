@@ -55,8 +55,9 @@ function CompanyDashboard() {
   const [company, setCompany] = useState<Company | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [tab, setTab] = useState<"branding" | "accounts">("branding");
+  const [tab, setTab] = useState<"branding" | "accounts" | "domains">("branding");
   const [accounts, setAccounts] = useState<MailAccount[]>([]);
+  const [domains, setDomains] = useState<EmailDomain[]>([]);
   const [isAdmin, setIsAdmin] = useState(false);
   const navigate = useNavigate();
 
