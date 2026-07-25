@@ -1316,19 +1316,19 @@ function MailApp() {
           }`}
         >
           {selection.size > 0 ? (
-            <div className="flex h-11 shrink-0 items-center gap-1 border-b border-border bg-accent/40 px-2 text-xs">
+            <div className="flex h-11 shrink-0 items-center gap-3 border-b border-border bg-accent/40 px-4 text-xs">
               <button
                 onClick={toggleSelectAllVisible}
-                className="flex h-8 w-8 items-center justify-center rounded hover:bg-muted"
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded hover:bg-muted"
                 title={selection.size >= filteredMessages.length ? "إلغاء التحديد" : "تحديد الكل"}
               >
                 {selection.size >= filteredMessages.length && filteredMessages.length > 0 ? (
-                  <CheckSquare className="h-4 w-4 text-primary" />
+                  <CheckSquare className="h-5 w-5 text-primary" />
                 ) : (
-                  <MinusSquare className="h-4 w-4 text-primary" />
+                  <MinusSquare className="h-5 w-5 text-primary" />
                 )}
               </button>
-              <span className="ml-1 font-semibold text-foreground">
+              <span className="font-semibold text-foreground">
                 {selection.size} محددة
               </span>
               <div className="mx-1 h-5 w-px bg-border" />
@@ -1394,15 +1394,17 @@ function MailApp() {
             </div>
           ) : (
             <div className="flex h-11 shrink-0 items-center justify-between border-b border-border px-4 text-xs">
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={toggleSelectAllVisible}
-                  disabled={filteredMessages.length === 0}
-                  className="flex h-7 w-7 items-center justify-center rounded hover:bg-muted disabled:opacity-40"
-                  title="تحديد الكل"
-                >
-                  <Square className="h-4 w-4 text-muted-foreground" />
-                </button>
+              <div className="flex items-center gap-3">
+                {selectMode && (
+                  <button
+                    onClick={toggleSelectAllVisible}
+                    disabled={filteredMessages.length === 0}
+                    className="flex h-9 w-9 shrink-0 items-center justify-center rounded hover:bg-muted disabled:opacity-40"
+                    title="تحديد الكل"
+                  >
+                    <Square className="h-5 w-5 text-muted-foreground" />
+                  </button>
+                )}
                 <span className="font-semibold text-muted-foreground">
                   {inDeepSearch ? (
                     <span className="flex items-center gap-1.5">
@@ -1418,7 +1420,7 @@ function MailApp() {
                     </span>
                   ) : (
                     <>
-                      {FOLDER_META[folder].label} · {filteredMessages.length}
+                      المعروضة · {filteredMessages.length}
                     </>
                   )}
                 </span>
@@ -1436,6 +1438,7 @@ function MailApp() {
               </div>
             </div>
           )}
+
           <div className="flex-1 overflow-hidden">
             {(loading || (inDeepSearch && deepLoading)) && filteredMessages.length === 0 ? (
               <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
