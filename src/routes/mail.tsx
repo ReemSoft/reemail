@@ -22,7 +22,20 @@ import {
   Mail as MailIcon,
   Loader2,
   ChevronLeft,
+  Reply,
+  ReplyAll,
+  Forward,
+  Printer,
+  MailOpen,
+  Copy,
 } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { useServerFn } from "@tanstack/react-start";
 import { toast } from "sonner";
 import { useCompanyTheme } from "@/hooks/use-company-theme";
@@ -74,6 +87,68 @@ function parseMessageId(id: string): { folder: MailFolder; uid: number } | null 
   const uid = Number(uidStr);
   if (!folder || !uidStr || Number.isNaN(uid)) return null;
   return { folder: folder as MailFolder, uid };
+}
+
+type ComposeInitial = {
+  to?: string;
+  cc?: string;
+  subject?: string;
+  body?: string;
+};
+
+function stripHtml(html: string): string {
+  if (!html) return "";
+  if (typeof document === "undefined") return html.replace(/<[^>]+>/g, "");
+  const tmp = document.createElement("div");
+  tmp.innerHTML = html;
+  return tmp.textContent || tmp.innerText || "";
+}
+
+function quoteBody(message: MailMessage): string {
+  const src = stripHtml(message.body || message.preview || "");
+  const dateStr = new Date(message.date).toLocaleString("ar", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
+  const from = message.from.name
+    ? `${message.from.name} <${message.from.email}>`
+    : message.from.email;
+  const header = `\n\n\nOn ${dateStr}, ${from} wrote:\n`;
+  const quoted = src
+    .split("\n")
+    .map((l) => `> ${l}`)
+    .join("\n");
+  return header + quoted;
+}
+
+function buildReply(message: MailMessage, myEmail: string, all: boolean): ComposeInitial {
+  const subject = message.subject.startsWith("Re:")
+    ? message.subject
+    : `Re: ${message.subject}`;
+  const to = message.from.email;
+  let cc = "";
+  if (all) {
+    const others = [
+      ...message.to.map((a) => a.email),
+      ...(message.cc?.map((a) => a.email) ?? []),
+    ].filter((e) => e && e.toLowerCase() !== myEmail.toLowerCase() && e.toLowerCase() !== to.toLowerCase());
+    cc = Array.from(new Set(others)).join(", ");
+  }
+  return { to, cc, subject, body: quoteBody(message) };
+}
+
+function buildForward(message: MailMessage): ComposeInitial {
+  const subject = message.subject.startsWith("Fwd:")
+    ? message.subject
+    : `Fwd: ${message.subject}`;
+  const header =
+    `\n\n---------- Forwarded message ----------\n` +
+    `From: ${message.from.name} <${message.from.email}>\n` +
+    `Date: ${new Date(message.date).toLocaleString("ar")}\n` +
+    `Subject: ${message.subject}\n` +
+    `To: ${message.to.map((t) => t.email).join(", ")}\n\n` +
+    stripHtml(message.body || message.preview || "");
+  return { to: "", subject, body: header };
 }
 
 function useMailData(session: MailSession | null) {
@@ -172,7 +247,7 @@ function MailApp() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [composeOpen, setComposeOpen] = useState(false);
+  const [compose, setCompose] = useState<ComposeInitial | null>(null);
   const [selectedMessage, setSelectedMessage] = useState<MailMessage | null>(null);
   const [reading, setReading] = useState(false);
 
@@ -403,6 +478,34 @@ function MailApp() {
   }
 
 
+  async function handleMarkUnread(id: string) {
+    const parsed = parseMessageId(id);
+    if (!parsed || !session) return;
+    setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, read: false } : m)));
+    setCounts((prev) => {
+      const cur = prev[parsed.folder];
+      if (!cur) return prev;
+      return { ...prev, [parsed.folder]: { ...cur, unread: cur.unread + 1 } };
+    });
+    const c = messageCache.current.get(id);
+    if (c) messageCache.current.set(id, { ...c, read: false });
+    setSelectedId(null);
+    setSelectedMessage(null);
+    try {
+      await markRead({
+        data: {
+          account: session.account,
+          password: session.password,
+          folder: parsed.folder,
+          uid: parsed.uid,
+          read: false,
+        },
+      });
+    } catch (err: any) {
+      toast.error(err?.message || "فشل التعليم كغير مقروءة");
+    }
+  }
+
   function handleSignOut() {
     clearMailSession();
     navigate({ to: "/login" });
@@ -498,7 +601,7 @@ function MailApp() {
           <div className="p-4">
             <button
               onClick={() => {
-                setComposeOpen(true);
+                setCompose({});
                 setSidebarOpen(false);
               }}
               className="flex w-full items-center gap-3 rounded-2xl bg-brand-gradient px-5 py-3.5 text-sm font-semibold text-white shadow-brand transition hover:scale-[1.02]"
@@ -607,14 +710,19 @@ function MailApp() {
             <MessageView
               message={selectedMessage}
               loading={reading}
+              myEmail={session.account.email_address}
               onBack={() => {
                 setSelectedId(null);
                 setSelectedMessage(null);
               }}
-              onReply={() => setComposeOpen(true)}
+              onReply={() => setCompose(buildReply(selectedMessage, session.account.email_address, false))}
+              onReplyAll={() => setCompose(buildReply(selectedMessage, session.account.email_address, true))}
+              onForward={() => setCompose(buildForward(selectedMessage))}
               onArchive={() => handleMove(selectedMessage.id, "archive")}
               onDelete={() => handleDelete(selectedMessage.id)}
               onSpam={() => handleMove(selectedMessage.id, "spam")}
+              onMarkUnread={() => handleMarkUnread(selectedMessage.id)}
+              onPrint={() => window.print()}
             />
           ) : (
             <EmptyViewer />
@@ -622,7 +730,14 @@ function MailApp() {
         </div>
       </div>
 
-      {composeOpen && <Composer session={session} onClose={() => setComposeOpen(false)} onSent={refresh} />}
+      {compose && (
+        <Composer
+          session={session}
+          initial={compose}
+          onClose={() => setCompose(null)}
+          onSent={refresh}
+        />
+      )}
     </div>
   );
 }
@@ -699,26 +814,50 @@ function MessageRow({
 function MessageView({
   message,
   loading,
+  myEmail,
   onBack,
   onReply,
+  onReplyAll,
+  onForward,
   onArchive,
   onDelete,
   onSpam,
+  onMarkUnread,
+  onPrint,
 }: {
   message: MailMessage;
   loading: boolean;
+  myEmail: string;
   onBack: () => void;
   onReply: () => void;
+  onReplyAll: () => void;
+  onForward: () => void;
   onArchive: () => void;
   onDelete: () => void;
   onSpam: () => void;
+  onMarkUnread: () => void;
+  onPrint: () => void;
 }) {
+  const recipients = message.to.map((t) => t.name || t.email).join(", ");
+  const isMeOnly =
+    message.to.length === 1 && message.to[0].email.toLowerCase() === myEmail.toLowerCase();
+
+  async function copyEmail() {
+    try {
+      await navigator.clipboard.writeText(message.from.email);
+      toast.success("تم نسخ البريد");
+    } catch {
+      toast.error("تعذّر النسخ");
+    }
+  }
+
   return (
     <>
-      <div className="flex h-12 shrink-0 items-center justify-between border-b border-border bg-card px-3">
+      <div className="flex h-12 shrink-0 items-center justify-between gap-2 border-b border-border bg-card px-2 sm:px-3">
         <button
           onClick={onBack}
           className="flex items-center gap-1.5 rounded-lg p-2 text-sm hover:bg-muted md:hidden"
+          aria-label="رجوع"
         >
           <ChevronLeft className="h-4 w-4" /> رجوع
         </button>
@@ -732,10 +871,62 @@ function MessageView({
           <button onClick={onSpam} className="rounded-lg p-2 hover:bg-muted" title="مزعج">
             <AlertOctagon className="h-4 w-4" />
           </button>
+          <div className="mx-1 h-6 w-px bg-border" />
+          <button
+            onClick={onMarkUnread}
+            className="rounded-lg p-2 hover:bg-muted"
+            title="تعليم كغير مقروءة"
+          >
+            <MailOpen className="h-4 w-4" />
+          </button>
+          <button onClick={onPrint} className="rounded-lg p-2 hover:bg-muted" title="طباعة">
+            <Printer className="h-4 w-4" />
+          </button>
         </div>
-        <button className="rounded-lg p-2 hover:bg-muted">
-          <MoreVertical className="h-4 w-4" />
-        </button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button
+              className="rounded-lg p-2 hover:bg-muted"
+              aria-label="خيارات أكثر"
+            >
+              <MoreVertical className="h-4 w-4" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-56">
+            <DropdownMenuItem onClick={onReply}>
+              <Reply className="h-4 w-4" /> رد
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={onReplyAll}>
+              <ReplyAll className="h-4 w-4" /> رد على الكل
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={onForward}>
+              <Forward className="h-4 w-4" /> إعادة توجيه
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onClick={onMarkUnread}>
+              <MailOpen className="h-4 w-4" /> تعليم كغير مقروءة
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={onPrint}>
+              <Printer className="h-4 w-4" /> طباعة
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={copyEmail}>
+              <Copy className="h-4 w-4" /> نسخ عنوان المرسل
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onClick={onArchive} className="md:hidden">
+              <Archive className="h-4 w-4" /> أرشفة
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={onSpam} className="md:hidden">
+              <AlertOctagon className="h-4 w-4" /> مزعج
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onClick={onDelete}
+              className="text-destructive focus:text-destructive"
+            >
+              <Trash2 className="h-4 w-4" /> حذف
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
       <div className="flex-1 overflow-y-auto">
         {loading ? (
@@ -744,29 +935,43 @@ function MessageView({
           </div>
         ) : (
           <div className="mx-auto max-w-3xl p-4 sm:p-6">
-            <h1 className="text-xl font-bold sm:text-2xl">{message.subject}</h1>
+            <h1 className="break-words text-xl font-bold leading-snug sm:text-2xl">
+              {message.subject || "(بدون موضوع)"}
+            </h1>
+
             <div className="mt-4 flex items-start gap-3 border-b border-border pb-4">
               <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-brand-gradient text-sm font-bold text-white">
-                {message.from.name.charAt(0) || message.from.email.charAt(0)}
+                {(message.from.name || message.from.email).charAt(0).toUpperCase()}
               </div>
-              <div className="flex-1">
-                <div className="flex flex-wrap items-baseline justify-between gap-2">
-                  <div>
-                    <span className="font-semibold">{message.from.name || message.from.email}</span>
-                    <span className="mr-2 text-xs text-muted-foreground" dir="ltr">
-                      &lt;{message.from.email}&gt;
-                    </span>
-                  </div>
-                  <span className="text-xs text-muted-foreground">{formatDate(message.date)}</span>
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                  <span className="truncate font-semibold">
+                    {message.from.name || message.from.email}
+                  </span>
+                  <span
+                    className="truncate text-xs text-muted-foreground"
+                    dir="ltr"
+                    title={message.from.email}
+                  >
+                    {message.from.email}
+                  </span>
                 </div>
                 <p className="mt-0.5 text-xs text-muted-foreground">
-                  إليّ · {message.to.map((t) => t.email).join(", ")}
+                  {isMeOnly ? "إليّ" : <>إلى: <span dir="ltr">{recipients}</span></>}
+                  {message.cc && message.cc.length > 0 && (
+                    <>
+                      {" · "}نسخة: <span dir="ltr">{message.cc.map((c) => c.email).join(", ")}</span>
+                    </>
+                  )}
                 </p>
               </div>
+              <span className="shrink-0 text-xs text-muted-foreground">
+                {formatDate(message.date)}
+              </span>
             </div>
 
             <article
-              className="prose prose-sm mt-6 max-w-none text-foreground"
+              className="prose prose-sm mt-6 max-w-none break-words text-foreground prose-a:text-brand-accent prose-img:rounded-lg"
               dangerouslySetInnerHTML={{ __html: message.body || message.preview }}
             />
 
@@ -794,12 +999,24 @@ function MessageView({
               </div>
             )}
 
-            <div className="mt-6 flex gap-2">
+            <div className="mt-6 flex flex-wrap gap-2">
               <button
                 onClick={onReply}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-4 py-2 text-sm font-medium hover:bg-muted"
+                className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-4 py-2 text-sm font-medium hover:bg-muted"
               >
-                <Pencil className="h-4 w-4" /> رد
+                <Reply className="h-4 w-4" /> رد
+              </button>
+              <button
+                onClick={onReplyAll}
+                className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-4 py-2 text-sm font-medium hover:bg-muted"
+              >
+                <ReplyAll className="h-4 w-4" /> رد على الكل
+              </button>
+              <button
+                onClick={onForward}
+                className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-4 py-2 text-sm font-medium hover:bg-muted"
+              >
+                <Forward className="h-4 w-4" /> إعادة توجيه
               </button>
             </div>
           </div>
@@ -820,18 +1037,20 @@ function EmptyViewer() {
 
 function Composer({
   session,
+  initial,
   onClose,
   onSent,
 }: {
   session: MailSession;
+  initial?: ComposeInitial | null;
   onClose: () => void;
   onSent: () => void;
 }) {
   const send = useServerFn(bridgeSend);
-  const [to, setTo] = useState("");
-  const [cc, setCc] = useState("");
-  const [subject, setSubject] = useState("");
-  const [body, setBody] = useState("");
+  const [to, setTo] = useState(initial?.to ?? "");
+  const [cc, setCc] = useState(initial?.cc ?? "");
+  const [subject, setSubject] = useState(initial?.subject ?? "");
+  const [body, setBody] = useState(initial?.body ?? "");
   const [sending, setSending] = useState(false);
 
   async function handleSend() {
