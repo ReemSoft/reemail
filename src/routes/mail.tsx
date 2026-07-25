@@ -998,7 +998,7 @@ function MailApp() {
           <span className="hidden text-base font-bold sm:inline">{brandName}</span>
         </Link>
 
-        <div className="mx-2 flex flex-1 items-center gap-2 rounded-xl bg-muted/70 px-3 py-2 transition focus-within:bg-card focus-within:shadow-elevated sm:mx-4 sm:max-w-2xl">
+        <div className="mx-2 flex flex-1 items-center gap-2 rounded-xl bg-muted/70 px-3 py-2 transition focus-within:bg-card focus-within:shadow-elevated sm:mx-4 sm:max-w-xl">
           <Search className="h-4 w-4 shrink-0 text-muted-foreground" />
           <input
             value={query}
@@ -1008,28 +1008,45 @@ function MailApp() {
           />
         </div>
 
-        <button
-          onClick={refresh}
-          className="hidden rounded-lg p-2 hover:bg-muted sm:inline-flex"
-          aria-label="تحديث"
-        >
-          <RefreshCw className="h-4 w-4" />
-        </button>
-        <div
-          className="hidden max-w-[180px] truncate rounded-lg bg-muted/60 px-3 py-1.5 text-xs text-muted-foreground sm:inline-block"
-          dir="ltr"
-          title={session.account.email_address}
-        >
-          {session.account.email_address}
+        <div className="ms-auto flex shrink-0 items-center gap-1.5">
+          <div
+            className="hidden max-w-[200px] truncate rounded-lg bg-muted/60 px-3 py-1.5 text-xs text-muted-foreground md:inline-block"
+            dir="ltr"
+            title={session.account.email_address}
+          >
+            {session.account.email_address}
+          </div>
+          <button
+            onClick={refresh}
+            className="hidden items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm font-medium text-muted-foreground hover:bg-muted hover:text-foreground sm:inline-flex"
+            title="تحديث البريد"
+          >
+            <RefreshCw className="h-4 w-4" />
+            <span className="hidden lg:inline">تحديث</span>
+          </button>
+          <button
+            onClick={refresh}
+            className="rounded-lg p-2 hover:bg-muted sm:hidden"
+            aria-label="تحديث"
+          >
+            <RefreshCw className="h-4 w-4" />
+          </button>
+          <button
+            onClick={handleSignOut}
+            className="hidden items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm font-medium text-muted-foreground hover:bg-destructive/10 hover:text-destructive sm:inline-flex"
+            title="تسجيل الخروج"
+          >
+            <LogOut className="h-4 w-4" />
+            <span className="hidden lg:inline">خروج</span>
+          </button>
+          <button
+            onClick={handleSignOut}
+            className="rounded-lg p-2 hover:bg-muted sm:hidden"
+            aria-label="خروج"
+          >
+            <LogOut className="h-4 w-4" />
+          </button>
         </div>
-        <button
-          onClick={handleSignOut}
-          className="rounded-lg p-2 hover:bg-muted"
-          aria-label="خروج"
-          title="تسجيل الخروج"
-        >
-          <LogOut className="h-4 w-4" />
-        </button>
       </header>
 
       <div className="relative flex flex-1 overflow-hidden">
