@@ -38,6 +38,7 @@ import {
   Zap,
   Globe,
   Check,
+  ArrowUpDown,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -202,10 +203,13 @@ function buildForward(message: MailMessage): ComposeInitial {
   return { to: "", subject, body: header };
 }
 
+type SortOption = "date-desc" | "date-asc" | "unread-first" | "starred-first";
+
 function useMailData(session: MailSession | null) {
   const getCounts = useServerFn(bridgeGetFolderCounts);
   const getMessages = useServerFn(bridgeGetMessages);
   const [folder, setFolder] = useState<MailFolder>("inbox");
+  const [sort, setSort] = useState<SortOption>("date-desc");
   const [counts, setCounts] = useState<Record<MailFolder, { total: number; unread: number; supported: boolean }>>({
     inbox: { total: 0, unread: 0, supported: true },
     starred: { total: 0, unread: 0, supported: true },
@@ -253,7 +257,7 @@ function useMailData(session: MailSession | null) {
     setLoading(true);
     try {
       const result = await getMessages({
-        data: { account: session.account, password: session.password, folder, limit: PAGE, offset: 0 },
+        data: { account: session.account, password: session.password, folder, limit: PAGE, offset: 0, sort },
       });
       if (!result.ok) throw new Error(result.error);
       setMessages(result.messages);
@@ -269,7 +273,7 @@ function useMailData(session: MailSession | null) {
       setLoading(false);
     }
 
-  }, [session, folder, getMessages]);
+  }, [session, folder, sort, getMessages]);
 
   const loadMore = useCallback(async () => {
     if (!session || loadingMore || loading || !hasMore) return;
@@ -277,7 +281,7 @@ function useMailData(session: MailSession | null) {
     try {
       const offset = messages.length;
       const result = await getMessages({
-        data: { account: session.account, password: session.password, folder, limit: PAGE, offset },
+        data: { account: session.account, password: session.password, folder, limit: PAGE, offset, sort },
       });
       if (!result.ok) throw new Error(result.error);
       setMessages((prev) => {
@@ -292,7 +296,7 @@ function useMailData(session: MailSession | null) {
     } finally {
       setLoadingMore(false);
     }
-  }, [session, folder, getMessages, messages.length, loadingMore, loading, hasMore]);
+  }, [session, folder, sort, getMessages, messages.length, loadingMore, loading, hasMore]);
 
   useEffect(() => {
     loadCounts();
@@ -302,9 +306,16 @@ function useMailData(session: MailSession | null) {
     loadMessages();
   }, [loadMessages]);
 
+  // Reset to default sort whenever the folder changes (no persistence between refreshes).
+  useEffect(() => {
+    setSort("date-desc");
+  }, [folder]);
+
   return {
     folder,
     setFolder,
+    sort,
+    setSort,
     counts,
     setCounts,
     messages,
@@ -316,11 +327,13 @@ function useMailData(session: MailSession | null) {
     bridgeError,
     useMock,
     refresh: () => {
+      setSort("date-desc");
       loadCounts();
       loadMessages();
     },
   };
 }
+
 
 
 function MailApp() {
@@ -343,7 +356,7 @@ function MailApp() {
   const [deepLoading, setDeepLoading] = useState(false);
   const [deepError, setDeepError] = useState<string | null>(null);
 
-  const { folder, setFolder, counts, setCounts, messages, setMessages, loading, loadingMore, hasMore, loadMore, bridgeError, useMock, refresh: rawRefresh } =
+  const { folder, setFolder, sort, setSort, counts, setCounts, messages, setMessages, loading, loadingMore, hasMore, loadMore, bridgeError, useMock, refresh: rawRefresh } =
     useMailData(session || null);
 
   const refresh = useCallback(async () => {
@@ -1454,6 +1467,42 @@ function MailApp() {
                 >
                   {selectMode ? "إلغاء" : "تحديد"}
                 </button>
+                {!inDeepSearch && (
+                  <DropdownMenu dir="rtl">
+                    <DropdownMenuTrigger asChild>
+                      <button
+                        className="flex items-center gap-1 rounded px-2 py-1.5 text-xs font-medium text-foreground hover:bg-muted"
+                        title="ترتيب العرض"
+                      >
+                        <ArrowUpDown className="h-3.5 w-3.5" />
+                        <span>ترتيب</span>
+                      </button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="start" className="w-56">
+                      {([
+                        { value: "date-desc", label: "الأحدث أولاً" },
+                        { value: "date-asc", label: "الأقدم أولاً" },
+                        { value: "unread-first", label: "غير المقروءة أولاً" },
+                        { value: "starred-first", label: "المميّزة بنجمة أولاً" },
+                      ] as { value: SortOption; label: string }[]).map((opt, i) => {
+                        const disabled = folder === "starred" && opt.value === "starred-first";
+                        return (
+                          <div key={opt.value}>
+                            {i > 0 && <DropdownMenuSeparator />}
+                            <DropdownMenuItem
+                              disabled={disabled}
+                              onClick={() => !disabled && setSort(opt.value)}
+                              className="flex items-center justify-between gap-2 hover:bg-accent focus:bg-accent"
+                            >
+                              <span>{opt.label}</span>
+                              {sort === opt.value && <Check className="h-4 w-4 text-primary" />}
+                            </DropdownMenuItem>
+                          </div>
+                        );
+                      })}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                )}
               </div>
             </div>
           )}

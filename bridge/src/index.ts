@@ -128,12 +128,16 @@ app.post("/api/folders", requireKey, async (req, res) => {
   }
 });
 
+const SortOptionSchema = z.enum(["date-desc", "date-asc", "unread-first", "starred-first"]);
+
 app.post("/api/messages", requireKey, async (req, res) => {
   try {
     const payload = FolderPayloadSchema.parse(req.body);
+    const sort = SortOptionSchema.optional().parse(req.body.sort) ?? "date-desc";
     const messages = await getMessages(payload.account as any, payload.password, payload.folder, {
       limit: req.body.limit ?? 50,
       offset: req.body.offset ?? 0,
+      sort,
     });
     return res.json({ ok: true, messages });
   } catch (err: any) {

@@ -163,76 +163,129 @@ export async function getFolderCounts(
   }
 }
 
+export type SortOption = "date-desc" | "date-asc" | "unread-first" | "starred-first";
+
 export async function getMessages(
   account: MailAccount,
   password: string,
   folder: MailFolder,
-  options: { limit?: number; offset?: number } = {},
+  options: { limit?: number; offset?: number; sort?: SortOption } = {},
 ): Promise<MailMessage[]> {
   const client = makeImapClient(account, password);
   const limit = options.limit ?? 50;
   const offset = options.offset ?? 0;
+  const sort: SortOption = options.sort ?? "date-desc";
 
   try {
     await client.connect();
     const mailboxes = await listMailboxes(client);
 
-    // Starred is a flag, not a folder on most IMAP servers.
-    // Fetch \Flagged messages from INBOX with proper pagination.
+    // Resolve mailbox path (starred = \Flagged in INBOX).
+    let path: string | undefined;
+    let baseCriteria: SearchObject | null = null;
     if (folder === "starred") {
-      const inboxPath = resolveFolderPath(mailboxes, "inbox") || "INBOX";
-      const lock = await client.getMailboxLock(inboxPath);
-      try {
-        const uids = ((await client.search({ flagged: true } as SearchObject, { uid: true })) as number[]) || [];
-        if (uids.length === 0) return [];
-        // UIDs are ascending; newest last. Sort desc then paginate.
-        const sorted = uids.slice().sort((a, b) => b - a);
-        const slice = sorted.slice(offset, offset + limit);
-        if (slice.length === 0) return [];
+      path = resolveFolderPath(mailboxes, "inbox") || "INBOX";
+      baseCriteria = { flagged: true } as SearchObject;
+    } else {
+      path = resolveFolderPath(mailboxes, folder);
+    }
+    if (!path) return [];
+
+    const lock = await client.getMailboxLock(path);
+    try {
+      // Build ordered UID list across the WHOLE folder (not just the loaded page)
+      // using cheap server-side SEARCH calls, then paginate + fetch envelopes
+      // only for the slice. This keeps the cost O(page) regardless of sort.
+      let orderedUids: number[] = [];
+
+      const fastPath =
+        !baseCriteria && (sort === "date-desc" || sort === "date-asc");
+
+      if (fastPath) {
+        // Ultra-fast path: use sequence numbers, no SEARCH needed.
+        const total = (client.mailbox as any)?.exists ?? 0;
+        if (total === 0) return [];
+        let start: number;
+        let end: number;
+        if (sort === "date-desc") {
+          start = Math.max(1, total - offset - limit + 1);
+          end = Math.max(1, total - offset);
+        } else {
+          start = Math.min(total, offset + 1);
+          end = Math.min(total, offset + limit);
+        }
+        if (end < start) return [];
+        const range = `${start}:${end}`;
 
         const messages: MailMessage[] = [];
-        for await (const msg of client.fetch(slice as any, {
+        for await (const msg of client.fetch(range, {
           uid: true,
           envelope: true,
           internalDate: true,
           flags: true,
           bodyStructure: true,
-        }, { uid: true })) {
+        })) {
           const parsed = await messageFromFetch(msg, folder, client);
           messages.push(parsed);
         }
-        return messages.sort((a, b) => (a.date < b.date ? 1 : -1));
-      } finally {
-        lock.release();
+        return messages.sort((a, b) =>
+          sort === "date-asc"
+            ? a.date < b.date ? -1 : 1
+            : a.date < b.date ? 1 : -1,
+        );
       }
-    }
 
-    const path = resolveFolderPath(mailboxes, folder);
-    if (!path) return [];
+      // Grouped / filtered sorts (still cheap: SEARCH only returns UIDs).
+      const runSearch = async (extra: SearchObject): Promise<number[]> => {
+        const crit: SearchObject = baseCriteria
+          ? ({ ...(baseCriteria as any), ...(extra as any) } as SearchObject)
+          : extra;
+        const uids = ((await client.search(crit, { uid: true })) as number[]) || [];
+        return uids;
+      };
 
-    const lock = await client.getMailboxLock(path);
-    try {
-      const total = (client.mailbox as any)?.exists ?? 0;
-      if (total === 0) return [];
+      if (sort === "unread-first" || sort === "starred-first") {
+        const primary = sort === "unread-first"
+          ? await runSearch({ seen: false } as SearchObject)
+          : await runSearch({ flagged: true } as SearchObject);
+        const secondary = sort === "unread-first"
+          ? await runSearch({ seen: true } as SearchObject)
+          : await runSearch({ flagged: false } as SearchObject);
+        // Each group ordered newest-first (UID desc ~ arrival order).
+        primary.sort((a, b) => b - a);
+        secondary.sort((a, b) => b - a);
+        orderedUids = [...primary, ...secondary];
+      } else if (baseCriteria) {
+        // starred folder with date sort
+        const uids = await runSearch({} as SearchObject);
+        orderedUids = uids.sort((a, b) =>
+          sort === "date-asc" ? a - b : b - a,
+        );
+      }
 
-      const start = Math.max(1, total - offset - limit + 1);
-      const end = total - offset;
-      const range = `${start}:${end}`;
+      if (orderedUids.length === 0) return [];
+      const slice = orderedUids.slice(offset, offset + limit);
+      if (slice.length === 0) return [];
 
       const messages: MailMessage[] = [];
-      for await (const msg of client.fetch(range, {
+      for await (const msg of client.fetch(slice as any, {
         uid: true,
         envelope: true,
         internalDate: true,
         flags: true,
         bodyStructure: true,
-      })) {
+      }, { uid: true })) {
         const parsed = await messageFromFetch(msg, folder, client);
         messages.push(parsed);
       }
-      if (messages.length === 0) return [];
-
-      return messages.sort((a, b) => (a.date < b.date ? 1 : -1));
+      // Preserve the server-computed order (slice), not date order.
+      const orderIndex = new Map(slice.map((u, i) => [u, i]));
+      messages.sort((a, b) => {
+        const ai = orderIndex.get(Number(a.id.split(":")[1])) ?? 0;
+        const bi = orderIndex.get(Number(b.id.split(":")[1])) ?? 0;
+        return ai - bi;
+      });
+      return messages;
     } finally {
       lock.release();
     }
@@ -240,6 +293,7 @@ export async function getMessages(
     await client.logout().catch(() => {});
   }
 }
+
 
 export async function getMessageBody(
   account: MailAccount,
