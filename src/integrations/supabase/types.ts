@@ -56,56 +56,6 @@ export type Database = {
         }
         Relationships: []
       }
-      email_domains: {
-        Row: {
-          company_id: string
-          created_at: string
-          domain: string
-          id: string
-          imap_host: string
-          imap_port: number
-          imap_secure: boolean
-          smtp_host: string
-          smtp_port: number
-          smtp_secure: boolean
-          updated_at: string
-        }
-        Insert: {
-          company_id: string
-          created_at?: string
-          domain: string
-          id?: string
-          imap_host: string
-          imap_port?: number
-          imap_secure?: boolean
-          smtp_host: string
-          smtp_port?: number
-          smtp_secure?: boolean
-          updated_at?: string
-        }
-        Update: {
-          company_id?: string
-          created_at?: string
-          domain?: string
-          id?: string
-          imap_host?: string
-          imap_port?: number
-          imap_secure?: boolean
-          smtp_host?: string
-          smtp_port?: number
-          smtp_secure?: boolean
-          updated_at?: string
-        }
-        Relationships: [
-          {
-            foreignKeyName: "email_domains_company_id_fkey"
-            columns: ["company_id"]
-            isOneToOne: false
-            referencedRelation: "companies"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
       mail_accounts: {
         Row: {
           company_id: string
@@ -114,14 +64,14 @@ export type Database = {
           display_name: string | null
           email_address: string
           id: string
-          imap_host: string | null
-          imap_port: number | null
-          imap_secure: boolean | null
+          imap_host: string
+          imap_port: number
+          imap_secure: boolean
           is_default: boolean
           last_synced_at: string | null
-          smtp_host: string | null
-          smtp_port: number | null
-          smtp_secure: boolean | null
+          smtp_host: string
+          smtp_port: number
+          smtp_secure: boolean
           updated_at: string
           user_id: string | null
         }
@@ -132,14 +82,14 @@ export type Database = {
           display_name?: string | null
           email_address: string
           id?: string
-          imap_host?: string | null
-          imap_port?: number | null
-          imap_secure?: boolean | null
+          imap_host: string
+          imap_port?: number
+          imap_secure?: boolean
           is_default?: boolean
           last_synced_at?: string | null
-          smtp_host?: string | null
-          smtp_port?: number | null
-          smtp_secure?: boolean | null
+          smtp_host: string
+          smtp_port?: number
+          smtp_secure?: boolean
           updated_at?: string
           user_id?: string | null
         }
@@ -150,14 +100,14 @@ export type Database = {
           display_name?: string | null
           email_address?: string
           id?: string
-          imap_host?: string | null
-          imap_port?: number | null
-          imap_secure?: boolean | null
+          imap_host?: string
+          imap_port?: number
+          imap_secure?: boolean
           is_default?: boolean
           last_synced_at?: string | null
-          smtp_host?: string | null
-          smtp_port?: number | null
-          smtp_secure?: boolean | null
+          smtp_host?: string
+          smtp_port?: number
+          smtp_secure?: boolean
           updated_at?: string
           user_id?: string | null
         }
