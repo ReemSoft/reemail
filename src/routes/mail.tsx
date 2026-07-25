@@ -569,6 +569,13 @@ function MailApp() {
     setSelection(new Set());
   }
 
+  function toggleSelectMode() {
+    setSelectMode((v) => {
+      if (v) clearSelection();
+      return !v;
+    });
+  }
+
   // Run async ops with limited concurrency to stay fast without hammering the bridge
   async function runBatch<T>(items: T[], limit: number, worker: (item: T) => Promise<any>) {
     let idx = 0;
