@@ -1152,6 +1152,7 @@ function MailApp() {
                   </div>
                 </div>
               </DropdownMenuItem>
+              <DropdownMenuSeparator />
               <DropdownMenuItem
                 onSelect={() => setSearchMode("deep")}
                 className="flex items-start gap-2 cursor-pointer hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground"
@@ -1169,28 +1170,30 @@ function MailApp() {
                   </div>
                 </div>
               </DropdownMenuItem>
-              {searchMode === "deep" && (
-                <>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem
-                    onSelect={(e) => {
-                      e.preventDefault();
-                      setDeepIncludeBody((v) => !v);
-                    }}
-                    className="flex items-start gap-2 cursor-pointer hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground"
-                  >
-                    <div className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded border border-border">
-                      {deepIncludeBody && <Check className="h-3 w-3 text-primary" />}
-                    </div>
-                    <div className="flex-1">
-                      <div className="font-medium">تضمين نص الرسالة</div>
-                      <div className="text-[11px] text-muted-foreground">
-                        أبطأ لكنه يبحث داخل محتوى الرسائل أيضاً
-                      </div>
-                    </div>
-                  </DropdownMenuItem>
-                </>
-              )}
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                onSelect={(e) => {
+                  e.preventDefault();
+                  if (searchMode !== "deep") setSearchMode("deep");
+                  setDeepIncludeBody((v) => !v);
+                }}
+                className="flex items-start gap-2 cursor-pointer hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground"
+              >
+                <div className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded border border-border">
+                  {deepIncludeBody && <Check className="h-3 w-3 text-primary" />}
+                </div>
+                <div className="flex-1">
+                  <div className="flex items-center justify-between">
+                    <span className="font-medium">تضمين نص الرسالة</span>
+                    {searchMode !== "deep" && (
+                      <span className="text-[10px] text-muted-foreground">يتطلب بحث شامل</span>
+                    )}
+                  </div>
+                  <div className="text-[11px] text-muted-foreground">
+                    أبطأ لكنه يبحث داخل محتوى الرسائل أيضاً
+                  </div>
+                </div>
+              </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
