@@ -1081,7 +1081,7 @@ function MessageView({
                   >
                     <span className="truncate">
                       <span className="text-foreground/70">إلى </span>
-                      <span>{toSummary}</span>
+                      <span dir="ltr" className="unicode-bidi-isolate">{toSummary}</span>
                     </span>
                     <ChevronDown
                       className={`h-3.5 w-3.5 shrink-0 transition-transform ${detailsOpen ? "rotate-180" : ""}`}
@@ -1089,43 +1089,55 @@ function MessageView({
                   </button>
                   {detailsOpen && (
                     <div className="mt-2 rounded-lg border border-border bg-muted/40 p-3">
-                      <dl className="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1.5 text-xs">
-                        <dt className="text-foreground/70">من:</dt>
+                      <dl className="grid grid-cols-[max-content_1fr] gap-x-2 gap-y-1.5 text-xs">
+                        <dt className="text-foreground/70 whitespace-nowrap">من:</dt>
                         <dd className="min-w-0 break-all">
-                          {message.from.name ? `${message.from.name} ` : ""}
+                          {message.from.name ? <span className="ml-1">{message.from.name}</span> : null}
                           <span dir="ltr" className="text-muted-foreground">
                             &lt;{message.from.email || "—"}&gt;
                           </span>
                         </dd>
-                        <dt className="text-foreground/70">إلى:</dt>
-                        <dd className="min-w-0 break-all" dir="ltr">
-                          {message.to.length > 0 ? message.to.map((t) => t.email).join(", ") : "—"}
+
+                        <dt className="text-foreground/70 whitespace-nowrap">إلى:</dt>
+                        <dd className="min-w-0 break-all">
+                          <span dir="ltr" style={{ unicodeBidi: "isolate" }}>
+                            {message.to.length > 0 ? message.to.map((t) => t.email).join(", ") : "—"}
+                          </span>
                         </dd>
+
                         {message.cc && message.cc.length > 0 && (
                           <>
-                            <dt className="text-foreground/70">نسخة:</dt>
-                            <dd className="min-w-0 break-all" dir="ltr">
-                              {message.cc.map((c) => c.email).join(", ")}
+                            <dt className="text-foreground/70 whitespace-nowrap">نسخة:</dt>
+                            <dd className="min-w-0 break-all">
+                              <span dir="ltr" style={{ unicodeBidi: "isolate" }}>
+                                {message.cc.map((c) => c.email).join(", ")}
+                              </span>
                             </dd>
                           </>
                         )}
-                        <dt className="text-foreground/70">التاريخ:</dt>
+
+                        <dt className="text-foreground/70 whitespace-nowrap">التاريخ:</dt>
                         <dd className="min-w-0">{fullDate}</dd>
+
                         {message.mailedBy && (
                           <>
-                            <dt className="text-foreground/70">mailed-by:</dt>
-                            <dd className="min-w-0 break-all" dir="ltr">{message.mailedBy}</dd>
+                            <dt className="text-foreground/70 whitespace-nowrap">الخادم المُرسِل:</dt>
+                            <dd className="min-w-0 break-all">
+                              <span dir="ltr" style={{ unicodeBidi: "isolate" }}>{message.mailedBy}</span>
+                            </dd>
                           </>
                         )}
                         {message.signedBy && (
                           <>
-                            <dt className="text-foreground/70">signed-by:</dt>
-                            <dd className="min-w-0 break-all" dir="ltr">{message.signedBy}</dd>
+                            <dt className="text-foreground/70 whitespace-nowrap">موقَّعة بواسطة:</dt>
+                            <dd className="min-w-0 break-all">
+                              <span dir="ltr" style={{ unicodeBidi: "isolate" }}>{message.signedBy}</span>
+                            </dd>
                           </>
                         )}
                         {message.security && (
                           <>
-                            <dt className="text-foreground/70">الأمان:</dt>
+                            <dt className="text-foreground/70 whitespace-nowrap">الأمان:</dt>
                             <dd className="min-w-0 inline-flex items-center gap-1">
                               {isSecure ? (
                                 <ShieldCheck className="h-3.5 w-3.5 text-emerald-600" />
@@ -1139,6 +1151,7 @@ function MessageView({
                       </dl>
                     </div>
                   )}
+
                 </div>
               </div>
             </div>
