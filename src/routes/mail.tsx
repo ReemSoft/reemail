@@ -89,6 +89,68 @@ function parseMessageId(id: string): { folder: MailFolder; uid: number } | null 
   return { folder: folder as MailFolder, uid };
 }
 
+type ComposeInitial = {
+  to?: string;
+  cc?: string;
+  subject?: string;
+  body?: string;
+};
+
+function stripHtml(html: string): string {
+  if (!html) return "";
+  if (typeof document === "undefined") return html.replace(/<[^>]+>/g, "");
+  const tmp = document.createElement("div");
+  tmp.innerHTML = html;
+  return tmp.textContent || tmp.innerText || "";
+}
+
+function quoteBody(message: MailMessage): string {
+  const src = stripHtml(message.body || message.preview || "");
+  const dateStr = new Date(message.date).toLocaleString("ar", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
+  const from = message.from.name
+    ? `${message.from.name} <${message.from.email}>`
+    : message.from.email;
+  const header = `\n\n\nOn ${dateStr}, ${from} wrote:\n`;
+  const quoted = src
+    .split("\n")
+    .map((l) => `> ${l}`)
+    .join("\n");
+  return header + quoted;
+}
+
+function buildReply(message: MailMessage, myEmail: string, all: boolean): ComposeInitial {
+  const subject = message.subject.startsWith("Re:")
+    ? message.subject
+    : `Re: ${message.subject}`;
+  const to = message.from.email;
+  let cc = "";
+  if (all) {
+    const others = [
+      ...message.to.map((a) => a.email),
+      ...(message.cc?.map((a) => a.email) ?? []),
+    ].filter((e) => e && e.toLowerCase() !== myEmail.toLowerCase() && e.toLowerCase() !== to.toLowerCase());
+    cc = Array.from(new Set(others)).join(", ");
+  }
+  return { to, cc, subject, body: quoteBody(message) };
+}
+
+function buildForward(message: MailMessage): ComposeInitial {
+  const subject = message.subject.startsWith("Fwd:")
+    ? message.subject
+    : `Fwd: ${message.subject}`;
+  const header =
+    `\n\n---------- Forwarded message ----------\n` +
+    `From: ${message.from.name} <${message.from.email}>\n` +
+    `Date: ${new Date(message.date).toLocaleString("ar")}\n` +
+    `Subject: ${message.subject}\n` +
+    `To: ${message.to.map((t) => t.email).join(", ")}\n\n` +
+    stripHtml(message.body || message.preview || "");
+  return { to: "", subject, body: header };
+}
+
 function useMailData(session: MailSession | null) {
   const getCounts = useServerFn(bridgeGetFolderCounts);
   const getMessages = useServerFn(bridgeGetMessages);
