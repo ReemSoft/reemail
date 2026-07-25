@@ -92,6 +92,7 @@ export async function getFolderCounts(
       "spam",
       "trash",
       "archive",
+      "all",
     ];
 
     const counts: FolderCount[] = [];
