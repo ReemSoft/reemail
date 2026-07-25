@@ -1239,6 +1239,7 @@ function MailApp() {
               onDelete={() => handleDelete(selectedMessage.id)}
               onSpam={() => handleMove(selectedMessage.id, "spam")}
               onMarkUnread={() => handleMarkUnread(selectedMessage.id)}
+              onRestore={() => handleRestore(selectedMessage.id)}
               onPrint={() => { /* handled inside MessageView */ }}
             />
           ) : (
