@@ -1360,7 +1360,7 @@ function MessageView({
           <button
             onClick={onDelete}
             className="rounded-lg p-2 text-destructive hover:bg-destructive/10"
-            title="حذف"
+            title={isTrash ? "حذف نهائي" : "نقل إلى المهملات"}
           >
             <Trash2 className="h-4 w-4" />
           </button>
@@ -1410,7 +1410,7 @@ function MessageView({
               onClick={onDelete}
               className="text-destructive focus:text-destructive"
             >
-              <Trash2 className="h-4 w-4" /> حذف
+              <Trash2 className="h-4 w-4" /> {isTrash ? "حذف نهائي" : "نقل إلى المهملات"}
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
