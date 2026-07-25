@@ -185,7 +185,7 @@ function MailApp() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [composeOpen, setComposeOpen] = useState(false);
+  const [compose, setCompose] = useState<ComposeInitial | null>(null);
   const [selectedMessage, setSelectedMessage] = useState<MailMessage | null>(null);
   const [reading, setReading] = useState(false);
 
