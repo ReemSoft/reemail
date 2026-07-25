@@ -1335,69 +1335,72 @@ function MailApp() {
               </span>
               <div className="flex-1" />
               {bulkBusy && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />}
-              <DropdownMenu dir="rtl">
-                <DropdownMenuTrigger asChild>
-                  <button
-                    disabled={bulkBusy || selection.size === 0}
-                    className="flex items-center gap-1.5 rounded px-2.5 py-1.5 text-xs font-medium text-foreground transition hover:bg-muted disabled:opacity-50"
-                    title="إجراءات"
-                  >
-                    <MoreVertical className="h-4 w-4" />
-                    <span>إجراءات</span>
-                  </button>
-                </DropdownMenuTrigger>
+              {selection.size > 0 && (
+                <DropdownMenu dir="rtl">
+                  <DropdownMenuTrigger asChild>
+                    <button
+                      disabled={bulkBusy}
+                      className="flex items-center gap-1.5 rounded px-2.5 py-1.5 text-xs font-medium text-foreground transition hover:bg-muted disabled:opacity-50"
+                      title="إجراءات"
+                    >
+                      <MoreVertical className="h-4 w-4" />
+                      <span>إجراءات</span>
+                    </button>
+                  </DropdownMenuTrigger>
 
-                <DropdownMenuContent align="start" className="w-56">
-                  {folder === "trash" && (
-                    <>
-                      <DropdownMenuItem
-                        onClick={bulkRestore}
-                        disabled={bulkBusy}
-                        className="cursor-pointer hover:bg-accent focus:bg-accent"
-                      >
-                        <ArchiveRestore className="ms-2 h-4 w-4" />
-                        استعادة المحدد
-                      </DropdownMenuItem>
-                      <DropdownMenuSeparator />
-                    </>
-                  )}
-                  <DropdownMenuItem
-                    onClick={() => bulkMove("archive")}
-                    disabled={bulkBusy}
-                    className="cursor-pointer hover:bg-accent focus:bg-accent"
-                  >
-                    <Archive className="ms-2 h-4 w-4" />
-                    أرشفة المحدد
-                  </DropdownMenuItem>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem
-                    onClick={() => bulkMove("spam")}
-                    disabled={bulkBusy}
-                    className="cursor-pointer hover:bg-accent focus:bg-accent"
-                  >
-                    <AlertOctagon className="ms-2 h-4 w-4" />
-                    نقل إلى المزعج
-                  </DropdownMenuItem>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem
-                    onClick={bulkMarkUnread}
-                    disabled={bulkBusy}
-                    className="cursor-pointer hover:bg-accent focus:bg-accent"
-                  >
-                    <MailIcon className="ms-2 h-4 w-4" />
-                    تعليم كغير مقروءة
-                  </DropdownMenuItem>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem
-                    onClick={bulkDelete}
-                    disabled={bulkBusy}
-                    className="cursor-pointer text-destructive hover:bg-destructive/10 focus:bg-destructive/10 focus:text-destructive"
-                  >
-                    <Trash2 className="ms-2 h-4 w-4" />
-                    {folder === "trash" ? "حذف نهائياً" : "نقل إلى المهملات"}
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
+                  <DropdownMenuContent align="start" className="w-56">
+                    {folder === "trash" && (
+                      <>
+                        <DropdownMenuItem
+                          onClick={bulkRestore}
+                          disabled={bulkBusy}
+                          className="cursor-pointer hover:bg-accent focus:bg-accent"
+                        >
+                          <ArchiveRestore className="ms-2 h-4 w-4" />
+                          استعادة المحدد
+                        </DropdownMenuItem>
+                        <DropdownMenuSeparator />
+                      </>
+                    )}
+                    <DropdownMenuItem
+                      onClick={() => bulkMove("archive")}
+                      disabled={bulkBusy}
+                      className="cursor-pointer hover:bg-accent focus:bg-accent"
+                    >
+                      <Archive className="ms-2 h-4 w-4" />
+                      أرشفة المحدد
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      onClick={() => bulkMove("spam")}
+                      disabled={bulkBusy}
+                      className="cursor-pointer hover:bg-accent focus:bg-accent"
+                    >
+                      <AlertOctagon className="ms-2 h-4 w-4" />
+                      نقل إلى المزعج
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      onClick={bulkMarkUnread}
+                      disabled={bulkBusy}
+                      className="cursor-pointer hover:bg-accent focus:bg-accent"
+                    >
+                      <MailIcon className="ms-2 h-4 w-4" />
+                      تعليم كغير مقروءة
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      onClick={bulkDelete}
+                      disabled={bulkBusy}
+                      className="cursor-pointer text-destructive hover:bg-destructive/10 focus:bg-destructive/10 focus:text-destructive"
+                    >
+                      <Trash2 className="ms-2 h-4 w-4" />
+                      {folder === "trash" ? "حذف نهائياً" : "نقل إلى المهملات"}
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              )}
+
               <button
                 onClick={toggleSelectMode}
                 disabled={bulkBusy}
