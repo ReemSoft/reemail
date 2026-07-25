@@ -44,6 +44,17 @@ interface MailAccount {
   is_default: boolean;
 }
 
+interface EmailDomain {
+  id: string;
+  domain: string;
+  imap_host: string;
+  imap_port: number;
+  imap_secure: boolean;
+  smtp_host: string;
+  smtp_port: number;
+  smtp_secure: boolean;
+}
+
 export const Route = createFileRoute("/_authenticated/dashboard")({
   head: () => ({
     meta: [{ title: "لوحة تحكم الشركة — MailMaestro" }],
