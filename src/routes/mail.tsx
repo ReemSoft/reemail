@@ -1265,6 +1265,7 @@ function MessageView({
     dateStyle: "full",
     timeStyle: "short",
   });
+  const isTrash = message.folder === "trash";
   const isSecure =
     !!message.security && !/غير/.test(message.security);
 
