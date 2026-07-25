@@ -682,14 +682,19 @@ function MailApp() {
             <MessageView
               message={selectedMessage}
               loading={reading}
+              myEmail={session.account.email_address}
               onBack={() => {
                 setSelectedId(null);
                 setSelectedMessage(null);
               }}
-              onReply={() => setComposeOpen(true)}
+              onReply={() => setCompose(buildReply(selectedMessage, session.account.email_address, false))}
+              onReplyAll={() => setCompose(buildReply(selectedMessage, session.account.email_address, true))}
+              onForward={() => setCompose(buildForward(selectedMessage))}
               onArchive={() => handleMove(selectedMessage.id, "archive")}
               onDelete={() => handleDelete(selectedMessage.id)}
               onSpam={() => handleMove(selectedMessage.id, "spam")}
+              onMarkUnread={() => handleMarkUnread(selectedMessage.id)}
+              onPrint={() => window.print()}
             />
           ) : (
             <EmptyViewer />
@@ -697,7 +702,14 @@ function MailApp() {
         </div>
       </div>
 
-      {composeOpen && <Composer session={session} onClose={() => setComposeOpen(false)} onSent={refresh} />}
+      {compose && (
+        <Composer
+          session={session}
+          initial={compose}
+          onClose={() => setCompose(null)}
+          onSent={refresh}
+        />
+      )}
     </div>
   );
 }
