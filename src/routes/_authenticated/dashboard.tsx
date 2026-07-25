@@ -442,7 +442,14 @@ function AccountsTab({
   }
 
   async function handleDelete(id: string) {
-    if (!confirm("حذف هذا الحساب؟")) return;
+    const confirmed = await confirm({
+      title: "حذف الحساب",
+      description: "هل أنت متأكد من حذف هذا الحساب؟ لا يمكن التراجع عن هذا الإجراء.",
+      confirmLabel: "حذف",
+      cancelLabel: "إلغاء",
+      variant: "destructive",
+    });
+    if (!confirmed) return;
     setBusyId(id);
     const { error } = await supabase.from("mail_accounts").delete().eq("id", id);
     setBusyId(null);
