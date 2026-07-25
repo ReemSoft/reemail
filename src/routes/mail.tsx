@@ -176,8 +176,9 @@ function MailApp() {
   const [selectedMessage, setSelectedMessage] = useState<MailMessage | null>(null);
   const [reading, setReading] = useState(false);
 
-  const { folder, setFolder, counts, messages, setMessages, loading, bridgeError, useMock, refresh } =
+  const { folder, setFolder, counts, setCounts, messages, setMessages, loading, bridgeError, useMock, refresh } =
     useMailData(session || null);
+
 
   const getOne = useServerFn(bridgeGetMessage);
   const markRead = useServerFn(bridgeMarkRead);
