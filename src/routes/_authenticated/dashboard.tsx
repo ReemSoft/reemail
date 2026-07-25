@@ -471,9 +471,9 @@ function AccountsTab({
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-xl font-bold">حسابات البريد (IMAP/SMTP)</h2>
+          <h2 className="text-xl font-bold">تخصيصات الحسابات (اختياري)</h2>
           <p className="text-sm text-muted-foreground">
-            أضف عنوان البريد وإعدادات السيرفر فقط. كلمة مرور البريد يُدخلها العميل بنفسه عند فتح صندوقه.
+            كل بريد على دومين مُسجَّل يعمل تلقائياً بإعدادات الدومين. أضف حساباً هنا فقط لتعديل اسم العرض أو استخدام خادم مختلف عن الدومين.
           </p>
         </div>
         <button
