@@ -962,16 +962,22 @@ function MessageView({
           <ChevronLeft className="h-4 w-4" /> رجوع
         </button>
         <div className="hidden gap-1 md:flex">
+          <button onClick={onReply} className="rounded-lg p-2 hover:bg-muted" title="رد">
+            <Reply className="h-4 w-4" />
+          </button>
+          <button onClick={onReplyAll} className="rounded-lg p-2 hover:bg-muted" title="رد على الكل">
+            <ReplyAll className="h-4 w-4" />
+          </button>
+          <button onClick={onForward} className="rounded-lg p-2 hover:bg-muted" title="إعادة توجيه">
+            <Forward className="h-4 w-4" />
+          </button>
+          <div className="mx-1 h-6 w-px bg-border" />
           <button onClick={onArchive} className="rounded-lg p-2 hover:bg-muted" title="أرشفة">
             <Archive className="h-4 w-4" />
-          </button>
-          <button onClick={onDelete} className="rounded-lg p-2 hover:bg-muted" title="حذف">
-            <Trash2 className="h-4 w-4" />
           </button>
           <button onClick={onSpam} className="rounded-lg p-2 hover:bg-muted" title="مزعج">
             <AlertOctagon className="h-4 w-4" />
           </button>
-          <div className="mx-1 h-6 w-px bg-border" />
           <button
             onClick={onMarkUnread}
             className="rounded-lg p-2 hover:bg-muted"
@@ -981,6 +987,17 @@ function MessageView({
           </button>
           <button onClick={printMessage} className="rounded-lg p-2 hover:bg-muted" title="طباعة">
             <Printer className="h-4 w-4" />
+          </button>
+          <button onClick={copyEmail} className="rounded-lg p-2 hover:bg-muted" title="نسخ عنوان المرسل">
+            <Copy className="h-4 w-4" />
+          </button>
+          <div className="mx-1 h-6 w-px bg-border" />
+          <button
+            onClick={onDelete}
+            className="rounded-lg p-2 text-destructive hover:bg-destructive/10"
+            title="حذف"
+          >
+            <Trash2 className="h-4 w-4" />
           </button>
         </div>
         <DropdownMenu>
