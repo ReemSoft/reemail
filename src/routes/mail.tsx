@@ -326,13 +326,15 @@ function useMailData(session: MailSession | null) {
     loadMore,
     bridgeError,
     useMock,
+    loadCounts,
     refresh: () => {
-      setSort("date-desc");
+      // Preserve current sort on manual refresh so user's choice is not lost.
       loadCounts();
       loadMessages();
     },
   };
 }
+
 
 
 
@@ -356,8 +358,9 @@ function MailApp() {
   const [deepLoading, setDeepLoading] = useState(false);
   const [deepError, setDeepError] = useState<string | null>(null);
 
-  const { folder, setFolder, sort, setSort, counts, setCounts, messages, setMessages, loading, loadingMore, hasMore, loadMore, bridgeError, useMock, refresh: rawRefresh } =
+  const { folder, setFolder, sort, setSort, counts, setCounts, messages, setMessages, loading, loadingMore, hasMore, loadMore, bridgeError, useMock, loadCounts, refresh: rawRefresh } =
     useMailData(session || null);
+
 
   const refresh = useCallback(async () => {
     if (refreshing) return;
@@ -1037,9 +1040,10 @@ function MailApp() {
   }
 
   function loadCountsSoft() {
-    // Refresh counts silently after bulk actions
-    setTimeout(() => refresh(), 300);
+    // Refresh counters only — never touch messages or sort order.
+    setTimeout(() => loadCounts(), 300);
   }
+
 
   function handleSignOut() {
     clearMailSession();
