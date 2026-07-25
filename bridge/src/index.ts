@@ -330,6 +330,7 @@ app.post("/api/attachment", requireKey, async (req, res) => {
     res.end();
   }
 });
+const HOST = process.env.HOST || "127.0.0.1";
 app.listen(PORT, HOST, () => {
   console.log(`[bridge] MailMaestro Bridge running on ${HOST}:${PORT}`);
 });
