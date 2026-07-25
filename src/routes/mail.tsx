@@ -34,6 +34,7 @@ import {
   CheckSquare,
   Square,
   MinusSquare,
+  ArchiveRestore,
 } from "lucide-react";
 import {
   DropdownMenu,
