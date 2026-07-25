@@ -22,7 +22,20 @@ import {
   Mail as MailIcon,
   Loader2,
   ChevronLeft,
+  Reply,
+  ReplyAll,
+  Forward,
+  Printer,
+  MailOpen,
+  Copy,
 } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { useServerFn } from "@tanstack/react-start";
 import { toast } from "sonner";
 import { useCompanyTheme } from "@/hooks/use-company-theme";
