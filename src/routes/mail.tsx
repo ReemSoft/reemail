@@ -326,13 +326,15 @@ function useMailData(session: MailSession | null) {
     loadMore,
     bridgeError,
     useMock,
+    loadCounts,
     refresh: () => {
-      setSort("date-desc");
+      // Preserve current sort on manual refresh so user's choice is not lost.
       loadCounts();
       loadMessages();
     },
   };
 }
+
 
 
 
