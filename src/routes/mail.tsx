@@ -722,7 +722,7 @@ function MailApp() {
               onDelete={() => handleDelete(selectedMessage.id)}
               onSpam={() => handleMove(selectedMessage.id, "spam")}
               onMarkUnread={() => handleMarkUnread(selectedMessage.id)}
-              onPrint={() => window.print()}
+              onPrint={() => { /* handled inside MessageView */ }}
             />
           ) : (
             <EmptyViewer />
