@@ -239,7 +239,7 @@ export async function getMessageBody(
       const parsed = await parseMessageSource(msg.source as Buffer, folder);
       parsed.id = `${folder}:${uid}`;
       parsed.threadId = msg.envelope?.messageId || parsed.id;
-      parsed.read = !msg.flags?.has("\\Seen");
+      parsed.read = msg.flags?.has("\\Seen") || false;
       parsed.starred = msg.flags?.has("\\Flagged") || false;
       parsed.folder = folder;
       return parsed;
