@@ -96,8 +96,7 @@ export async function getFolderCounts(
 
     const counts: FolderCount[] = [];
     for (const folder of allFolders) {
-      // Starred is a flag, not a folder on most IMAP servers.
-      // Count \Flagged messages in INBOX (fast SEARCH, no fetch).
+      // Starred is a virtual folder (\Flagged in INBOX). Always supported.
       if (folder === "starred") {
         try {
           const inboxPath = resolveFolderPath(mailboxes, "inbox") || "INBOX";
@@ -105,18 +104,44 @@ export async function getFolderCounts(
           try {
             const uids = (await client.search({ flagged: true } as SearchObject, { uid: true })) as number[];
             const unseen = (await client.search({ flagged: true, seen: false } as SearchObject, { uid: true })) as number[];
-            counts.push({ folder, total: uids?.length ?? 0, unread: unseen?.length ?? 0 });
+            counts.push({ folder, total: uids?.length ?? 0, unread: unseen?.length ?? 0, supported: true });
           } finally {
             lock.release();
           }
         } catch {
-          counts.push({ folder, total: 0, unread: 0 });
+          counts.push({ folder, total: 0, unread: 0, supported: true });
         }
         continue;
       }
+
+      // For `all`, only treat as supported if a real "All Mail" mailbox exists
+      // (e.g. Gmail). Otherwise skip to avoid expensive cross-folder aggregation.
+      if (folder === "all") {
+        const allMailPath = mailboxes.find((m) =>
+          /all\s*mail/i.test(m.path) || /\[Gmail\]\/All Mail/i.test(m.path),
+        )?.path;
+        if (!allMailPath) {
+          counts.push({ folder, total: 0, unread: 0, supported: false });
+          continue;
+        }
+        try {
+          const status = await client.status(allMailPath, { messages: true, unseen: true });
+          counts.push({
+            folder,
+            total: status.messages ?? 0,
+            unread: status.unseen ?? 0,
+            supported: true,
+          });
+        } catch {
+          counts.push({ folder, total: 0, unread: 0, supported: false });
+        }
+        continue;
+      }
+
       const path = resolveFolderPath(mailboxes, folder);
       if (!path) {
-        counts.push({ folder, total: 0, unread: 0 });
+        // archive/etc. not present on the server → hide from the UI.
+        counts.push({ folder, total: 0, unread: 0, supported: false });
         continue;
       }
       try {
@@ -125,9 +150,10 @@ export async function getFolderCounts(
           folder,
           total: status.messages ?? 0,
           unread: status.unseen ?? 0,
+          supported: true,
         });
       } catch {
-        counts.push({ folder, total: 0, unread: 0 });
+        counts.push({ folder, total: 0, unread: 0, supported: true });
       }
     }
     return counts;
