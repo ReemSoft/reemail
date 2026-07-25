@@ -130,15 +130,19 @@ export const clientLogin = createServerFn({ method: "POST" })
       let json: any = {};
       try { json = JSON.parse(rawText); } catch { /* not json */ }
       if (!res.ok || !json.ok) {
+        const isHtmlError = rawText.trim().startsWith("<") || rawText.includes("<!DOCTYPE");
+        const bridgeMessage =
+          res.status === 503
+            ? "خادم البريد الخارجي لا يستجيب حالياً. افحص تشغيل الـ Bridge والبروكسي على السيرفر."
+            : json.error || (isHtmlError ? "الخادم أعاد صفحة خطأ بدلاً من رد JSON." : rawText.slice(0, 120)) || "خطأ غير معروف";
         console.error("[clientLogin] bridge verify failed", {
           status: res.status,
           bridgeUrl,
-          bridgeKeyPrefix: bridgeKey.slice(0, 6),
           body: rawText.slice(0, 300),
         });
         return {
           ok: false as const,
-          message: `فشل التحقق (${res.status}): ${json.error || rawText.slice(0, 120) || "خطأ غير معروف"}`,
+          message: `فشل التحقق (${res.status}): ${bridgeMessage}`,
         };
       }
     } catch (err) {
