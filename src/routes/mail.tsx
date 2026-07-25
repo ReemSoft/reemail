@@ -2256,3 +2256,181 @@ function Composer({
     </div>
   );
 }
+
+// ---- Attachment card with download + inline preview ----
+const INLINE_PREVIEW_MIME = new Set<string>([
+  "image/png",
+  "image/jpeg",
+  "image/jpg",
+  "image/gif",
+  "image/webp",
+  "application/pdf",
+]);
+
+function AttachmentCard({
+  attachment,
+  message,
+}: {
+  attachment: import("@/lib/mail-types").MailAttachment;
+  message: MailMessage;
+}) {
+  const [busy, setBusy] = useState<"download" | "preview" | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const canPreview = INLINE_PREVIEW_MIME.has((attachment.mimeType || "").toLowerCase());
+  const canDownload = !!attachment.part;
+
+  useEffect(() => {
+    return () => {
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
+    };
+  }, [previewUrl]);
+
+  async function fetchBlob(): Promise<Blob | null> {
+    const session = getMailSession();
+    if (!session) {
+      toast.error("انتهت الجلسة");
+      return null;
+    }
+    const parsed = parseMessageId(message.id);
+    if (!parsed || !attachment.part) {
+      toast.error("لا يمكن تحديد المرفق");
+      return null;
+    }
+    const res = await fetch("/api/mail-attachment", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        account: session.account,
+        password: session.password,
+        folder: parsed.folder,
+        uid: parsed.uid,
+        part: attachment.part,
+      }),
+    });
+    if (!res.ok) {
+      const msg = await res.text().catch(() => "");
+      toast.error(`تعذّر تنزيل المرفق${msg ? `: ${msg.slice(0, 100)}` : ""}`);
+      return null;
+    }
+    return await res.blob();
+  }
+
+  async function handleDownload() {
+    if (busy || !canDownload) return;
+    setBusy("download");
+    try {
+      const blob = await fetchBlob();
+      if (!blob) return;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = attachment.filename || "attachment";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1500);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function handlePreview() {
+    if (busy || !canDownload || !canPreview) return;
+    setBusy("preview");
+    try {
+      const blob = await fetchBlob();
+      if (!blob) return;
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
+      setPreviewUrl(URL.createObjectURL(blob));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <>
+      <div className="flex items-center gap-3 rounded-xl border border-border bg-card p-3">
+        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-brand-gradient/10 text-brand-accent">
+          <Paperclip className="h-4 w-4" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-sm font-medium" title={attachment.filename}>
+            {attachment.filename}
+          </p>
+          <p className="text-xs text-muted-foreground">{formatSize(attachment.size)}</p>
+        </div>
+        <div className="flex shrink-0 items-center gap-1">
+          {canPreview && (
+            <button
+              type="button"
+              onClick={handlePreview}
+              disabled={!canDownload || busy !== null}
+              title="معاينة"
+              className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-border bg-background text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {busy === "preview" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Eye className="h-4 w-4" />}
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={handleDownload}
+            disabled={!canDownload || busy !== null}
+            title={canDownload ? "تنزيل" : "غير متاح"}
+            className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-border bg-background text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {busy === "download" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+          </button>
+        </div>
+      </div>
+
+      {previewUrl && (
+        <div
+          className="fixed inset-0 z-50 flex flex-col bg-black/80 backdrop-blur-sm"
+          onClick={() => setPreviewUrl(null)}
+        >
+          <div className="flex items-center justify-between gap-3 border-b border-white/10 px-4 py-3 text-white">
+            <p className="truncate text-sm font-medium">{attachment.filename}</p>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleDownload();
+                }}
+                className="inline-flex items-center gap-1.5 rounded-full border border-white/20 bg-white/10 px-3 py-1.5 text-xs font-medium hover:bg-white/20"
+              >
+                <Download className="h-3.5 w-3.5" /> تنزيل
+              </button>
+              <button
+                type="button"
+                onClick={() => setPreviewUrl(null)}
+                className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/20 bg-white/10 hover:bg-white/20"
+                title="إغلاق"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+          <div
+            className="flex flex-1 items-center justify-center overflow-auto p-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {attachment.mimeType.startsWith("image/") ? (
+              <img
+                src={previewUrl}
+                alt={attachment.filename}
+                className="max-h-full max-w-full rounded-lg object-contain shadow-2xl"
+              />
+            ) : (
+              <iframe
+                src={previewUrl}
+                title={attachment.filename}
+                className="h-full w-full rounded-lg bg-white shadow-2xl"
+              />
+            )}
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
