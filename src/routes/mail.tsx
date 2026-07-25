@@ -1414,6 +1414,21 @@ function MessageRow({
           >
             <Star className={`h-3.5 w-3.5 ${message.starred ? "fill-star" : ""}`} />
           </button>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggleRead(e);
+            }}
+            className="rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+            title={message.read ? "تعليم كغير مقروءة" : "تعليم كمقروءة"}
+          >
+            {message.read ? (
+              <MailIcon className="h-3.5 w-3.5" />
+            ) : (
+              <MailOpen className="h-3.5 w-3.5" />
+            )}
+          </button>
           {message.hasAttachments && <Paperclip className="h-3 w-3 text-muted-foreground" />}
           {message.labels?.map((l) => (
             <span
