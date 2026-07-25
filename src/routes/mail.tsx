@@ -22,12 +22,15 @@ import {
   Mail as MailIcon,
   Loader2,
   ChevronLeft,
+  ChevronDown,
   Reply,
   ReplyAll,
   Forward,
   Printer,
   MailOpen,
   Copy,
+  ShieldCheck,
+  ShieldAlert,
 } from "lucide-react";
 import {
   DropdownMenu,
