@@ -922,6 +922,13 @@ function MailApp() {
               >
                 <X className="h-4 w-4" />
               </button>
+              <button
+                onClick={toggleSelectMode}
+                disabled={bulkBusy}
+                className="rounded px-2 py-1.5 text-xs font-medium text-foreground transition hover:bg-muted disabled:opacity-50"
+              >
+                إلغاء
+              </button>
             </div>
           ) : (
             <div className="flex h-11 shrink-0 items-center justify-between border-b border-border px-4 text-xs">
