@@ -191,6 +191,23 @@ export const bridgeDelete = createServerFn({ method: "POST" })
     return bridgePost("/api/delete", data);
   });
 
+export const bridgeSearch = createServerFn({ method: "POST" })
+  .inputValidator(
+    (input: {
+      account: MailSessionAccount;
+      password: string;
+      folder: MailFolder;
+      query: string;
+      includeBody?: boolean;
+      limit?: number;
+    }) => input,
+  )
+  .handler(async ({ data }) => {
+    const result = await bridgePost("/api/search", data);
+    if (!result.ok) return { ok: false as const, error: result.error as string, messages: [] as MailMessage[] };
+    return { ok: true as const, messages: (result.messages ?? []) as MailMessage[] };
+  });
+
 export const bridgeSend = createServerFn({ method: "POST" })
   .inputValidator(
     (input: {
