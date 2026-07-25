@@ -67,8 +67,9 @@ function CompanyDashboard() {
   const [company, setCompany] = useState<Company | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [tab, setTab] = useState<"branding" | "accounts">("branding");
+  const [tab, setTab] = useState<"branding" | "domains" | "accounts">("branding");
   const [accounts, setAccounts] = useState<MailAccount[]>([]);
+  const [domains, setDomains] = useState<EmailDomain[]>([]);
   const [isAdmin, setIsAdmin] = useState(false);
   const navigate = useNavigate();
 
@@ -100,17 +101,23 @@ function CompanyDashboard() {
       return;
     }
 
-    const [{ data: co }, { data: ma }] = await Promise.all([
+    const [{ data: co }, { data: ma }, { data: dm }] = await Promise.all([
       supabase.from("companies").select("*").eq("id", companyId).maybeSingle(),
       supabase
         .from("mail_accounts")
         .select("*")
         .eq("company_id", companyId)
         .order("created_at", { ascending: false }),
+      supabase
+        .from("email_domains")
+        .select("*")
+        .eq("company_id", companyId)
+        .order("domain", { ascending: true }),
     ]);
 
     if (co) setCompany(co as Company);
     if (ma) setAccounts(ma as MailAccount[]);
+    if (dm) setDomains(dm as EmailDomain[]);
     setLoading(false);
   }, []);
 
