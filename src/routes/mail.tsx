@@ -917,7 +917,7 @@ function MessageView({
           >
             <MailOpen className="h-4 w-4" />
           </button>
-          <button onClick={onPrint} className="rounded-lg p-2 hover:bg-muted" title="طباعة">
+          <button onClick={printMessage} className="rounded-lg p-2 hover:bg-muted" title="طباعة">
             <Printer className="h-4 w-4" />
           </button>
         </div>
@@ -949,7 +949,7 @@ function MessageView({
             <DropdownMenuItem onClick={onMarkUnread}>
               <MailOpen className="h-4 w-4" /> تعليم كغير مقروءة
             </DropdownMenuItem>
-            <DropdownMenuItem onClick={onPrint}>
+            <DropdownMenuItem onClick={printMessage}>
               <Printer className="h-4 w-4" /> طباعة
             </DropdownMenuItem>
             <DropdownMenuItem onClick={copyEmail}>
