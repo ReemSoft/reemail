@@ -2,7 +2,6 @@
   "name": "mailmaestro-bridge",
   "version": "1.0.0",
   "description": "High-performance IMAP/SMTP bridge for the MailMaestro SaaS app",
-  "type": "module",
   "main": "dist/index.js",
   "scripts": {
     "dev": "tsx src/index.ts",
