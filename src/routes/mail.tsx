@@ -281,6 +281,7 @@ function useMailData(session: MailSession | null) {
 
 function MailApp() {
   const navigate = useNavigate();
+  const { confirm } = useConfirm();
   const [session, setSession] = useState<MailSession | null | undefined>(undefined);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
