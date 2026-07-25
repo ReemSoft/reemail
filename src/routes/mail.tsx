@@ -851,6 +851,44 @@ function MessageView({
     }
   }
 
+  function printMessage() {
+    const win = window.open("", "_blank", "width=800,height=900");
+    if (!win) {
+      toast.error("تعذّر فتح نافذة الطباعة");
+      return;
+    }
+    const esc = (s: string) =>
+      s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]!));
+    const subject = esc(message.subject || "(بدون موضوع)");
+    const fromName = esc(message.from.name || message.from.email);
+    const fromEmail = esc(message.from.email);
+    const to = esc(message.to.map((t) => t.email).join(", "));
+    const cc = message.cc && message.cc.length > 0 ? esc(message.cc.map((c) => c.email).join(", ")) : "";
+    const date = esc(new Date(message.date).toLocaleString("ar"));
+    const body = message.body || esc(message.preview);
+    win.document.write(`<!doctype html><html dir="rtl" lang="ar"><head><meta charset="utf-8"><title>${subject}</title>
+<style>
+  body{font-family:'IBM Plex Sans Arabic',system-ui,sans-serif;color:#111;padding:24px;line-height:1.6}
+  h1{font-size:20px;margin:0 0 16px}
+  .meta{font-size:12px;color:#555;border-bottom:1px solid #ddd;padding-bottom:12px;margin-bottom:16px}
+  .meta div{margin:2px 0}
+  .body{font-size:14px}
+  img{max-width:100%;height:auto}
+  a{color:#0645ad;word-break:break-all}
+</style></head><body>
+<h1>${subject}</h1>
+<div class="meta">
+  <div><strong>من:</strong> ${fromName} &lt;${fromEmail}&gt;</div>
+  <div><strong>إلى:</strong> <span dir="ltr">${to}</span></div>
+  ${cc ? `<div><strong>نسخة:</strong> <span dir="ltr">${cc}</span></div>` : ""}
+  <div><strong>التاريخ:</strong> ${date}</div>
+</div>
+<div class="body">${body}</div>
+<script>window.onload=function(){setTimeout(function(){window.print();},300);};<\/script>
+</body></html>`);
+    win.document.close();
+  }
+
   return (
     <>
       <div className="flex h-12 shrink-0 items-center justify-between gap-2 border-b border-border bg-card px-2 sm:px-3">
