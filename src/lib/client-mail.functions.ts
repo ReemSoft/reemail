@@ -42,6 +42,29 @@ export const clientLogin = createServerFn({ method: "POST" })
     if (!account) {
       return { ok: false as const, message: "هذا البريد غير مُسجّل. تواصل مع شركتك." };
     }
+    if (
+      !account.imap_host ||
+      !account.imap_port ||
+      account.imap_secure == null ||
+      !account.smtp_host ||
+      !account.smtp_port ||
+      account.smtp_secure == null
+    ) {
+      return {
+        ok: false as const,
+        message: "إعدادات البريد لهذا الحساب غير مكتملة. تواصل مع المشرف.",
+      };
+    }
+
+    const configuredAccount = {
+      ...account,
+      imap_host: account.imap_host,
+      imap_port: account.imap_port,
+      imap_secure: account.imap_secure,
+      smtp_host: account.smtp_host,
+      smtp_port: account.smtp_port,
+      smtp_secure: account.smtp_secure,
+    };
 
     const { data: company } = await supabaseAdmin
       .from("companies")
@@ -93,5 +116,5 @@ export const clientLogin = createServerFn({ method: "POST" })
     }
 
 
-    return { ok: true as const, account, company };
+    return { ok: true as const, account: configuredAccount, company };
   });
