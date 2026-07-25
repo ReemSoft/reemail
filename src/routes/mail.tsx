@@ -289,6 +289,7 @@ function MailApp() {
   const [reading, setReading] = useState(false);
   const [selection, setSelection] = useState<Set<string>>(() => new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
+  const [selectMode, setSelectMode] = useState(false);
 
   const { folder, setFolder, counts, setCounts, messages, setMessages, loading, loadingMore, hasMore, loadMore, bridgeError, useMock, refresh } =
     useMailData(session || null);
