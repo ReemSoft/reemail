@@ -1028,26 +1028,66 @@ function MailApp() {
 function MessageRow({
   message,
   active,
+  selected,
+  anySelected,
   onClick,
   onPrefetch,
   onToggleStar,
+  onToggleSelect,
 }: {
   message: MailMessage;
   active: boolean;
+  selected: boolean;
+  anySelected: boolean;
   onClick: () => void;
   onPrefetch?: () => void;
   onToggleStar: (e: React.MouseEvent) => void;
+  onToggleSelect: () => void;
 }) {
   return (
-    <button
+    <div
+      role="button"
+      tabIndex={0}
       onClick={onClick}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onClick();
+        }
+      }}
       onMouseEnter={onPrefetch}
       onFocus={onPrefetch}
       onTouchStart={onPrefetch}
-      className={`flex w-full items-start gap-3 border-b border-border/60 px-4 py-3 text-right transition hover:bg-muted/50 ${
+      className={`group flex w-full cursor-pointer items-start gap-3 border-b border-border/60 px-4 py-3 text-right transition hover:bg-muted/50 ${
         active ? "bg-accent" : ""
-      } ${!message.read ? "bg-card" : "bg-card/70"}`}
+      } ${selected ? "bg-primary/5" : ""} ${!message.read ? "bg-card" : "bg-card/70"}`}
     >
+      <div
+        role="checkbox"
+        aria-checked={selected}
+        tabIndex={0}
+        onClick={(e) => {
+          e.stopPropagation();
+          onToggleSelect();
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            e.stopPropagation();
+            onToggleSelect();
+          }
+        }}
+        className={`mt-1 flex h-5 w-5 shrink-0 items-center justify-center rounded transition ${
+          selected || anySelected ? "opacity-100" : "opacity-0 group-hover:opacity-100"
+        }`}
+        title={selected ? "إلغاء التحديد" : "تحديد"}
+      >
+        {selected ? (
+          <CheckSquare className="h-4 w-4 text-primary" />
+        ) : (
+          <Square className="h-4 w-4 text-muted-foreground" />
+        )}
+      </div>
 
       <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-brand-gradient text-sm font-bold text-white">
         {message.from.name.charAt(0) || message.from.email.charAt(0)}
@@ -1073,7 +1113,11 @@ function MessageRow({
         <p className="mt-0.5 truncate text-xs text-muted-foreground">{message.preview}</p>
         <div className="mt-1 flex items-center gap-2">
           <button
-            onClick={onToggleStar}
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggleStar(e);
+            }}
             className={`rounded p-0.5 hover:bg-muted ${message.starred ? "text-star" : "text-muted-foreground"}`}
             title={message.starred ? "إزالة المميّز" : "تمييز"}
           >
@@ -1090,7 +1134,7 @@ function MessageRow({
           ))}
         </div>
       </div>
-    </button>
+    </div>
   );
 }
 
