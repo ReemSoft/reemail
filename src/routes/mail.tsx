@@ -501,6 +501,17 @@ function MailApp() {
   async function handleDelete(id: string) {
     const parsed = parseMessageId(id);
     if (!parsed || !session) return;
+    const isTrash = parsed.folder === "trash";
+    const confirmed = await confirm({
+      title: isTrash ? "حذف نهائي" : "نقل إلى المهملات",
+      description: isTrash
+        ? "هل أنت متأكد من حذف هذه الرسالة نهائياً؟ لا يمكن التراجع عن هذا الإجراء."
+        : "هل أنت متأكد من نقل هذه الرسالة إلى المهملات؟",
+      confirmLabel: isTrash ? "حذف" : "نقل",
+      cancelLabel: "إلغاء",
+      variant: isTrash ? "destructive" : "default",
+    });
+    if (!confirmed) return;
     const snapshot = messages;
     const prevSelectedId = selectedId;
     const prevSelected = selectedMessage;
@@ -509,15 +520,28 @@ function MailApp() {
     setSelectedMessage(null);
     messageCache.current.delete(id);
     try {
-      await deleteFn({
-        data: { account: session.account, password: session.password, folder: parsed.folder, uid: parsed.uid },
-      });
-      toast.success("تم حذف الرسالة");
+      if (isTrash) {
+        await deleteFn({
+          data: { account: session.account, password: session.password, folder: parsed.folder, uid: parsed.uid },
+        });
+        toast.success("تم حذف الرسالة نهائياً");
+      } else {
+        await move({
+          data: {
+            account: session.account,
+            password: session.password,
+            folder: parsed.folder,
+            uid: parsed.uid,
+            toFolder: "trash",
+          },
+        });
+        toast.success("تم نقل الرسالة إلى المهملات");
+      }
     } catch (err: any) {
       setMessages(snapshot);
       setSelectedId(prevSelectedId);
       setSelectedMessage(prevSelected);
-      toast.error(err?.message || "فشل حذف الرسالة");
+      toast.error(err?.message || (isTrash ? "فشل حذف الرسالة" : "فشل نقل الرسالة إلى المهملات"));
     }
   }
 
@@ -640,12 +664,15 @@ function MailApp() {
   async function bulkDelete() {
     if (!session || selection.size === 0 || bulkBusy) return;
     const ids = Array.from(selection);
+    const isTrash = folder === "trash";
     const confirmed = await confirm({
-      title: "حذف الرسائل",
-      description: `هل أنت متأكد من حذف ${ids.length} رسالة نهائياً؟`,
-      confirmLabel: "حذف",
+      title: isTrash ? "حذف نهائي" : "نقل إلى المهملات",
+      description: isTrash
+        ? `هل أنت متأكد من حذف ${ids.length} رسالة نهائياً؟ لا يمكن التراجع عن هذا الإجراء.`
+        : `هل أنت متأكد من نقل ${ids.length} رسالة إلى المهملات؟`,
+      confirmLabel: isTrash ? "حذف" : "نقل",
       cancelLabel: "إلغاء",
-      variant: "destructive",
+      variant: isTrash ? "destructive" : "default",
     });
     if (!confirmed) return;
     const snapshot = messages;
@@ -662,23 +689,35 @@ function MailApp() {
     const { failed } = await runBatch(ids, 5, async (id) => {
       const parsed = parseMessageId(id);
       if (!parsed) return;
-      await deleteFn({
-        data: {
-          account: session.account,
-          password: session.password,
-          folder: parsed.folder,
-          uid: parsed.uid,
-        },
-      });
+      if (isTrash) {
+        await deleteFn({
+          data: {
+            account: session.account,
+            password: session.password,
+            folder: parsed.folder,
+            uid: parsed.uid,
+          },
+        });
+      } else {
+        await move({
+          data: {
+            account: session.account,
+            password: session.password,
+            folder: parsed.folder,
+            uid: parsed.uid,
+            toFolder: "trash",
+          },
+        });
+      }
     });
     setBulkBusy(false);
     if (failed > 0) {
       setMessages(snapshot);
       setSelectedId(prevSelectedId);
       setSelectedMessage(prevSelected);
-      toast.error(`فشل حذف ${failed} من ${ids.length} رسالة`);
+      toast.error(isTrash ? `فشل حذف ${failed} من ${ids.length} رسالة` : `فشل نقل ${failed} من ${ids.length} رسالة إلى المهملات`);
     } else {
-      toast.success(`تم حذف ${ids.length} رسالة`);
+      toast.success(isTrash ? `تم حذف ${ids.length} رسالة` : `تم نقل ${ids.length} رسالة إلى المهملات`);
       loadCountsSoft();
     }
   }
