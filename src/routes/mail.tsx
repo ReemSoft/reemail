@@ -1316,7 +1316,7 @@ function MailApp() {
           }`}
         >
           {selection.size > 0 ? (
-            <div className="flex h-11 shrink-0 items-center gap-3 border-b border-border bg-accent/40 px-4 text-xs">
+            <div className="flex h-11 shrink-0 items-center gap-2 border-b border-border bg-accent/40 px-4 text-xs">
               <button
                 onClick={toggleSelectAllVisible}
                 className="flex h-9 w-9 shrink-0 items-center justify-center rounded hover:bg-muted"
@@ -1331,67 +1331,80 @@ function MailApp() {
               <span className="font-semibold text-foreground">
                 {selection.size} محددة
               </span>
-              <div className="mx-1 h-5 w-px bg-border" />
-              {folder === "trash" && (
-                <button
-                  onClick={bulkRestore}
-                  disabled={bulkBusy}
-                  className="flex h-8 w-8 items-center justify-center rounded hover:bg-muted disabled:opacity-50"
-                  title="استعادة المحدد"
-                >
-                  <ArchiveRestore className="h-4 w-4" />
-                </button>
-              )}
-              <button
-                onClick={() => bulkMove("archive")}
-                disabled={bulkBusy}
-                className="flex h-8 w-8 items-center justify-center rounded hover:bg-muted disabled:opacity-50"
-                title="أرشفة المحدد"
-              >
-                <Archive className="h-4 w-4" />
-              </button>
-              <button
-                onClick={() => bulkMove("spam")}
-                disabled={bulkBusy}
-                className="flex h-8 w-8 items-center justify-center rounded hover:bg-muted disabled:opacity-50"
-                title="نقل إلى المزعج"
-              >
-                <AlertOctagon className="h-4 w-4" />
-              </button>
-              <button
-                onClick={bulkMarkUnread}
-                disabled={bulkBusy}
-                className="flex h-8 w-8 items-center justify-center rounded hover:bg-muted disabled:opacity-50"
-                title="تعليم كغير مقروءة"
-              >
-                <MailIcon className="h-4 w-4" />
-              </button>
-              <button
-                onClick={bulkDelete}
-                disabled={bulkBusy}
-                className="flex h-8 w-8 items-center justify-center rounded text-destructive hover:bg-destructive/10 disabled:opacity-50"
-                title={folder === "trash" ? "حذف المحدد نهائياً" : "نقل المحدد إلى المهملات"}
-              >
-                <Trash2 className="h-4 w-4" />
-              </button>
               <div className="flex-1" />
               {bulkBusy && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />}
-              <button
-                onClick={clearSelection}
-                disabled={bulkBusy}
-                className="flex h-8 w-8 items-center justify-center rounded hover:bg-muted disabled:opacity-50"
-                title="إلغاء التحديد"
-              >
-                <X className="h-4 w-4" />
-              </button>
+              <DropdownMenu dir="rtl">
+                <DropdownMenuTrigger asChild>
+                  <button
+                    disabled={bulkBusy}
+                    className="flex items-center gap-1.5 rounded px-2.5 py-1.5 text-xs font-medium text-foreground transition hover:bg-muted disabled:opacity-50"
+                    title="إجراءات"
+                  >
+                    <MoreVertical className="h-4 w-4" />
+                    <span>إجراءات</span>
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" className="w-56">
+                  {folder === "trash" && (
+                    <>
+                      <DropdownMenuItem
+                        onClick={bulkRestore}
+                        disabled={bulkBusy}
+                        className="cursor-pointer hover:bg-accent focus:bg-accent"
+                      >
+                        <ArchiveRestore className="ms-2 h-4 w-4" />
+                        استعادة المحدد
+                      </DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                    </>
+                  )}
+                  <DropdownMenuItem
+                    onClick={() => bulkMove("archive")}
+                    disabled={bulkBusy}
+                    className="cursor-pointer hover:bg-accent focus:bg-accent"
+                  >
+                    <Archive className="ms-2 h-4 w-4" />
+                    أرشفة المحدد
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    onClick={() => bulkMove("spam")}
+                    disabled={bulkBusy}
+                    className="cursor-pointer hover:bg-accent focus:bg-accent"
+                  >
+                    <AlertOctagon className="ms-2 h-4 w-4" />
+                    نقل إلى المزعج
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    onClick={bulkMarkUnread}
+                    disabled={bulkBusy}
+                    className="cursor-pointer hover:bg-accent focus:bg-accent"
+                  >
+                    <MailIcon className="ms-2 h-4 w-4" />
+                    تعليم كغير مقروءة
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    onClick={bulkDelete}
+                    disabled={bulkBusy}
+                    className="cursor-pointer text-destructive hover:bg-destructive/10 focus:bg-destructive/10 focus:text-destructive"
+                  >
+                    <Trash2 className="ms-2 h-4 w-4" />
+                    {folder === "trash" ? "حذف نهائياً" : "نقل إلى المهملات"}
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
               <button
                 onClick={toggleSelectMode}
                 disabled={bulkBusy}
-                className="rounded px-2 py-1.5 text-xs font-medium text-foreground transition hover:bg-muted disabled:opacity-50"
+                className="rounded px-2 py-1.5 text-xs font-medium text-muted-foreground transition hover:bg-muted hover:text-foreground disabled:opacity-50"
+                title="إلغاء التحديد"
               >
                 إلغاء
               </button>
             </div>
+
           ) : (
             <div className="flex h-11 shrink-0 items-center justify-between border-b border-border px-4 text-xs">
               <div className="flex items-center gap-3">
