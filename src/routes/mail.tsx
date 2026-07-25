@@ -152,6 +152,7 @@ function useMailData(session: MailSession | null) {
     folder,
     setFolder,
     counts,
+    setCounts,
     messages,
     setMessages,
     loading,
@@ -163,6 +164,7 @@ function useMailData(session: MailSession | null) {
     },
   };
 }
+
 
 function MailApp() {
   const navigate = useNavigate();
