@@ -354,10 +354,12 @@ const IMAP_PRESETS = [
 
 function AccountsTab({
   accounts,
+  domains,
   companyId,
   onChange,
 }: {
   accounts: MailAccount[];
+  domains: EmailDomain[];
   companyId: string;
   onChange: () => Promise<void> | void;
 }) {
