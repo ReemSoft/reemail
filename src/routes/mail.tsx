@@ -287,6 +287,8 @@ function MailApp() {
   const [compose, setCompose] = useState<ComposeInitial | null>(null);
   const [selectedMessage, setSelectedMessage] = useState<MailMessage | null>(null);
   const [reading, setReading] = useState(false);
+  const [selection, setSelection] = useState<Set<string>>(() => new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
 
   const { folder, setFolder, counts, setCounts, messages, setMessages, loading, loadingMore, hasMore, loadMore, bridgeError, useMock, refresh } =
     useMailData(session || null);
