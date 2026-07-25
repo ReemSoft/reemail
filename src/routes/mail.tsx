@@ -356,7 +356,7 @@ function MailApp() {
   const [deepLoading, setDeepLoading] = useState(false);
   const [deepError, setDeepError] = useState<string | null>(null);
 
-  const { folder, setFolder, counts, setCounts, messages, setMessages, loading, loadingMore, hasMore, loadMore, bridgeError, useMock, refresh: rawRefresh } =
+  const { folder, setFolder, sort, setSort, counts, setCounts, messages, setMessages, loading, loadingMore, hasMore, loadMore, bridgeError, useMock, refresh: rawRefresh } =
     useMailData(session || null);
 
   const refresh = useCallback(async () => {
