@@ -640,7 +640,14 @@ function MailApp() {
   async function bulkDelete() {
     if (!session || selection.size === 0 || bulkBusy) return;
     const ids = Array.from(selection);
-    if (!window.confirm(`تأكيد حذف ${ids.length} رسالة نهائياً؟`)) return;
+    const confirmed = await confirm({
+      title: "حذف الرسائل",
+      description: `هل أنت متأكد من حذف ${ids.length} رسالة نهائياً؟`,
+      confirmLabel: "حذف",
+      cancelLabel: "إلغاء",
+      variant: "destructive",
+    });
+    if (!confirmed) return;
     const snapshot = messages;
     const prevSelectedId = selectedId;
     const prevSelected = selectedMessage;
