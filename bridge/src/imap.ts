@@ -40,6 +40,20 @@ export function resolveFolderPath(
   mailboxes: ListResponse[],
   folder: MailFolder,
 ): string | undefined {
+  // Starred is not a real folder on most IMAP servers — it's the \Flagged
+  // flag inside INBOX. Map it to INBOX so per-UID operations (mark read,
+  // star/unstar, move, delete, fetch body) target the correct mailbox.
+  if (folder === "starred") {
+    const inbox = mailboxes.find((m) => m.path.toUpperCase() === "INBOX");
+    if (inbox) return inbox.path;
+    // Fall back to a real Starred mailbox if the server exposes one (Gmail).
+    const gmailStarred = mailboxes.find((m) =>
+      m.path.toLowerCase().includes("starred"),
+    );
+    if (gmailStarred) return gmailStarred.path;
+    return "INBOX";
+  }
+
   const candidates = WELL_KNOWN_FOLDERS[folder] || [];
 
   // Direct path match
@@ -82,6 +96,24 @@ export async function getFolderCounts(
 
     const counts: FolderCount[] = [];
     for (const folder of allFolders) {
+      // Starred is a flag, not a folder on most IMAP servers.
+      // Count \Flagged messages in INBOX (fast SEARCH, no fetch).
+      if (folder === "starred") {
+        try {
+          const inboxPath = resolveFolderPath(mailboxes, "inbox") || "INBOX";
+          const lock = await client.getMailboxLock(inboxPath);
+          try {
+            const uids = (await client.search({ flagged: true } as SearchObject, { uid: true })) as number[];
+            const unseen = (await client.search({ flagged: true, seen: false } as SearchObject, { uid: true })) as number[];
+            counts.push({ folder, total: uids?.length ?? 0, unread: unseen?.length ?? 0 });
+          } finally {
+            lock.release();
+          }
+        } catch {
+          counts.push({ folder, total: 0, unread: 0 });
+        }
+        continue;
+      }
       const path = resolveFolderPath(mailboxes, folder);
       if (!path) {
         counts.push({ folder, total: 0, unread: 0 });
@@ -117,6 +149,37 @@ export async function getMessages(
   try {
     await client.connect();
     const mailboxes = await listMailboxes(client);
+
+    // Starred is a flag, not a folder on most IMAP servers.
+    // Fetch \Flagged messages from INBOX with proper pagination.
+    if (folder === "starred") {
+      const inboxPath = resolveFolderPath(mailboxes, "inbox") || "INBOX";
+      const lock = await client.getMailboxLock(inboxPath);
+      try {
+        const uids = ((await client.search({ flagged: true } as SearchObject, { uid: true })) as number[]) || [];
+        if (uids.length === 0) return [];
+        // UIDs are ascending; newest last. Sort desc then paginate.
+        const sorted = uids.slice().sort((a, b) => b - a);
+        const slice = sorted.slice(offset, offset + limit);
+        if (slice.length === 0) return [];
+
+        const messages: MailMessage[] = [];
+        for await (const msg of client.fetch(slice as any, {
+          uid: true,
+          envelope: true,
+          internalDate: true,
+          flags: true,
+          bodyStructure: true,
+        }, { uid: true })) {
+          const parsed = await messageFromFetch(msg, folder, client);
+          messages.push(parsed);
+        }
+        return messages.sort((a, b) => (a.date < b.date ? 1 : -1));
+      } finally {
+        lock.release();
+      }
+    }
+
     const path = resolveFolderPath(mailboxes, folder);
     if (!path) return [];
 
