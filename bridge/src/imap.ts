@@ -341,7 +341,8 @@ async function messageFromFetch(
   const uid: number = msg.uid;
   const envelope = msg.envelope;
   const date = msg.internalDate ? new Date(msg.internalDate).toISOString() : new Date().toISOString();
-  const hasAttachments = detectAttachments(msg.bodyStructure);
+  const attachments = collectAttachmentParts(msg.bodyStructure);
+  const hasAttachments = attachments.length > 0;
 
   const from = addressFromEnvelope(envelope?.from?.[0], accountEmail(client));
   const subject = envelope?.subject || "(بدون موضوع)";
@@ -361,7 +362,7 @@ async function messageFromFetch(
     read: msg.flags?.has("\\Seen") || false,
     starred: msg.flags?.has("\\Flagged") || false,
     hasAttachments,
-    attachments: undefined,
+    attachments: hasAttachments ? attachments : undefined,
     labels: [],
   };
 }
@@ -379,14 +380,42 @@ function addressFromEnvelope(addr: any, fallback: string): { name: string; email
   };
 }
 
-function detectAttachments(structure: any): boolean {
-  if (!structure) return false;
-  if (structure.type === "attachment") return true;
-  if (Array.isArray(structure.childNodes)) {
-    return structure.childNodes.some((c: any) => detectAttachments(c));
+/**
+ * Walk ImapFlow BODYSTRUCTURE tree and collect every attachment-like part
+ * with its IMAP part number (usable directly with client.download(uid, part)).
+ * Zero extra round-trips: bodyStructure is already fetched for list/read.
+ */
+export function collectAttachmentParts(structure: any, acc: MailAttachment[] = []): MailAttachment[] {
+  if (!structure) return acc;
+  const isAttachment =
+    structure.disposition === "attachment" ||
+    (structure.disposition === "inline" && !!structure.dispositionParameters?.filename) ||
+    structure.type === "attachment";
+  if (isAttachment && structure.part) {
+    const filename =
+      structure.dispositionParameters?.filename ||
+      structure.parameters?.name ||
+      `attachment_${acc.length + 1}`;
+    acc.push({
+      id: structure.part,
+      part: structure.part,
+      filename,
+      size: typeof structure.size === "number" ? structure.size : 0,
+      mimeType: structure.type || "application/octet-stream",
+      disposition: structure.disposition,
+      contentId: structure.id,
+    });
   }
-  if (structure.childNodes) return detectAttachments(structure.childNodes);
-  return false;
+  if (Array.isArray(structure.childNodes)) {
+    for (const c of structure.childNodes) collectAttachmentParts(c, acc);
+  } else if (structure.childNodes) {
+    collectAttachmentParts(structure.childNodes, acc);
+  }
+  return acc;
+}
+
+function detectAttachments(structure: any): boolean {
+  return collectAttachmentParts(structure).length > 0;
 }
 
 async function parseMessageSource(source: Buffer, folder: MailFolder): Promise<MailMessage> {
