@@ -1131,7 +1131,7 @@ function MailApp() {
                 <ChevronDown className="h-3 w-3 opacity-60" />
               </button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" dir="rtl" className="w-64">
+            <DropdownMenuContent align="end" className="w-64">
               <div className="px-2 pb-1 pt-1 text-[11px] font-semibold text-muted-foreground">
                 نمط البحث
               </div>
