@@ -11,6 +11,7 @@ import {
   starMessage,
   moveMessage,
   deleteMessage,
+  searchMessages,
 } from "./imap.js";
 import { sendMessage } from "./smtp.js";
 import type { MailAccount, MailFolder } from "./types.js";
