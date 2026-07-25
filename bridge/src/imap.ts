@@ -129,21 +129,18 @@ export async function getMessages(
       const end = total - offset;
       const range = `${start}:${end}`;
 
-      const ids: number[] = [];
-      for await (const msg of client.fetch(range, { uid: true, envelope: true, flags: true })) {
-        ids.push(msg.uid);
-      }
-      if (ids.length === 0) return [];
-
-      // Fetch structure for attachment detection
       const messages: MailMessage[] = [];
-      for await (const msg of client.fetch(
-        { uid: ids, all: true } as any,
-        { uid: true, envelope: true, internalDate: true, flags: true, bodyStructure: true },
-      )) {
+      for await (const msg of client.fetch(range, {
+        uid: true,
+        envelope: true,
+        internalDate: true,
+        flags: true,
+        bodyStructure: true,
+      })) {
         const parsed = await messageFromFetch(msg, folder, client);
         messages.push(parsed);
       }
+      if (messages.length === 0) return [];
 
       return messages.sort((a, b) => (a.date < b.date ? 1 : -1));
     } finally {
