@@ -507,6 +507,50 @@ function MailApp() {
     }
   }
 
+  async function toggleRead(e: React.MouseEvent, id: string) {
+    e.stopPropagation();
+    const parsed = parseMessageId(id);
+    if (!parsed || !session) return;
+    const msg = messages.find((m) => m.id === id);
+    if (!msg) return;
+    const nextRead = !msg.read;
+    // Optimistic
+    setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, read: nextRead } : m)));
+    const cached = messageCache.current.get(id);
+    if (cached) messageCache.current.set(id, { ...cached, read: nextRead });
+    setCounts((prev) => {
+      const cur = prev[parsed.folder];
+      if (!cur) return prev;
+      const delta = nextRead ? -1 : 1;
+      const unread = Math.max(0, cur.unread + delta);
+      return { ...prev, [parsed.folder]: { ...cur, unread } };
+    });
+    try {
+      await markRead({
+        data: {
+          account: session.account,
+          password: session.password,
+          folder: parsed.folder,
+          uid: parsed.uid,
+          read: nextRead,
+        },
+      });
+    } catch (err: any) {
+      // Revert
+      setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, read: !nextRead } : m)));
+      const c = messageCache.current.get(id);
+      if (c) messageCache.current.set(id, { ...c, read: !nextRead });
+      setCounts((prev) => {
+        const cur = prev[parsed.folder];
+        if (!cur) return prev;
+        const delta = nextRead ? 1 : -1;
+        const unread = Math.max(0, cur.unread + delta);
+        return { ...prev, [parsed.folder]: { ...cur, unread } };
+      });
+      toast.error(err?.message || "فشل تحديث حالة القراءة");
+    }
+  }
+
   async function handleMove(id: string, toFolder: MailFolder) {
     const parsed = parseMessageId(id);
     if (!parsed || !session) return;
