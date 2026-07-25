@@ -627,19 +627,17 @@ function AccountsTab({
 
             <fieldset className="rounded-xl border border-border p-3">
               <legend className="px-1 text-xs font-semibold text-muted-foreground">
-                خادم الصادر (SMTP)
+                خادم الصادر (SMTP) — اتركه فارغاً لاستخدام إعدادات الدومين
               </legend>
               <div className="grid gap-3 sm:grid-cols-[1fr_100px_auto]">
                 <input
-                  required
-                  placeholder="smtp.example.com"
+                  placeholder="smtp.example.com (اختياري)"
                   dir="ltr"
                   value={form.smtp_host}
                   onChange={(e) => setForm({ ...form, smtp_host: e.target.value })}
                   className="rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary"
                 />
                 <input
-                  required
                   type="number"
                   value={form.smtp_port}
                   onChange={(e) =>
