@@ -35,13 +35,25 @@ interface MailAccount {
   id: string;
   email_address: string;
   display_name: string | null;
+  imap_host: string | null;
+  imap_port: number | null;
+  imap_secure: boolean | null;
+  smtp_host: string | null;
+  smtp_port: number | null;
+  smtp_secure: boolean | null;
+  is_default: boolean;
+}
+
+interface EmailDomain {
+  id: string;
+  company_id: string;
+  domain: string;
   imap_host: string;
   imap_port: number;
   imap_secure: boolean;
   smtp_host: string;
   smtp_port: number;
   smtp_secure: boolean;
-  is_default: boolean;
 }
 
 export const Route = createFileRoute("/_authenticated/dashboard")({
