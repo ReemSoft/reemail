@@ -1568,6 +1568,11 @@ function MessageView({
               <Copy className="h-4 w-4" /> نسخ عنوان المرسل
             </DropdownMenuItem>
             <DropdownMenuSeparator />
+            {isTrash && (
+              <DropdownMenuItem onClick={onRestore}>
+                <ArchiveRestore className="h-4 w-4" /> استعادة إلى المجلد الأصلي
+              </DropdownMenuItem>
+            )}
             <DropdownMenuItem onClick={onArchive} className="md:hidden">
               <Archive className="h-4 w-4" /> أرشفة
             </DropdownMenuItem>
