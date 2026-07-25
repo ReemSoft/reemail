@@ -487,24 +487,36 @@ function addressFromEnvelope(addr: any, fallback: string): { name: string; email
  */
 export function collectAttachmentParts(structure: any, acc: MailAttachment[] = []): MailAttachment[] {
   if (!structure) return acc;
-  const isAttachment =
-    structure.disposition === "attachment" ||
-    (structure.disposition === "inline" && !!structure.dispositionParameters?.filename) ||
-    structure.type === "attachment";
-  if (isAttachment && structure.part) {
-    const filename =
-      structure.dispositionParameters?.filename ||
-      structure.parameters?.name ||
-      `attachment_${acc.length + 1}`;
-    acc.push({
-      id: structure.part,
-      part: structure.part,
-      filename,
-      size: typeof structure.size === "number" ? structure.size : 0,
-      mimeType: structure.type || "application/octet-stream",
-      disposition: structure.disposition,
-      contentId: structure.id,
-    });
+  const mime = String(structure.type || "").toLowerCase();
+  const isMultipart = mime.startsWith("multipart/");
+  const filename =
+    structure.dispositionParameters?.filename ||
+    structure.parameters?.name ||
+    undefined;
+  const disp = structure.disposition ? String(structure.disposition).toLowerCase() : undefined;
+
+  if (!isMultipart && structure.part) {
+    const isAttachment =
+      disp === "attachment" ||
+      (disp === "inline" && !!filename) ||
+      // Fallback: leaf part with a filename but no explicit disposition
+      // (common for .zip / application/octet-stream from some clients).
+      (!disp && !!filename) ||
+      // Fallback: leaf part that is not text/* and not the body — treat
+      // as attachment so it can be downloaded.
+      (!disp && !mime.startsWith("text/") && !mime.startsWith("multipart/"));
+
+    if (isAttachment) {
+      acc.push({
+        id: structure.part,
+        part: structure.part,
+        filename: filename || `attachment_${acc.length + 1}`,
+        size: typeof structure.size === "number" ? structure.size : 0,
+        mimeType: mime || "application/octet-stream",
+        disposition: disp,
+        contentId: structure.id,
+      });
+    }
   }
   if (Array.isArray(structure.childNodes)) {
     for (const c of structure.childNodes) collectAttachmentParts(c, acc);
