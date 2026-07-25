@@ -855,12 +855,84 @@ function MailApp() {
             selectedMessage ? "hidden md:flex" : "flex"
           }`}
         >
-          <div className="flex h-11 shrink-0 items-center justify-between border-b border-border px-4 text-xs">
-            <span className="font-semibold text-muted-foreground">
-              {FOLDER_META[folder].label} · {filteredMessages.length}
-            </span>
-            {loading && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />}
-          </div>
+          {selection.size > 0 ? (
+            <div className="flex h-11 shrink-0 items-center gap-1 border-b border-border bg-accent/40 px-2 text-xs">
+              <button
+                onClick={toggleSelectAllVisible}
+                className="flex h-8 w-8 items-center justify-center rounded hover:bg-muted"
+                title={selection.size >= filteredMessages.length ? "إلغاء التحديد" : "تحديد الكل"}
+              >
+                {selection.size >= filteredMessages.length && filteredMessages.length > 0 ? (
+                  <CheckSquare className="h-4 w-4 text-primary" />
+                ) : (
+                  <MinusSquare className="h-4 w-4 text-primary" />
+                )}
+              </button>
+              <span className="ml-1 font-semibold text-foreground">
+                {selection.size} محددة
+              </span>
+              <div className="mx-1 h-5 w-px bg-border" />
+              <button
+                onClick={() => bulkMove("archive")}
+                disabled={bulkBusy}
+                className="flex h-8 w-8 items-center justify-center rounded hover:bg-muted disabled:opacity-50"
+                title="أرشفة المحدد"
+              >
+                <Archive className="h-4 w-4" />
+              </button>
+              <button
+                onClick={() => bulkMove("spam")}
+                disabled={bulkBusy}
+                className="flex h-8 w-8 items-center justify-center rounded hover:bg-muted disabled:opacity-50"
+                title="نقل إلى المزعج"
+              >
+                <AlertOctagon className="h-4 w-4" />
+              </button>
+              <button
+                onClick={bulkMarkUnread}
+                disabled={bulkBusy}
+                className="flex h-8 w-8 items-center justify-center rounded hover:bg-muted disabled:opacity-50"
+                title="تعليم كغير مقروءة"
+              >
+                <MailIcon className="h-4 w-4" />
+              </button>
+              <button
+                onClick={bulkDelete}
+                disabled={bulkBusy}
+                className="flex h-8 w-8 items-center justify-center rounded text-destructive hover:bg-destructive/10 disabled:opacity-50"
+                title="حذف المحدد"
+              >
+                <Trash2 className="h-4 w-4" />
+              </button>
+              <div className="flex-1" />
+              {bulkBusy && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />}
+              <button
+                onClick={clearSelection}
+                disabled={bulkBusy}
+                className="flex h-8 w-8 items-center justify-center rounded hover:bg-muted disabled:opacity-50"
+                title="إلغاء التحديد"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          ) : (
+            <div className="flex h-11 shrink-0 items-center justify-between border-b border-border px-4 text-xs">
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={toggleSelectAllVisible}
+                  disabled={filteredMessages.length === 0}
+                  className="flex h-7 w-7 items-center justify-center rounded hover:bg-muted disabled:opacity-40"
+                  title="تحديد الكل"
+                >
+                  <Square className="h-4 w-4 text-muted-foreground" />
+                </button>
+                <span className="font-semibold text-muted-foreground">
+                  {FOLDER_META[folder].label} · {filteredMessages.length}
+                </span>
+              </div>
+              {loading && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />}
+            </div>
+          )}
           <div className="flex-1 overflow-hidden">
             {loading && filteredMessages.length === 0 ? (
               <div className="flex h-full items-center justify-center">
