@@ -266,6 +266,8 @@ export function parsedMailToMessage(parsed: ParsedMail, folder: MailFolder): Mai
     mimeType: a.contentType,
   }));
 
+  const { mailedBy, signedBy, security } = extractSecurityHeaders(parsed);
+
   return {
     id: "",
     threadId: parsed.messageId || "",
@@ -282,8 +284,63 @@ export function parsedMailToMessage(parsed: ParsedMail, folder: MailFolder): Mai
     hasAttachments,
     attachments,
     labels: [],
+    mailedBy,
+    signedBy,
+    security,
   };
 }
+
+function headerValue(parsed: ParsedMail, name: string): string {
+  const raw = parsed.headers?.get(name.toLowerCase());
+  if (!raw) return "";
+  if (typeof raw === "string") return raw;
+  if (Array.isArray(raw)) return raw.map((v) => (typeof v === "string" ? v : "")).join(" ");
+  if (typeof (raw as any).value === "string") return (raw as any).value;
+  return "";
+}
+
+function headerLines(parsed: ParsedMail, name: string): string[] {
+  const target = name.toLowerCase();
+  const lines = (parsed.headerLines || []).filter((l: any) => l?.key === target);
+  return lines.map((l: any) => String(l.line || "").replace(/^[^:]*:\s*/i, ""));
+}
+
+function extractSecurityHeaders(parsed: ParsedMail): {
+  mailedBy?: string;
+  signedBy?: string;
+  security?: string;
+} {
+  // signed-by: DKIM d=domain
+  let signedBy: string | undefined;
+  const dkim = headerLines(parsed, "DKIM-Signature").join(" ");
+  const dMatch = dkim.match(/(?:^|;|\s)d=([^;\s]+)/i);
+  if (dMatch) signedBy = dMatch[1].toLowerCase();
+
+  // mailed-by: from Return-Path domain, or from first Received "by <host>"
+  let mailedBy: string | undefined;
+  const returnPath = headerValue(parsed, "Return-Path");
+  const rpMatch = returnPath.match(/@([A-Za-z0-9.-]+)/);
+  if (rpMatch) mailedBy = rpMatch[1].toLowerCase();
+  if (!mailedBy) {
+    const received = headerLines(parsed, "Received");
+    const first = received[received.length - 1] || received[0] || "";
+    const byMatch = first.match(/\bby\s+([A-Za-z0-9.-]+)/i);
+    if (byMatch) mailedBy = byMatch[1].toLowerCase();
+  }
+
+  // security: infer TLS from Received "with ESMTPS" / "using TLS"
+  let security: string | undefined;
+  const receivedAll = headerLines(parsed, "Received").join(" ");
+  if (/\b(ESMTPS|ESMTPSA)\b/i.test(receivedAll) || /\busing TLS/i.test(receivedAll)) {
+    const versionMatch = receivedAll.match(/\b(TLS(?:v?1\.\d)?)\b/i);
+    security = versionMatch ? `مشفّر (${versionMatch[1].toUpperCase()})` : "مشفّر (TLS)";
+  } else if (receivedAll) {
+    security = "غير مشفّر";
+  }
+
+  return { mailedBy, signedBy, security };
+}
+
 
 function flattenAddressObject(obj: AddressObject | AddressObject[]): { name: string; email: string }[] {
   const arr = Array.isArray(obj) ? obj : [obj];
