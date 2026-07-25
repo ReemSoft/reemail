@@ -183,6 +183,53 @@ function MailApp() {
   const move = useServerFn(bridgeMove);
   const deleteFn = useServerFn(bridgeDelete);
 
+  // In-memory caches for instant open (prefetch on hover)
+  const messageCache = useRef<Map<string, MailMessage>>(new Map());
+  const inflight = useRef<Map<string, Promise<MailMessage | null>>>(new Map());
+
+  const fetchMessage = useCallback(
+    (id: string): Promise<MailMessage | null> => {
+      if (!session) return Promise.resolve(null);
+      const cached = messageCache.current.get(id);
+      if (cached) return Promise.resolve(cached);
+      const existing = inflight.current.get(id);
+      if (existing) return existing;
+      const parsed = parseMessageId(id);
+      if (!parsed) return Promise.resolve(null);
+      const p = getOne({
+        data: {
+          account: session.account,
+          password: session.password,
+          folder: parsed.folder,
+          uid: parsed.uid,
+        },
+      })
+        .then((result) => {
+          if (result.ok && result.message) {
+            messageCache.current.set(id, result.message);
+            return result.message;
+          }
+          return null;
+        })
+        .catch(() => null)
+        .finally(() => {
+          inflight.current.delete(id);
+        });
+      inflight.current.set(id, p);
+      return p;
+    },
+    [session, getOne],
+  );
+
+  const prefetchMessage = useCallback(
+    (id: string) => {
+      if (!messageCache.current.has(id) && !inflight.current.has(id)) {
+        void fetchMessage(id);
+      }
+    },
+    [fetchMessage],
+  );
+
   useCompanyTheme(
     session?.company
       ? { primary: session.company.brand_primary, accent: session.company.brand_accent }
@@ -197,6 +244,12 @@ function MailApp() {
     }
     setSession(s);
   }, [navigate]);
+
+  // Clear message cache when switching folders (memory hygiene)
+  useEffect(() => {
+    messageCache.current.clear();
+    inflight.current.clear();
+  }, [folder]);
 
   const filteredMessages = useMemo(() => {
     if (!query.trim()) return messages;
@@ -217,24 +270,44 @@ function MailApp() {
       setSelectedMessage(getMockMessage(id) ?? null);
       return;
     }
-    setReading(true);
+    const cached = messageCache.current.get(id);
+    if (cached) {
+      // Instant open (0ms perceived latency)
+      setSelectedMessage(cached);
+      setReading(false);
+    } else {
+      setSelectedMessage(null);
+      setReading(true);
+    }
     try {
-      const result = await getOne({
-        data: { account: session.account, password: session.password, folder: parsed.folder, uid: parsed.uid },
-      });
-      if (!result.ok) throw new Error(result.error);
-      setSelectedMessage(result.message);
-      if (result.message && !result.message.read) {
+      const msg = await fetchMessage(id);
+      if (msg) setSelectedMessage(msg);
+      else if (!cached) throw new Error("فشل فتح الرسالة");
 
-        await markRead({
-          data: { account: session.account, password: session.password, folder: parsed.folder, uid: parsed.uid, read: true },
-        });
-        // Optimistically update local read state
+      const listMsg = messages.find((m) => m.id === id);
+      if (listMsg && !listMsg.read) {
+        // Optimistic read
         setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, read: true } : m)));
+        setCounts((prev) => {
+          const cur = prev[parsed.folder];
+          if (!cur || cur.unread <= 0) return prev;
+          return { ...prev, [parsed.folder]: { ...cur, unread: cur.unread - 1 } };
+        });
+        markRead({
+          data: {
+            account: session.account,
+            password: session.password,
+            folder: parsed.folder,
+            uid: parsed.uid,
+            read: true,
+          },
+        }).catch(() => {});
       }
     } catch (err: any) {
-      toast.error(err?.message || "فشل فتح الرسالة");
-      setSelectedMessage(getMockMessage(id) ?? null);
+      if (!cached) {
+        toast.error(err?.message || "فشل فتح الرسالة");
+        setSelectedMessage(getMockMessage(id) ?? null);
+      }
     } finally {
       setReading(false);
     }
@@ -246,6 +319,10 @@ function MailApp() {
     if (!parsed || !session) return;
     const msg = messages.find((m) => m.id === id);
     const nextStarred = !msg?.starred;
+    // Optimistic
+    setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, starred: nextStarred } : m)));
+    const cached = messageCache.current.get(id);
+    if (cached) messageCache.current.set(id, { ...cached, starred: nextStarred });
     try {
       await star({
         data: {
@@ -256,8 +333,13 @@ function MailApp() {
           starred: nextStarred,
         },
       });
-      setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, starred: nextStarred } : m)));
     } catch (err: any) {
+      // Revert
+      setMessages((prev) =>
+        prev.map((m) => (m.id === id ? { ...m, starred: !nextStarred } : m)),
+      );
+      const c = messageCache.current.get(id);
+      if (c) messageCache.current.set(id, { ...c, starred: !nextStarred });
       toast.error(err?.message || "فشل تحديث المميّز");
     }
   }
@@ -265,6 +347,15 @@ function MailApp() {
   async function handleMove(id: string, toFolder: MailFolder) {
     const parsed = parseMessageId(id);
     if (!parsed || !session) return;
+    // Snapshot for rollback
+    const snapshot = messages;
+    const prevSelectedId = selectedId;
+    const prevSelected = selectedMessage;
+    // Optimistic
+    setMessages((prev) => prev.filter((m) => m.id !== id));
+    setSelectedId(null);
+    setSelectedMessage(null);
+    messageCache.current.delete(id);
     try {
       await move({
         data: {
@@ -276,10 +367,11 @@ function MailApp() {
         },
       });
       toast.success("تم نقل الرسالة");
-      setMessages((prev) => prev.filter((m) => m.id !== id));
-      setSelectedId(null);
-      setSelectedMessage(null);
     } catch (err: any) {
+      // Revert
+      setMessages(snapshot);
+      setSelectedId(prevSelectedId);
+      setSelectedMessage(prevSelected);
       toast.error(err?.message || "فشل نقل الرسالة");
     }
   }
@@ -287,18 +379,26 @@ function MailApp() {
   async function handleDelete(id: string) {
     const parsed = parseMessageId(id);
     if (!parsed || !session) return;
+    const snapshot = messages;
+    const prevSelectedId = selectedId;
+    const prevSelected = selectedMessage;
+    setMessages((prev) => prev.filter((m) => m.id !== id));
+    setSelectedId(null);
+    setSelectedMessage(null);
+    messageCache.current.delete(id);
     try {
       await deleteFn({
         data: { account: session.account, password: session.password, folder: parsed.folder, uid: parsed.uid },
       });
       toast.success("تم حذف الرسالة");
-      setMessages((prev) => prev.filter((m) => m.id !== id));
-      setSelectedId(null);
-      setSelectedMessage(null);
     } catch (err: any) {
+      setMessages(snapshot);
+      setSelectedId(prevSelectedId);
+      setSelectedMessage(prevSelected);
       toast.error(err?.message || "فشل حذف الرسالة");
     }
   }
+
 
   function handleSignOut() {
     clearMailSession();
