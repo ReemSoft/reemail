@@ -202,15 +202,15 @@ function useMailData(session: MailSession | null) {
   const getCounts = useServerFn(bridgeGetFolderCounts);
   const getMessages = useServerFn(bridgeGetMessages);
   const [folder, setFolder] = useState<MailFolder>("inbox");
-  const [counts, setCounts] = useState<Record<MailFolder, { total: number; unread: number }>>({
-    inbox: { total: 0, unread: 0 },
-    starred: { total: 0, unread: 0 },
-    sent: { total: 0, unread: 0 },
-    drafts: { total: 0, unread: 0 },
-    spam: { total: 0, unread: 0 },
-    trash: { total: 0, unread: 0 },
-    archive: { total: 0, unread: 0 },
-    all: { total: 0, unread: 0 },
+  const [counts, setCounts] = useState<Record<MailFolder, { total: number; unread: number; supported: boolean }>>({
+    inbox: { total: 0, unread: 0, supported: true },
+    starred: { total: 0, unread: 0, supported: true },
+    sent: { total: 0, unread: 0, supported: true },
+    drafts: { total: 0, unread: 0, supported: true },
+    spam: { total: 0, unread: 0, supported: true },
+    trash: { total: 0, unread: 0, supported: true },
+    archive: { total: 0, unread: 0, supported: true },
+    all: { total: 0, unread: 0, supported: true },
   });
   const [messages, setMessages] = useState<MailMessage[]>([]);
   const [loading, setLoading] = useState(false);
@@ -224,23 +224,23 @@ function useMailData(session: MailSession | null) {
     if (!session) return;
     try {
       const result = await getCounts({ data: { account: session.account, password: session.password } });
-      const map: Record<MailFolder, { total: number; unread: number }> = {
-        inbox: { total: 0, unread: 0 },
-        starred: { total: 0, unread: 0 },
-        sent: { total: 0, unread: 0 },
-        drafts: { total: 0, unread: 0 },
-        spam: { total: 0, unread: 0 },
-        trash: { total: 0, unread: 0 },
-        archive: { total: 0, unread: 0 },
-        all: { total: 0, unread: 0 },
+      const map: Record<MailFolder, { total: number; unread: number; supported: boolean }> = {
+        inbox: { total: 0, unread: 0, supported: true },
+        starred: { total: 0, unread: 0, supported: true },
+        sent: { total: 0, unread: 0, supported: true },
+        drafts: { total: 0, unread: 0, supported: true },
+        spam: { total: 0, unread: 0, supported: true },
+        trash: { total: 0, unread: 0, supported: true },
+        archive: { total: 0, unread: 0, supported: false },
+        all: { total: 0, unread: 0, supported: false },
       };
       if (!result.ok) throw new Error(result.error);
-      result.counts.forEach((c) => (map[c.folder] = { total: c.total, unread: c.unread }));
+      result.counts.forEach((c) => (map[c.folder] = { total: c.total, unread: c.unread, supported: c.supported !== false }));
       setCounts(map);
       setBridgeError(null);
     } catch (err: any) {
       setBridgeError(err?.message || "فشل الاتصال بخادم البريد");
-      setCounts(Object.fromEntries(getMockFolderCounts().map((c) => [c.folder, { total: c.total, unread: c.unread }])) as Record<MailFolder, { total: number; unread: number }>);
+      setCounts(Object.fromEntries(getMockFolderCounts().map((c) => [c.folder, { total: c.total, unread: c.unread, supported: true }])) as Record<MailFolder, { total: number; unread: number; supported: boolean }>);
     }
   }, [session, getCounts]);
 
@@ -1053,7 +1053,9 @@ function MailApp() {
           </div>
 
           <nav className="px-2">
-            {(Object.keys(FOLDER_META) as MailFolder[]).map((f) => {
+            {(Object.keys(FOLDER_META) as MailFolder[])
+              .filter((f) => counts[f]?.supported !== false)
+              .map((f) => {
               const meta = FOLDER_META[f];
               const active = f === folder;
               const Icon = meta.icon;
