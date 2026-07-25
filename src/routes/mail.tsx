@@ -31,6 +31,9 @@ import {
   Copy,
   ShieldCheck,
   ShieldAlert,
+  CheckSquare,
+  Square,
+  MinusSquare,
 } from "lucide-react";
 import {
   DropdownMenu,
