@@ -324,12 +324,85 @@ export async function getMessageBody(
       parsed.read = msg.flags?.has("\\Seen") || false;
       parsed.starred = msg.flags?.has("\\Flagged") || false;
       parsed.folder = folder;
+      // Override attachments with bodyStructure-based ones (real IMAP part
+      // numbers usable for on-demand download). Falls back to mailparser
+      // output only if bodyStructure yielded nothing (defensive).
+      const structural = collectAttachmentParts(msg.bodyStructure);
+      if (structural.length > 0) {
+        parsed.attachments = structural;
+        parsed.hasAttachments = true;
+      }
       return parsed;
     } finally {
       lock.release();
     }
   } finally {
     await client.logout().catch(() => {});
+  }
+}
+
+/**
+ * Stream a single attachment from IMAP using its BODYSTRUCTURE part number.
+ * Returns { meta, content }. Caller is responsible for consuming `content`
+ * fully; connection cleanup runs after the stream ends/errors.
+ */
+export async function downloadAttachment(
+  account: MailAccount,
+  password: string,
+  folder: MailFolder,
+  uid: number,
+  part: string,
+  maxBytes: number,
+): Promise<{
+  meta: {
+    contentType?: string;
+    filename?: string;
+    disposition?: string;
+    expectedSize?: number;
+  };
+  content: Readable;
+  cleanup: () => Promise<void>;
+} | null> {
+  const client = makeImapClient(account, password);
+  await client.connect();
+  const mailboxes = await listMailboxes(client);
+  const path = resolveFolderPath(mailboxes, folder);
+  if (!path) {
+    await client.logout().catch(() => {});
+    return null;
+  }
+  const lock = await client.getMailboxLock(path);
+  try {
+    const dl = await client.download(uid.toString(), part, { uid: true, maxBytes });
+    if (!dl || !dl.content) {
+      lock.release();
+      await client.logout().catch(() => {});
+      return null;
+    }
+    let released = false;
+    const cleanup = async () => {
+      if (released) return;
+      released = true;
+      try { lock.release(); } catch {}
+      try { await client.logout(); } catch {}
+    };
+    dl.content.once("end", () => { cleanup().catch(() => {}); });
+    dl.content.once("close", () => { cleanup().catch(() => {}); });
+    dl.content.once("error", () => { cleanup().catch(() => {}); });
+    return {
+      meta: {
+        contentType: (dl.meta as any)?.contentType,
+        filename: (dl.meta as any)?.filename,
+        disposition: (dl.meta as any)?.disposition,
+        expectedSize: (dl.meta as any)?.expectedSize,
+      },
+      content: dl.content as Readable,
+      cleanup,
+    };
+  } catch (err) {
+    try { lock.release(); } catch {}
+    await client.logout().catch(() => {});
+    throw err;
   }
 }
 
