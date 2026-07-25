@@ -838,7 +838,6 @@ function MessageView({
   onMarkUnread: () => void;
   onPrint: () => void;
 }) {
-  const recipients = message.to.map((t) => t.name || t.email).join(", ");
   const isMeOnly =
     message.to.length === 1 && message.to[0].email.toLowerCase() === myEmail.toLowerCase();
 
