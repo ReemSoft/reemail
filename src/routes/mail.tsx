@@ -957,9 +957,12 @@ function MailApp() {
                   <MessageRow
                     message={m}
                     active={m.id === selectedId}
+                    selected={selection.has(m.id)}
+                    anySelected={selection.size > 0}
                     onClick={() => openMessage(m.id)}
                     onPrefetch={() => prefetchMessage(m.id)}
                     onToggleStar={(e) => toggleStar(e, m.id)}
+                    onToggleSelect={() => toggleSelect(m.id)}
                   />
                 )}
                 components={{
