@@ -682,7 +682,292 @@ function AccountsTab({
   );
 }
 
-/* --------------------------------------------------------------- shared -- */
+/* --------------------------------------------------------------- Domains -- */
+function DomainsTab({
+  domains,
+  companyId,
+  onChange,
+}: {
+  domains: EmailDomain[];
+  companyId: string;
+  onChange: () => Promise<void> | void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const emptyForm = {
+    domain: "",
+    imap_host: "",
+    imap_port: 993,
+    imap_secure: true,
+    smtp_host: "",
+    smtp_port: 465,
+    smtp_secure: true,
+  };
+  const [form, setForm] = useState(emptyForm);
+  const [submitting, setSubmitting] = useState(false);
+
+  function closeModal() {
+    setOpen(false);
+    setEditingId(null);
+    setForm(emptyForm);
+  }
+
+  function startEdit(d: EmailDomain) {
+    setEditingId(d.id);
+    setForm({
+      domain: d.domain,
+      imap_host: d.imap_host,
+      imap_port: d.imap_port,
+      imap_secure: d.imap_secure,
+      smtp_host: d.smtp_host,
+      smtp_port: d.smtp_port,
+      smtp_secure: d.smtp_secure,
+    });
+    setOpen(true);
+  }
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setSubmitting(true);
+    const payload = {
+      domain: form.domain.trim().toLowerCase().replace(/^@/, ""),
+      imap_host: form.imap_host.trim(),
+      imap_port: form.imap_port,
+      imap_secure: form.imap_secure,
+      smtp_host: form.smtp_host.trim(),
+      smtp_port: form.smtp_port,
+      smtp_secure: form.smtp_secure,
+    };
+    if (!payload.domain.includes(".")) {
+      setSubmitting(false);
+      return toast.error("أدخل دومين صحيح مثل example.com");
+    }
+    if (editingId) {
+      const { error } = await supabase
+        .from("email_domains")
+        .update(payload)
+        .eq("id", editingId);
+      setSubmitting(false);
+      if (error) return toast.error(error.message);
+      toast.success("تم تحديث الدومين");
+    } else {
+      const { error } = await supabase
+        .from("email_domains")
+        .insert({ company_id: companyId, ...payload });
+      setSubmitting(false);
+      if (error) return toast.error(error.message);
+      toast.success("تمت إضافة الدومين");
+    }
+    closeModal();
+    await onChange();
+  }
+
+  async function handleDelete(id: string) {
+    if (!confirm("حذف إعدادات هذا الدومين؟")) return;
+    setBusyId(id);
+    const { error } = await supabase.from("email_domains").delete().eq("id", id);
+    setBusyId(null);
+    if (error) return toast.error(error.message);
+    toast.success("تم الحذف");
+    await onChange();
+  }
+
+  function applyPreset(p: (typeof IMAP_PRESETS)[number]) {
+    setForm({
+      ...form,
+      imap_host: p.imap,
+      imap_port: 993,
+      imap_secure: true,
+      smtp_host: p.smtp,
+      smtp_port: 465,
+      smtp_secure: true,
+    });
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-xl font-bold">دومينات مشتركة</h2>
+          <p className="text-sm text-muted-foreground">
+            أضف إعدادات IMAP/SMTP للدومين مرة واحدة، وأي بريد على نفس الدومين يعمل تلقائياً بدون إضافة كل حساب على حدة.
+          </p>
+        </div>
+        <button
+          onClick={() => setOpen(true)}
+          className="inline-flex items-center gap-1.5 rounded-lg bg-brand-gradient px-4 py-2 text-sm font-semibold text-white shadow-soft"
+        >
+          <Plus className="h-4 w-4" />
+          دومين جديد
+        </button>
+      </div>
+
+      <div className="overflow-hidden rounded-2xl border border-border bg-card shadow-soft">
+        {domains.length === 0 ? (
+          <div className="p-10 text-center text-sm text-muted-foreground">
+            لم تُضف أي دومين بعد.
+          </div>
+        ) : (
+          <ul className="divide-y divide-border">
+            {domains.map((d) => (
+              <li key={d.id} className="flex items-center gap-4 p-4">
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-brand-gradient/10 text-brand-accent">
+                  <Globe className="h-5 w-5" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate font-semibold" dir="ltr">
+                    @{d.domain}
+                  </p>
+                  <p className="mt-0.5 truncate text-xs text-muted-foreground" dir="ltr">
+                    IMAP {d.imap_host}:{d.imap_port} · SMTP {d.smtp_host}:{d.smtp_port}
+                  </p>
+                </div>
+                <button
+                  onClick={() => startEdit(d)}
+                  className="rounded-md p-2 text-muted-foreground hover:bg-primary/10 hover:text-primary"
+                  title="تعديل"
+                >
+                  <Pencil className="h-4 w-4" />
+                </button>
+                <button
+                  onClick={() => handleDelete(d.id)}
+                  disabled={busyId === d.id}
+                  className="rounded-md p-2 text-muted-foreground hover:bg-destructive/10 hover:text-destructive disabled:opacity-50"
+                  title="حذف"
+                >
+                  {busyId === d.id ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Trash2 className="h-4 w-4" />
+                  )}
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      {open && (
+        <Modal
+          title={editingId ? "تعديل إعدادات الدومين" : "إعدادات دومين جديدة"}
+          onClose={closeModal}
+        >
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div>
+              <p className="mb-1.5 text-xs font-medium text-muted-foreground">اختصارات:</p>
+              <div className="flex flex-wrap gap-1.5">
+                {IMAP_PRESETS.map((p) => (
+                  <button
+                    type="button"
+                    key={p.name}
+                    onClick={() => applyPreset(p)}
+                    className="rounded-md border border-input bg-background px-2 py-1 text-xs hover:border-primary hover:bg-muted"
+                  >
+                    {p.name}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <Field label="الدومين">
+              <input
+                required
+                dir="ltr"
+                placeholder="example.com"
+                value={form.domain}
+                onChange={(e) => setForm({ ...form, domain: e.target.value })}
+                className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary"
+              />
+            </Field>
+
+            <fieldset className="rounded-xl border border-border p-3">
+              <legend className="px-1 text-xs font-semibold text-muted-foreground">
+                خادم الوارد (IMAP)
+              </legend>
+              <div className="grid gap-3 sm:grid-cols-[1fr_100px_auto]">
+                <input
+                  required
+                  placeholder="imap.example.com"
+                  dir="ltr"
+                  value={form.imap_host}
+                  onChange={(e) => setForm({ ...form, imap_host: e.target.value })}
+                  className="rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary"
+                />
+                <input
+                  required
+                  type="number"
+                  value={form.imap_port}
+                  onChange={(e) => setForm({ ...form, imap_port: Number(e.target.value) })}
+                  className="rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary"
+                />
+                <label className="flex items-center gap-2 text-xs">
+                  <input
+                    type="checkbox"
+                    checked={form.imap_secure}
+                    onChange={(e) => setForm({ ...form, imap_secure: e.target.checked })}
+                  />
+                  SSL
+                </label>
+              </div>
+            </fieldset>
+
+            <fieldset className="rounded-xl border border-border p-3">
+              <legend className="px-1 text-xs font-semibold text-muted-foreground">
+                خادم الصادر (SMTP)
+              </legend>
+              <div className="grid gap-3 sm:grid-cols-[1fr_100px_auto]">
+                <input
+                  required
+                  placeholder="smtp.example.com"
+                  dir="ltr"
+                  value={form.smtp_host}
+                  onChange={(e) => setForm({ ...form, smtp_host: e.target.value })}
+                  className="rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary"
+                />
+                <input
+                  required
+                  type="number"
+                  value={form.smtp_port}
+                  onChange={(e) => setForm({ ...form, smtp_port: Number(e.target.value) })}
+                  className="rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary"
+                />
+                <label className="flex items-center gap-2 text-xs">
+                  <input
+                    type="checkbox"
+                    checked={form.smtp_secure}
+                    onChange={(e) => setForm({ ...form, smtp_secure: e.target.checked })}
+                  />
+                  SSL
+                </label>
+              </div>
+            </fieldset>
+
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={closeModal}
+                className="rounded-lg px-4 py-2 text-sm hover:bg-muted"
+              >
+                إلغاء
+              </button>
+              <button
+                type="submit"
+                disabled={submitting}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-brand-gradient px-4 py-2 text-sm font-semibold text-white shadow-soft disabled:opacity-60"
+              >
+                {submitting && <Loader2 className="h-4 w-4 animate-spin" />}
+                حفظ
+              </button>
+            </div>
+          </form>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div>
