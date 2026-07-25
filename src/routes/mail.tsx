@@ -39,6 +39,8 @@ import {
   Globe,
   Check,
   ArrowUpDown,
+  Download,
+  Eye,
 } from "lucide-react";
 import {
   DropdownMenu,
