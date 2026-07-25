@@ -100,10 +100,15 @@ function CompanyDashboard() {
       return;
     }
 
-    const [{ data: co }, { data: ma }] = await Promise.all([
+    const [{ data: co }, { data: ma }, { data: dm }] = await Promise.all([
       supabase.from("companies").select("*").eq("id", companyId).maybeSingle(),
       supabase
         .from("mail_accounts")
+        .select("*")
+        .eq("company_id", companyId)
+        .order("created_at", { ascending: false }),
+      supabase
+        .from("email_domains")
         .select("*")
         .eq("company_id", companyId)
         .order("created_at", { ascending: false }),
@@ -111,6 +116,7 @@ function CompanyDashboard() {
 
     if (co) setCompany(co as Company);
     if (ma) setAccounts(ma as MailAccount[]);
+    if (dm) setDomains(dm as EmailDomain[]);
     setLoading(false);
   }, []);
 
