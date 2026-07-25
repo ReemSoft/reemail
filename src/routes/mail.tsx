@@ -982,35 +982,37 @@ function MessageView({
               {message.subject || "(بدون موضوع)"}
             </h1>
 
-            <div className="mt-4 flex items-start gap-3 border-b border-border pb-4">
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-brand-gradient text-sm font-bold text-white">
+            <div className="mt-4 grid grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-x-3 gap-y-1 border-b border-border pb-4">
+              <div className="row-span-2 flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-brand-gradient text-sm font-bold text-white">
                 {(message.from.name || message.from.email).charAt(0).toUpperCase()}
               </div>
-              <div className="min-w-0 flex-1">
-                <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-                  <span className="truncate font-semibold">
-                    {message.from.name || message.from.email}
-                  </span>
-                  <span
-                    className="truncate text-xs text-muted-foreground"
-                    dir="ltr"
-                    title={message.from.email}
-                  >
-                    {message.from.email}
-                  </span>
+              <div className="min-w-0">
+                <div className="truncate font-semibold leading-tight">
+                  {message.from.name || message.from.email}
                 </div>
-                <p className="mt-0.5 text-xs text-muted-foreground">
-                  {isMeOnly ? "إليّ" : <>إلى: <span dir="ltr">{recipients}</span></>}
-                  {message.cc && message.cc.length > 0 && (
-                    <>
-                      {" · "}نسخة: <span dir="ltr">{message.cc.map((c) => c.email).join(", ")}</span>
-                    </>
-                  )}
-                </p>
+                <div
+                  className="truncate text-xs text-muted-foreground"
+                  dir="ltr"
+                  title={message.from.email}
+                >
+                  {message.from.email}
+                </div>
               </div>
-              <span className="shrink-0 text-xs text-muted-foreground">
+              <span className="shrink-0 whitespace-nowrap text-xs text-muted-foreground">
                 {formatDate(message.date)}
               </span>
+              <div className="col-span-2 min-w-0 space-y-0.5 text-xs text-muted-foreground">
+                <div className="truncate">
+                  <span className="text-foreground/70">إلى: </span>
+                  {isMeOnly ? "إليّ" : <span dir="ltr">{recipients}</span>}
+                </div>
+                {message.cc && message.cc.length > 0 && (
+                  <div className="truncate">
+                    <span className="text-foreground/70">نسخة: </span>
+                    <span dir="ltr">{message.cc.map((c) => c.email).join(", ")}</span>
+                  </div>
+                )}
+              </div>
             </div>
 
             <article
