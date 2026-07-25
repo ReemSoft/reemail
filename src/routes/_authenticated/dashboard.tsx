@@ -223,6 +223,7 @@ function CompanyDashboard() {
           {[
             { id: "branding", label: "العلامة التجارية", icon: Palette },
             { id: "accounts", label: "حسابات البريد", icon: MailIcon, count: accounts.length },
+            { id: "domains", label: "دومينات مشتركة", icon: Globe, count: domains.length },
           ].map((t) => (
             <button
               key={t.id}
@@ -253,6 +254,13 @@ function CompanyDashboard() {
           {tab === "accounts" && (
             <AccountsTab
               accounts={accounts}
+              companyId={company.id}
+              onChange={load}
+            />
+          )}
+          {tab === "domains" && (
+            <DomainsTab
+              domains={domains}
               companyId={company.id}
               onChange={load}
             />
