@@ -1241,6 +1241,7 @@ function MailApp() {
                     }}
                     onPrefetch={() => prefetchMessage(m.id)}
                     onToggleStar={(e) => toggleStar(e, m.id)}
+                    onToggleRead={(e) => toggleRead(e, m.id)}
                     onToggleSelect={() => toggleSelect(m.id)}
                   />
                 )}
