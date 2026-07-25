@@ -97,6 +97,45 @@ function parseMessageId(id: string): { folder: MailFolder; uid: number } | null 
   return { folder: folder as MailFolder, uid };
 }
 
+// ---- Trash origin tracking (for restore-to-original-folder) ----
+const TRASH_ORIGIN_KEY = "mailmaestro:trash-origin";
+type OriginMap = Record<string, MailFolder>;
+function loadOriginMap(): OriginMap {
+  if (typeof localStorage === "undefined") return {};
+  try {
+    return JSON.parse(localStorage.getItem(TRASH_ORIGIN_KEY) || "{}") as OriginMap;
+  } catch {
+    return {};
+  }
+}
+function saveOriginMap(map: OriginMap) {
+  if (typeof localStorage === "undefined") return;
+  try {
+    localStorage.setItem(TRASH_ORIGIN_KEY, JSON.stringify(map));
+  } catch {
+    /* ignore quota errors */
+  }
+}
+function rememberOrigin(threadId: string | undefined, folder: MailFolder) {
+  if (!threadId || folder === "trash") return;
+  const m = loadOriginMap();
+  m[threadId] = folder;
+  saveOriginMap(m);
+}
+function getOrigin(threadId: string | undefined): MailFolder {
+  if (!threadId) return "inbox";
+  const m = loadOriginMap();
+  return m[threadId] || "inbox";
+}
+function forgetOrigin(threadId: string | undefined) {
+  if (!threadId) return;
+  const m = loadOriginMap();
+  if (threadId in m) {
+    delete m[threadId];
+    saveOriginMap(m);
+  }
+}
+
 type ComposeInitial = {
   to?: string;
   cc?: string;
