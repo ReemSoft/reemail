@@ -332,9 +332,22 @@ function MailApp() {
   const [selection, setSelection] = useState<Set<string>>(() => new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
   const [selectMode, setSelectMode] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
 
-  const { folder, setFolder, counts, setCounts, messages, setMessages, loading, loadingMore, hasMore, loadMore, bridgeError, useMock, refresh } =
+  const { folder, setFolder, counts, setCounts, messages, setMessages, loading, loadingMore, hasMore, loadMore, bridgeError, useMock, refresh: rawRefresh } =
     useMailData(session || null);
+
+  const refresh = useCallback(async () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    try {
+      await Promise.resolve(rawRefresh());
+      // keep spinner at least 600ms so it always feels intentional
+      await new Promise((r) => setTimeout(r, 600));
+    } finally {
+      setRefreshing(false);
+    }
+  }, [rawRefresh, refreshing]);
 
 
   const getOne = useServerFn(bridgeGetMessage);
