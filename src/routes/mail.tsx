@@ -977,7 +977,11 @@ function MailApp() {
                     active={m.id === selectedId}
                     selected={selection.has(m.id)}
                     anySelected={selection.size > 0}
-                    onClick={() => openMessage(m.id)}
+                    selectMode={selectMode}
+                    onClick={() => {
+                      if (selectMode) toggleSelect(m.id);
+                      else openMessage(m.id);
+                    }}
                     onPrefetch={() => prefetchMessage(m.id)}
                     onToggleStar={(e) => toggleStar(e, m.id)}
                     onToggleSelect={() => toggleSelect(m.id)}
