@@ -135,6 +135,37 @@ export async function getMessages(
   try {
     await client.connect();
     const mailboxes = await listMailboxes(client);
+
+    // Starred is a flag, not a folder on most IMAP servers.
+    // Fetch \Flagged messages from INBOX with proper pagination.
+    if (folder === "starred") {
+      const inboxPath = resolveFolderPath(mailboxes, "inbox") || "INBOX";
+      const lock = await client.getMailboxLock(inboxPath);
+      try {
+        const uids = ((await client.search({ flagged: true } as SearchObject, { uid: true })) as number[]) || [];
+        if (uids.length === 0) return [];
+        // UIDs are ascending; newest last. Sort desc then paginate.
+        const sorted = uids.slice().sort((a, b) => b - a);
+        const slice = sorted.slice(offset, offset + limit);
+        if (slice.length === 0) return [];
+
+        const messages: MailMessage[] = [];
+        for await (const msg of client.fetch(slice as any, {
+          uid: true,
+          envelope: true,
+          internalDate: true,
+          flags: true,
+          bodyStructure: true,
+        }, { uid: true })) {
+          const parsed = await messageFromFetch(msg, folder, client);
+          messages.push(parsed);
+        }
+        return messages.sort((a, b) => (a.date < b.date ? 1 : -1));
+      } finally {
+        lock.release();
+      }
+    }
+
     const path = resolveFolderPath(mailboxes, folder);
     if (!path) return [];
 
