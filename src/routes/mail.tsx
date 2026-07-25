@@ -203,10 +203,13 @@ function buildForward(message: MailMessage): ComposeInitial {
   return { to: "", subject, body: header };
 }
 
+type SortOption = "date-desc" | "date-asc" | "unread-first" | "starred-first";
+
 function useMailData(session: MailSession | null) {
   const getCounts = useServerFn(bridgeGetFolderCounts);
   const getMessages = useServerFn(bridgeGetMessages);
   const [folder, setFolder] = useState<MailFolder>("inbox");
+  const [sort, setSort] = useState<SortOption>("date-desc");
   const [counts, setCounts] = useState<Record<MailFolder, { total: number; unread: number; supported: boolean }>>({
     inbox: { total: 0, unread: 0, supported: true },
     starred: { total: 0, unread: 0, supported: true },
@@ -254,7 +257,7 @@ function useMailData(session: MailSession | null) {
     setLoading(true);
     try {
       const result = await getMessages({
-        data: { account: session.account, password: session.password, folder, limit: PAGE, offset: 0 },
+        data: { account: session.account, password: session.password, folder, limit: PAGE, offset: 0, sort },
       });
       if (!result.ok) throw new Error(result.error);
       setMessages(result.messages);
@@ -270,7 +273,7 @@ function useMailData(session: MailSession | null) {
       setLoading(false);
     }
 
-  }, [session, folder, getMessages]);
+  }, [session, folder, sort, getMessages]);
 
   const loadMore = useCallback(async () => {
     if (!session || loadingMore || loading || !hasMore) return;
@@ -278,7 +281,7 @@ function useMailData(session: MailSession | null) {
     try {
       const offset = messages.length;
       const result = await getMessages({
-        data: { account: session.account, password: session.password, folder, limit: PAGE, offset },
+        data: { account: session.account, password: session.password, folder, limit: PAGE, offset, sort },
       });
       if (!result.ok) throw new Error(result.error);
       setMessages((prev) => {
@@ -293,7 +296,7 @@ function useMailData(session: MailSession | null) {
     } finally {
       setLoadingMore(false);
     }
-  }, [session, folder, getMessages, messages.length, loadingMore, loading, hasMore]);
+  }, [session, folder, sort, getMessages, messages.length, loadingMore, loading, hasMore]);
 
   useEffect(() => {
     loadCounts();
@@ -303,9 +306,16 @@ function useMailData(session: MailSession | null) {
     loadMessages();
   }, [loadMessages]);
 
+  // Reset to default sort whenever the folder changes (no persistence between refreshes).
+  useEffect(() => {
+    setSort("date-desc");
+  }, [folder]);
+
   return {
     folder,
     setFolder,
+    sort,
+    setSort,
     counts,
     setCounts,
     messages,
@@ -317,11 +327,13 @@ function useMailData(session: MailSession | null) {
     bridgeError,
     useMock,
     refresh: () => {
+      setSort("date-desc");
       loadCounts();
       loadMessages();
     },
   };
 }
+
 
 
 function MailApp() {
