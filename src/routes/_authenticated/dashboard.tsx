@@ -10,6 +10,7 @@ import {
   Plus,
   Trash2,
   Server,
+  Globe,
   X,
   Copy,
   Check,
@@ -34,13 +35,25 @@ interface MailAccount {
   id: string;
   email_address: string;
   display_name: string | null;
+  imap_host: string | null;
+  imap_port: number | null;
+  imap_secure: boolean | null;
+  smtp_host: string | null;
+  smtp_port: number | null;
+  smtp_secure: boolean | null;
+  is_default: boolean;
+}
+
+interface EmailDomain {
+  id: string;
+  company_id: string;
+  domain: string;
   imap_host: string;
   imap_port: number;
   imap_secure: boolean;
   smtp_host: string;
   smtp_port: number;
   smtp_secure: boolean;
-  is_default: boolean;
 }
 
 export const Route = createFileRoute("/_authenticated/dashboard")({
@@ -54,8 +67,9 @@ function CompanyDashboard() {
   const [company, setCompany] = useState<Company | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [tab, setTab] = useState<"branding" | "accounts">("branding");
+  const [tab, setTab] = useState<"branding" | "domains" | "accounts">("branding");
   const [accounts, setAccounts] = useState<MailAccount[]>([]);
+  const [domains, setDomains] = useState<EmailDomain[]>([]);
   const [isAdmin, setIsAdmin] = useState(false);
   const navigate = useNavigate();
 
@@ -87,17 +101,23 @@ function CompanyDashboard() {
       return;
     }
 
-    const [{ data: co }, { data: ma }] = await Promise.all([
+    const [{ data: co }, { data: ma }, { data: dm }] = await Promise.all([
       supabase.from("companies").select("*").eq("id", companyId).maybeSingle(),
       supabase
         .from("mail_accounts")
         .select("*")
         .eq("company_id", companyId)
         .order("created_at", { ascending: false }),
+      supabase
+        .from("email_domains")
+        .select("*")
+        .eq("company_id", companyId)
+        .order("domain", { ascending: true }),
     ]);
 
     if (co) setCompany(co as Company);
     if (ma) setAccounts(ma as MailAccount[]);
+    if (dm) setDomains(dm as EmailDomain[]);
     setLoading(false);
   }, []);
 
@@ -203,7 +223,8 @@ function CompanyDashboard() {
         <nav className="flex gap-2 overflow-x-auto md:flex-col">
           {[
             { id: "branding", label: "العلامة التجارية", icon: Palette },
-            { id: "accounts", label: "حسابات البريد", icon: MailIcon, count: accounts.length },
+            { id: "domains", label: "دوماينات البريد", icon: Globe, count: domains.length },
+            { id: "accounts", label: "تخصيصات الحسابات", icon: MailIcon, count: accounts.length },
           ].map((t) => (
             <button
               key={t.id}
@@ -231,9 +252,13 @@ function CompanyDashboard() {
           {tab === "branding" && (
             <BrandingTab company={company} setCompany={setCompany} />
           )}
+          {tab === "domains" && (
+            <DomainsTab domains={domains} companyId={company.id} onChange={load} />
+          )}
           {tab === "accounts" && (
             <AccountsTab
               accounts={accounts}
+              domains={domains}
               companyId={company.id}
               onChange={load}
             />
@@ -329,10 +354,12 @@ const IMAP_PRESETS = [
 
 function AccountsTab({
   accounts,
+  domains,
   companyId,
   onChange,
 }: {
   accounts: MailAccount[];
+  domains: EmailDomain[];
   companyId: string;
   onChange: () => Promise<void> | void;
 }) {
@@ -364,12 +391,12 @@ function AccountsTab({
     setForm({
       display_name: account.display_name || "",
       email_address: account.email_address,
-      imap_host: account.imap_host,
-      imap_port: account.imap_port,
-      imap_secure: account.imap_secure,
-      smtp_host: account.smtp_host,
-      smtp_port: account.smtp_port,
-      smtp_secure: account.smtp_secure,
+      imap_host: account.imap_host ?? "",
+      imap_port: account.imap_port ?? 993,
+      imap_secure: account.imap_secure ?? true,
+      smtp_host: account.smtp_host ?? "",
+      smtp_port: account.smtp_port ?? 465,
+      smtp_secure: account.smtp_secure ?? true,
     });
     setOpen(true);
   }
@@ -378,15 +405,17 @@ function AccountsTab({
     e.preventDefault();
     setSubmitting(true);
 
+    // Empty host means "inherit from the domain's settings".
+    const hostOrNull = (v: string) => (v.trim() === "" ? null : v.trim());
     const basePayload = {
       display_name: form.display_name || null,
       email_address: form.email_address,
-      imap_host: form.imap_host,
-      imap_port: form.imap_port,
-      imap_secure: form.imap_secure,
-      smtp_host: form.smtp_host,
-      smtp_port: form.smtp_port,
-      smtp_secure: form.smtp_secure,
+      imap_host: hostOrNull(form.imap_host),
+      imap_port: hostOrNull(form.imap_host) ? form.imap_port : null,
+      imap_secure: hostOrNull(form.imap_host) ? form.imap_secure : null,
+      smtp_host: hostOrNull(form.smtp_host),
+      smtp_port: hostOrNull(form.smtp_host) ? form.smtp_port : null,
+      smtp_secure: hostOrNull(form.smtp_host) ? form.smtp_secure : null,
     };
 
     if (editingId) {
@@ -407,6 +436,8 @@ function AccountsTab({
       if (error) return toast.error(error.message);
       toast.success("تمت إضافة الحساب");
     }
+
+
 
     closeModal();
     await onChange();
@@ -440,9 +471,9 @@ function AccountsTab({
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-xl font-bold">حسابات البريد (IMAP/SMTP)</h2>
+          <h2 className="text-xl font-bold">تخصيصات الحسابات (اختياري)</h2>
           <p className="text-sm text-muted-foreground">
-            أضف عنوان البريد وإعدادات السيرفر فقط. كلمة مرور البريد يُدخلها العميل بنفسه عند فتح صندوقه.
+            كل بريد على دومين مُسجَّل يعمل تلقائياً بإعدادات الدومين. أضف حساباً هنا فقط لتعديل اسم العرض أو استخدام خادم مختلف عن الدومين.
           </p>
         </div>
         <button
@@ -563,19 +594,17 @@ function AccountsTab({
 
             <fieldset className="rounded-xl border border-border p-3">
               <legend className="px-1 text-xs font-semibold text-muted-foreground">
-                خادم الوارد (IMAP)
+                خادم الوارد (IMAP) — اتركه فارغاً لاستخدام إعدادات الدومين
               </legend>
               <div className="grid gap-3 sm:grid-cols-[1fr_100px_auto]">
                 <input
-                  required
-                  placeholder="imap.example.com"
+                  placeholder="imap.example.com (اختياري)"
                   dir="ltr"
                   value={form.imap_host}
                   onChange={(e) => setForm({ ...form, imap_host: e.target.value })}
                   className="rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary"
                 />
                 <input
-                  required
                   type="number"
                   value={form.imap_port}
                   onChange={(e) =>
@@ -598,19 +627,17 @@ function AccountsTab({
 
             <fieldset className="rounded-xl border border-border p-3">
               <legend className="px-1 text-xs font-semibold text-muted-foreground">
-                خادم الصادر (SMTP)
+                خادم الصادر (SMTP) — اتركه فارغاً لاستخدام إعدادات الدومين
               </legend>
               <div className="grid gap-3 sm:grid-cols-[1fr_100px_auto]">
                 <input
-                  required
-                  placeholder="smtp.example.com"
+                  placeholder="smtp.example.com (اختياري)"
                   dir="ltr"
                   value={form.smtp_host}
                   onChange={(e) => setForm({ ...form, smtp_host: e.target.value })}
                   className="rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary"
                 />
                 <input
-                  required
                   type="number"
                   value={form.smtp_port}
                   onChange={(e) =>
@@ -646,6 +673,293 @@ function AccountsTab({
               >
                 {submitting && <Loader2 className="h-4 w-4 animate-spin" />}
                 حفظ الإعدادات
+              </button>
+            </div>
+          </form>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------- Domains -- */
+function DomainsTab({
+  domains,
+  companyId,
+  onChange,
+}: {
+  domains: EmailDomain[];
+  companyId: string;
+  onChange: () => Promise<void> | void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  const emptyForm = {
+    domain: "",
+    imap_host: "",
+    imap_port: 993,
+    imap_secure: true,
+    smtp_host: "",
+    smtp_port: 465,
+    smtp_secure: true,
+  };
+  const [form, setForm] = useState(emptyForm);
+
+  function closeModal() {
+    setOpen(false);
+    setEditingId(null);
+    setForm(emptyForm);
+  }
+
+  function startEdit(d: EmailDomain) {
+    setEditingId(d.id);
+    setForm({
+      domain: d.domain,
+      imap_host: d.imap_host,
+      imap_port: d.imap_port,
+      imap_secure: d.imap_secure,
+      smtp_host: d.smtp_host,
+      smtp_port: d.smtp_port,
+      smtp_secure: d.smtp_secure,
+    });
+    setOpen(true);
+  }
+
+  function applyPreset(p: (typeof IMAP_PRESETS)[number]) {
+    setForm({
+      ...form,
+      imap_host: p.imap,
+      imap_port: 993,
+      imap_secure: true,
+      smtp_host: p.smtp,
+      smtp_port: 465,
+      smtp_secure: true,
+    });
+  }
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setSubmitting(true);
+    const cleanDomain = form.domain.trim().toLowerCase().replace(/^@/, "");
+    const payload = {
+      domain: cleanDomain,
+      imap_host: form.imap_host.trim(),
+      imap_port: form.imap_port,
+      imap_secure: form.imap_secure,
+      smtp_host: form.smtp_host.trim(),
+      smtp_port: form.smtp_port,
+      smtp_secure: form.smtp_secure,
+    };
+    if (editingId) {
+      const { error } = await supabase.from("email_domains").update(payload).eq("id", editingId);
+      setSubmitting(false);
+      if (error) return toast.error(error.message);
+      toast.success("تم تحديث الدومين");
+    } else {
+      const { error } = await supabase
+        .from("email_domains")
+        .insert({ company_id: companyId, ...payload });
+      setSubmitting(false);
+      if (error) return toast.error(error.message);
+      toast.success("تمت إضافة الدومين");
+    }
+    closeModal();
+    await onChange();
+  }
+
+  async function handleDelete(id: string) {
+    if (!confirm("حذف هذا الدومين؟ جميع البريد المنتمي له سيتوقف عن العمل.")) return;
+    setBusyId(id);
+    const { error } = await supabase.from("email_domains").delete().eq("id", id);
+    setBusyId(null);
+    if (error) return toast.error(error.message);
+    toast.success("تم الحذف");
+    await onChange();
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-xl font-bold">دوماينات البريد</h2>
+          <p className="text-sm text-muted-foreground">
+            أضف دومين شركتك (مثال: <span dir="ltr">reemsoft.com</span>) مع إعدادات
+            الخادم مرة واحدة، وسيعمل كل بريد ينتهي بهذا الدومين تلقائياً.
+          </p>
+        </div>
+        <button
+          onClick={() => setOpen(true)}
+          className="inline-flex items-center gap-1.5 rounded-lg bg-brand-gradient px-4 py-2 text-sm font-semibold text-white shadow-soft"
+        >
+          <Plus className="h-4 w-4" />
+          دومين جديد
+        </button>
+      </div>
+
+      <div className="overflow-hidden rounded-2xl border border-border bg-card shadow-soft">
+        {domains.length === 0 ? (
+          <div className="p-10 text-center text-sm text-muted-foreground">
+            لا توجد دوماينات بعد. أضف الدومين الأول لتفعيل جميع بريد الشركة دفعة واحدة.
+          </div>
+        ) : (
+          <ul className="divide-y divide-border">
+            {domains.map((d) => (
+              <li key={d.id} className="flex items-center gap-4 p-4">
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-brand-gradient/10 text-brand-accent">
+                  <Globe className="h-5 w-5" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate font-semibold" dir="ltr">
+                    @{d.domain}
+                  </p>
+                  <p className="mt-0.5 truncate text-xs text-muted-foreground">
+                    <span dir="ltr" className="mx-1">
+                      IMAP {d.imap_host}:{d.imap_port}
+                    </span>
+                    ·
+                    <span dir="ltr" className="mx-1">
+                      SMTP {d.smtp_host}:{d.smtp_port}
+                    </span>
+                  </p>
+                </div>
+                <button
+                  onClick={() => startEdit(d)}
+                  className="rounded-md p-2 text-muted-foreground hover:bg-primary/10 hover:text-primary"
+                  title="تعديل"
+                >
+                  <Pencil className="h-4 w-4" />
+                </button>
+                <button
+                  onClick={() => handleDelete(d.id)}
+                  disabled={busyId === d.id}
+                  className="rounded-md p-2 text-muted-foreground hover:bg-destructive/10 hover:text-destructive disabled:opacity-50"
+                  title="حذف"
+                >
+                  {busyId === d.id ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Trash2 className="h-4 w-4" />
+                  )}
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      {open && (
+        <Modal
+          title={editingId ? "تعديل دومين" : "إضافة دومين جديد"}
+          onClose={closeModal}
+        >
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <Field label="الدومين">
+              <input
+                required
+                dir="ltr"
+                placeholder="example.com"
+                value={form.domain}
+                onChange={(e) => setForm({ ...form, domain: e.target.value })}
+                className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary"
+              />
+            </Field>
+
+            <div>
+              <p className="mb-1.5 text-xs font-medium text-muted-foreground">اختصارات:</p>
+              <div className="flex flex-wrap gap-1.5">
+                {IMAP_PRESETS.map((p) => (
+                  <button
+                    type="button"
+                    key={p.name}
+                    onClick={() => applyPreset(p)}
+                    className="rounded-md border border-input bg-background px-2 py-1 text-xs hover:border-primary hover:bg-muted"
+                  >
+                    {p.name}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <fieldset className="rounded-xl border border-border p-3">
+              <legend className="px-1 text-xs font-semibold text-muted-foreground">
+                خادم الوارد (IMAP)
+              </legend>
+              <div className="grid gap-3 sm:grid-cols-[1fr_100px_auto]">
+                <input
+                  required
+                  dir="ltr"
+                  placeholder="imap.example.com"
+                  value={form.imap_host}
+                  onChange={(e) => setForm({ ...form, imap_host: e.target.value })}
+                  className="rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary"
+                />
+                <input
+                  required
+                  type="number"
+                  value={form.imap_port}
+                  onChange={(e) => setForm({ ...form, imap_port: Number(e.target.value) })}
+                  className="rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary"
+                />
+                <label className="flex items-center gap-2 text-xs">
+                  <input
+                    type="checkbox"
+                    checked={form.imap_secure}
+                    onChange={(e) => setForm({ ...form, imap_secure: e.target.checked })}
+                  />
+                  SSL
+                </label>
+              </div>
+            </fieldset>
+
+            <fieldset className="rounded-xl border border-border p-3">
+              <legend className="px-1 text-xs font-semibold text-muted-foreground">
+                خادم الصادر (SMTP)
+              </legend>
+              <div className="grid gap-3 sm:grid-cols-[1fr_100px_auto]">
+                <input
+                  required
+                  dir="ltr"
+                  placeholder="smtp.example.com"
+                  value={form.smtp_host}
+                  onChange={(e) => setForm({ ...form, smtp_host: e.target.value })}
+                  className="rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary"
+                />
+                <input
+                  required
+                  type="number"
+                  value={form.smtp_port}
+                  onChange={(e) => setForm({ ...form, smtp_port: Number(e.target.value) })}
+                  className="rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary"
+                />
+                <label className="flex items-center gap-2 text-xs">
+                  <input
+                    type="checkbox"
+                    checked={form.smtp_secure}
+                    onChange={(e) => setForm({ ...form, smtp_secure: e.target.checked })}
+                  />
+                  SSL
+                </label>
+              </div>
+            </fieldset>
+
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={closeModal}
+                className="rounded-lg px-4 py-2 text-sm hover:bg-muted"
+              >
+                إلغاء
+              </button>
+              <button
+                type="submit"
+                disabled={submitting}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-brand-gradient px-4 py-2 text-sm font-semibold text-white shadow-soft disabled:opacity-60"
+              >
+                {submitting && <Loader2 className="h-4 w-4 animate-spin" />}
+                حفظ الدومين
               </button>
             </div>
           </form>
