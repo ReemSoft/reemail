@@ -1467,6 +1467,42 @@ function MailApp() {
                 >
                   {selectMode ? "إلغاء" : "تحديد"}
                 </button>
+                {!inDeepSearch && (
+                  <DropdownMenu dir="rtl">
+                    <DropdownMenuTrigger asChild>
+                      <button
+                        className="flex items-center gap-1 rounded px-2 py-1.5 text-xs font-medium text-foreground hover:bg-muted"
+                        title="ترتيب العرض"
+                      >
+                        <ArrowUpDown className="h-3.5 w-3.5" />
+                        <span>ترتيب</span>
+                      </button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="start" className="w-56">
+                      {([
+                        { value: "date-desc", label: "الأحدث أولاً" },
+                        { value: "date-asc", label: "الأقدم أولاً" },
+                        { value: "unread-first", label: "غير المقروءة أولاً" },
+                        { value: "starred-first", label: "المميّزة بنجمة أولاً" },
+                      ] as { value: SortOption; label: string }[]).map((opt, i) => {
+                        const disabled = folder === "starred" && opt.value === "starred-first";
+                        return (
+                          <div key={opt.value}>
+                            {i > 0 && <DropdownMenuSeparator />}
+                            <DropdownMenuItem
+                              disabled={disabled}
+                              onClick={() => !disabled && setSort(opt.value)}
+                              className="flex items-center justify-between gap-2 hover:bg-accent focus:bg-accent"
+                            >
+                              <span>{opt.label}</span>
+                              {sort === opt.value && <Check className="h-4 w-4 text-primary" />}
+                            </DropdownMenuItem>
+                          </div>
+                        );
+                      })}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                )}
               </div>
             </div>
           )}
