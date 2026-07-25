@@ -940,8 +940,8 @@ function MessageView({
 </style></head><body>
 <h1>${subject}</h1>
 <div class="meta">
-  <div><strong>من:</strong> ${fromName} &lt;${fromEmail}&gt;</div>
-  <div><strong>إلى:</strong> <span dir="ltr">${to}</span></div>
+  <div><strong>المرسل:</strong> ${fromName} &lt;${fromEmail}&gt;</div>
+  <div><strong>المستلم:</strong> <span dir="ltr">${to}</span></div>
   ${cc ? `<div><strong>نسخة:</strong> <span dir="ltr">${cc}</span></div>` : ""}
   <div><strong>التاريخ:</strong> ${date}</div>
 </div>
@@ -1092,7 +1092,7 @@ function MessageView({
                   {detailsOpen && (
                     <div className="mt-2 rounded-lg border border-border bg-muted/40 p-3">
                       <dl className="grid grid-cols-[max-content_1fr] gap-x-2 gap-y-1.5 text-xs">
-                        <dt className="text-foreground/70 whitespace-nowrap">من:</dt>
+                        <dt className="text-foreground/70 whitespace-nowrap">المرسل:</dt>
                         <dd className="min-w-0 break-all">
                           {message.from.name ? <span className="ml-1">{message.from.name}</span> : null}
                           <span dir="ltr" className="text-muted-foreground">
@@ -1100,7 +1100,7 @@ function MessageView({
                           </span>
                         </dd>
 
-                        <dt className="text-foreground/70 whitespace-nowrap">إلى:</dt>
+                        <dt className="text-foreground/70 whitespace-nowrap">المستلم:</dt>
                         <dd className="min-w-0 break-all">
                           <span dir="ltr" style={{ unicodeBidi: "isolate" }}>
                             {message.to.length > 0 ? message.to.map((t) => t.email).join(", ") : "—"}
