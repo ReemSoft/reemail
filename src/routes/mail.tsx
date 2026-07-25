@@ -546,6 +546,159 @@ function MailApp() {
     }
   }
 
+  function toggleSelect(id: string) {
+    setSelection((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleSelectAllVisible() {
+    setSelection((prev) => {
+      if (prev.size >= filteredMessages.length && filteredMessages.length > 0) {
+        return new Set();
+      }
+      return new Set(filteredMessages.map((m) => m.id));
+    });
+  }
+
+  function clearSelection() {
+    setSelection(new Set());
+  }
+
+  // Run async ops with limited concurrency to stay fast without hammering the bridge
+  async function runBatch<T>(items: T[], limit: number, worker: (item: T) => Promise<any>) {
+    let idx = 0;
+    let failed = 0;
+    const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
+      while (idx < items.length) {
+        const i = idx++;
+        try {
+          await worker(items[i]);
+        } catch {
+          failed++;
+        }
+      }
+    });
+    await Promise.all(runners);
+    return { failed };
+  }
+
+  async function bulkMove(toFolder: MailFolder) {
+    if (!session || selection.size === 0 || bulkBusy) return;
+    const ids = Array.from(selection);
+    const snapshot = messages;
+    const prevSelectedId = selectedId;
+    const prevSelected = selectedMessage;
+    setBulkBusy(true);
+    // Optimistic remove from list
+    setMessages((prev) => prev.filter((m) => !selection.has(m.id)));
+    if (prevSelectedId && selection.has(prevSelectedId)) {
+      setSelectedId(null);
+      setSelectedMessage(null);
+    }
+    ids.forEach((id) => messageCache.current.delete(id));
+    clearSelection();
+    const { failed } = await runBatch(ids, 5, async (id) => {
+      const parsed = parseMessageId(id);
+      if (!parsed) return;
+      await move({
+        data: {
+          account: session.account,
+          password: session.password,
+          folder: parsed.folder,
+          uid: parsed.uid,
+          toFolder,
+        },
+      });
+    });
+    setBulkBusy(false);
+    if (failed > 0) {
+      setMessages(snapshot);
+      setSelectedId(prevSelectedId);
+      setSelectedMessage(prevSelected);
+      toast.error(`فشل نقل ${failed} من ${ids.length} رسالة`);
+    } else {
+      toast.success(`تم نقل ${ids.length} رسالة`);
+      loadCountsSoft();
+    }
+  }
+
+  async function bulkDelete() {
+    if (!session || selection.size === 0 || bulkBusy) return;
+    const ids = Array.from(selection);
+    if (!window.confirm(`تأكيد حذف ${ids.length} رسالة نهائياً؟`)) return;
+    const snapshot = messages;
+    const prevSelectedId = selectedId;
+    const prevSelected = selectedMessage;
+    setBulkBusy(true);
+    setMessages((prev) => prev.filter((m) => !selection.has(m.id)));
+    if (prevSelectedId && selection.has(prevSelectedId)) {
+      setSelectedId(null);
+      setSelectedMessage(null);
+    }
+    ids.forEach((id) => messageCache.current.delete(id));
+    clearSelection();
+    const { failed } = await runBatch(ids, 5, async (id) => {
+      const parsed = parseMessageId(id);
+      if (!parsed) return;
+      await deleteFn({
+        data: {
+          account: session.account,
+          password: session.password,
+          folder: parsed.folder,
+          uid: parsed.uid,
+        },
+      });
+    });
+    setBulkBusy(false);
+    if (failed > 0) {
+      setMessages(snapshot);
+      setSelectedId(prevSelectedId);
+      setSelectedMessage(prevSelected);
+      toast.error(`فشل حذف ${failed} من ${ids.length} رسالة`);
+    } else {
+      toast.success(`تم حذف ${ids.length} رسالة`);
+      loadCountsSoft();
+    }
+  }
+
+  async function bulkMarkUnread() {
+    if (!session || selection.size === 0 || bulkBusy) return;
+    const ids = Array.from(selection);
+    setBulkBusy(true);
+    setMessages((prev) => prev.map((m) => (selection.has(m.id) ? { ...m, read: false } : m)));
+    ids.forEach((id) => {
+      const c = messageCache.current.get(id);
+      if (c) messageCache.current.set(id, { ...c, read: false });
+    });
+    clearSelection();
+    const { failed } = await runBatch(ids, 5, async (id) => {
+      const parsed = parseMessageId(id);
+      if (!parsed) return;
+      await markRead({
+        data: {
+          account: session.account,
+          password: session.password,
+          folder: parsed.folder,
+          uid: parsed.uid,
+          read: false,
+        },
+      });
+    });
+    setBulkBusy(false);
+    if (failed > 0) toast.error(`فشل تعليم ${failed} رسالة`);
+    else toast.success(`تم تعليم ${ids.length} رسالة كغير مقروءة`);
+    loadCountsSoft();
+  }
+
+  function loadCountsSoft() {
+    // Refresh counts silently after bulk actions
+    setTimeout(() => refresh(), 300);
+  }
+
   function handleSignOut() {
     clearMailSession();
     navigate({ to: "/login" });
