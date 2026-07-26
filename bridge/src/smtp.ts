@@ -1,5 +1,11 @@
-import { createTransport, type SendMailOptions } from "nodemailer";
+import { createTransport } from "nodemailer";
 import type { MailAccount } from "./types.js";
+
+export interface SendAttachment {
+  filename: string;
+  content: Buffer;
+  contentType?: string;
+}
 
 export interface SendMessagePayload {
   from: { name: string; email: string };
@@ -9,6 +15,7 @@ export interface SendMessagePayload {
   subject: string;
   bodyHtml?: string;
   bodyText?: string;
+  attachments?: SendAttachment[];
 }
 
 export async function sendMessage(
@@ -40,6 +47,11 @@ export async function sendMessage(
       subject: payload.subject,
       text: payload.bodyText || "",
       html: payload.bodyHtml || "",
+      attachments: payload.attachments?.map((a) => ({
+        filename: a.filename,
+        content: a.content,
+        contentType: a.contentType,
+      })),
     });
     return { ok: true, messageId: info.messageId || "" };
   } catch (err: any) {
@@ -48,3 +60,4 @@ export async function sendMessage(
     transporter.close();
   }
 }
+
