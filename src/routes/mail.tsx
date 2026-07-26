@@ -275,6 +275,20 @@ function useMailData(session: MailSession | null) {
   // Optimistic hide set — rows removed by the user (unstar in the "starred"
   // folder) that must NOT be resurrected by a racing sync response.
   const pendingHiddenRef = useRef<HiddenIdsSet>(new Map());
+  // V4: Starred-count race guard. `active` = in-flight star mutations;
+  // `settledAt` = timestamp of the most recent resolution. While either
+  // is "hot" (active > 0 OR within 2s of settledAt), counts loaders must
+  // NOT overwrite `starred.total` — a stale server value would clobber
+  // the optimistic delta applied by toggleStar.
+  const pendingStarMutRef = useRef<{ active: number; settledAt: number }>({
+    active: 0,
+    settledAt: 0,
+  });
+  const STAR_COUNT_HOT_MS = 2000;
+  const isStarCountHot = useCallback(() => {
+    const s = pendingStarMutRef.current;
+    return s.active > 0 || Date.now() - s.settledAt < STAR_COUNT_HOT_MS;
+  }, []);
 
   /** Apply overrides + hidden filter to `list`, GC confirmed entries. */
   const applyPending = useCallback((list: MailMessage[]): MailMessage[] => {
