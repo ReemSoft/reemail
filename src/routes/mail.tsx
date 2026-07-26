@@ -641,6 +641,9 @@ function MailApp() {
     loadCounts,
     refresh: rawRefresh,
     onAfterSend,
+    setPendingFlagOverride,
+    clearPendingFlagOverride,
+    applyPendingOne,
   } = useMailData(session || null);
 
   const refresh = useCallback(async () => {
