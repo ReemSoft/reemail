@@ -12,6 +12,7 @@ import {
   confirmHide,
   gcHiddenBefore,
   hideId,
+  normalizeFlagIdentity,
   reconcileOverrides,
   setOverride,
   unhideId,
