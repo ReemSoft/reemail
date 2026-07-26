@@ -72,6 +72,7 @@ import {
   bridgeSearch,
 } from "@/lib/mail-bridge.functions";
 import { indexListMessages } from "@/lib/mail-index.functions";
+import { indexUpdateFlag } from "@/lib/mail-flags.functions";
 import { MAIL_INDEX_ENABLED } from "@/lib/mail-feature-flags";
 import { useMailIndexSync } from "@/hooks/use-mail-index-sync";
 import {
@@ -425,16 +426,16 @@ function useMailData(session: MailSession | null) {
   // afterwards, plus a 5-minute reconcile once the folder is indexed.
   // Pauses when the tab is hidden and never overlaps itself.
   const isFolderIndexed = indexReady[folder] === true;
-  const { reconcileNow, incrementalNow } = useMailIndexSync({
+  const { reconcileNow, incrementalNow, shouldReconcile } = useMailIndexSync({
     session,
     folderPath,
     canonical: folder,
     indexed: isFolderIndexed,
     enabled: MAIL_INDEX_ENABLED && !!session?.mailSessionToken && sort === "date-desc",
     onSynced: () => {
-      // Refresh the current folder from the index after a successful round.
-      // Tombstoned messages disappear from the list because indexListMessages
-      // filters `deleted_at IS NULL` server-side.
+      // Background rounds only: refresh the current folder from the index
+      // when the sync actually changed something (the hook already gates on
+      // meaningful-change; suppressed rounds do NOT reach this callback).
       loadMessages();
       loadCounts();
     },
@@ -458,18 +459,17 @@ function useMailData(session: MailSession | null) {
     loadCounts,
     source,
     refresh: async () => {
-      // Manual refresh = pull latest counts + kick both an incremental and a
-      // reconcile round for the current folder (when the index is enabled).
-      // The hook enforces overlap protection, so this is safe to call from a
-      // button handler.
-      loadCounts();
-      await incrementalNow();
-      // Only run reconcile after initial has completed (guarded inside the
-      // hook). Awaiting sequentially avoids two IMAP round-trips at once.
-      await reconcileNow();
-      // Ensure the visible list picks up any changes the sync rounds didn't
-      // already broadcast via onSynced.
-      loadMessages();
+      // Coalesced manual Refresh:
+      //   1) incremental (always) — suppress onSynced
+      //   2) reconcile — only when due (5 min elapsed OR flags drift)
+      //   3) ONE final Promise.all([loadMessages, loadCounts])
+      // No artificial delay, no intermediate re-renders.
+      const needsReconcile = shouldReconcile();
+      await incrementalNow({ suppressOnSynced: true });
+      if (needsReconcile) {
+        await reconcileNow({ suppressOnSynced: true });
+      }
+      await Promise.all([loadMessages(), loadCounts()]);
     },
   };
 }
@@ -502,12 +502,12 @@ function MailApp() {
 
 
   const refresh = useCallback(async () => {
+    // No artificial delay. rawRefresh coalesces sync + list + counts into a
+    // single UI update pass.
     if (refreshing) return;
     setRefreshing(true);
     try {
-      await Promise.resolve(rawRefresh());
-      // keep spinner at least 600ms so it always feels intentional
-      await new Promise((r) => setTimeout(r, 600));
+      await rawRefresh();
     } finally {
       setRefreshing(false);
     }
@@ -517,6 +517,7 @@ function MailApp() {
   const getOne = useServerFn(bridgeGetMessage);
   const markRead = useServerFn(bridgeMarkRead);
   const star = useServerFn(bridgeStar);
+  const updateFlag = useServerFn(indexUpdateFlag);
   const move = useServerFn(bridgeMove);
   const deleteFn = useServerFn(bridgeDelete);
   const searchFn = useServerFn(bridgeSearch);
