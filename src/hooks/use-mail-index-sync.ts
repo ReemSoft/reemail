@@ -48,7 +48,7 @@ export interface UseMailIndexSyncHandle {
 
 type Mode = "initial" | "incremental" | "reconcile";
 
-function hasMeaningfulChange(res: SuccessResult): boolean {
+export function hasMeaningfulChange(res: SuccessResult): boolean {
   return (
     res.mode === "initial" ||
     res.wipedForUidValidity ||

@@ -168,7 +168,7 @@ app.post("/api/message", requireKey, async (req, res) => {
   try {
     const payload = MessagePayloadSchema.parse(req.body);
     const message = await getMessageBody(
-      payload.account as any,
+      payload.account as MailAccount,
       payload.password,
       payload.folder,
       payload.uid,
@@ -187,7 +187,7 @@ app.post("/api/mark-read", requireKey, async (req, res) => {
   try {
     const payload = MarkReadPayloadSchema.parse(req.body);
     await markRead(
-      payload.account as any,
+      payload.account as MailAccount,
       payload.password,
       payload.folder,
       payload.uid,
@@ -204,7 +204,7 @@ app.post("/api/star", requireKey, async (req, res) => {
   try {
     const payload = StarPayloadSchema.parse(req.body);
     await starMessage(
-      payload.account as any,
+      payload.account as MailAccount,
       payload.password,
       payload.folder,
       payload.uid,
@@ -221,7 +221,7 @@ app.post("/api/move", requireKey, async (req, res) => {
   try {
     const payload = MovePayloadSchema.parse(req.body);
     await moveMessage(
-      payload.account as any,
+      payload.account as MailAccount,
       payload.password,
       payload.folder,
       payload.uid,
@@ -283,13 +283,13 @@ app.post("/api/send", requireKey, async (req, res) => {
       bodyHtml: payload.bodyHtml,
       bodyText: payload.bodyText,
     });
-    if (!result.ok && "error" in result) {
+    if ("error" in result) {
       return res.status(500).json({ ok: false, error: result.error });
     }
     return res.json({
       ok: true,
-      messageId: (result as any).messageId,
-      sentCopySaved: (result as any).sentCopySaved,
+      messageId: result.messageId,
+      sentCopySaved: result.sentCopySaved,
     });
   } catch (err: any) {
     console.error("[bridge] /api/send error:", err);
@@ -388,13 +388,13 @@ app.post(
         bodyText: payload.bodyText,
         attachments,
       });
-      if (!result.ok && "error" in result) {
+      if ("error" in result) {
         return res.status(500).json({ ok: false, error: result.error });
       }
       return res.json({
         ok: true,
-        messageId: (result as any).messageId,
-        sentCopySaved: (result as any).sentCopySaved,
+        messageId: result.messageId,
+        sentCopySaved: result.sentCopySaved,
       });
     } catch (err: any) {
       if (err?.code === "LIMIT_FILE_SIZE") {
@@ -480,7 +480,9 @@ app.post("/api/attachment", requireKey, async (req, res) => {
       if (!res.writableEnded) {
         try {
           content.destroy();
-        } catch {}
+        } catch {
+          // stream may already be closed; nothing to do.
+        }
         cleanup().catch(() => {});
       }
     });

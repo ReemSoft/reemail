@@ -44,7 +44,7 @@ const SENT_SEARCH_INTERVAL_MS = 500;
  * known names that actually exist in the LIST response. Returns undefined if
  * no suitable Sent mailbox is present — never creates one.
  */
-function resolveSentPath(mailboxes: ListResponse[]): string | undefined {
+export function resolveSentPath(mailboxes: ListResponse[]): string | undefined {
   // 1) SPECIAL-USE \Sent (RFC 6154)
   for (const mb of mailboxes) {
     const su = (mb as unknown as { specialUse?: string | string[] }).specialUse;

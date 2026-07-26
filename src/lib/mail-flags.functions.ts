@@ -128,64 +128,57 @@ export const indexUpdateFlag = createServerFn({ method: "POST" })
       return { ok: false, error: msg, code: "BRIDGE_UNREACHABLE" };
     }
 
-    // 4) Local index write-through. Best-effort.
+    // 4) Local index write-through. Best-effort — IMAP already succeeded.
+    //    All DB operations live in `mail-flags-writer.server.ts` so they can
+    //    be exercised under unit tests with a mocked Supabase client.
+    const {
+      resolveFolderForFlag,
+      updateMessageFlag,
+      recomputeFolderUnread,
+      markFolderNeedsFlagReconcile,
+    } = await import("./mail-flags-writer.server");
     let folderId: string | null = null;
     try {
-      const fq = await supabaseAdmin
-        .from("mail_folders")
-        .select("id, uidvalidity")
-        .eq("account_id", accountId)
-        .eq("company_id", companyId)
-        .eq("canonical", data.canonical)
-        .maybeSingle();
-      if (fq.error) throw fq.error;
-      if (!fq.data?.id || fq.data.uidvalidity == null) {
+      const folder = await resolveFolderForFlag(
+        supabaseAdmin,
+        accountId,
+        companyId,
+        data.canonical,
+      );
+      if (!folder) {
         // Folder not yet indexed — nothing to write.
         return { ok: true, imap: true, index: "no-folder" };
       }
-      folderId = fq.data.id;
-      const uv = Number(fq.data.uidvalidity);
-
-      const patch: Record<string, unknown> = {};
-      if (data.kind === "seen") patch.seen = data.value;
-      else patch.flagged = data.value;
-
-      const up = await supabaseAdmin
-        .from("mail_messages")
-        .update(patch as never)
-        .eq("account_id", accountId)
-        .eq("folder_id", folderId)
-        .eq("uidvalidity", uv)
-        .eq("uid", data.uid);
-      if (up.error) throw up.error;
-
-      // Refresh unread count on seen changes only (cheap head count).
+      folderId = folder.id;
+      await updateMessageFlag(supabaseAdmin, {
+        accountId,
+        folderId: folder.id,
+        uidvalidity: folder.uidvalidity,
+        uid: data.uid,
+        kind: data.kind,
+        value: data.value,
+      });
       if (data.kind === "seen") {
-        const unreadQ = await supabaseAdmin
-          .from("mail_messages")
-          .select("*", { count: "exact", head: true })
-          .eq("account_id", accountId)
-          .eq("folder_id", folderId)
-          .eq("uidvalidity", uv)
-          .is("deleted_at", null)
-          .eq("seen", false);
-        if (!unreadQ.error) {
-          await supabaseAdmin
-            .from("mail_folders")
-            .update({ unread: unreadQ.count ?? 0 })
-            .eq("id", folderId);
+        // Best-effort unread recount — do not fail the whole write on this.
+        try {
+          await recomputeFolderUnread(supabaseAdmin, {
+            accountId,
+            folderId: folder.id,
+            uidvalidity: folder.uidvalidity,
+          });
+        } catch (e) {
+          console.error("[indexUpdateFlag] unread recount failed", e);
         }
       }
       return { ok: true, imap: true, index: "updated" };
     } catch (e) {
       console.error("[indexUpdateFlag] index update failed after IMAP success", e);
-      // Mark folder for reconcile so IMAP truth is applied on next round.
       if (folderId) {
-        await supabaseAdmin
-          .from("mail_sync_state")
-          .update({ flags_need_reconcile: true })
-          .eq("account_id", accountId)
-          .eq("folder_id", folderId);
+        try {
+          await markFolderNeedsFlagReconcile(supabaseAdmin, { accountId, folderId });
+        } catch (mErr) {
+          console.error("[indexUpdateFlag] failed to mark flags_need_reconcile", mErr);
+        }
       }
       return { ok: true, imap: true, index: "partial" };
     }
