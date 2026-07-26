@@ -71,6 +71,9 @@ import {
   bridgeDelete,
   bridgeSearch,
 } from "@/lib/mail-bridge.functions";
+import { indexListMessages } from "@/lib/mail-index.functions";
+import { MAIL_INDEX_ENABLED } from "@/lib/mail-feature-flags";
+import { useMailIndexSync } from "@/hooks/use-mail-index-sync";
 import {
   formatDate,
   formatSize,
