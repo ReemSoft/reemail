@@ -208,18 +208,24 @@ function CompanyDashboard() {
           </div>
           <div className="flex items-center gap-2">
             {tab === "branding" && (
-              <button
-                onClick={handleSave}
-                disabled={saving}
-                className="inline-flex items-center gap-1.5 rounded-lg bg-brand-gradient px-4 py-2 text-sm font-semibold text-white shadow-soft disabled:opacity-60"
+              <div
+                className={`overflow-hidden transition-all duration-200 ease-out ${
+                  hasChanges ? "max-w-[120px] opacity-100" : "max-w-0 opacity-0"
+                }`}
               >
-                {saving ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <Save className="h-4 w-4" />
-                )}
-                حفظ
-              </button>
+                <button
+                  onClick={handleSave}
+                  disabled={saving}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-brand-gradient px-4 py-2 text-sm font-semibold text-white shadow-soft disabled:opacity-60"
+                >
+                  {saving ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Save className="h-4 w-4" />
+                  )}
+                  حفظ
+                </button>
+              </div>
             )}
             <button
               onClick={handleLogout}
