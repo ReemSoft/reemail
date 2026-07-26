@@ -47,7 +47,13 @@ function LoginPage() {
         return;
       }
 
-      saveMailSession({ account: result.account, company: result.company, password });
+      saveMailSession({
+        account: result.account,
+        company: result.company,
+        password,
+        mailSessionToken: result.mailSessionToken,
+        mailSessionTokenExpiresAt: result.mailSessionTokenExpiresAt,
+      });
       toast.success("تم فتح البريد ✨");
       navigate({ to: "/mail" });
     } catch (err: unknown) {

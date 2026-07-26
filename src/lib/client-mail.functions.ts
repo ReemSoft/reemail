@@ -198,6 +198,59 @@ export const clientLogin = createServerFn({ method: "POST" })
       };
     }
 
+    // Bridge verify succeeded → resolve permanent mail_accounts identity.
+    const isDomainDerived = typeof resolved.id === "string" && resolved.id.startsWith("domain:");
+    const sourceDomainId = isDomainDerived ? resolved.id.slice("domain:".length) : null;
 
-    return { ok: true as const, account: configuredAccount, company };
+    const {
+      findOrCreateMailAccountIdentity,
+      MailAccountOwnershipConflictError,
+      MailAccountSourceMismatchError,
+      normalizeEmail,
+    } = await import("@/lib/mail-account-identity.server");
+
+    let identity;
+    try {
+      identity = await findOrCreateMailAccountIdentity(supabaseAdmin, {
+        companyId: resolved.company_id,
+        emailAddress: resolved.email_address,
+        displayName: resolved.display_name,
+        sourceDomainId,
+        accountSource: isDomainDerived ? "domain" : "manual",
+      });
+    } catch (e) {
+      if (e instanceof MailAccountOwnershipConflictError) {
+        return { ok: false as const, message: "هذا البريد مسجّل تحت شركة أخرى. تواصل مع الدعم." };
+      }
+      if (e instanceof MailAccountSourceMismatchError) {
+        return { ok: false as const, message: "تعارض في مصدر إعدادات هذا الحساب. تواصل مع مشرف شركتك." };
+      }
+      console.error("[clientLogin] identity resolution failed", e);
+      return { ok: false as const, message: "تعذر تجهيز هوية الحساب. حاول مرة أخرى." };
+    }
+
+    // Issue signed Mail Session Token (Server-only signing key).
+    const { issueMailSessionToken } = await import("@/lib/mail-token.server");
+    let tokenInfo: { token: string; expiresAt: number };
+    try {
+      tokenInfo = await issueMailSessionToken({
+        accountId: identity.id,
+        companyId: identity.companyId,
+        normalizedEmail: normalizeEmail(identity.emailAddress),
+      });
+    } catch (e) {
+      console.error("[clientLogin] issue mail session token failed", e);
+      return { ok: false as const, message: "تعذر إصدار جلسة البريد الآمنة. حاول لاحقاً." };
+    }
+
+    // Return the permanent UUID as the browser-visible account.id.
+    const persistentAccount = { ...configuredAccount, id: identity.id };
+
+    return {
+      ok: true as const,
+      account: persistentAccount,
+      company,
+      mailSessionToken: tokenInfo.token,
+      mailSessionTokenExpiresAt: tokenInfo.expiresAt,
+    };
   });

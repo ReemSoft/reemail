@@ -27,6 +27,10 @@ export interface MailSession {
   account: MailSessionAccount;
   company: MailSessionCompany | null;
   password: string;
+  /** Short-lived signed JWT bound to the permanent mail_accounts.id. */
+  mailSessionToken?: string;
+  /** Unix seconds. */
+  mailSessionTokenExpiresAt?: number;
 }
 
 const KEY = "mailmaestro.mail.session";
@@ -41,7 +45,11 @@ export function getMailSession(): MailSession | null {
   const raw = sessionStorage.getItem(KEY);
   if (!raw) return null;
   try {
-    return JSON.parse(raw) as MailSession;
+    const parsed = JSON.parse(raw) as MailSession;
+    // Legacy sessions predating mailSessionToken are still usable for the
+    // existing bridge flow; downstream sync code must treat missing token as
+    // "needs re-login" rather than crashing.
+    return parsed;
   } catch {
     return null;
   }
@@ -49,5 +57,6 @@ export function getMailSession(): MailSession | null {
 
 export function clearMailSession() {
   if (typeof window === "undefined") return;
+  // Wipes password + token together.
   sessionStorage.removeItem(KEY);
 }
