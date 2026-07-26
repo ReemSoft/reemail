@@ -824,29 +824,31 @@ function MailApp() {
     async (params: {
       sourceCanonical: MailFolder;
       uid: number;
-      /** Omit → permanent delete route (bridge `/api/delete`). */
+      /** Omit → permanent delete (only valid when sourceCanonical === "trash"). */
       toFolder?: MailFolder;
     }) => {
       if (!session) throw new Error("لا توجد جلسة بريد");
       const dest = params.toFolder;
-      if (session.mailSessionToken) {
-        // Delete path currently maps to move-to-trash server-side; keep
-        // parity with legacy behavior when no explicit destination given.
-        const destCanonical = (dest ?? "trash") as MailFolder;
-        const res = await moveIndex({
-          data: {
-            mailSessionToken: session.mailSessionToken,
-            password: session.password,
-            sourceCanonical: params.sourceCanonical,
-            destCanonical,
-            uid: params.uid,
-          },
-        });
-        if (!res.ok) throw new Error(res.error);
-        return;
-      }
-      // Legacy bridge fallback (no JWT).
+      // Permanent-delete branch — MUST use indexDeleteMessage (Blocker 1).
+      // Never delegates to moveIndex; the Bridge decider on "trash" would
+      // otherwise take an unrelated code path.
       if (dest === undefined) {
+        if (params.sourceCanonical !== "trash") {
+          throw new Error("الحذف النهائي مسموح فقط من مجلد المهملات");
+        }
+        if (session.mailSessionToken) {
+          const res = await deleteIndex({
+            data: {
+              mailSessionToken: session.mailSessionToken,
+              password: session.password,
+              canonical: "trash",
+              uid: params.uid,
+            },
+          });
+          if (!res.ok) throw new Error(res.error);
+          return;
+        }
+        // Legacy fallback (no JWT): bridge /api/delete decides on trash → permanent.
         await deleteFn({
           data: {
             account: session.account,
@@ -855,19 +857,33 @@ function MailApp() {
             uid: params.uid,
           },
         });
-      } else {
-        await move({
+        return;
+      }
+      // Move branch — IMAP MOVE + local write-through in one round.
+      if (session.mailSessionToken) {
+        const res = await moveIndex({
           data: {
-            account: session.account,
+            mailSessionToken: session.mailSessionToken,
             password: session.password,
-            folder: params.sourceCanonical,
+            sourceCanonical: params.sourceCanonical,
+            destCanonical: dest,
             uid: params.uid,
-            toFolder: dest,
           },
         });
+        if (!res.ok) throw new Error(res.error);
+        return;
       }
+      await move({
+        data: {
+          account: session.account,
+          password: session.password,
+          folder: params.sourceCanonical,
+          uid: params.uid,
+          toFolder: dest,
+        },
+      });
     },
-    [session, moveIndex, deleteFn, move],
+    [session, moveIndex, deleteIndex, deleteFn, move],
   );
 
   // Per-id single-flight guard against double-click on Move/Delete/Restore.
