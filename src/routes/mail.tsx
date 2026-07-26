@@ -378,7 +378,7 @@ function useMailData(session: MailSession | null) {
           });
           if (loadReqIdRef.current !== reqId) return;
           if (res.ok && res.indexed) {
-            setMessages(res.messages);
+            setMessages(applyPending(res.messages));
             setHasMore(res.hasMore);
             setIndexCursor(res.nextCursor);
             setSource("index");
@@ -397,7 +397,7 @@ function useMailData(session: MailSession | null) {
     } finally {
       if (loadReqIdRef.current === reqId) setLoading(false);
     }
-  }, [session, folder, sort, canUseIndex, listIndex, loadFromBridge]);
+  }, [session, folder, sort, canUseIndex, listIndex, loadFromBridge, applyPending]);
 
   const loadMore = useCallback(async () => {
     if (!session || loadingMore || loading || !hasMore) return;
