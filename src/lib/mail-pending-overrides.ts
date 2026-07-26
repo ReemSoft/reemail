@@ -1,4 +1,4 @@
-// Pure helpers for "pending flag overrides".
+// Pure helpers for "pending flag overrides" and "pending hidden ids".
 //
 // Problem: a Star/Read mutation is optimistic on the client, but any list
 // arriving from the Local Mail Index, Bridge, background sync, pagination,
@@ -6,10 +6,28 @@
 // we just replace state with the incoming list, the optimistic star flips
 // back to empty until the next reload.
 //
-// Fix: keep a small map of expected flag values keyed by message id. Every
-// server-fetched list is piped through `applyOverrides` before it becomes
-// state, so stale rows are patched with the user's intended value. Entries
-// are GC'd via `reconcileOverrides` once a fresh row confirms the value.
+// Fix (flags): keep a small map of expected flag values keyed by message id.
+// Every server-fetched list is piped through `applyOverrides` before it
+// becomes state, so stale rows are patched with the user's intended value.
+// Entries are GC'd via `reconcileOverrides` once a fresh row confirms the
+// value.
+//
+// Fix (hidden rows): a companion map of message ids that were optimistically
+// REMOVED from the currently-visible list (e.g. unstar inside the "starred"
+// folder). Every server-list writer filters through `applyHidden` so a racing
+// sync cannot resurrect a row the user just removed.
+//
+// Hidden lifecycle (V3):
+//   * hideId(id)                  — enters `pending` (mutation in flight).
+//   * unhideId(id)                — drops the entry (rollback / re-star).
+//   * confirmHide(id, confirmedAt)— mutation succeeded; entry becomes
+//                                    `confirmed`. It STAYS active so a racing
+//                                    pre-mutation list can't resurrect the
+//                                    row, then is dropped by
+//                                    `gcHiddenBefore(cutoff)` on the next
+//                                    list load that started AFTER confirmedAt.
+//   * gcHiddenBefore(cutoff)      — drops every entry whose `confirmedAt` is
+//                                    <= cutoff. Pending entries are kept.
 //
 // This module is intentionally dependency-free so it can be unit-tested in
 // isolation and reused from any UI surface (list / deep search / cache).
@@ -90,27 +108,73 @@ export function reconcileOverrides(list: MailMessage[], overrides: OverridesMap)
   }
 }
 
+// ==============================================================
+// Hidden ids (V3 lifecycle)
+// ==============================================================
+
+export type HideStatus =
+  | { status: "pending" }
+  | { status: "confirmed"; confirmedAt: number };
+
+/** Map<id, HideStatus>. Keyed by the ORIGINAL message id (folder:uid). */
+export type HiddenIdsMap = Map<string, HideStatus>;
+
 /**
- * Hidden-ids set: message IDs that were optimistically removed from the
- * currently-visible list (e.g. unstar inside the "starred" folder). Every
- * server-list writer must filter through `applyHidden` so a racing sync
- * cannot resurrect a row the user just removed.
- *
- * On mutation failure the caller unhides + restores the snapshot in place.
- * On success the entry stays until a fresh reload naturally drops the row
- * (server no longer returns it) — cheap and self-healing.
+ * Backward-compat alias. Callers can pass either a plain Set<string> or the
+ * V3 map; `applyHidden` accepts both via the `HiddenIdsLike` type below.
  */
-export type HiddenIdsSet = Set<string>;
+export type HiddenIdsSet = HiddenIdsMap;
 
-export function applyHidden(list: MailMessage[], hidden: HiddenIdsSet): MailMessage[] {
+export type HiddenIdsLike = HiddenIdsMap | Set<string>;
+
+function hiddenHas(hidden: HiddenIdsLike, id: string): boolean {
+  return hidden.has(id);
+}
+
+export function applyHidden(list: MailMessage[], hidden: HiddenIdsLike): MailMessage[] {
   if (hidden.size === 0) return list;
-  return list.filter((m) => !hidden.has(m.id));
+  return list.filter((m) => !hiddenHas(hidden, m.id));
 }
 
-export function hideId(hidden: HiddenIdsSet, id: string): void {
-  hidden.add(id);
+/** Mark an id as hidden (mutation in flight). Idempotent. */
+export function hideId(hidden: HiddenIdsLike, id: string): void {
+  if (hidden instanceof Set) {
+    hidden.add(id);
+    return;
+  }
+  hidden.set(id, { status: "pending" });
 }
 
-export function unhideId(hidden: HiddenIdsSet, id: string): void {
+/** Drop the hide entirely (rollback OR re-star flow). */
+export function unhideId(hidden: HiddenIdsLike, id: string): void {
   hidden.delete(id);
+}
+
+/**
+ * Mark a hide as confirmed at `confirmedAt`. It stays active until a list
+ * load started AFTER `confirmedAt` completes; `gcHiddenBefore` then drops it.
+ */
+export function confirmHide(hidden: HiddenIdsMap, id: string, confirmedAt: number): void {
+  hidden.set(id, { status: "confirmed", confirmedAt });
+}
+
+/**
+ * Drop every confirmed entry whose `confirmedAt <= cutoff`. Pending entries
+ * are always retained (their mutation hasn't finished yet).
+ *
+ * Call this AFTER a successful primary list load, passing the timestamp
+ * captured BEFORE the load was issued. Any hide confirmed before that
+ * timestamp is guaranteed to be reflected by this list — safe to drop.
+ * Returns the number of entries removed (for tests).
+ */
+export function gcHiddenBefore(hidden: HiddenIdsMap, cutoff: number): number {
+  if (hidden.size === 0) return 0;
+  let removed = 0;
+  for (const [id, entry] of hidden) {
+    if (entry.status === "confirmed" && entry.confirmedAt <= cutoff) {
+      hidden.delete(id);
+      removed++;
+    }
+  }
+  return removed;
 }
