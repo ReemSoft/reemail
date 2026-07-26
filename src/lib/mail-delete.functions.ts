@@ -143,7 +143,8 @@ export const indexDeleteMessage = createServerFn({ method: "POST" })
     }
 
     // 4) Local Mail Index write-through — best-effort after IMAP success.
-    let indexStatus: IndexDeleteResult extends { index: infer T } ? T : never = "partial" as any;
+    let indexStatus: "tombstoned" | "already-tombstoned" | "no-source-folder" | "partial" =
+      "partial";
     try {
       const outcome = await applyDeleteWriteThrough(supabaseAdmin, {
         accountId,
