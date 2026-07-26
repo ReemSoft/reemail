@@ -1157,7 +1157,7 @@ function MailApp() {
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-64">
-              <div className="px-2 pb-1 pt-1 text-[11px] font-semibold text-muted-foreground">
+              <div className="px-2 pb-1 pt-1 text-xs font-semibold text-muted-foreground">
                 نمط البحث
               </div>
               <DropdownMenuItem
@@ -1210,9 +1210,6 @@ function MailApp() {
                 <div className="flex-1">
                   <div className="flex items-center justify-between">
                     <span className="font-medium">تضمين نص الرسالة</span>
-                    {searchMode !== "deep" && (
-                      <span className="text-[10px] text-muted-foreground">يتطلب بحث شامل</span>
-                    )}
                   </div>
                   <div className="text-[11px] text-muted-foreground">
                     أبطأ لكنه يبحث داخل محتوى الرسائل أيضاً
