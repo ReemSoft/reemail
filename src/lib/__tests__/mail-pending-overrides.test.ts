@@ -107,13 +107,13 @@ describe("mail-pending-overrides", () => {
 
   it("applyHidden is a no-op when the set is empty", () => {
     const list = [msg("inbox:1"), msg("inbox:2")];
-    const out = applyHidden(list, new Set());
+    const out = applyHidden(list, new Map());
     expect(out).toBe(list);
   });
 
   it("applyHidden filters out ids that were optimistically removed", () => {
     const list = [msg("inbox:1"), msg("inbox:2"), msg("inbox:3")];
-    const hidden: HiddenIdsSet = new Set();
+    const hidden: HiddenIdsSet = new Map();
     hideId(hidden, "inbox:2");
     const out = applyHidden(list, hidden);
     expect(out.map((m) => m.id)).toEqual(["inbox:1", "inbox:3"]);
@@ -121,7 +121,7 @@ describe("mail-pending-overrides", () => {
 
   it("unhideId restores a previously hidden id", () => {
     const list = [msg("inbox:1"), msg("inbox:2")];
-    const hidden: HiddenIdsSet = new Set();
+    const hidden: HiddenIdsSet = new Map();
     hideId(hidden, "inbox:1");
     unhideId(hidden, "inbox:1");
     expect(applyHidden(list, hidden).map((m) => m.id)).toEqual(["inbox:1", "inbox:2"]);
@@ -131,7 +131,7 @@ describe("mail-pending-overrides", () => {
     // User unstarred inbox:1 in the starred folder — we remove it and hide
     // its id; a background sync response still contains the row because the
     // server hasn't cleared the flag yet. It must NOT re-appear.
-    const hidden: HiddenIdsSet = new Set();
+    const hidden: HiddenIdsSet = new Map();
     hideId(hidden, "inbox:1");
     const stale = [msg("inbox:1", true, false), msg("inbox:2", true, false)];
     const out = applyHidden(stale, hidden);
