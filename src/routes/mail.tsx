@@ -542,7 +542,7 @@ function useMailData(session: MailSession | null) {
       // when the sync actually changed something (the hook already gates on
       // meaningful-change; suppressed rounds do NOT reach this callback).
       loadMessages();
-      loadCounts();
+      loadCountsFast();
     },
   });
 
