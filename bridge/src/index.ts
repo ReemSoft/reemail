@@ -220,14 +220,16 @@ app.post("/api/star", requireKey, async (req, res) => {
 app.post("/api/move", requireKey, async (req, res) => {
   try {
     const payload = MovePayloadSchema.parse(req.body);
-    await moveMessage(
+    const move = await moveMessage(
       payload.account as MailAccount,
       payload.password,
       payload.folder,
       payload.uid,
       payload.toFolder,
     );
-    return res.json({ ok: true });
+    // Backward-compat: existing callers only check `ok`. New callers can
+    // read `move.destinationUid` when `move.uidMappingAvailable === true`.
+    return res.json({ ok: true, move });
   } catch (err: any) {
     console.error("[bridge] /api/move error:", err);
     return res.status(500).json({ ok: false, error: err?.message || "Failed to move message" });
@@ -237,8 +239,16 @@ app.post("/api/move", requireKey, async (req, res) => {
 app.post("/api/delete", requireKey, async (req, res) => {
   try {
     const payload = MessagePayloadSchema.parse(req.body);
-    await deleteMessage(payload.account as any, payload.password, payload.folder, payload.uid);
-    return res.json({ ok: true });
+    const result = await deleteMessage(
+      payload.account as any,
+      payload.password,
+      payload.folder,
+      payload.uid,
+    );
+    // Typed contract: today `/api/delete` always routes through move-to-trash.
+    // `kind` lets callers branch when a true permanent-delete path lands
+    // later without a breaking change.
+    return res.json({ ok: true, kind: result.kind, move: result.move });
   } catch (err: any) {
     console.error("[bridge] /api/delete error:", err);
     return res.status(500).json({ ok: false, error: err?.message || "Failed to delete message" });
