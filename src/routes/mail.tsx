@@ -422,6 +422,11 @@ function useMailData(session: MailSession | null) {
   const loadMessages = useCallback(async () => {
     if (!session) return;
     const reqId = ++loadReqIdRef.current;
+    // Timestamp captured BEFORE the request is issued. After the load
+    // succeeds we drop every "confirmed" hide whose confirmedAt <= this
+    // value: any mutation that confirmed before this load started is
+    // guaranteed to be reflected in the response.
+    const startedAt = Date.now();
     setLoading(true);
     try {
       if (canUseIndex(folder, sort)) {
@@ -442,6 +447,7 @@ function useMailData(session: MailSession | null) {
             setUseMock(false);
             setBridgeError(null);
             setIndexReady((prev) => (prev[folder] ? prev : { ...prev, [folder]: true }));
+            gcHiddenBefore(pendingHiddenRef.current, startedAt);
             return;
           }
           // Not indexed yet OR transient error → mark not-ready and fall back.
@@ -451,10 +457,14 @@ function useMailData(session: MailSession | null) {
         }
       }
       await loadFromBridge(reqId);
+      if (loadReqIdRef.current === reqId) {
+        gcHiddenBefore(pendingHiddenRef.current, startedAt);
+      }
     } finally {
       if (loadReqIdRef.current === reqId) setLoading(false);
     }
   }, [session, folder, sort, canUseIndex, listIndex, loadFromBridge, applyPending]);
+
 
   const loadMore = useCallback(async () => {
     if (!session || loadingMore || loading || !hasMore) return;
