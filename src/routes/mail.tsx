@@ -1592,7 +1592,7 @@ function MailApp() {
         {/* Message viewer */}
         <div
           className={`flex-1 overflow-hidden bg-surface ${
-            selectedMessage ? "flex" : "hidden md:flex"
+            selectedMessage || (selectedId && reading) ? "flex" : "hidden md:flex"
           } flex-col`}
         >
           {selectedMessage ? (
@@ -1613,6 +1613,13 @@ function MailApp() {
               onMarkUnread={() => handleMarkUnread(selectedMessage.id)}
               onRestore={() => handleRestore(selectedMessage.id)}
               onPrint={() => { /* handled inside MessageView */ }}
+            />
+          ) : selectedId && reading ? (
+            <LoadingViewer
+              onBack={() => {
+                setSelectedId(null);
+                setSelectedMessage(null);
+              }}
             />
           ) : (
             <EmptyViewer />
@@ -1669,7 +1676,7 @@ function MessageRow({
       onMouseEnter={onPrefetch}
       onFocus={onPrefetch}
       onTouchStart={onPrefetch}
-      className={`group flex w-full cursor-pointer items-start gap-3 border-b border-border/60 px-4 py-3 text-right transition hover:bg-muted/50 ${
+      className={`group flex w-full cursor-pointer items-start gap-3 border-b border-border/60 px-4 py-3 text-right transition-colors duration-150 hover:bg-muted/50 active:bg-muted active:duration-75 ${
         active ? "bg-accent" : ""
       } ${selected ? "bg-primary/5" : ""} ${!message.read ? "bg-card" : "bg-card/70"}`}
     >
@@ -2155,6 +2162,27 @@ function EmptyViewer() {
     </div>
   );
 }
+
+function LoadingViewer({ onBack }: { onBack: () => void }) {
+  return (
+    <>
+      <div className="flex h-12 shrink-0 items-center justify-between gap-2 border-b border-border bg-card px-2 sm:px-3">
+        <button
+          onClick={onBack}
+          className="flex items-center gap-1.5 rounded-lg p-2 text-sm hover:bg-muted md:hidden"
+          aria-label="رجوع"
+        >
+          <ChevronLeft className="h-4 w-4" /> رجوع
+        </button>
+        <div />
+      </div>
+      <div className="flex flex-1 items-center justify-center">
+        <Loader2 className="h-6 w-6 animate-spin text-primary" />
+      </div>
+    </>
+  );
+}
+
 
 const COMPOSE_MAX_TOTAL_BYTES = 25 * 1024 * 1024;
 const COMPOSE_MAX_FILES = 10;
