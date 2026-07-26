@@ -1013,6 +1013,9 @@ function MailApp() {
     // Record expected value first so any in-flight list write (background
     // sync, refresh, pagination, deep search) cannot clobber it.
     setPendingFlagOverride(id, { starred: nextStarred });
+    // V4: mark the star-count "hot" so any concurrent counts loader keeps
+    // the optimistic value instead of the still-stale server total.
+    beginStarMutation();
     // Optimistic counter — starred.total moves by exactly one and never
     // dips below zero. Rolled back below on failure via the inverse delta.
     setCounts((prev) => {
