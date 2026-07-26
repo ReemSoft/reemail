@@ -169,7 +169,11 @@ export const bridgeStar = createServerFn({ method: "POST" })
     }) => input,
   )
   .handler(async ({ data }) => {
-    return bridgePost("/api/star", data);
+    const result = await bridgePost("/api/star", data);
+    // Symmetric with bridgeMarkRead: throw on bridge failure so callers'
+    // optimistic-UI rollback paths (which rely on .catch) fire correctly.
+    if (!result.ok) throw new Error((result.error as string) || "فشل تحديث المميّز على الخادم");
+    return result;
   });
 
 export const bridgeMove = createServerFn({ method: "POST" })

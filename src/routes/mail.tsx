@@ -72,6 +72,7 @@ import {
   bridgeSearch,
 } from "@/lib/mail-bridge.functions";
 import { indexListMessages } from "@/lib/mail-index.functions";
+import { indexUpdateFlag } from "@/lib/mail-flags.functions";
 import { MAIL_INDEX_ENABLED } from "@/lib/mail-feature-flags";
 import { useMailIndexSync } from "@/hooks/use-mail-index-sync";
 import {
@@ -425,16 +426,16 @@ function useMailData(session: MailSession | null) {
   // afterwards, plus a 5-minute reconcile once the folder is indexed.
   // Pauses when the tab is hidden and never overlaps itself.
   const isFolderIndexed = indexReady[folder] === true;
-  const { reconcileNow, incrementalNow } = useMailIndexSync({
+  const { reconcileNow, incrementalNow, shouldReconcile } = useMailIndexSync({
     session,
     folderPath,
     canonical: folder,
     indexed: isFolderIndexed,
     enabled: MAIL_INDEX_ENABLED && !!session?.mailSessionToken && sort === "date-desc",
     onSynced: () => {
-      // Refresh the current folder from the index after a successful round.
-      // Tombstoned messages disappear from the list because indexListMessages
-      // filters `deleted_at IS NULL` server-side.
+      // Background rounds only: refresh the current folder from the index
+      // when the sync actually changed something (the hook already gates on
+      // meaningful-change; suppressed rounds do NOT reach this callback).
       loadMessages();
       loadCounts();
     },
@@ -458,18 +459,28 @@ function useMailData(session: MailSession | null) {
     loadCounts,
     source,
     refresh: async () => {
-      // Manual refresh = pull latest counts + kick both an incremental and a
-      // reconcile round for the current folder (when the index is enabled).
-      // The hook enforces overlap protection, so this is safe to call from a
-      // button handler.
-      loadCounts();
-      await incrementalNow();
-      // Only run reconcile after initial has completed (guarded inside the
-      // hook). Awaiting sequentially avoids two IMAP round-trips at once.
-      await reconcileNow();
-      // Ensure the visible list picks up any changes the sync rounds didn't
-      // already broadcast via onSynced.
-      loadMessages();
+      // Coalesced manual Refresh:
+      //   1) incremental (always) — suppress onSynced
+      //   2) reconcile — only when due (5 min elapsed OR flags drift)
+      //   3) ONE final Promise.all([loadMessages, loadCounts])
+      // No artificial delay, no intermediate re-renders.
+      const needsReconcile = shouldReconcile();
+      await incrementalNow({ suppressOnSynced: true });
+      if (needsReconcile) {
+        await reconcileNow({ suppressOnSynced: true });
+      }
+      await Promise.all([loadMessages(), loadCounts()]);
+    },
+    onAfterSend: async () => {
+      // After a successful send: only refresh the Sent folder itself, and
+      // only if the user is currently viewing it. From any other folder we
+      // just pull counts once (Sent count moves; Inbox does not).
+      if (folder === "sent") {
+        await incrementalNow({ suppressOnSynced: true });
+        await Promise.all([loadMessages(), loadCounts()]);
+      } else {
+        await loadCounts();
+      }
     },
   };
 }
@@ -497,17 +508,17 @@ function MailApp() {
   const [deepLoading, setDeepLoading] = useState(false);
   const [deepError, setDeepError] = useState<string | null>(null);
 
-  const { folder, setFolder, sort, setSort, counts, setCounts, messages, setMessages, loading, loadingMore, hasMore, loadMore, bridgeError, useMock, loadCounts, refresh: rawRefresh } =
+  const { folder, setFolder, sort, setSort, counts, setCounts, messages, setMessages, loading, loadingMore, hasMore, loadMore, bridgeError, useMock, loadCounts, refresh: rawRefresh, onAfterSend } =
     useMailData(session || null);
 
 
   const refresh = useCallback(async () => {
+    // No artificial delay. rawRefresh coalesces sync + list + counts into a
+    // single UI update pass.
     if (refreshing) return;
     setRefreshing(true);
     try {
-      await Promise.resolve(rawRefresh());
-      // keep spinner at least 600ms so it always feels intentional
-      await new Promise((r) => setTimeout(r, 600));
+      await rawRefresh();
     } finally {
       setRefreshing(false);
     }
@@ -517,9 +528,45 @@ function MailApp() {
   const getOne = useServerFn(bridgeGetMessage);
   const markRead = useServerFn(bridgeMarkRead);
   const star = useServerFn(bridgeStar);
+  const updateFlag = useServerFn(indexUpdateFlag);
   const move = useServerFn(bridgeMove);
   const deleteFn = useServerFn(bridgeDelete);
   const searchFn = useServerFn(bridgeSearch);
+
+  // Preferred path for \Seen / \Flagged mutations:
+  //   session has mailSessionToken → indexUpdateFlag (IMAP + Local Index
+  //   write-through in one round). Falls back to raw bridge for legacy
+  //   sessions with no token. Throws on any failure so callers' optimistic
+  //   rollback in .catch fires.
+  const mutateFlag = useCallback(
+    async (canonical: MailFolder, uid: number, kind: "seen" | "flagged", value: boolean) => {
+      if (!session) throw new Error("لا توجد جلسة بريد");
+      if (session.mailSessionToken) {
+        const res = await updateFlag({
+          data: {
+            mailSessionToken: session.mailSessionToken,
+            password: session.password,
+            canonical,
+            uid,
+            kind,
+            value,
+          },
+        });
+        if (!res.ok) throw new Error(res.error);
+        return;
+      }
+      if (kind === "seen") {
+        await markRead({
+          data: { account: session.account, password: session.password, folder: canonical, uid, read: value },
+        });
+      } else {
+        await star({
+          data: { account: session.account, password: session.password, folder: canonical, uid, starred: value },
+        });
+      }
+    },
+    [session, updateFlag, markRead, star],
+  );
 
   // In-memory caches for instant open (prefetch on hover)
   const messageCache = useRef<Map<string, MailMessage>>(new Map());
@@ -691,15 +738,9 @@ function MailApp() {
           if (!cur || cur.unread <= 0) return prev;
           return { ...prev, [parsed.folder]: { ...cur, unread: cur.unread - 1 } };
         });
-        markRead({
-          data: {
-            account: session.account,
-            password: session.password,
-            folder: parsed.folder,
-            uid: parsed.uid,
-            read: true,
-          },
-        }).catch(() => {});
+        const c = messageCache.current.get(id);
+        if (c) messageCache.current.set(id, { ...c, read: true });
+        mutateFlag(parsed.folder, parsed.uid, "seen", true).catch(() => {});
       }
     } catch (err: any) {
       if (!cached) {
@@ -722,18 +763,10 @@ function MailApp() {
     const cached = messageCache.current.get(id);
     if (cached) messageCache.current.set(id, { ...cached, starred: nextStarred });
     try {
-      await star({
-        data: {
-          account: session.account,
-          password: session.password,
-          folder: parsed.folder,
-          uid: parsed.uid,
-          starred: nextStarred,
-        },
-      });
-      loadCountsSoft();
+      await mutateFlag(parsed.folder, parsed.uid, "flagged", nextStarred);
+      // Local Index write-through happens inside mutateFlag on the server side
+      // (indexUpdateFlag), so a follow-up loadCountsSoft is no longer required.
     } catch (err: any) {
-      // Revert
       setMessages((prev) =>
         prev.map((m) => (m.id === id ? { ...m, starred: !nextStarred } : m)),
       );
@@ -762,17 +795,9 @@ function MailApp() {
       return { ...prev, [parsed.folder]: { ...cur, unread } };
     });
     try {
-      await markRead({
-        data: {
-          account: session.account,
-          password: session.password,
-          folder: parsed.folder,
-          uid: parsed.uid,
-          read: nextRead,
-        },
-      });
+      await mutateFlag(parsed.folder, parsed.uid, "seen", nextRead);
     } catch (err: any) {
-      // Revert
+      // Revert both flag and counter.
       setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, read: !nextRead } : m)));
       const c = messageCache.current.get(id);
       if (c) messageCache.current.set(id, { ...c, read: !nextRead });
@@ -928,15 +953,7 @@ function MailApp() {
     setSelectedId(null);
     setSelectedMessage(null);
     try {
-      await markRead({
-        data: {
-          account: session.account,
-          password: session.password,
-          folder: parsed.folder,
-          uid: parsed.uid,
-          read: false,
-        },
-      });
+      await mutateFlag(parsed.folder, parsed.uid, "seen", false);
     } catch (err: any) {
       toast.error(err?.message || "فشل التعليم كغير مقروءة");
     }
@@ -1162,15 +1179,7 @@ function MailApp() {
     const { failed } = await runBatch(ids, 5, async (id) => {
       const parsed = parseMessageId(id);
       if (!parsed) return;
-      await markRead({
-        data: {
-          account: session.account,
-          password: session.password,
-          folder: parsed.folder,
-          uid: parsed.uid,
-          read: false,
-        },
-      });
+      await mutateFlag(parsed.folder, parsed.uid, "seen", false);
     });
     setBulkBusy(false);
     if (failed > 0) toast.error(`فشل تعليم ${failed} رسالة`);
@@ -1763,7 +1772,7 @@ function MailApp() {
           session={session}
           initial={compose}
           onClose={() => setCompose(null)}
-          onSent={refresh}
+          onSent={onAfterSend}
         />
       )}
     </div>

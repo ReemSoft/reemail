@@ -257,7 +257,7 @@ app.post("/api/send", requireKey, async (req, res) => {
     if (!result.ok && "error" in result) {
       return res.status(500).json({ ok: false, error: result.error });
     }
-    return res.json({ ok: true, messageId: result.messageId });
+    return res.json({ ok: true, messageId: (result as any).messageId, sentCopySaved: (result as any).sentCopySaved });
   } catch (err: any) {
     console.error("[bridge] /api/send error:", err);
     return res.status(500).json({ ok: false, error: err?.message || "Failed to send message" });
@@ -358,7 +358,7 @@ app.post(
       if (!result.ok && "error" in result) {
         return res.status(500).json({ ok: false, error: result.error });
       }
-      return res.json({ ok: true, messageId: result.messageId });
+      return res.json({ ok: true, messageId: (result as any).messageId, sentCopySaved: (result as any).sentCopySaved });
     } catch (err: any) {
       if (err?.code === "LIMIT_FILE_SIZE") {
         return res.status(413).json({ ok: false, error: "ملف يتجاوز الحد المسموح (25MB)" });
