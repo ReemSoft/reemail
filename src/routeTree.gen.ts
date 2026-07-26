@@ -15,6 +15,7 @@ import { Route as LoginRouteImport } from './routes/login'
 import { Route as CompanyRouteImport } from './routes/company'
 import { Route as AuthenticatedRouteRouteImport } from './routes/_authenticated/route'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as ApiMailSendRouteImport } from './routes/api/mail-send'
 import { Route as ApiMailAttachmentRouteImport } from './routes/api/mail-attachment'
 import { Route as AuthenticatedDashboardRouteImport } from './routes/_authenticated/dashboard'
 
@@ -47,6 +48,11 @@ const IndexRoute = IndexRouteImport.update({
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiMailSendRoute = ApiMailSendRouteImport.update({
+  id: '/api/mail-send',
+  path: '/api/mail-send',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiMailAttachmentRoute = ApiMailAttachmentRouteImport.update({
   id: '/api/mail-attachment',
   path: '/api/mail-attachment',
@@ -66,6 +72,7 @@ export interface FileRoutesByFullPath {
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/dashboard': typeof AuthenticatedDashboardRoute
   '/api/mail-attachment': typeof ApiMailAttachmentRoute
+  '/api/mail-send': typeof ApiMailSendRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -75,6 +82,7 @@ export interface FileRoutesByTo {
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/dashboard': typeof AuthenticatedDashboardRoute
   '/api/mail-attachment': typeof ApiMailAttachmentRoute
+  '/api/mail-send': typeof ApiMailSendRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -86,6 +94,7 @@ export interface FileRoutesById {
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/_authenticated/dashboard': typeof AuthenticatedDashboardRoute
   '/api/mail-attachment': typeof ApiMailAttachmentRoute
+  '/api/mail-send': typeof ApiMailSendRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -97,6 +106,7 @@ export interface FileRouteTypes {
     | '/sitemap.xml'
     | '/dashboard'
     | '/api/mail-attachment'
+    | '/api/mail-send'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -106,6 +116,7 @@ export interface FileRouteTypes {
     | '/sitemap.xml'
     | '/dashboard'
     | '/api/mail-attachment'
+    | '/api/mail-send'
   id:
     | '__root__'
     | '/'
@@ -116,6 +127,7 @@ export interface FileRouteTypes {
     | '/sitemap.xml'
     | '/_authenticated/dashboard'
     | '/api/mail-attachment'
+    | '/api/mail-send'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -126,6 +138,7 @@ export interface RootRouteChildren {
   MailRoute: typeof MailRoute
   SitemapDotxmlRoute: typeof SitemapDotxmlRoute
   ApiMailAttachmentRoute: typeof ApiMailAttachmentRoute
+  ApiMailSendRoute: typeof ApiMailSendRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -172,6 +185,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/mail-send': {
+      id: '/api/mail-send'
+      path: '/api/mail-send'
+      fullPath: '/api/mail-send'
+      preLoaderRoute: typeof ApiMailSendRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/mail-attachment': {
       id: '/api/mail-attachment'
       path: '/api/mail-attachment'
@@ -208,6 +228,7 @@ const rootRouteChildren: RootRouteChildren = {
   MailRoute: MailRoute,
   SitemapDotxmlRoute: SitemapDotxmlRoute,
   ApiMailAttachmentRoute: ApiMailAttachmentRoute,
+  ApiMailSendRoute: ApiMailSendRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
