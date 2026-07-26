@@ -140,4 +140,50 @@ describe("mail-pending-overrides", () => {
     const out = applyHidden(stale, hidden);
     expect(out.map((m) => m.id)).toEqual(["inbox:2"]);
   });
+
+  it("gcHiddenBefore keeps PENDING hides regardless of the cutoff", () => {
+    // A hide whose mutation is still in flight must never be auto-dropped
+    // by a list load — the server truth hasn't caught up yet.
+    const hidden: HiddenIdsSet = new Map();
+    hideId(hidden, "starred:1");
+    const removed = gcHiddenBefore(hidden, Date.now() + 1_000_000);
+    expect(removed).toBe(0);
+    expect(hidden.has("starred:1")).toBe(true);
+  });
+
+  it("gcHiddenBefore drops a CONFIRMED hide whose confirmedAt <= cutoff", () => {
+    // Mutation succeeded at t=100. A subsequent list load started at t=200
+    // is guaranteed to reflect the flip → the hide is safe to release.
+    const hidden: HiddenIdsSet = new Map();
+    hideId(hidden, "starred:1");
+    confirmHide(hidden, "starred:1", 100);
+    const removed = gcHiddenBefore(hidden, 200);
+    expect(removed).toBe(1);
+    expect(hidden.has("starred:1")).toBe(false);
+  });
+
+  it("gcHiddenBefore keeps a CONFIRMED hide whose confirmedAt > cutoff", () => {
+    // The list was requested BEFORE the mutation confirmed → response
+    // predates the flip and may still contain the row. Keep the hide.
+    const hidden: HiddenIdsSet = new Map();
+    confirmHide(hidden, "starred:1", 300);
+    const removed = gcHiddenBefore(hidden, 200);
+    expect(removed).toBe(0);
+    expect(hidden.has("starred:1")).toBe(true);
+  });
+
+  it("cross-folder re-star: unhiding 'starred:<uid>' releases a stale hide", () => {
+    // Simulates the flow: user unstarred inbox:5 while inside Starred
+    // (hide entry keyed as "starred:5"); later re-stars the same message
+    // from Inbox (mutation id = "inbox:5"). toggleStar's re-star branch
+    // explicitly unhides "starred:5" so it reappears in Starred.
+    const hidden: HiddenIdsSet = new Map();
+    hideId(hidden, "starred:5");
+    // Simulate the re-star path clearing both namespaces.
+    unhideId(hidden, "inbox:5");
+    unhideId(hidden, "starred:5");
+    const list = [msg("starred:5", true, false)];
+    expect(applyHidden(list, hidden).map((m) => m.id)).toEqual(["starred:5"]);
+  });
 });
+
