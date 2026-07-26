@@ -346,11 +346,18 @@ export const runMailSync = createServerFn({ method: "POST" })
             code: "NO_CURSOR",
           };
         }
-        const fromUid = data.fromUid ?? cursor.oldest_synced_uid ?? 1;
-        const toUid = data.toUid ?? cursor.newest_synced_uid ?? fromUid;
+        const RECONCILE_MAX_RANGE = 1000; // matches bridge's V1_MAX_RECONCILE_RANGE
+        const requestedFrom = data.fromUid ?? cursor.oldest_synced_uid ?? 1;
+        const requestedTo = data.toUid ?? cursor.newest_synced_uid ?? requestedFrom;
+        // Auto-bound to the newest window so a large synced range never
+        // trips the bridge's max-range guard. Reconciling the most recent
+        // slice is enough to catch flag drift + tombstones in practice.
+        const toUid = requestedTo;
+        const fromUid = Math.max(requestedFrom, toUid - (RECONCILE_MAX_RANGE - 1));
         if (toUid < fromUid) {
           return { ok: false, error: "نطاق التوفيق غير صالح.", code: "INVALID_RANGE" };
         }
+
 
         const result = (await bridgePost("/api/sync/reconcile", {
           account: bridgeAccount,
