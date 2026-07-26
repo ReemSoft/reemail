@@ -1222,43 +1222,71 @@ function MailApp() {
     }
   }
 
+  // Optimistic-count helper for Move/Trash/Restore. `from` decreases by 1
+  // (and unread by 1 if the message was unread). `to` is symmetric. Both
+  // clamp at 0 so a stale counter never goes negative.
+  function applyMoveCountsDelta(
+    from: MailFolder,
+    to: MailFolder | null,
+    wasUnread: boolean,
+  ) {
+    setCounts((prev) => {
+      const next = { ...prev };
+      const src = next[from];
+      if (src) {
+        next[from] = {
+          ...src,
+          total: Math.max(0, src.total - 1),
+          unread: Math.max(0, src.unread - (wasUnread ? 1 : 0)),
+        };
+      }
+      if (to && next[to]) {
+        const d = next[to];
+        next[to] = {
+          ...d,
+          total: d.total + 1,
+          unread: d.unread + (wasUnread ? 1 : 0),
+        };
+      }
+      return next;
+    });
+  }
+
   async function handleMove(id: string, toFolder: MailFolder) {
     const parsed = parseMessageId(id);
     if (!parsed || !session) return;
-    const msg = messages.find((m) => m.id === id);
-    // Snapshot for rollback
-    const snapshot = messages;
-    const prevSelectedId = selectedId;
-    const prevSelected = selectedMessage;
-    // Optimistic
-    setMessages((prev) => prev.filter((m) => m.id !== id));
-    setSelectedId(null);
-    setSelectedMessage(null);
-    messageCache.current.delete(id);
-    try {
-      await move({
-        data: {
-          account: session.account,
-          password: session.password,
-          folder: parsed.folder,
+    return runMoveFlight(id, async () => {
+      const msg = messages.find((m) => m.id === id);
+      const wasUnread = msg ? !msg.read : false;
+      const snapshot = messages;
+      const prevSelectedId = selectedId;
+      const prevSelected = selectedMessage;
+      // Optimistic — hide row, drop selection, adjust counters.
+      setMessages((prev) => prev.filter((m) => m.id !== id));
+      setSelectedId(null);
+      setSelectedMessage(null);
+      messageCache.current.delete(id);
+      hideId(pendingHiddenRef.current, id);
+      applyMoveCountsDelta(parsed.folder, toFolder, wasUnread);
+      try {
+        await mutateMoveOrDelete({
+          sourceCanonical: parsed.folder,
           uid: parsed.uid,
           toFolder,
-        },
-      });
-      // Track origin for restore-from-trash
-      if (toFolder === "trash") {
-        rememberOrigin(msg?.threadId, parsed.folder);
-      } else {
-        forgetOrigin(msg?.threadId);
+        });
+        if (toFolder === "trash") rememberOrigin(msg?.threadId, parsed.folder);
+        else forgetOrigin(msg?.threadId);
+        confirmHide(pendingHiddenRef.current, id, Date.now());
+        toast.success("تم نقل الرسالة");
+      } catch (err: any) {
+        unhideId(pendingHiddenRef.current, id);
+        applyMoveCountsDelta(toFolder, parsed.folder, wasUnread); // revert
+        setMessages(snapshot);
+        setSelectedId(prevSelectedId);
+        setSelectedMessage(prevSelected);
+        toast.error(err?.message || "فشل نقل الرسالة");
       }
-      toast.success("تم نقل الرسالة");
-    } catch (err: any) {
-      // Revert
-      setMessages(snapshot);
-      setSelectedId(prevSelectedId);
-      setSelectedMessage(prevSelected);
-      toast.error(err?.message || "فشل نقل الرسالة");
-    }
+    });
   }
 
   async function handleDelete(id: string) {
@@ -1276,82 +1304,84 @@ function MailApp() {
       variant: isTrash ? "destructive" : "default",
     });
     if (!confirmed) return;
-    const snapshot = messages;
-    const prevSelectedId = selectedId;
-    const prevSelected = selectedMessage;
-    setMessages((prev) => prev.filter((m) => m.id !== id));
-    setSelectedId(null);
-    setSelectedMessage(null);
-    messageCache.current.delete(id);
-    try {
-      if (isTrash) {
-        await deleteFn({
-          data: {
-            account: session.account,
-            password: session.password,
-            folder: parsed.folder,
-            uid: parsed.uid,
-          },
-        });
-        forgetOrigin(msg?.threadId);
-        toast.success("تم حذف الرسالة نهائياً");
-      } else {
-        await move({
-          data: {
-            account: session.account,
-            password: session.password,
-            folder: parsed.folder,
+    return runMoveFlight(id, async () => {
+      const wasUnread = msg ? !msg.read : false;
+      const snapshot = messages;
+      const prevSelectedId = selectedId;
+      const prevSelected = selectedMessage;
+      // Trash-delete = move-to-trash on the server (see bridge/imap.ts).
+      // Same-folder move contributes no counter delta, so treat isTrash
+      // as "permanent" for the UI counter model: source-1 only.
+      const destForCounts: MailFolder | null = isTrash ? null : "trash";
+      setMessages((prev) => prev.filter((m) => m.id !== id));
+      setSelectedId(null);
+      setSelectedMessage(null);
+      messageCache.current.delete(id);
+      hideId(pendingHiddenRef.current, id);
+      applyMoveCountsDelta(parsed.folder, destForCounts, wasUnread);
+      try {
+        if (isTrash) {
+          await mutateMoveOrDelete({ sourceCanonical: parsed.folder, uid: parsed.uid });
+          forgetOrigin(msg?.threadId);
+        } else {
+          await mutateMoveOrDelete({
+            sourceCanonical: parsed.folder,
             uid: parsed.uid,
             toFolder: "trash",
-          },
-        });
-        rememberOrigin(msg?.threadId, parsed.folder);
-        toast.success("تم نقل الرسالة إلى المهملات");
+          });
+          rememberOrigin(msg?.threadId, parsed.folder);
+        }
+        confirmHide(pendingHiddenRef.current, id, Date.now());
+        toast.success(isTrash ? "تم حذف الرسالة نهائياً" : "تم نقل الرسالة إلى المهملات");
+      } catch (err: any) {
+        unhideId(pendingHiddenRef.current, id);
+        applyMoveCountsDelta(destForCounts ?? parsed.folder, parsed.folder, wasUnread); // revert
+        setMessages(snapshot);
+        setSelectedId(prevSelectedId);
+        setSelectedMessage(prevSelected);
+        toast.error(err?.message || (isTrash ? "فشل حذف الرسالة" : "فشل نقل الرسالة إلى المهملات"));
       }
-    } catch (err: any) {
-      setMessages(snapshot);
-      setSelectedId(prevSelectedId);
-      setSelectedMessage(prevSelected);
-      toast.error(err?.message || (isTrash ? "فشل حذف الرسالة" : "فشل نقل الرسالة إلى المهملات"));
-    }
+    });
   }
 
   async function handleRestore(id: string) {
     const parsed = parseMessageId(id);
     if (!parsed || !session) return;
     if (parsed.folder !== "trash") return;
-    const msg = messages.find((m) => m.id === id);
-    const target = getOrigin(msg?.threadId);
-    const snapshot = messages;
-    const prevSelectedId = selectedId;
-    const prevSelected = selectedMessage;
-    setMessages((prev) => prev.filter((m) => m.id !== id));
-    setSelectedId(null);
-    setSelectedMessage(null);
-    messageCache.current.delete(id);
-    try {
-      await move({
-        data: {
-          account: session.account,
-          password: session.password,
-          folder: parsed.folder,
+    return runMoveFlight(id, async () => {
+      const msg = messages.find((m) => m.id === id);
+      const wasUnread = msg ? !msg.read : false;
+      const target = getOrigin(msg?.threadId);
+      const snapshot = messages;
+      const prevSelectedId = selectedId;
+      const prevSelected = selectedMessage;
+      setMessages((prev) => prev.filter((m) => m.id !== id));
+      setSelectedId(null);
+      setSelectedMessage(null);
+      messageCache.current.delete(id);
+      hideId(pendingHiddenRef.current, id);
+      applyMoveCountsDelta(parsed.folder, target, wasUnread);
+      try {
+        await mutateMoveOrDelete({
+          sourceCanonical: parsed.folder,
           uid: parsed.uid,
           toFolder: target,
-        },
-      });
-      forgetOrigin(msg?.threadId);
-      const label = FOLDER_META[target]?.label || target;
-      toast.success(`تم استعادة الرسالة إلى ${label}`);
-      loadCountsSoft();
-    } catch (err: any) {
-      setMessages(snapshot);
-      setSelectedId(prevSelectedId);
-      setSelectedMessage(prevSelected);
-      toast.error(err?.message || "فشل استعادة الرسالة");
-    }
+        });
+        forgetOrigin(msg?.threadId);
+        confirmHide(pendingHiddenRef.current, id, Date.now());
+        const label = FOLDER_META[target]?.label || target;
+        toast.success(`تم استعادة الرسالة إلى ${label}`);
+      } catch (err: any) {
+        unhideId(pendingHiddenRef.current, id);
+        applyMoveCountsDelta(target, parsed.folder, wasUnread); // revert
+        setMessages(snapshot);
+        setSelectedId(prevSelectedId);
+        setSelectedMessage(prevSelected);
+        toast.error(err?.message || "فشل استعادة الرسالة");
+      }
+    });
   }
 
-  async function handleMarkUnread(id: string) {
     const parsed = parseMessageId(id);
     if (!parsed || !session) return;
     setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, read: false } : m)));
