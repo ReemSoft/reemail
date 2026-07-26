@@ -4,7 +4,9 @@
 import type { supabaseAdmin as SupabaseAdminType } from "@/integrations/supabase/client.server";
 
 export function normalizeEmail(raw: string): string {
-  return String(raw ?? "").trim().toLowerCase();
+  return String(raw ?? "")
+    .trim()
+    .toLowerCase();
 }
 
 export type MailAccountSource = "manual" | "domain";

@@ -18,7 +18,9 @@ describe("mail-token.server", () => {
   it("accepts a freshly issued token", async () => {
     const { issueMailSessionToken, verifyMailSessionToken } = await loadModule();
     const { token } = await issueMailSessionToken({
-      accountId: ACC, companyId: CID, normalizedEmail: EM,
+      accountId: ACC,
+      companyId: CID,
+      normalizedEmail: EM,
     });
     const claims = await verifyMailSessionToken(token);
     expect(claims.sub).toBe(ACC);
@@ -34,7 +36,9 @@ describe("mail-token.server", () => {
   it("rejects a token with a mutated character", async () => {
     const { issueMailSessionToken, verifyMailSessionToken } = await loadModule();
     const { token } = await issueMailSessionToken({
-      accountId: ACC, companyId: CID, normalizedEmail: EM,
+      accountId: ACC,
+      companyId: CID,
+      normalizedEmail: EM,
     });
     const flipped = token.slice(0, -2) + (token.slice(-2) === "AA" ? "BB" : "AA");
     await expect(verifyMailSessionToken(flipped)).rejects.toBeDefined();
@@ -47,8 +51,12 @@ describe("mail-token.server", () => {
     const iat = Math.floor(Date.now() / 1000) - 60 * 60 * 24;
     const token = await new SignJWT({ ver: 1, cid: CID, em: EM })
       .setProtectedHeader({ alg: "HS256" })
-      .setIssuer("mailmaestro").setAudience("mailmaestro-index")
-      .setSubject(ACC).setIssuedAt(iat).setExpirationTime(iat + 60).setJti("j")
+      .setIssuer("mailmaestro")
+      .setAudience("mailmaestro-index")
+      .setSubject(ACC)
+      .setIssuedAt(iat)
+      .setExpirationTime(iat + 60)
+      .setJti("j")
       .sign(key);
     await expect(verifyMailSessionToken(token)).rejects.toBeDefined();
   });
@@ -59,8 +67,12 @@ describe("mail-token.server", () => {
     const key = new TextEncoder().encode(TEST_SECRET);
     const token = await new SignJWT({ ver: 1, cid: CID, em: EM })
       .setProtectedHeader({ alg: "HS256" })
-      .setIssuer("other").setAudience("mailmaestro-index")
-      .setSubject(ACC).setIssuedAt().setExpirationTime("1h").setJti("j")
+      .setIssuer("other")
+      .setAudience("mailmaestro-index")
+      .setSubject(ACC)
+      .setIssuedAt()
+      .setExpirationTime("1h")
+      .setJti("j")
       .sign(key);
     await expect(verifyMailSessionToken(token)).rejects.toBeDefined();
   });
@@ -71,8 +83,12 @@ describe("mail-token.server", () => {
     const key = new TextEncoder().encode(TEST_SECRET);
     const token = await new SignJWT({ ver: 1, cid: CID, em: EM })
       .setProtectedHeader({ alg: "HS256" })
-      .setIssuer("mailmaestro").setAudience("other")
-      .setSubject(ACC).setIssuedAt().setExpirationTime("1h").setJti("j")
+      .setIssuer("mailmaestro")
+      .setAudience("other")
+      .setSubject(ACC)
+      .setIssuedAt()
+      .setExpirationTime("1h")
+      .setJti("j")
       .sign(key);
     await expect(verifyMailSessionToken(token)).rejects.toBeDefined();
   });
@@ -83,8 +99,12 @@ describe("mail-token.server", () => {
     const key = new TextEncoder().encode(TEST_SECRET);
     const token = await new SignJWT({ ver: 2, cid: CID, em: EM })
       .setProtectedHeader({ alg: "HS256" })
-      .setIssuer("mailmaestro").setAudience("mailmaestro-index")
-      .setSubject(ACC).setIssuedAt().setExpirationTime("1h").setJti("j")
+      .setIssuer("mailmaestro")
+      .setAudience("mailmaestro-index")
+      .setSubject(ACC)
+      .setIssuedAt()
+      .setExpirationTime("1h")
+      .setJti("j")
       .sign(key);
     await expect(verifyMailSessionToken(token)).rejects.toBeDefined();
   });
@@ -95,8 +115,12 @@ describe("mail-token.server", () => {
     const { privateKey } = await generateKeyPair("RS256");
     const token = await new SignJWT({ ver: 1, cid: CID, em: EM })
       .setProtectedHeader({ alg: "RS256" })
-      .setIssuer("mailmaestro").setAudience("mailmaestro-index")
-      .setSubject(ACC).setIssuedAt().setExpirationTime("1h").setJti("j")
+      .setIssuer("mailmaestro")
+      .setAudience("mailmaestro-index")
+      .setSubject(ACC)
+      .setIssuedAt()
+      .setExpirationTime("1h")
+      .setJti("j")
       .sign(privateKey);
     await expect(verifyMailSessionToken(token)).rejects.toBeDefined();
   });
@@ -107,8 +131,12 @@ describe("mail-token.server", () => {
     const key = new TextEncoder().encode(TEST_SECRET);
     const token = await new SignJWT({ ver: 1, cid: CID, em: EM })
       .setProtectedHeader({ alg: "HS256" })
-      .setIssuer("mailmaestro").setAudience("mailmaestro-index")
-      .setSubject("not-a-uuid").setIssuedAt().setExpirationTime("1h").setJti("j")
+      .setIssuer("mailmaestro")
+      .setAudience("mailmaestro-index")
+      .setSubject("not-a-uuid")
+      .setIssuedAt()
+      .setExpirationTime("1h")
+      .setJti("j")
       .sign(key);
     await expect(verifyMailSessionToken(token)).rejects.toBeDefined();
   });
@@ -129,7 +157,9 @@ describe("mail-token.server", () => {
   it("payload contains no password or IMAP/SMTP fields", async () => {
     const { issueMailSessionToken } = await loadModule();
     const { token } = await issueMailSessionToken({
-      accountId: ACC, companyId: CID, normalizedEmail: EM,
+      accountId: ACC,
+      companyId: CID,
+      normalizedEmail: EM,
     });
     const [, payloadB64] = token.split(".");
     const payload = JSON.parse(

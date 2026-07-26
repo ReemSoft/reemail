@@ -77,9 +77,7 @@ function makeMockAdmin(seed: Row[] = [], opts: { failFirstInsertAs?: "race" } = 
           return { data: newRow, error: null };
         }
         // select path
-        const match = rows.find((r) =>
-          state.filters.every(([c, v]) => (r as any)[c] === v),
-        );
+        const match = rows.find((r) => state.filters.every(([c, v]) => (r as any)[c] === v));
         return { data: match ?? null, error: null };
       },
     };
@@ -100,14 +98,21 @@ describe("normalizeEmail", () => {
 
 describe("findOrCreateMailAccountIdentity", () => {
   it("returns existing UUID for manual account", async () => {
-    const seed: Row[] = [{
-      id: "ffffffff-ffff-4fff-8fff-ffffffffffff",
-      company_id: CID_A, email_address: "u@a.com", normalized_email: "u@a.com",
-      source_domain_id: null, display_name: null,
-    }];
+    const seed: Row[] = [
+      {
+        id: "ffffffff-ffff-4fff-8fff-ffffffffffff",
+        company_id: CID_A,
+        email_address: "u@a.com",
+        normalized_email: "u@a.com",
+        source_domain_id: null,
+        display_name: null,
+      },
+    ];
     const { admin, inserted } = makeMockAdmin(seed);
     const r = await findOrCreateMailAccountIdentity(admin, {
-      companyId: CID_A, emailAddress: "u@a.com", accountSource: "manual",
+      companyId: CID_A,
+      emailAddress: "u@a.com",
+      accountSource: "manual",
     });
     expect(r.id).toBe("ffffffff-ffff-4fff-8fff-ffffffffffff");
     expect(inserted).toHaveLength(0);
@@ -116,7 +121,10 @@ describe("findOrCreateMailAccountIdentity", () => {
   it("creates row for domain-derived account", async () => {
     const { admin, inserted } = makeMockAdmin([]);
     const r = await findOrCreateMailAccountIdentity(admin, {
-      companyId: CID_A, emailAddress: "new@a.com", accountSource: "domain", sourceDomainId: DOM_1,
+      companyId: CID_A,
+      emailAddress: "new@a.com",
+      accountSource: "domain",
+      sourceDomainId: DOM_1,
     });
     expect(inserted).toHaveLength(1);
     expect(r.sourceDomainId).toBe(DOM_1);
@@ -126,31 +134,46 @@ describe("findOrCreateMailAccountIdentity", () => {
   it("case/whitespace variants resolve to same row", async () => {
     const { admin, inserted } = makeMockAdmin([]);
     const first = await findOrCreateMailAccountIdentity(admin, {
-      companyId: CID_A, emailAddress: "  User@A.com ", accountSource: "manual",
+      companyId: CID_A,
+      emailAddress: "  User@A.com ",
+      accountSource: "manual",
     });
     const second = await findOrCreateMailAccountIdentity(admin, {
-      companyId: CID_A, emailAddress: "user@a.com", accountSource: "manual",
+      companyId: CID_A,
+      emailAddress: "user@a.com",
+      accountSource: "manual",
     });
     expect(second.id).toBe(first.id);
     expect(inserted).toHaveLength(1);
   });
 
   it("cross-company conflict throws typed error and does not leak", async () => {
-    const seed: Row[] = [{
-      id: "ffffffff-ffff-4fff-8fff-ffffffffffff",
-      company_id: CID_A, email_address: "x@a.com", normalized_email: "x@a.com",
-      source_domain_id: null, display_name: null,
-    }];
+    const seed: Row[] = [
+      {
+        id: "ffffffff-ffff-4fff-8fff-ffffffffffff",
+        company_id: CID_A,
+        email_address: "x@a.com",
+        normalized_email: "x@a.com",
+        source_domain_id: null,
+        display_name: null,
+      },
+    ];
     const { admin } = makeMockAdmin(seed);
-    await expect(findOrCreateMailAccountIdentity(admin, {
-      companyId: CID_B, emailAddress: "x@a.com", accountSource: "manual",
-    })).rejects.toBeInstanceOf(MailAccountOwnershipConflictError);
+    await expect(
+      findOrCreateMailAccountIdentity(admin, {
+        companyId: CID_B,
+        emailAddress: "x@a.com",
+        accountSource: "manual",
+      }),
+    ).rejects.toBeInstanceOf(MailAccountOwnershipConflictError);
   });
 
   it("simulated race does not create two rows", async () => {
     const { admin, rows } = makeMockAdmin([], { failFirstInsertAs: "race" });
     const r = await findOrCreateMailAccountIdentity(admin, {
-      companyId: CID_A, emailAddress: "race@a.com", accountSource: "manual",
+      companyId: CID_A,
+      emailAddress: "race@a.com",
+      accountSource: "manual",
     });
     expect(r.id).toBeDefined();
     expect(rows.filter((x) => x.normalized_email === "race@a.com")).toHaveLength(1);
@@ -158,26 +181,43 @@ describe("findOrCreateMailAccountIdentity", () => {
 
   it("source_domain_id mismatch on domain re-login throws typed error", async () => {
     const OTHER_DOM = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
-    const seed: Row[] = [{
-      id: "ffffffff-ffff-4fff-8fff-ffffffffffff",
-      company_id: CID_A, email_address: "d@a.com", normalized_email: "d@a.com",
-      source_domain_id: OTHER_DOM, display_name: null,
-    }];
+    const seed: Row[] = [
+      {
+        id: "ffffffff-ffff-4fff-8fff-ffffffffffff",
+        company_id: CID_A,
+        email_address: "d@a.com",
+        normalized_email: "d@a.com",
+        source_domain_id: OTHER_DOM,
+        display_name: null,
+      },
+    ];
     const { admin } = makeMockAdmin(seed);
-    await expect(findOrCreateMailAccountIdentity(admin, {
-      companyId: CID_A, emailAddress: "d@a.com", accountSource: "domain", sourceDomainId: DOM_1,
-    })).rejects.toBeInstanceOf(MailAccountSourceMismatchError);
+    await expect(
+      findOrCreateMailAccountIdentity(admin, {
+        companyId: CID_A,
+        emailAddress: "d@a.com",
+        accountSource: "domain",
+        sourceDomainId: DOM_1,
+      }),
+    ).rejects.toBeInstanceOf(MailAccountSourceMismatchError);
   });
 
   it("manual login for existing domain-derived row keeps source_domain_id", async () => {
-    const seed: Row[] = [{
-      id: "ffffffff-ffff-4fff-8fff-ffffffffffff",
-      company_id: CID_A, email_address: "m@a.com", normalized_email: "m@a.com",
-      source_domain_id: DOM_1, display_name: null,
-    }];
+    const seed: Row[] = [
+      {
+        id: "ffffffff-ffff-4fff-8fff-ffffffffffff",
+        company_id: CID_A,
+        email_address: "m@a.com",
+        normalized_email: "m@a.com",
+        source_domain_id: DOM_1,
+        display_name: null,
+      },
+    ];
     const { admin } = makeMockAdmin(seed);
     const r = await findOrCreateMailAccountIdentity(admin, {
-      companyId: CID_A, emailAddress: "m@a.com", accountSource: "manual",
+      companyId: CID_A,
+      emailAddress: "m@a.com",
+      accountSource: "manual",
     });
     expect(r.sourceDomainId).toBe(DOM_1);
   });

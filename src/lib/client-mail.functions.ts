@@ -177,7 +177,11 @@ export const clientLogin = createServerFn({ method: "POST" })
       });
       const rawText = await res.text();
       let json: any = {};
-      try { json = JSON.parse(rawText); } catch { /* not json */ }
+      try {
+        json = JSON.parse(rawText);
+      } catch {
+        /* not json */
+      }
       if (!res.ok || !json.ok) {
         console.error("[clientLogin] bridge verify failed", {
           status: res.status,
@@ -223,7 +227,10 @@ export const clientLogin = createServerFn({ method: "POST" })
         return { ok: false as const, message: "هذا البريد مسجّل تحت شركة أخرى. تواصل مع الدعم." };
       }
       if (e instanceof MailAccountSourceMismatchError) {
-        return { ok: false as const, message: "تعارض في مصدر إعدادات هذا الحساب. تواصل مع مشرف شركتك." };
+        return {
+          ok: false as const,
+          message: "تعارض في مصدر إعدادات هذا الحساب. تواصل مع مشرف شركتك.",
+        };
       }
       console.error("[clientLogin] identity resolution failed", e);
       return { ok: false as const, message: "تعذر تجهيز هوية الحساب. حاول مرة أخرى." };
