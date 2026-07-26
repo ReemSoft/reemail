@@ -766,7 +766,7 @@ function MailApp() {
       inflight.current.set(id, p);
       return p;
     },
-    [session, getOne],
+    [session, getOne, applyPendingOne],
   );
 
   const prefetchMessage = useCallback(
