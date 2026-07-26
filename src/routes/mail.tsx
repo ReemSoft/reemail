@@ -903,8 +903,14 @@ function MailApp() {
     if (!parsed || !session) return;
     const msg = messages.find((m) => m.id === id);
     const nextStarred = !msg?.starred;
+    // Record expected value first so any in-flight list write (background
+    // sync, refresh, pagination, deep search) cannot clobber it.
+    setPendingFlagOverride(id, { starred: nextStarred });
     // Optimistic
     setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, starred: nextStarred } : m)));
+    setDeepResults((prev) =>
+      prev ? prev.map((m) => (m.id === id ? { ...m, starred: nextStarred } : m)) : prev,
+    );
     const cached = messageCache.current.get(id);
     if (cached) messageCache.current.set(id, { ...cached, starred: nextStarred });
     try {
@@ -912,7 +918,11 @@ function MailApp() {
       // Local Index write-through happens inside mutateFlag on the server side
       // (indexUpdateFlag), so a follow-up loadCountsSoft is no longer required.
     } catch (err: any) {
+      clearPendingFlagOverride(id, "starred");
       setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, starred: !nextStarred } : m)));
+      setDeepResults((prev) =>
+        prev ? prev.map((m) => (m.id === id ? { ...m, starred: !nextStarred } : m)) : prev,
+      );
       const c = messageCache.current.get(id);
       if (c) messageCache.current.set(id, { ...c, starred: !nextStarred });
       toast.error(err?.message || "فشل تحديث المميّز");
@@ -926,8 +936,12 @@ function MailApp() {
     const msg = messages.find((m) => m.id === id);
     if (!msg) return;
     const nextRead = !msg.read;
+    setPendingFlagOverride(id, { read: nextRead });
     // Optimistic
     setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, read: nextRead } : m)));
+    setDeepResults((prev) =>
+      prev ? prev.map((m) => (m.id === id ? { ...m, read: nextRead } : m)) : prev,
+    );
     const cached = messageCache.current.get(id);
     if (cached) messageCache.current.set(id, { ...cached, read: nextRead });
     setCounts((prev) => {
@@ -941,7 +955,11 @@ function MailApp() {
       await mutateFlag(parsed.folder, parsed.uid, "seen", nextRead);
     } catch (err: any) {
       // Revert both flag and counter.
+      clearPendingFlagOverride(id, "read");
       setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, read: !nextRead } : m)));
+      setDeepResults((prev) =>
+        prev ? prev.map((m) => (m.id === id ? { ...m, read: !nextRead } : m)) : prev,
+      );
       const c = messageCache.current.get(id);
       if (c) messageCache.current.set(id, { ...c, read: !nextRead });
       setCounts((prev) => {
