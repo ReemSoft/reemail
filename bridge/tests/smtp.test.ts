@@ -52,7 +52,12 @@ test("resolveSentPath returns undefined when no Sent-like folder exists (APPEND 
 // These tests MUST fail if Search-then-APPEND, duplicate protection, raw-MIME
 // reuse, retry timing, or Sent-folder resolution ever regress.
 // ============================================================================
-import { sendMessage, type SendMessageDeps, type SmtpTransport, type ImapSentClient } from "../src/smtp.js";
+import {
+  sendMessage,
+  type SendMessageDeps,
+  type SmtpTransport,
+  type ImapSentClient,
+} from "../src/smtp.js";
 import type { MailAccount } from "../src/types.js";
 
 const ACCT: MailAccount = {
@@ -220,7 +225,9 @@ test("Non-auto-save provider → APPEND once with same raw MIME, same Message-ID
   const searched = rec.searchCalls[0].messageId;
   assert.equal(searched, r.messageId);
   // Raw MIME contains that Message-ID header:
-  assert.ok(rec.appendCalls[0].raw.toString("utf8").toLowerCase().includes(r.messageId.toLowerCase()));
+  assert.ok(
+    rec.appendCalls[0].raw.toString("utf8").toLowerCase().includes(r.messageId.toLowerCase()),
+  );
 });
 
 test("APPEND failure after SMTP success → ok:true, sentCopySaved:false, no throw", async () => {
@@ -274,7 +281,11 @@ test("Attachments are embedded in the raw MIME that both SMTP and APPEND receive
     {
       ...BASE_PAYLOAD,
       attachments: [
-        { filename: "report.txt", content: Buffer.from("hello-attachment-body"), contentType: "text/plain" },
+        {
+          filename: "report.txt",
+          content: Buffer.from("hello-attachment-body"),
+          contentType: "text/plain",
+        },
       ],
     },
     deps,
@@ -291,10 +302,7 @@ test("Attachments are embedded in the raw MIME that both SMTP and APPEND receive
 
 test("SPECIAL-USE \\Sent wins over well-known 'Sent' during full sendMessage", async () => {
   const { deps, rec } = mkDeps({
-    mailboxes: [
-      { path: "Sent" },
-      { path: "Custom/Outbox", specialUse: "\\Sent" },
-    ],
+    mailboxes: [{ path: "Sent" }, { path: "Custom/Outbox", specialUse: "\\Sent" }],
     searchAttempts: [false, false, false],
   });
   const r = await sendMessage(ACCT, "pw", BASE_PAYLOAD, deps);
