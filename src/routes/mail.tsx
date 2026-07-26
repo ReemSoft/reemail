@@ -727,15 +727,9 @@ function MailApp() {
           if (!cur || cur.unread <= 0) return prev;
           return { ...prev, [parsed.folder]: { ...cur, unread: cur.unread - 1 } };
         });
-        markRead({
-          data: {
-            account: session.account,
-            password: session.password,
-            folder: parsed.folder,
-            uid: parsed.uid,
-            read: true,
-          },
-        }).catch(() => {});
+        const c = messageCache.current.get(id);
+        if (c) messageCache.current.set(id, { ...c, read: true });
+        mutateFlag(parsed.folder, parsed.uid, "seen", true).catch(() => {});
       }
     } catch (err: any) {
       if (!cached) {
@@ -758,18 +752,10 @@ function MailApp() {
     const cached = messageCache.current.get(id);
     if (cached) messageCache.current.set(id, { ...cached, starred: nextStarred });
     try {
-      await star({
-        data: {
-          account: session.account,
-          password: session.password,
-          folder: parsed.folder,
-          uid: parsed.uid,
-          starred: nextStarred,
-        },
-      });
-      loadCountsSoft();
+      await mutateFlag(parsed.folder, parsed.uid, "flagged", nextStarred);
+      // Local Index write-through happens inside mutateFlag on the server side
+      // (indexUpdateFlag), so a follow-up loadCountsSoft is no longer required.
     } catch (err: any) {
-      // Revert
       setMessages((prev) =>
         prev.map((m) => (m.id === id ? { ...m, starred: !nextStarred } : m)),
       );
@@ -798,17 +784,9 @@ function MailApp() {
       return { ...prev, [parsed.folder]: { ...cur, unread } };
     });
     try {
-      await markRead({
-        data: {
-          account: session.account,
-          password: session.password,
-          folder: parsed.folder,
-          uid: parsed.uid,
-          read: nextRead,
-        },
-      });
+      await mutateFlag(parsed.folder, parsed.uid, "seen", nextRead);
     } catch (err: any) {
-      // Revert
+      // Revert both flag and counter.
       setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, read: !nextRead } : m)));
       const c = messageCache.current.get(id);
       if (c) messageCache.current.set(id, { ...c, read: !nextRead });
