@@ -392,8 +392,14 @@ export async function downloadAttachment(
 } | null> {
   const client = makeImapClient(account, password);
   await client.connect();
-  const mailboxes = await listMailboxes(client);
-  const path = resolveFolderPath(mailboxes, folder);
+  // Fast-path: inbox/starred always live in INBOX — skip the LIST round-trip.
+  let path: string | undefined;
+  if (folder === "inbox" || folder === "starred") {
+    path = "INBOX";
+  } else {
+    const mailboxes = await listMailboxes(client);
+    path = resolveFolderPath(mailboxes, folder);
+  }
   if (!path) {
     await client.logout().catch(() => {});
     return null;
