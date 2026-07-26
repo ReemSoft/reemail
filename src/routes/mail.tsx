@@ -764,6 +764,7 @@ function MailApp() {
   const move = useServerFn(bridgeMove);
   const deleteFn = useServerFn(bridgeDelete);
   const moveIndex = useServerFn(indexMoveMessage);
+  const deleteIndex = useServerFn(indexDeleteMessage);
   const searchFn = useServerFn(bridgeSearch);
 
   // Preferred path for \Seen / \Flagged mutations:
