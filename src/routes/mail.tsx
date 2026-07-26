@@ -329,7 +329,15 @@ function useMailData(session: MailSession | null) {
         map[c.folder] = { total: c.total, unread: c.unread, supported: c.supported !== false };
         if (c.path) paths[c.folder] = c.path;
       });
-      setCounts(map);
+      setCounts((prev) => {
+        // V4 count race guard: while a star mutation is in flight (or was
+        // very recently), keep the optimistic starred.total instead of the
+        // possibly-stale server value.
+        if (isStarCountHot() && prev.starred) {
+          map.starred = { ...map.starred, total: prev.starred.total };
+        }
+        return map;
+      });
       setFolderPaths(paths);
       setBridgeError(null);
     } catch (err: any) {
@@ -343,7 +351,8 @@ function useMailData(session: MailSession | null) {
         ) as Record<MailFolder, { total: number; unread: number; supported: boolean }>,
       );
     }
-  }, [session, getCounts]);
+  }, [session, getCounts, isStarCountHot]);
+
 
   /**
    * Manual-Refresh counts path: prefer Local Mail Index (single Supabase
