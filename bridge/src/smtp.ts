@@ -3,9 +3,13 @@ import type { MailAccount } from "./types.js";
 
 export interface SendAttachment {
   filename: string;
-  content: Buffer;
+  /** In-memory bytes. Prefer `path` for anything > a few KB. */
+  content?: Buffer;
+  /** On-disk path — nodemailer streams it, keeping RSS flat. */
+  path?: string;
   contentType?: string;
 }
+
 
 export interface SendMessagePayload {
   from: { name: string; email: string };
