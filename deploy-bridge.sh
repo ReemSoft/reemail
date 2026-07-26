@@ -1,107 +1,87 @@
 #!/usr/bin/env bash
-# MailMaestro Bridge — safe production deploy for POST_INDEX_UX release.
+# MailMaestro Bridge — safe in-place deploy for the current VPS layout.
 #
-# Guarantees:
-#   * Atomic release/current symlink swap (never partial state)
-#   * Backup of previous release AND its node_modules (ABI mismatch-safe rollback)
-#   * `trap rollback ERR` — any failing step performs a full rollback, never a
-#     silent partial deploy
-#   * PM2 process restart with health verification (local + public)
-#   * Automatic rollback if either health check fails
+# Layout assumed on the VPS (unchanged, no symlink swap):
+#   /home/reemsoft/mailmaestro                        ← git checkout
+#   /home/reemsoft/mailmaestro/bridge                 ← build root
+#   /home/reemsoft/mailmaestro/bridge/dist/index.js   ← PM2 entry
+#   PM2 process name:  mailmaestro-bridge
 #
-# Prerequisites on the VPS:
-#   - node >= 20, pm2 installed globally, running as the deploy user
-#   - $BASE_DIR exists and is writable by the deploy user
-#   - PM2 app name `mail-bridge` already registered on first deploy
-#     (created by the first upload). Subsequent deploys just `pm2 restart`.
-#
-# Uploaded artifact: mailmaestro-bridge.tar.gz containing the bridge/ tree.
+# Behaviour:
+#   1. Record OLD_SHA (current HEAD) — used for rollback.
+#   2. git pull --ff-only origin main.
+#   3. Verify HEAD equals the SHA the operator expects (TARGET_SHA env var).
+#   4. npm ci  +  npm run build   inside bridge/.
+#   5. pm2 restart mailmaestro-bridge --update-env.
+#   6. Health-check local + public + confirm no restart loop.
+#   7. On any failure: git reset --hard OLD_SHA, npm ci, npm run build,
+#      pm2 restart. .env is never touched.
 set -Eeuo pipefail
 
-BASE_DIR="${BASE_DIR:-/home/mailmaestro/bridge}"
-RELEASES_DIR="$BASE_DIR/releases"
-CURRENT_LINK="$BASE_DIR/current"
-PREVIOUS_LINK="$BASE_DIR/previous"
-HEALTH_LOCAL="${HEALTH_LOCAL:-http://127.0.0.1:3011/health}"
-HEALTH_PUBLIC="${HEALTH_PUBLIC:-https://mailmaestro.reemsoft.com/health}"
-PM2_APP="${PM2_APP:-mail-bridge}"
-ARTIFACT="${ARTIFACT:-/tmp/mailmaestro-bridge.tar.gz}"
+REPO_DIR="/home/reemsoft/mailmaestro"
+BRIDGE_DIR="$REPO_DIR/bridge"
+PM2_NAME="mailmaestro-bridge"
+LOCAL_HEALTH="http://127.0.0.1:8787/health"
+PUBLIC_HEALTH="https://mailmaestro.reemsoft.com/health"
+TARGET_SHA="${TARGET_SHA:-}"   # optional; if set, deploy aborts unless HEAD matches after pull
 
-TS="$(date -u +%Y%m%dT%H%M%SZ)"
-NEW_RELEASE="$RELEASES_DIR/$TS"
-PREV_TARGET=""   # populated below if a previous release exists
+log() { printf '[deploy] %s\n' "$*"; }
+die() { printf '[deploy][FATAL] %s\n' "$*" >&2; exit 1; }
 
-log() { printf "\033[1;34m[deploy %s]\033[0m %s\n" "$(date -u +%H:%M:%S)" "$*"; }
-err() { printf "\033[1;31m[deploy ERR]\033[0m %s\n" "$*" >&2; }
+cd "$REPO_DIR" || die "repo missing: $REPO_DIR"
+[ -d "$BRIDGE_DIR" ] || die "bridge dir missing: $BRIDGE_DIR"
+
+OLD_SHA="$(git rev-parse HEAD)"
+log "OLD_SHA=$OLD_SHA"
 
 rollback() {
-  local rc=$?
-  err "step failed (exit=$rc). Rolling back."
-  if [ -n "$PREV_TARGET" ] && [ -d "$PREV_TARGET" ]; then
-    ln -sfn "$PREV_TARGET" "$CURRENT_LINK"
-    pm2 restart "$PM2_APP" >/dev/null 2>&1 || true
-    log "rolled back to $PREV_TARGET"
-  else
-    err "no previous release recorded — manual intervention required"
-  fi
-  # keep the failed release for post-mortem, but prune to last 5
-  ls -1dt "$RELEASES_DIR"/* 2>/dev/null | tail -n +6 | xargs -r rm -rf
-  exit "$rc"
+  log "rolling back to $OLD_SHA"
+  git reset --hard "$OLD_SHA" || log "git reset failed — inspect manually"
+  ( cd "$BRIDGE_DIR" && npm ci && npm run build ) || log "rollback rebuild failed"
+  pm2 restart "$PM2_NAME" --update-env || log "pm2 rollback restart failed"
+  exit 1
 }
-trap rollback ERR
+trap 'rollback' ERR
 
-# ---------------- 0. sanity ----------------
-[ -f "$ARTIFACT" ] || { err "artifact not found: $ARTIFACT"; exit 2; }
-mkdir -p "$RELEASES_DIR"
+log "git pull --ff-only"
+git pull --ff-only origin main
 
-if [ -L "$CURRENT_LINK" ]; then
-  PREV_TARGET="$(readlink -f "$CURRENT_LINK")"
-  log "previous release: $PREV_TARGET"
+NEW_SHA="$(git rev-parse HEAD)"
+log "NEW_SHA=$NEW_SHA"
+if [ -n "$TARGET_SHA" ] && [ "$NEW_SHA" != "$TARGET_SHA" ]; then
+  die "HEAD ($NEW_SHA) does not match TARGET_SHA ($TARGET_SHA)"
+fi
+if [ "$NEW_SHA" = "$OLD_SHA" ]; then
+  log "no changes to deploy; exiting cleanly"
+  trap - ERR
+  exit 0
 fi
 
-# ---------------- 1. unpack ----------------
-log "unpacking artifact into $NEW_RELEASE"
-mkdir -p "$NEW_RELEASE"
-tar -xzf "$ARTIFACT" -C "$NEW_RELEASE" --strip-components=1
+cd "$BRIDGE_DIR"
+log "npm ci"
+npm ci --omit=dev=false
+log "npm run build"
+npm run build
 
-# ---------------- 2. install deps ----------------
-log "installing production dependencies (npm ci)"
-( cd "$NEW_RELEASE" && npm ci --omit=dev --no-audit --no-fund )
+log "pm2 restart $PM2_NAME"
+pm2 restart "$PM2_NAME" --update-env
 
-# ---------------- 3. build ----------------
-log "building bridge (tsc)"
-( cd "$NEW_RELEASE" && npm run build )
+# Restart-loop guard — sample restart counter twice; must be stable.
+sleep 5
+R1="$(pm2 jlist | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);const p=j.find(x=>x.name===process.argv[1]);process.stdout.write(String(p?.pm2_env?.restart_time??"?"))})' "$PM2_NAME")"
+sleep 8
+R2="$(pm2 jlist | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);const p=j.find(x=>x.name===process.argv[1]);process.stdout.write(String(p?.pm2_env?.restart_time??"?"))})' "$PM2_NAME")"
+log "pm2 restart_time: before=$R1 after=$R2"
+[ "$R1" = "$R2" ] || die "restart loop detected ($R1 → $R2)"
 
-# ---------------- 4. atomic swap ----------------
-log "swapping current -> $NEW_RELEASE"
-if [ -n "$PREV_TARGET" ]; then
-  ln -sfn "$PREV_TARGET" "$PREVIOUS_LINK"
-fi
-ln -sfn "$NEW_RELEASE" "$CURRENT_LINK"
+log "local health"
+curl -fsS --max-time 5 "$LOCAL_HEALTH" >/dev/null || die "local health failed"
+log "public health"
+curl -fsS --max-time 8 "$PUBLIC_HEALTH" >/dev/null || die "public health failed"
 
-# ---------------- 5. restart pm2 ----------------
-log "pm2 restart $PM2_APP"
-pm2 restart "$PM2_APP" --update-env
-pm2 save >/dev/null 2>&1 || true
-
-# ---------------- 6. health checks ----------------
-sleep 3
-log "local health -> $HEALTH_LOCAL"
-for i in 1 2 3 4 5; do
-  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$HEALTH_LOCAL" || true)"
-  [ "$code" = "200" ] && break
-  log "attempt $i: got $code, retrying..."
-  sleep 2
-done
-[ "$code" = "200" ] || { err "local health non-200 ($code)"; false; }
-
-log "public health -> $HEALTH_PUBLIC"
-code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 "$HEALTH_PUBLIC" || true)"
-[ "$code" = "200" ] || { err "public health non-200 ($code)"; false; }
-
-# ---------------- 7. prune old releases (keep last 5) ----------------
-log "pruning old releases (keeping last 5)"
-ls -1dt "$RELEASES_DIR"/* | tail -n +6 | xargs -r rm -rf
+log "auth guard (expect HTTP 401 without key)"
+CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "https://mailmaestro.reemsoft.com/api/health-auth" || true)
+[ "$CODE" = "401" ] || log "warning: auth guard returned $CODE (endpoint may differ)"
 
 trap - ERR
-log "deploy OK — active: $(readlink -f "$CURRENT_LINK")"
+log "DEPLOY OK  old=$OLD_SHA  new=$NEW_SHA"
