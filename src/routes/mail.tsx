@@ -558,7 +558,16 @@ function useMailData(session: MailSession | null) {
     folderPath,
     canonical: folder,
     indexed: isFolderIndexed,
-    enabled: MAIL_INDEX_ENABLED && !!session?.mailSessionToken && sort === "date-desc",
+    enabled:
+      MAIL_INDEX_ENABLED &&
+      !!session?.mailSessionToken &&
+      sort === "date-desc" &&
+      // "starred" is a virtual view over INBOX (see mail-index.functions.ts):
+      // its canonical name collides with inbox on the (account_id, path)
+      // uniqueness of mail_folders, so a starred sync round would just
+      // overwrite the inbox folder row with duplicate work and never serve
+      // starred correctly. Bridge listing owns starred; do not sync it here.
+      folder !== "starred",
     onSynced: () => {
       // Background rounds only: refresh the current folder from the index
       // when the sync actually changed something (the hook already gates on
@@ -567,6 +576,7 @@ function useMailData(session: MailSession | null) {
       loadCountsFast();
     },
   });
+
 
   return {
     folder,
