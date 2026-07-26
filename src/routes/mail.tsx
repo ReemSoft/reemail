@@ -2507,15 +2507,20 @@ function AttachmentCard({
 
   return (
     <>
-      <div className="flex items-center gap-3 rounded-xl border border-border bg-card p-3">
-        <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg ${tint}`}>
-          <FileIcon className="h-5 w-5" />
+      <div className="flex items-center gap-2.5 rounded-xl border border-border bg-card p-2.5 sm:gap-3 sm:p-3">
+        <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg sm:h-10 sm:w-10 ${tint}`}>
+          <FileIcon className="h-4 w-4 sm:h-5 sm:w-5" />
         </div>
         <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-medium" title={attachment.filename}>
+          <p
+            className="line-clamp-2 break-all text-[13px] font-medium leading-snug sm:text-sm"
+            title={attachment.filename}
+          >
             {attachment.filename}
           </p>
-          <p className="text-xs text-muted-foreground">{formatSize(attachment.size)}</p>
+          <p className="mt-0.5 text-[11px] text-muted-foreground sm:text-xs">
+            <bdi dir="ltr">{formatSize(attachment.size)}</bdi>
+          </p>
         </div>
         <div className="flex shrink-0 items-center gap-1">
           {canPreview && (
@@ -2524,7 +2529,8 @@ function AttachmentCard({
               onClick={handlePreview}
               disabled={!canDownload || busy !== null}
               title="معاينة"
-              className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-border bg-background text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+              aria-label="معاينة"
+              className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-background text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50 sm:h-8 sm:w-8"
             >
               {busy === "preview" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Eye className="h-4 w-4" />}
             </button>
@@ -2534,7 +2540,8 @@ function AttachmentCard({
             onClick={handleDownload}
             disabled={!canDownload || busy !== null}
             title={canDownload ? "تنزيل" : "غير متاح"}
-            className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-border bg-background text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+            aria-label="تنزيل"
+            className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-background text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50 sm:h-8 sm:w-8"
           >
             {busy === "download" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
           </button>
