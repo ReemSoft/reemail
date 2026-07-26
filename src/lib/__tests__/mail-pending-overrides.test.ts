@@ -9,6 +9,8 @@ import {
   applyOverrideToOne,
   clearOverride,
   clearOverrideField,
+  confirmHide,
+  gcHiddenBefore,
   hideId,
   reconcileOverrides,
   setOverride,
@@ -17,6 +19,7 @@ import {
   type OverridesMap,
 } from "../mail-pending-overrides";
 import type { MailMessage } from "@/lib/mail-types";
+
 
 function msg(id: string, starred = false, read = false): MailMessage {
   return {
