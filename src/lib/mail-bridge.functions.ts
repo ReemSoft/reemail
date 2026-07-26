@@ -184,6 +184,19 @@ export const bridgeStar = createServerFn({ method: "POST" })
     return result;
   });
 
+/**
+ * Bridge move-result contract (mirror of MoveResult in bridge/src/imap.ts).
+ * `uidMappingAvailable === true` guarantees a real `destinationUid` from
+ * an IMAP UIDPLUS COPYUID response — never invent one on the client.
+ */
+export interface BridgeMoveResult {
+  sourceUid: number;
+  destinationPath?: string;
+  destinationUid?: number;
+  destinationUidValidity?: string;
+  uidMappingAvailable: boolean;
+}
+
 export const bridgeMove = createServerFn({ method: "POST" })
   .inputValidator(
     (input: {
@@ -194,8 +207,14 @@ export const bridgeMove = createServerFn({ method: "POST" })
       toFolder: MailFolder;
     }) => input,
   )
-  .handler(async ({ data }) => {
-    return bridgePost("/api/move", data);
+  .handler(async ({ data }): Promise<{ ok: true; move: BridgeMoveResult }> => {
+    const result = await bridgePost("/api/move", data);
+    if (!result.ok) throw new Error((result.error as string) || "فشل نقل الرسالة");
+    const move = (result.move as BridgeMoveResult | undefined) ?? {
+      sourceUid: data.uid,
+      uidMappingAvailable: false,
+    };
+    return { ok: true, move };
   });
 
 export const bridgeDelete = createServerFn({ method: "POST" })
@@ -203,9 +222,20 @@ export const bridgeDelete = createServerFn({ method: "POST" })
     (input: { account: MailSessionAccount; password: string; folder: MailFolder; uid: number }) =>
       input,
   )
-  .handler(async ({ data }) => {
-    return bridgePost("/api/delete", data);
-  });
+  .handler(
+    async ({
+      data,
+    }): Promise<{ ok: true; kind: "moved-to-trash"; move: BridgeMoveResult }> => {
+      const result = await bridgePost("/api/delete", data);
+      if (!result.ok) throw new Error((result.error as string) || "فشل حذف الرسالة");
+      const move = (result.move as BridgeMoveResult | undefined) ?? {
+        sourceUid: data.uid,
+        uidMappingAvailable: false,
+      };
+      const kind = (result.kind as "moved-to-trash" | undefined) ?? "moved-to-trash";
+      return { ok: true, kind, move };
+    },
+  );
 
 export const bridgeSearch = createServerFn({ method: "POST" })
   .inputValidator(
