@@ -607,6 +607,8 @@ function useMailData(session: MailSession | null) {
       if (field) clearFlagOverrideField(pendingOverridesRef.current, id, field);
       else clearFlagOverride(pendingOverridesRef.current, id);
     },
+    hideRow: (id: string) => hideId(pendingHiddenRef.current, id),
+    unhideRow: (id: string) => unhideId(pendingHiddenRef.current, id),
     applyPendingOne,
   };
 }
