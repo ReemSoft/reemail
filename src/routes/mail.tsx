@@ -751,8 +751,11 @@ function MailApp() {
       })
         .then((result) => {
           if (result.ok && result.message) {
-            messageCache.current.set(id, result.message);
-            return result.message;
+            // Patch through pending overrides so a slow fetch response cannot
+            // overwrite an in-flight optimistic star/read the user just set.
+            const patched = applyPendingOne(result.message);
+            messageCache.current.set(id, patched);
+            return patched;
           }
           return null;
         })
