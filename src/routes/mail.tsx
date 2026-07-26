@@ -673,6 +673,16 @@ function useMailData(session: MailSession | null) {
     unhideRow: (id: string) => unhideId(pendingHiddenRef.current, id),
     confirmHideRow: (id: string, at: number = Date.now()) =>
       confirmHide(pendingHiddenRef.current, id, at),
+    // V4: star-mutation lifecycle hooks used by toggleStar to hold the
+    // Starred count against racing loaders.
+    beginStarMutation: () => {
+      pendingStarMutRef.current.active++;
+    },
+    endStarMutation: () => {
+      const s = pendingStarMutRef.current;
+      if (s.active > 0) s.active--;
+      s.settledAt = Date.now();
+    },
 
     applyPendingOne,
   };
