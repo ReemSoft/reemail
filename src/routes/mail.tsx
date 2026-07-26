@@ -72,9 +72,20 @@ import {
   bridgeSearch,
 } from "@/lib/mail-bridge.functions";
 import { indexListMessages } from "@/lib/mail-index.functions";
+import { indexListFolderCounts } from "@/lib/mail-index-counts.functions";
 import { indexUpdateFlag } from "@/lib/mail-flags.functions";
 import { MAIL_INDEX_ENABLED } from "@/lib/mail-feature-flags";
 import { useMailIndexSync } from "@/hooks/use-mail-index-sync";
+import {
+  applyOverrides as applyFlagOverrides,
+  applyOverrideToOne as applyFlagOverrideToOne,
+  clearOverride as clearFlagOverride,
+  clearOverrideField as clearFlagOverrideField,
+  reconcileOverrides as reconcileFlagOverrides,
+  setOverride as setFlagOverride,
+  type OverridesMap as FlagOverridesMap,
+} from "@/lib/mail-pending-overrides";
+import { runManualRefresh } from "@/lib/mail-refresh-orchestration";
 import {
   formatDate,
   formatSize,
