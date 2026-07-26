@@ -58,6 +58,13 @@ export interface FolderCount {
    * mailbox exists on the server.
    */
   supported: boolean;
+  /**
+   * Real IMAP mailbox path resolved on the server (e.g. "INBOX",
+   * "[Gmail]/Sent Mail"). Absent when `supported === false` and no path
+   * could be resolved. Used by the Local Mail Index sync so we never
+   * guess folder names on the client.
+   */
+  path?: string;
 }
 
 export interface MailAccount {
