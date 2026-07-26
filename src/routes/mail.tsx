@@ -75,6 +75,7 @@ import { indexListMessages } from "@/lib/mail-index.functions";
 import { indexListFolderCounts } from "@/lib/mail-index-counts.functions";
 import { indexUpdateFlag } from "@/lib/mail-flags.functions";
 import { indexMoveMessage } from "@/lib/mail-move.functions";
+import { indexDeleteMessage } from "@/lib/mail-delete.functions";
 import { MAIL_INDEX_ENABLED } from "@/lib/mail-feature-flags";
 import { useMailIndexSync } from "@/hooks/use-mail-index-sync";
 import {
