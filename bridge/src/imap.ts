@@ -721,13 +721,35 @@ export async function starMessage(
   }
 }
 
+/**
+ * Result of a Bridge move operation.
+ *
+ * `uidMappingAvailable` is true iff the IMAP server responded to the
+ * MOVE/COPY with UIDPLUS COPYUID data (per RFC 4315). When true, we surface
+ * the destination path, the destination UID that the message landed on,
+ * and the destination UIDVALIDITY. When false (no UIDPLUS support), we
+ * NEVER invent a destination UID — the caller must schedule a targeted
+ * destination sync to discover it.
+ *
+ * `destinationPath` is included even in the no-mapping case because it is
+ * resolved locally from the account's folder listing and does not depend
+ * on server support.
+ */
+export interface MoveResult {
+  sourceUid: number;
+  destinationPath?: string;
+  destinationUid?: number;
+  destinationUidValidity?: string;
+  uidMappingAvailable: boolean;
+}
+
 export async function moveMessage(
   account: MailAccount,
   password: string,
   fromFolder: MailFolder,
   uid: number,
   toFolder: MailFolder,
-): Promise<void> {
+): Promise<MoveResult> {
   const client = makeImapClient(account, password);
   try {
     await client.connect();
@@ -737,7 +759,12 @@ export async function moveMessage(
     if (!fromPath || !toPath) throw new Error("Folder not found");
     const lock = await client.getMailboxLock(fromPath);
     try {
-      await client.messageMove({ uid: [uid] } as any, toPath, { uid: true });
+      const raw = (await client.messageMove(
+        { uid: String(uid) } as any,
+        toPath,
+        { uid: true },
+      )) as unknown;
+      return parseMoveResponse(raw, uid, toPath);
     } finally {
       lock.release();
     }
@@ -746,13 +773,80 @@ export async function moveMessage(
   }
 }
 
+/**
+ * Pure decoder for imapflow's messageMove return value. Exported for tests.
+ * Never invents a destination UID — a missing / malformed uidMap produces
+ * `uidMappingAvailable: false`, and the caller is expected to fall back to
+ * a targeted destination sync.
+ */
+export function parseMoveResponse(
+  raw: unknown,
+  sourceUid: number,
+  fallbackPath: string,
+): MoveResult {
+  let destinationUid: number | undefined;
+  let destinationUidValidity: string | undefined;
+  let destinationPath: string | undefined = fallbackPath;
+  let uidMappingAvailable = false;
+
+  if (raw && typeof raw === "object") {
+    const r = raw as {
+      path?: unknown;
+      uidMap?: unknown;
+      uidValidity?: unknown;
+    };
+    if (typeof r.path === "string" && r.path.length > 0) destinationPath = r.path;
+    if (r.uidValidity != null) destinationUidValidity = String(r.uidValidity);
+    const map = r.uidMap;
+    let mapped: number | undefined;
+    if (map instanceof Map) {
+      const v = (map as Map<unknown, unknown>).get(sourceUid);
+      if (typeof v === "number") mapped = v;
+      else if (typeof v === "bigint") mapped = Number(v);
+      else if (typeof v === "string" && /^\d+$/.test(v)) mapped = Number(v);
+    } else if (map && typeof map === "object") {
+      const rec = map as Record<string, unknown>;
+      const v = rec[String(sourceUid)];
+      if (typeof v === "number") mapped = v;
+      else if (typeof v === "string" && /^\d+$/.test(v)) mapped = Number(v);
+    }
+    if (typeof mapped === "number" && Number.isFinite(mapped) && mapped > 0) {
+      destinationUid = mapped;
+      uidMappingAvailable = true;
+    }
+  }
+
+  return {
+    sourceUid,
+    destinationPath,
+    destinationUid,
+    destinationUidValidity,
+    uidMappingAvailable,
+  };
+}
+
+/**
+ * Permanent-delete vs move-to-trash decision.
+ *
+ * Behavior contract (preserved from the pre-refactor bridge): calling
+ * `/api/delete` on ANY folder currently routes through
+ * `moveMessage(..., "trash")`. We surface the FULL move contract on delete so
+ * the caller can apply a local-index write-through and drop the source row.
+ *
+ * The response is typed as `{ kind: "moved-to-trash", move: MoveResult }`
+ * so a future permanent-delete code path can be added later without
+ * breaking existing callers.
+ */
+export type DeleteResult = { kind: "moved-to-trash"; move: MoveResult };
+
 export async function deleteMessage(
   account: MailAccount,
   password: string,
   folder: MailFolder,
   uid: number,
-): Promise<void> {
-  await moveMessage(account, password, folder, uid, "trash");
+): Promise<DeleteResult> {
+  const move = await moveMessage(account, password, folder, uid, "trash");
+  return { kind: "moved-to-trash", move };
 }
 
 export async function verifyCredentials(
