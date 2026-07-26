@@ -1168,15 +1168,7 @@ function MailApp() {
     const { failed } = await runBatch(ids, 5, async (id) => {
       const parsed = parseMessageId(id);
       if (!parsed) return;
-      await markRead({
-        data: {
-          account: session.account,
-          password: session.password,
-          folder: parsed.folder,
-          uid: parsed.uid,
-          read: false,
-        },
-      });
+      await mutateFlag(parsed.folder, parsed.uid, "seen", false);
     });
     setBulkBusy(false);
     if (failed > 0) toast.error(`فشل تعليم ${failed} رسالة`);
