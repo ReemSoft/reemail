@@ -653,20 +653,25 @@ function MailApp() {
     onAfterSend,
     setPendingFlagOverride,
     clearPendingFlagOverride,
+    hideRow,
+    unhideRow,
     applyPendingOne,
   } = useMailData(session || null);
 
-  const refresh = useCallback(async () => {
-    // No artificial delay. rawRefresh coalesces sync + list + counts into a
-    // single UI update pass.
-    if (refreshing) return;
+  // Serialize Refresh with a ref (not React state) so a double-click that
+  // fires before the re-render can't spawn a second incrementalNow.
+  const refreshInFlightRef = useRef<Promise<void> | null>(null);
+  const refresh = useCallback((): Promise<void> => {
+    const existing = refreshInFlightRef.current;
+    if (existing) return existing;
     setRefreshing(true);
-    try {
-      await rawRefresh();
-    } finally {
+    const p = rawRefresh().finally(() => {
+      refreshInFlightRef.current = null;
       setRefreshing(false);
-    }
-  }, [rawRefresh, refreshing]);
+    });
+    refreshInFlightRef.current = p;
+    return p;
+  }, [rawRefresh]);
 
   const getOne = useServerFn(bridgeGetMessage);
   const markRead = useServerFn(bridgeMarkRead);
