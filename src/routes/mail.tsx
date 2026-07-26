@@ -922,13 +922,38 @@ function MailApp() {
     e.stopPropagation();
     const parsed = parseMessageId(id);
     if (!parsed || !session) return;
-    const msg = messages.find((m) => m.id === id);
+    // Prev value from the ACTUALLY VISIBLE source: Deep Search overrides the
+    // regular list, and messages the row may not exist in at all.
+    const inDeep = searchMode === "deep" && query.trim().length >= 2;
+    const source = inDeep && deepResults ? deepResults : messages;
+    const msg = source.find((m) => m.id === id);
     const nextStarred = !msg?.starred;
     // Record expected value first so any in-flight list write (background
     // sync, refresh, pagination, deep search) cannot clobber it.
     setPendingFlagOverride(id, { starred: nextStarred });
-    // Optimistic
-    setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, starred: nextStarred } : m)));
+    // Optimistic counter — starred.total moves by exactly one and never
+    // dips below zero. Rolled back below on failure via the inverse delta.
+    setCounts((prev) => {
+      const cur = prev.starred;
+      if (!cur) return prev;
+      const delta = nextStarred ? 1 : -1;
+      return { ...prev, starred: { ...cur, total: Math.max(0, cur.total + delta) } };
+    });
+    // Snapshot for potential rollback (used when we optimistically REMOVE
+    // the row from the "starred" folder view on unstar).
+    let starredFolderSnapshot: { list: MailMessage[]; index: number } | null = null;
+    if (folder === "starred" && !nextStarred) {
+      const idx = messages.findIndex((m) => m.id === id);
+      if (idx >= 0) {
+        starredFolderSnapshot = { list: messages, index: idx };
+        hideRow(id);
+        setMessages((prev) => prev.filter((m) => m.id !== id));
+      }
+    } else {
+      // Re-starring: make sure a stale hide entry can't keep the row hidden.
+      unhideRow(id);
+      setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, starred: nextStarred } : m)));
+    }
     setDeepResults((prev) =>
       prev ? prev.map((m) => (m.id === id ? { ...m, starred: nextStarred } : m)) : prev,
     );
@@ -940,7 +965,29 @@ function MailApp() {
       // (indexUpdateFlag), so a follow-up loadCountsSoft is no longer required.
     } catch (err: any) {
       clearPendingFlagOverride(id, "starred");
-      setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, starred: !nextStarred } : m)));
+      // Rollback counter with the inverse delta (single, exact revert).
+      setCounts((prev) => {
+        const cur = prev.starred;
+        if (!cur) return prev;
+        const delta = nextStarred ? -1 : 1;
+        return { ...prev, starred: { ...cur, total: Math.max(0, cur.total + delta) } };
+      });
+      if (starredFolderSnapshot) {
+        // Restore the row at its previous position, then unhide.
+        unhideRow(id);
+        const { list, index } = starredFolderSnapshot;
+        const revived = list[index];
+        setMessages((prev) => {
+          const next = prev.slice();
+          const clampedIdx = Math.min(index, next.length);
+          next.splice(clampedIdx, 0, revived);
+          return next;
+        });
+      } else {
+        setMessages((prev) =>
+          prev.map((m) => (m.id === id ? { ...m, starred: !nextStarred } : m)),
+        );
+      }
       setDeepResults((prev) =>
         prev ? prev.map((m) => (m.id === id ? { ...m, starred: !nextStarred } : m)) : prev,
       );
