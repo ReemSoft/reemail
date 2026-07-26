@@ -471,6 +471,17 @@ function useMailData(session: MailSession | null) {
       }
       await Promise.all([loadMessages(), loadCounts()]);
     },
+    onAfterSend: async () => {
+      // After a successful send: only refresh the Sent folder itself, and
+      // only if the user is currently viewing it. From any other folder we
+      // just pull counts once (Sent count moves; Inbox does not).
+      if (folder === "sent") {
+        await incrementalNow({ suppressOnSynced: true });
+        await Promise.all([loadMessages(), loadCounts()]);
+      } else {
+        await loadCounts();
+      }
+    },
   };
 }
 
