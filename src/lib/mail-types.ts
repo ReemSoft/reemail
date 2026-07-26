@@ -58,4 +58,10 @@ export interface FolderCount {
    * `archive` / `all` are only supported when a matching mailbox exists.
    */
   supported?: boolean;
+  /**
+   * Real IMAP mailbox path resolved by the bridge (e.g. "INBOX",
+   * "[Gmail]/Sent Mail"). Used to drive Local Mail Index sync without
+   * guessing folder names on the client.
+   */
+  path?: string;
 }
