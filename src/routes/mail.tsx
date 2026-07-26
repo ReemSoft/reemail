@@ -508,7 +508,7 @@ function MailApp() {
   const [deepLoading, setDeepLoading] = useState(false);
   const [deepError, setDeepError] = useState<string | null>(null);
 
-  const { folder, setFolder, sort, setSort, counts, setCounts, messages, setMessages, loading, loadingMore, hasMore, loadMore, bridgeError, useMock, loadCounts, refresh: rawRefresh } =
+  const { folder, setFolder, sort, setSort, counts, setCounts, messages, setMessages, loading, loadingMore, hasMore, loadMore, bridgeError, useMock, loadCounts, refresh: rawRefresh, onAfterSend } =
     useMailData(session || null);
 
 
@@ -1772,7 +1772,7 @@ function MailApp() {
           session={session}
           initial={compose}
           onClose={() => setCompose(null)}
-          onSent={refresh}
+          onSent={onAfterSend}
         />
       )}
     </div>
