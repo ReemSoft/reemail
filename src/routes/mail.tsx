@@ -319,6 +319,51 @@ function useMailData(session: MailSession | null) {
     }
   }, [session, getCounts]);
 
+  /**
+   * Manual-Refresh counts path: prefer Local Mail Index (single Supabase
+   * SELECT, no IMAP round-trip). Falls back to the bridge only when the
+   * index has not yet resolved for this account/session. Also refreshes
+   * `folderPaths` from any bridge fallback path — the index never invents
+   * new paths.
+   */
+  const loadCountsFast = useCallback(async () => {
+    if (!session) return;
+    if (MAIL_INDEX_ENABLED && session.mailSessionToken) {
+      try {
+        const res = await listIndexCounts({
+          data: { mailSessionToken: session.mailSessionToken },
+        });
+        if (res.ok && res.counts.length > 0) {
+          setCounts((prev) => {
+            const next = { ...prev };
+            for (const c of res.counts) {
+              if (!c.hasUidvalidity) continue;
+              const cur = next[c.folder] ?? { total: 0, unread: 0, supported: true };
+              next[c.folder] = { total: c.total, unread: c.unread, supported: cur.supported };
+            }
+            return next;
+          });
+          setFolderPaths((prev) => {
+            let changed = false;
+            const next = { ...prev };
+            for (const c of res.counts) {
+              if (c.path && next[c.folder] !== c.path) {
+                next[c.folder] = c.path;
+                changed = true;
+              }
+            }
+            return changed ? next : prev;
+          });
+          setBridgeError(null);
+          return;
+        }
+      } catch {
+        /* fall through to bridge */
+      }
+    }
+    await loadCounts();
+  }, [session, listIndexCounts, loadCounts]);
+
   // Decide whether this (folder, sort, session) call can use the Local Mail Index.
   // Only "date-desc" is index-native; other sorts fall back to the bridge.
   const canUseIndex = useCallback(
