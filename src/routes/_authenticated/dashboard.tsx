@@ -116,7 +116,10 @@ function CompanyDashboard() {
         .order("created_at", { ascending: false }),
     ]);
 
-    if (co) setCompany(co as Company);
+    if (co) {
+      setCompany(co as Company);
+      setOriginalCompany(co as Company);
+    }
     if (ma) setAccounts(ma as MailAccount[]);
     if (dm) setDomains(dm as EmailDomain[]);
     setLoading(false);
