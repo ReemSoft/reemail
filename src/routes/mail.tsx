@@ -1449,51 +1449,84 @@ function MailApp() {
     return { failed };
   }
 
+  // Bulk helper: capture per-id metadata BEFORE we clear the selection or
+  // filter the list, so a per-id rollback can rebuild counters correctly.
+  function collectBulkMeta(ids: string[]) {
+    const set = new Set(ids);
+    const meta = new Map<string, { threadId?: string; wasUnread: boolean }>();
+    for (const m of messages) {
+      if (set.has(m.id)) meta.set(m.id, { threadId: m.threadId, wasUnread: !m.read });
+    }
+    return meta;
+  }
+
   async function bulkMove(toFolder: MailFolder) {
     if (!session || selection.size === 0 || bulkBusy) return;
     const ids = Array.from(selection);
+    const meta = collectBulkMeta(ids);
     const snapshot = messages;
     const prevSelectedId = selectedId;
     const prevSelected = selectedMessage;
     setBulkBusy(true);
-    // Optimistic remove from list
     setMessages((prev) => prev.filter((m) => !selection.has(m.id)));
     if (prevSelectedId && selection.has(prevSelectedId)) {
       setSelectedId(null);
       setSelectedMessage(null);
     }
-    ids.forEach((id) => messageCache.current.delete(id));
+    ids.forEach((id) => {
+      messageCache.current.delete(id);
+      hideRow(id);
+    });
+    // Optimistic counter deltas per id (source folder inferred from id).
+    for (const id of ids) {
+      const parsed = parseMessageId(id);
+      if (!parsed) continue;
+      const info = meta.get(id);
+      applyMoveCountsDelta(parsed.folder, toFolder, info?.wasUnread ?? false);
+    }
     clearSelection();
-    const idsToThread = new Map<string, string | undefined>(
-      snapshot.filter((m) => selection.has(m.id)).map((m) => [m.id, m.threadId]),
-    );
-    const { failed } = await runBatch(ids, 5, async (id) => {
+    const failedIds: string[] = [];
+    await runBatch(ids, 5, async (id) => {
       const parsed = parseMessageId(id);
       if (!parsed) return;
-      await move({
-        data: {
-          account: session.account,
-          password: session.password,
-          folder: parsed.folder,
+      try {
+        await mutateMoveOrDelete({
+          sourceCanonical: parsed.folder,
           uid: parsed.uid,
           toFolder,
-        },
-      });
-      if (toFolder === "trash") {
-        rememberOrigin(idsToThread.get(id), parsed.folder);
-      } else {
-        forgetOrigin(idsToThread.get(id));
+        });
+        if (toFolder === "trash") rememberOrigin(meta.get(id)?.threadId, parsed.folder);
+        else forgetOrigin(meta.get(id)?.threadId);
+        confirmHideRow(id);
+      } catch (err) {
+        failedIds.push(id);
+        throw err;
       }
     });
     setBulkBusy(false);
-    if (failed > 0) {
-      setMessages(snapshot);
-      setSelectedId(prevSelectedId);
-      setSelectedMessage(prevSelected);
-      toast.error(`فشل نقل ${failed} من ${ids.length} رسالة`);
+    if (failedIds.length > 0) {
+      // Per-id rollback: restore rows + counters for failed ids only.
+      const failedSet = new Set(failedIds);
+      for (const id of failedIds) {
+        unhideRow(id);
+        const parsed = parseMessageId(id);
+        if (parsed) {
+          const info = meta.get(id);
+          applyMoveCountsDelta(toFolder, parsed.folder, info?.wasUnread ?? false); // revert
+        }
+      }
+      setMessages((prev) => {
+        const seen = new Set(prev.map((m) => m.id));
+        const revived = snapshot.filter((m) => failedSet.has(m.id) && !seen.has(m.id));
+        return revived.length ? [...revived, ...prev] : prev;
+      });
+      if (prevSelectedId && failedSet.has(prevSelectedId)) {
+        setSelectedId(prevSelectedId);
+        setSelectedMessage(prevSelected);
+      }
+      toast.error(`فشل نقل ${failedIds.length} من ${ids.length} رسالة`);
     } else {
       toast.success(`تم نقل ${ids.length} رسالة`);
-      loadCountsSoft();
     }
   }
 
@@ -1511,6 +1544,7 @@ function MailApp() {
       variant: isTrash ? "destructive" : "default",
     });
     if (!confirmed) return;
+    const meta = collectBulkMeta(ids);
     const snapshot = messages;
     const prevSelectedId = selectedId;
     const prevSelected = selectedMessage;
@@ -1520,52 +1554,69 @@ function MailApp() {
       setSelectedId(null);
       setSelectedMessage(null);
     }
-    ids.forEach((id) => messageCache.current.delete(id));
+    ids.forEach((id) => {
+      messageCache.current.delete(id);
+      hideRow(id);
+    });
+    const destForCounts: MailFolder | null = isTrash ? null : "trash";
+    for (const id of ids) {
+      const parsed = parseMessageId(id);
+      if (!parsed) continue;
+      const info = meta.get(id);
+      applyMoveCountsDelta(parsed.folder, destForCounts, info?.wasUnread ?? false);
+    }
     clearSelection();
-    const idsToThread = new Map<string, string | undefined>(
-      snapshot.filter((m) => selection.has(m.id)).map((m) => [m.id, m.threadId]),
-    );
-    const { failed } = await runBatch(ids, 5, async (id) => {
+    const failedIds: string[] = [];
+    await runBatch(ids, 5, async (id) => {
       const parsed = parseMessageId(id);
       if (!parsed) return;
-      if (isTrash) {
-        await deleteFn({
-          data: {
-            account: session.account,
-            password: session.password,
-            folder: parsed.folder,
-            uid: parsed.uid,
-          },
-        });
-        forgetOrigin(idsToThread.get(id));
-      } else {
-        await move({
-          data: {
-            account: session.account,
-            password: session.password,
-            folder: parsed.folder,
+      try {
+        if (isTrash) {
+          await mutateMoveOrDelete({ sourceCanonical: parsed.folder, uid: parsed.uid });
+          forgetOrigin(meta.get(id)?.threadId);
+        } else {
+          await mutateMoveOrDelete({
+            sourceCanonical: parsed.folder,
             uid: parsed.uid,
             toFolder: "trash",
-          },
-        });
-        rememberOrigin(idsToThread.get(id), parsed.folder);
+          });
+          rememberOrigin(meta.get(id)?.threadId, parsed.folder);
+        }
+        confirmHideRow(id);
+      } catch (err) {
+        failedIds.push(id);
+        throw err;
       }
     });
     setBulkBusy(false);
-    if (failed > 0) {
-      setMessages(snapshot);
-      setSelectedId(prevSelectedId);
-      setSelectedMessage(prevSelected);
+    if (failedIds.length > 0) {
+      const failedSet = new Set(failedIds);
+      for (const id of failedIds) {
+        unhideRow(id);
+        const parsed = parseMessageId(id);
+        if (parsed) {
+          const info = meta.get(id);
+          applyMoveCountsDelta(destForCounts ?? parsed.folder, parsed.folder, info?.wasUnread ?? false); // revert
+        }
+      }
+      setMessages((prev) => {
+        const seen = new Set(prev.map((m) => m.id));
+        const revived = snapshot.filter((m) => failedSet.has(m.id) && !seen.has(m.id));
+        return revived.length ? [...revived, ...prev] : prev;
+      });
+      if (prevSelectedId && failedSet.has(prevSelectedId)) {
+        setSelectedId(prevSelectedId);
+        setSelectedMessage(prevSelected);
+      }
       toast.error(
         isTrash
-          ? `فشل حذف ${failed} من ${ids.length} رسالة`
-          : `فشل نقل ${failed} من ${ids.length} رسالة إلى المهملات`,
+          ? `فشل حذف ${failedIds.length} من ${ids.length} رسالة`
+          : `فشل نقل ${failedIds.length} من ${ids.length} رسالة إلى المهملات`,
       );
     } else {
       toast.success(
         isTrash ? `تم حذف ${ids.length} رسالة` : `تم نقل ${ids.length} رسالة إلى المهملات`,
       );
-      loadCountsSoft();
     }
   }
 
@@ -1573,46 +1624,76 @@ function MailApp() {
     if (!session || selection.size === 0 || bulkBusy) return;
     if (folder !== "trash") return;
     const ids = Array.from(selection);
+    const meta = collectBulkMeta(ids);
     const snapshot = messages;
     const prevSelectedId = selectedId;
     const prevSelected = selectedMessage;
-    const idsToThread = new Map<string, string | undefined>(
-      snapshot.filter((m) => selection.has(m.id)).map((m) => [m.id, m.threadId]),
-    );
     setBulkBusy(true);
     setMessages((prev) => prev.filter((m) => !selection.has(m.id)));
     if (prevSelectedId && selection.has(prevSelectedId)) {
       setSelectedId(null);
       setSelectedMessage(null);
     }
-    ids.forEach((id) => messageCache.current.delete(id));
+    ids.forEach((id) => {
+      messageCache.current.delete(id);
+      hideRow(id);
+    });
+    // Precompute targets from origin map for both delta application and rollback.
+    const idToTarget = new Map<string, MailFolder>();
+    for (const id of ids) {
+      const parsed = parseMessageId(id);
+      if (!parsed) continue;
+      const target = getOrigin(meta.get(id)?.threadId);
+      idToTarget.set(id, target);
+      applyMoveCountsDelta(parsed.folder, target, meta.get(id)?.wasUnread ?? false);
+    }
     clearSelection();
-    const { failed } = await runBatch(ids, 5, async (id) => {
+    const failedIds: string[] = [];
+    await runBatch(ids, 5, async (id) => {
       const parsed = parseMessageId(id);
       if (!parsed) return;
-      const target = getOrigin(idsToThread.get(id));
-      await move({
-        data: {
-          account: session.account,
-          password: session.password,
-          folder: parsed.folder,
+      const target = idToTarget.get(id)!;
+      try {
+        await mutateMoveOrDelete({
+          sourceCanonical: parsed.folder,
           uid: parsed.uid,
           toFolder: target,
-        },
-      });
-      forgetOrigin(idsToThread.get(id));
+        });
+        forgetOrigin(meta.get(id)?.threadId);
+        confirmHideRow(id);
+      } catch (err) {
+        failedIds.push(id);
+        throw err;
+      }
     });
     setBulkBusy(false);
-    if (failed > 0) {
-      setMessages(snapshot);
-      setSelectedId(prevSelectedId);
-      setSelectedMessage(prevSelected);
-      toast.error(`فشل استعادة ${failed} من ${ids.length} رسالة`);
+    if (failedIds.length > 0) {
+      const failedSet = new Set(failedIds);
+      for (const id of failedIds) {
+        unhideRow(id);
+        const parsed = parseMessageId(id);
+        if (parsed) {
+          const target = idToTarget.get(id);
+          if (target) {
+            applyMoveCountsDelta(target, parsed.folder, meta.get(id)?.wasUnread ?? false); // revert
+          }
+        }
+      }
+      setMessages((prev) => {
+        const seen = new Set(prev.map((m) => m.id));
+        const revived = snapshot.filter((m) => failedSet.has(m.id) && !seen.has(m.id));
+        return revived.length ? [...revived, ...prev] : prev;
+      });
+      if (prevSelectedId && failedSet.has(prevSelectedId)) {
+        setSelectedId(prevSelectedId);
+        setSelectedMessage(prevSelected);
+      }
+      toast.error(`فشل استعادة ${failedIds.length} من ${ids.length} رسالة`);
     } else {
       toast.success(`تم استعادة ${ids.length} رسالة`);
-      loadCountsSoft();
     }
   }
+
 
   async function bulkMarkUnread() {
     if (!session || selection.size === 0 || bulkBusy) return;
