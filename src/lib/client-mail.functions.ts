@@ -161,7 +161,19 @@ export const clientLogin = createServerFn({ method: "POST" })
           "Content-Type": "application/json",
           "X-Bridge-Key": bridgeKey,
         },
-        body: JSON.stringify({ account, password: data.password }),
+        body: JSON.stringify({
+          account: {
+            email_address: configuredAccount.email_address,
+            display_name: configuredAccount.display_name,
+            imap_host: configuredAccount.imap_host,
+            imap_port: configuredAccount.imap_port,
+            imap_secure: configuredAccount.imap_secure,
+            smtp_host: configuredAccount.smtp_host,
+            smtp_port: configuredAccount.smtp_port,
+            smtp_secure: configuredAccount.smtp_secure,
+          },
+          password: data.password,
+        }),
       });
       const rawText = await res.text();
       let json: any = {};
