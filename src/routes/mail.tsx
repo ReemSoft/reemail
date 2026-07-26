@@ -670,8 +670,8 @@ function useMailData(session: MailSession | null) {
       if (field) clearFlagOverrideField(pendingOverridesRef.current, id, field);
       else clearFlagOverride(pendingOverridesRef.current, id);
     },
-    hideRow: (id: string) => hideRow(id),
-    unhideRow: (id: string) => unhideRow(id),
+    hideRow: (id: string) => hideId(pendingHiddenRef.current, id),
+    unhideRow: (id: string) => unhideId(pendingHiddenRef.current, id),
     confirmHideRow: (id: string, at: number = Date.now()) =>
       confirmHide(pendingHiddenRef.current, id, at),
     // V4: star-mutation lifecycle hooks used by toggleStar to hold the
