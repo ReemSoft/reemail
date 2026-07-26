@@ -844,6 +844,39 @@ export type DeleteResult =
   | { kind: "moved-to-trash"; move: MoveResult }
   | { kind: "permanent-delete"; sourceUid: number };
 
+/**
+ * Testable core of the permanent-delete flow. Kept free of connection /
+ * mailbox-resolution concerns so unit tests can inject a fake IMAP client
+ * that records `messageDelete` vs `messageMove` calls and lock lifecycle.
+ *
+ * Invariants proven by tests:
+ *   * messageDelete calls === 1
+ *   * messageMove   calls === 0
+ *   * lock.release  calls === 1 (even when messageDelete throws / returns false)
+ */
+export interface PermanentDeleteImapClient {
+  getMailboxLock(path: string): Promise<{ release: () => void }>;
+  messageDelete(
+    query: unknown,
+    options: { uid: true },
+  ): Promise<boolean>;
+}
+
+export async function executePermanentDelete(
+  client: PermanentDeleteImapClient,
+  path: string,
+  uid: number,
+): Promise<{ kind: "permanent-delete"; sourceUid: number }> {
+  const lock = await client.getMailboxLock(path);
+  try {
+    const ok = await client.messageDelete({ uid: String(uid) }, { uid: true });
+    if (!ok) throw new Error("IMAP messageDelete returned false");
+    return { kind: "permanent-delete", sourceUid: uid };
+  } finally {
+    lock.release();
+  }
+}
+
 export async function permanentDeleteMessage(
   account: MailAccount,
   password: string,
@@ -856,19 +889,11 @@ export async function permanentDeleteMessage(
     const mailboxes = await listMailboxes(client);
     const path = resolveFolderPath(mailboxes, folder);
     if (!path) throw new Error("Folder not found");
-    const lock = await client.getMailboxLock(path);
-    try {
-      // imapflow's messageDelete flags \Deleted and EXPUNGEs when uid:true.
-      // This never falls back to a MOVE — the message is removed from IMAP.
-      const ok = await client.messageDelete(
-        { uid: String(uid) } as unknown as SearchObject,
-        { uid: true },
-      );
-      if (!ok) throw new Error("IMAP messageDelete returned false");
-      return { kind: "permanent-delete", sourceUid: uid };
-    } finally {
-      lock.release();
-    }
+    return await executePermanentDelete(
+      client as unknown as PermanentDeleteImapClient,
+      path,
+      uid,
+    );
   } finally {
     await client.logout().catch(() => {});
   }
