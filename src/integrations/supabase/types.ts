@@ -187,42 +187,51 @@ export type Database = {
       mail_folders: {
         Row: {
           account_id: string
-          canonical: string
+          canonical: string | null
           company_id: string
           created_at: string
           delimiter: string | null
+          highest_modseq: number | null
           id: string
+          last_synced_at: string | null
           path: string
           supported: boolean
           total: number
+          uidnext: number | null
           uidvalidity: number | null
           unread: number
           updated_at: string
         }
         Insert: {
           account_id: string
-          canonical: string
+          canonical?: string | null
           company_id: string
           created_at?: string
           delimiter?: string | null
+          highest_modseq?: number | null
           id?: string
+          last_synced_at?: string | null
           path: string
           supported?: boolean
           total?: number
+          uidnext?: number | null
           uidvalidity?: number | null
           unread?: number
           updated_at?: string
         }
         Update: {
           account_id?: string
-          canonical?: string
+          canonical?: string | null
           company_id?: string
           created_at?: string
           delimiter?: string | null
+          highest_modseq?: number | null
           id?: string
+          last_synced_at?: string | null
           path?: string
           supported?: boolean
           total?: number
+          uidnext?: number | null
           uidvalidity?: number | null
           unread?: number
           updated_at?: string
@@ -240,22 +249,25 @@ export type Database = {
       mail_messages: {
         Row: {
           account_id: string
+          answered: boolean
           cc_addrs: Json | null
           company_id: string
           created_at: string
+          deleted_at: string | null
+          draft: boolean
           flagged: boolean
-          flags: string[]
           folder_id: string
           from_addr: Json | null
           has_attachments: boolean
           id: string
+          in_reply_to: string | null
           internal_date: string | null
+          keywords: string[]
           message_id: string | null
-          preview: string | null
+          modseq: number | null
           seen: boolean
           size_bytes: number | null
           subject: string | null
-          thread_id: string | null
           to_addrs: Json | null
           uid: number
           uidvalidity: number
@@ -263,22 +275,25 @@ export type Database = {
         }
         Insert: {
           account_id: string
+          answered?: boolean
           cc_addrs?: Json | null
           company_id: string
           created_at?: string
+          deleted_at?: string | null
+          draft?: boolean
           flagged?: boolean
-          flags?: string[]
           folder_id: string
           from_addr?: Json | null
           has_attachments?: boolean
           id?: string
+          in_reply_to?: string | null
           internal_date?: string | null
+          keywords?: string[]
           message_id?: string | null
-          preview?: string | null
+          modseq?: number | null
           seen?: boolean
           size_bytes?: number | null
           subject?: string | null
-          thread_id?: string | null
           to_addrs?: Json | null
           uid: number
           uidvalidity: number
@@ -286,22 +301,25 @@ export type Database = {
         }
         Update: {
           account_id?: string
+          answered?: boolean
           cc_addrs?: Json | null
           company_id?: string
           created_at?: string
+          deleted_at?: string | null
+          draft?: boolean
           flagged?: boolean
-          flags?: string[]
           folder_id?: string
           from_addr?: Json | null
           has_attachments?: boolean
           id?: string
+          in_reply_to?: string | null
           internal_date?: string | null
+          keywords?: string[]
           message_id?: string | null
-          preview?: string | null
+          modseq?: number | null
           seen?: boolean
           size_bytes?: number | null
           subject?: string | null
-          thread_id?: string | null
           to_addrs?: Json | null
           uid?: number
           uidvalidity?: number
@@ -327,44 +345,74 @@ export type Database = {
       mail_sync_state: {
         Row: {
           account_id: string
+          attempts: number
           company_id: string
           created_at: string
-          folder_id: string
+          error_code: string | null
+          error_message: string | null
+          flags_need_reconcile: boolean
+          folder_id: string | null
+          highest_modseq: number | null
           id: string
-          last_error: string | null
-          last_full_sync_at: string | null
-          last_synced_at: string | null
-          last_synced_uid: number | null
-          sync_in_progress: boolean
-          sync_lock_at: string | null
+          last_attempt_at: string | null
+          last_reconcile_at: string | null
+          last_success_at: string | null
+          lock_expires_at: string | null
+          locked_at: string | null
+          locked_by: string | null
+          newest_synced_uid: number | null
+          oldest_synced_uid: number | null
+          sync_status: string
+          uidnext: number | null
+          uidvalidity: number | null
           updated_at: string
         }
         Insert: {
           account_id: string
+          attempts?: number
           company_id: string
           created_at?: string
-          folder_id: string
+          error_code?: string | null
+          error_message?: string | null
+          flags_need_reconcile?: boolean
+          folder_id?: string | null
+          highest_modseq?: number | null
           id?: string
-          last_error?: string | null
-          last_full_sync_at?: string | null
-          last_synced_at?: string | null
-          last_synced_uid?: number | null
-          sync_in_progress?: boolean
-          sync_lock_at?: string | null
+          last_attempt_at?: string | null
+          last_reconcile_at?: string | null
+          last_success_at?: string | null
+          lock_expires_at?: string | null
+          locked_at?: string | null
+          locked_by?: string | null
+          newest_synced_uid?: number | null
+          oldest_synced_uid?: number | null
+          sync_status?: string
+          uidnext?: number | null
+          uidvalidity?: number | null
           updated_at?: string
         }
         Update: {
           account_id?: string
+          attempts?: number
           company_id?: string
           created_at?: string
-          folder_id?: string
+          error_code?: string | null
+          error_message?: string | null
+          flags_need_reconcile?: boolean
+          folder_id?: string | null
+          highest_modseq?: number | null
           id?: string
-          last_error?: string | null
-          last_full_sync_at?: string | null
-          last_synced_at?: string | null
-          last_synced_uid?: number | null
-          sync_in_progress?: boolean
-          sync_lock_at?: string | null
+          last_attempt_at?: string | null
+          last_reconcile_at?: string | null
+          last_success_at?: string | null
+          lock_expires_at?: string | null
+          locked_at?: string | null
+          locked_by?: string | null
+          newest_synced_uid?: number | null
+          oldest_synced_uid?: number | null
+          sync_status?: string
+          uidnext?: number | null
+          uidvalidity?: number | null
           updated_at?: string
         }
         Relationships: [
@@ -459,7 +507,28 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      claim_mail_sync_lock: {
+        Args: {
+          p_account_id: string
+          p_company_id: string
+          p_folder_id: string
+          p_locked_by: string
+          p_ttl_seconds: number
+        }
+        Returns: boolean
+      }
+      release_mail_sync_lock: {
+        Args: {
+          p_account_id: string
+          p_company_id: string
+          p_error_code?: string
+          p_error_msg?: string
+          p_folder_id: string
+          p_locked_by: string
+          p_status: string
+        }
+        Returns: boolean
+      }
     }
     Enums: {
       app_role: "super_admin" | "company_admin" | "end_user"
