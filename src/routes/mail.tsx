@@ -72,9 +72,20 @@ import {
   bridgeSearch,
 } from "@/lib/mail-bridge.functions";
 import { indexListMessages } from "@/lib/mail-index.functions";
+import { indexListFolderCounts } from "@/lib/mail-index-counts.functions";
 import { indexUpdateFlag } from "@/lib/mail-flags.functions";
 import { MAIL_INDEX_ENABLED } from "@/lib/mail-feature-flags";
 import { useMailIndexSync } from "@/hooks/use-mail-index-sync";
+import {
+  applyOverrides as applyFlagOverrides,
+  applyOverrideToOne as applyFlagOverrideToOne,
+  clearOverride as clearFlagOverride,
+  clearOverrideField as clearFlagOverrideField,
+  reconcileOverrides as reconcileFlagOverrides,
+  setOverride as setFlagOverride,
+  type OverridesMap as FlagOverridesMap,
+} from "@/lib/mail-pending-overrides";
+import { runManualRefresh } from "@/lib/mail-refresh-orchestration";
 import {
   formatDate,
   formatSize,
@@ -218,6 +229,7 @@ function useMailData(session: MailSession | null) {
   const getCounts = useServerFn(bridgeGetFolderCounts);
   const getMessages = useServerFn(bridgeGetMessages);
   const listIndex = useServerFn(indexListMessages);
+  const listIndexCounts = useServerFn(indexListFolderCounts);
   const [folder, setFolder] = useState<MailFolder>("inbox");
   const [sort, setSort] = useState<SortOption>("date-desc");
   const [counts, setCounts] = useState<
@@ -246,6 +258,26 @@ function useMailData(session: MailSession | null) {
   // Race guard: only accept a load result whose id matches the latest request.
   const loadReqIdRef = useRef(0);
   const PAGE = 50;
+
+  // Pending Flag Overrides — persist optimistic star/read across any
+  // server-list arrival (Local Index, Bridge, background sync, pagination,
+  // deep search). Entries are cleared on mutation failure (rollback) or
+  // when a fresh server row confirms the expected value.
+  const pendingOverridesRef = useRef<FlagOverridesMap>(new Map());
+
+  /** Apply overrides to `list`, GC confirmed entries, and return the patched list. */
+  const applyPending = useCallback((list: MailMessage[]): MailMessage[] => {
+    reconcileFlagOverrides(list, pendingOverridesRef.current);
+    return applyFlagOverrides(list, pendingOverridesRef.current);
+  }, []);
+
+  /** Wrap a single incoming message the same way (used by messageCache). */
+  const applyPendingOne = useCallback(
+    (m: MailMessage): MailMessage => applyFlagOverrideToOne(m, pendingOverridesRef.current),
+    [],
+  );
+
+
 
   const folderPath = folderPaths[folder] ?? null;
 
@@ -287,6 +319,51 @@ function useMailData(session: MailSession | null) {
     }
   }, [session, getCounts]);
 
+  /**
+   * Manual-Refresh counts path: prefer Local Mail Index (single Supabase
+   * SELECT, no IMAP round-trip). Falls back to the bridge only when the
+   * index has not yet resolved for this account/session. Also refreshes
+   * `folderPaths` from any bridge fallback path — the index never invents
+   * new paths.
+   */
+  const loadCountsFast = useCallback(async () => {
+    if (!session) return;
+    if (MAIL_INDEX_ENABLED && session.mailSessionToken) {
+      try {
+        const res = await listIndexCounts({
+          data: { mailSessionToken: session.mailSessionToken },
+        });
+        if (res.ok && res.counts.length > 0) {
+          setCounts((prev) => {
+            const next = { ...prev };
+            for (const c of res.counts) {
+              if (!c.hasUidvalidity) continue;
+              const cur = next[c.folder] ?? { total: 0, unread: 0, supported: true };
+              next[c.folder] = { total: c.total, unread: c.unread, supported: cur.supported };
+            }
+            return next;
+          });
+          setFolderPaths((prev) => {
+            let changed = false;
+            const next = { ...prev };
+            for (const c of res.counts) {
+              if (c.path && next[c.folder] !== c.path) {
+                next[c.folder] = c.path;
+                changed = true;
+              }
+            }
+            return changed ? next : prev;
+          });
+          setBridgeError(null);
+          return;
+        }
+      } catch {
+        /* fall through to bridge */
+      }
+    }
+    await loadCounts();
+  }, [session, listIndexCounts, loadCounts]);
+
   // Decide whether this (folder, sort, session) call can use the Local Mail Index.
   // Only "date-desc" is index-native; other sorts fall back to the bridge.
   const canUseIndex = useCallback(
@@ -311,7 +388,7 @@ function useMailData(session: MailSession | null) {
         });
         if (loadReqIdRef.current !== reqId) return;
         if (!result.ok) throw new Error(result.error);
-        setMessages(result.messages);
+        setMessages(applyPending(result.messages));
         setHasMore(result.messages.length >= PAGE);
         setBridgeError(null);
         setUseMock(false);
@@ -320,14 +397,14 @@ function useMailData(session: MailSession | null) {
       } catch (err: any) {
         if (loadReqIdRef.current !== reqId) return;
         setBridgeError(err?.message || "فشل جلب الرسائل");
-        setMessages(getMockMessages(folder));
+        setMessages(applyPending(getMockMessages(folder)));
         setHasMore(false);
         setUseMock(true);
         setSource("mock");
         setIndexCursor(null);
       }
     },
-    [session, folder, sort, getMessages],
+    [session, folder, sort, getMessages, applyPending],
   );
 
   const loadMessages = useCallback(async () => {
@@ -346,7 +423,7 @@ function useMailData(session: MailSession | null) {
           });
           if (loadReqIdRef.current !== reqId) return;
           if (res.ok && res.indexed) {
-            setMessages(res.messages);
+            setMessages(applyPending(res.messages));
             setHasMore(res.hasMore);
             setIndexCursor(res.nextCursor);
             setSource("index");
@@ -365,7 +442,7 @@ function useMailData(session: MailSession | null) {
     } finally {
       if (loadReqIdRef.current === reqId) setLoading(false);
     }
-  }, [session, folder, sort, canUseIndex, listIndex, loadFromBridge]);
+  }, [session, folder, sort, canUseIndex, listIndex, loadFromBridge, applyPending]);
 
   const loadMore = useCallback(async () => {
     if (!session || loadingMore || loading || !hasMore) return;
@@ -381,10 +458,11 @@ function useMailData(session: MailSession | null) {
           },
         });
         if (res.ok && res.indexed) {
+          const patched = applyPending(res.messages);
           setMessages((prev) => {
             const seen = new Set(prev.map((m) => m.id));
             const merged = [...prev];
-            for (const m of res.messages) if (!seen.has(m.id)) merged.push(m);
+            for (const m of patched) if (!seen.has(m.id)) merged.push(m);
             return merged;
           });
           setHasMore(res.hasMore);
@@ -408,10 +486,11 @@ function useMailData(session: MailSession | null) {
         },
       });
       if (!result.ok) throw new Error(result.error);
+      const patched = applyPending(result.messages);
       setMessages((prev) => {
         const seen = new Set(prev.map((m) => m.id));
         const merged = [...prev];
-        for (const m of result.messages) if (!seen.has(m.id)) merged.push(m);
+        for (const m of patched) if (!seen.has(m.id)) merged.push(m);
         return merged;
       });
       setHasMore(result.messages.length >= PAGE);
@@ -463,7 +542,7 @@ function useMailData(session: MailSession | null) {
       // when the sync actually changed something (the hook already gates on
       // meaningful-change; suppressed rounds do NOT reach this callback).
       loadMessages();
-      loadCounts();
+      loadCountsFast();
     },
   });
 
@@ -484,30 +563,43 @@ function useMailData(session: MailSession | null) {
     useMock,
     loadCounts,
     source,
-    refresh: async () => {
-      // Coalesced manual Refresh:
-      //   1) incremental (always) — suppress onSynced
-      //   2) reconcile — only when due (5 min elapsed OR flags drift)
-      //   3) ONE final Promise.all([loadMessages, loadCounts])
-      // No artificial delay, no intermediate re-renders.
-      const needsReconcile = shouldReconcile();
-      await incrementalNow({ suppressOnSynced: true });
-      if (needsReconcile) {
-        await reconcileNow({ suppressOnSynced: true });
-      }
-      await Promise.all([loadMessages(), loadCounts()]);
-    },
+    /**
+     * Manual Refresh contract (locked by tests):
+     *   incrementalNow=1, list=1, counts=1 (via loadCountsFast → Local Index),
+     *   reconcileNow is NEVER awaited on the manual path. When it's due,
+     *   scheduleBackground fires it after the spinner has already ended.
+     */
+    refresh: () =>
+      runManualRefresh({
+        incrementalNow,
+        reconcileNow,
+        shouldReconcile,
+        loadMessages,
+        loadCounts: loadCountsFast,
+      }),
     onAfterSend: async () => {
       // After a successful send: only refresh the Sent folder itself, and
       // only if the user is currently viewing it. From any other folder we
       // just pull counts once (Sent count moves; Inbox does not).
       if (folder === "sent") {
         await incrementalNow({ suppressOnSynced: true });
-        await Promise.all([loadMessages(), loadCounts()]);
+        await Promise.all([loadMessages(), loadCountsFast()]);
       } else {
-        await loadCounts();
+        await loadCountsFast();
       }
     },
+    // Pending Flag Overrides — exposed so MailApp toggleStar/toggleRead can
+    // record the expected value BEFORE the mutation resolves. All server-
+    // list writers inside useMailData already patch through applyPending.
+    pendingOverridesRef,
+    setPendingFlagOverride: (id: string, patch: { starred?: boolean; read?: boolean }) => {
+      setFlagOverride(pendingOverridesRef.current, id, patch);
+    },
+    clearPendingFlagOverride: (id: string, field?: "starred" | "read") => {
+      if (field) clearFlagOverrideField(pendingOverridesRef.current, id, field);
+      else clearFlagOverride(pendingOverridesRef.current, id);
+    },
+    applyPendingOne,
   };
 }
 
@@ -549,6 +641,9 @@ function MailApp() {
     loadCounts,
     refresh: rawRefresh,
     onAfterSend,
+    setPendingFlagOverride,
+    clearPendingFlagOverride,
+    applyPendingOne,
   } = useMailData(session || null);
 
   const refresh = useCallback(async () => {
@@ -721,7 +816,7 @@ function MailApp() {
           },
         });
         if (cancelled) return;
-        if (res.ok) setDeepResults(res.messages);
+        if (res.ok) setDeepResults(res.messages.map(applyPendingOne));
         else {
           setDeepResults([]);
           setDeepError(res.error || "فشل البحث على السيرفر");
@@ -782,6 +877,7 @@ function MailApp() {
       const listMsg = messages.find((m) => m.id === id);
       if (listMsg && !listMsg.read) {
         // Optimistic read
+        setPendingFlagOverride(id, { read: true });
         setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, read: true } : m)));
         setCounts((prev) => {
           const cur = prev[parsed.folder];
@@ -790,7 +886,9 @@ function MailApp() {
         });
         const c = messageCache.current.get(id);
         if (c) messageCache.current.set(id, { ...c, read: true });
-        mutateFlag(parsed.folder, parsed.uid, "seen", true).catch(() => {});
+        mutateFlag(parsed.folder, parsed.uid, "seen", true).catch(() => {
+          clearPendingFlagOverride(id, "read");
+        });
       }
     } catch (err: any) {
       if (!cached) {
@@ -808,8 +906,14 @@ function MailApp() {
     if (!parsed || !session) return;
     const msg = messages.find((m) => m.id === id);
     const nextStarred = !msg?.starred;
+    // Record expected value first so any in-flight list write (background
+    // sync, refresh, pagination, deep search) cannot clobber it.
+    setPendingFlagOverride(id, { starred: nextStarred });
     // Optimistic
     setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, starred: nextStarred } : m)));
+    setDeepResults((prev) =>
+      prev ? prev.map((m) => (m.id === id ? { ...m, starred: nextStarred } : m)) : prev,
+    );
     const cached = messageCache.current.get(id);
     if (cached) messageCache.current.set(id, { ...cached, starred: nextStarred });
     try {
@@ -817,7 +921,11 @@ function MailApp() {
       // Local Index write-through happens inside mutateFlag on the server side
       // (indexUpdateFlag), so a follow-up loadCountsSoft is no longer required.
     } catch (err: any) {
+      clearPendingFlagOverride(id, "starred");
       setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, starred: !nextStarred } : m)));
+      setDeepResults((prev) =>
+        prev ? prev.map((m) => (m.id === id ? { ...m, starred: !nextStarred } : m)) : prev,
+      );
       const c = messageCache.current.get(id);
       if (c) messageCache.current.set(id, { ...c, starred: !nextStarred });
       toast.error(err?.message || "فشل تحديث المميّز");
@@ -831,8 +939,12 @@ function MailApp() {
     const msg = messages.find((m) => m.id === id);
     if (!msg) return;
     const nextRead = !msg.read;
+    setPendingFlagOverride(id, { read: nextRead });
     // Optimistic
     setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, read: nextRead } : m)));
+    setDeepResults((prev) =>
+      prev ? prev.map((m) => (m.id === id ? { ...m, read: nextRead } : m)) : prev,
+    );
     const cached = messageCache.current.get(id);
     if (cached) messageCache.current.set(id, { ...cached, read: nextRead });
     setCounts((prev) => {
@@ -846,7 +958,11 @@ function MailApp() {
       await mutateFlag(parsed.folder, parsed.uid, "seen", nextRead);
     } catch (err: any) {
       // Revert both flag and counter.
+      clearPendingFlagOverride(id, "read");
       setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, read: !nextRead } : m)));
+      setDeepResults((prev) =>
+        prev ? prev.map((m) => (m.id === id ? { ...m, read: !nextRead } : m)) : prev,
+      );
       const c = messageCache.current.get(id);
       if (c) messageCache.current.set(id, { ...c, read: !nextRead });
       setCounts((prev) => {
