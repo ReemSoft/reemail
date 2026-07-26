@@ -259,6 +259,26 @@ function useMailData(session: MailSession | null) {
   const loadReqIdRef = useRef(0);
   const PAGE = 50;
 
+  // Pending Flag Overrides — persist optimistic star/read across any
+  // server-list arrival (Local Index, Bridge, background sync, pagination,
+  // deep search). Entries are cleared on mutation failure (rollback) or
+  // when a fresh server row confirms the expected value.
+  const pendingOverridesRef = useRef<FlagOverridesMap>(new Map());
+
+  /** Apply overrides to `list`, GC confirmed entries, and return the patched list. */
+  const applyPending = useCallback((list: MailMessage[]): MailMessage[] => {
+    reconcileFlagOverrides(list, pendingOverridesRef.current);
+    return applyFlagOverrides(list, pendingOverridesRef.current);
+  }, []);
+
+  /** Wrap a single incoming message the same way (used by messageCache). */
+  const applyPendingOne = useCallback(
+    (m: MailMessage): MailMessage => applyFlagOverrideToOne(m, pendingOverridesRef.current),
+    [],
+  );
+
+
+
   const folderPath = folderPaths[folder] ?? null;
 
   const loadCounts = useCallback(async () => {
