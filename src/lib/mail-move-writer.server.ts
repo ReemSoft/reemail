@@ -281,16 +281,16 @@ export async function applyMoveWriteThrough(
     };
   }
 
-  // 2) Tombstone source row.
+  // 2) Tombstone source row atomically (idempotent on retry / double-move).
   const tomb = await tombstoneSourceRow(supabase, {
     accountId: input.accountId,
     folderId: src.id,
     uidvalidity: src.uidvalidity,
     uid: input.sourceUid,
   });
-  const sourceTombstoned = !!tomb;
+  const sourceTombstoned = tomb.changed;
 
-  if (tomb) {
+  if (tomb.changed) {
     await adjustFolderCountsDelta(supabase, {
       folderId: src.id,
       totalDelta: -1,
@@ -322,7 +322,10 @@ export async function applyMoveWriteThrough(
     if (!dst && input.destinationPath) {
       dst = await resolveFolderByPath(supabase, input.accountId, input.destinationPath);
     }
-    if (dst && dst.uidvalidity != null && String(dst.uidvalidity) === destUvStr && tomb) {
+    // Only insert-and-count-up the destination when this caller actually
+    // won the source-tombstone race. If a sibling won, they handled the
+    // destination side too — inserting again would double-count.
+    if (dst && dst.uidvalidity != null && String(dst.uidvalidity) === destUvStr && tomb.changed) {
       const ins = await insertDestinationRowFromSource(supabase, {
         accountId: input.accountId,
         companyId: input.companyId,
