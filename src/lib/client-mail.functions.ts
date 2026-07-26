@@ -224,7 +224,7 @@ export const clientLogin = createServerFn({ method: "POST" })
       });
     } catch (e) {
       if (e instanceof MailAccountOwnershipConflictError) {
-        return { ok: false as const, message: "هذا البريد مسجّل تحت شركة أخرى. تواصل مع الدعم." };
+        return { ok: false as const, message: "تعذر ربط عنوان البريد بهذا الحساب. تحقق من بيانات الحساب أو تواصل مع مسؤول النظام." };
       }
       if (e instanceof MailAccountSourceMismatchError) {
         return {
