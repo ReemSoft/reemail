@@ -41,6 +41,13 @@ import {
   ArrowUpDown,
   Download,
   Eye,
+  FileImage,
+  FileVideo,
+  FileAudio,
+  FileArchive,
+  FileSpreadsheet,
+  FileCode,
+  FileType,
 } from "lucide-react";
 import {
   DropdownMenu,
