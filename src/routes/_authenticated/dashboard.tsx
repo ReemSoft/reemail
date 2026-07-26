@@ -129,6 +129,15 @@ function CompanyDashboard() {
     void load();
   }, [load]);
 
+  const hasChanges =
+    !!company &&
+    !!originalCompany &&
+    (company.name !== originalCompany.name ||
+      company.brand_primary !== originalCompany.brand_primary ||
+      company.brand_accent !== originalCompany.brand_accent ||
+      company.app_name !== originalCompany.app_name ||
+      company.logo_url !== originalCompany.logo_url);
+
   async function handleSave() {
     if (!company) return;
     setSaving(true);
@@ -144,6 +153,7 @@ function CompanyDashboard() {
       .eq("id", company.id);
     setSaving(false);
     if (error) return toast.error(error.message);
+    setOriginalCompany(company);
     toast.success("تم حفظ التغييرات");
   }
 
