@@ -12,8 +12,7 @@ export const Route = createFileRoute("/login")({
       { title: "دخول العملاء — MailMaestro" },
       {
         name: "description",
-        content:
-          "بوابة دخول العملاء إلى بريدهم الإلكتروني عبر منصة MailMaestro.",
+        content: "بوابة دخول العملاء إلى بريدهم الإلكتروني عبر منصة MailMaestro.",
       },
       { property: "og:title", content: "دخول العملاء — MailMaestro" },
       {
@@ -47,7 +46,13 @@ function LoginPage() {
         return;
       }
 
-      saveMailSession({ account: result.account, company: result.company, password });
+      saveMailSession({
+        account: result.account,
+        company: result.company,
+        password,
+        mailSessionToken: result.mailSessionToken,
+        mailSessionTokenExpiresAt: result.mailSessionTokenExpiresAt,
+      });
       toast.success("تم فتح البريد ✨");
       navigate({ to: "/mail" });
     } catch (err: unknown) {
@@ -86,9 +91,7 @@ function LoginPage() {
               أدخل بريدك وكلمة مروره فقط — لا حاجة لأي حساب إضافي.
             </p>
           </div>
-          <p className="text-sm text-white/70">
-            © {new Date().getFullYear()} MailMaestro
-          </p>
+          <p className="text-sm text-white/70">© {new Date().getFullYear()} MailMaestro</p>
         </div>
       </div>
 
@@ -106,7 +109,8 @@ function LoginPage() {
           </div>
           <h1 className="text-3xl font-bold tracking-tight">افتح بريدك</h1>
           <p className="mt-2 text-muted-foreground">
-            استخدم عنوان بريدك وكلمة مروره الحقيقية. كلمة المرور تُستخدم فقط في هذه الجلسة ولا تُخزَّن.
+            استخدم عنوان بريدك وكلمة مروره الحقيقية. كلمة المرور تُستخدم فقط في هذه الجلسة ولا
+            تُخزَّن.
           </p>
 
           <form onSubmit={handleSubmit} className="mt-8 space-y-4">
