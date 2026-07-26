@@ -229,6 +229,7 @@ function useMailData(session: MailSession | null) {
   const getCounts = useServerFn(bridgeGetFolderCounts);
   const getMessages = useServerFn(bridgeGetMessages);
   const listIndex = useServerFn(indexListMessages);
+  const listIndexCounts = useServerFn(indexListFolderCounts);
   const [folder, setFolder] = useState<MailFolder>("inbox");
   const [sort, setSort] = useState<SortOption>("date-desc");
   const [counts, setCounts] = useState<
