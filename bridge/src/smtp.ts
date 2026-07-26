@@ -53,9 +53,11 @@ export async function sendMessage(
       html: payload.bodyHtml || "",
       attachments: payload.attachments?.map((a) => ({
         filename: a.filename,
-        content: a.content,
+        // Prefer `path` (streamed from disk) over `content` (buffered).
+        ...(a.path ? { path: a.path } : { content: a.content }),
         contentType: a.contentType,
       })),
+
     });
     return { ok: true, messageId: info.messageId || "" };
   } catch (err: any) {
