@@ -89,3 +89,28 @@ export function reconcileOverrides(list: MailMessage[], overrides: OverridesMap)
     }
   }
 }
+
+/**
+ * Hidden-ids set: message IDs that were optimistically removed from the
+ * currently-visible list (e.g. unstar inside the "starred" folder). Every
+ * server-list writer must filter through `applyHidden` so a racing sync
+ * cannot resurrect a row the user just removed.
+ *
+ * On mutation failure the caller unhides + restores the snapshot in place.
+ * On success the entry stays until a fresh reload naturally drops the row
+ * (server no longer returns it) — cheap and self-healing.
+ */
+export type HiddenIdsSet = Set<string>;
+
+export function applyHidden(list: MailMessage[], hidden: HiddenIdsSet): MailMessage[] {
+  if (hidden.size === 0) return list;
+  return list.filter((m) => !hidden.has(m.id));
+}
+
+export function hideId(hidden: HiddenIdsSet, id: string): void {
+  hidden.add(id);
+}
+
+export function unhideId(hidden: HiddenIdsSet, id: string): void {
+  hidden.delete(id);
+}
