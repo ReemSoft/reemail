@@ -83,11 +83,7 @@ import {
   getMessage as getMockMessage,
 } from "@/lib/mail-mock";
 import type { MailFolder, MailMessage } from "@/lib/mail-types";
-import {
-  clearMailSession,
-  getMailSession,
-  type MailSession,
-} from "@/lib/mail-session";
+import { clearMailSession, getMailSession, type MailSession } from "@/lib/mail-session";
 
 export const Route = createFileRoute("/mail")({
   ssr: false,
@@ -187,25 +183,23 @@ function quoteBody(message: MailMessage): string {
 }
 
 function buildReply(message: MailMessage, myEmail: string, all: boolean): ComposeInitial {
-  const subject = message.subject.startsWith("Re:")
-    ? message.subject
-    : `Re: ${message.subject}`;
+  const subject = message.subject.startsWith("Re:") ? message.subject : `Re: ${message.subject}`;
   const to = message.from.email;
   let cc = "";
   if (all) {
     const others = [
       ...message.to.map((a) => a.email),
       ...(message.cc?.map((a) => a.email) ?? []),
-    ].filter((e) => e && e.toLowerCase() !== myEmail.toLowerCase() && e.toLowerCase() !== to.toLowerCase());
+    ].filter(
+      (e) => e && e.toLowerCase() !== myEmail.toLowerCase() && e.toLowerCase() !== to.toLowerCase(),
+    );
     cc = Array.from(new Set(others)).join(", ");
   }
   return { to, cc, subject, body: quoteBody(message) };
 }
 
 function buildForward(message: MailMessage): ComposeInitial {
-  const subject = message.subject.startsWith("Fwd:")
-    ? message.subject
-    : `Fwd: ${message.subject}`;
+  const subject = message.subject.startsWith("Fwd:") ? message.subject : `Fwd: ${message.subject}`;
   const header =
     `\n\n---------- Forwarded message ----------\n` +
     `From: ${message.from.name} <${message.from.email}>\n` +
@@ -226,7 +220,9 @@ function useMailData(session: MailSession | null) {
   const listIndex = useServerFn(indexListMessages);
   const [folder, setFolder] = useState<MailFolder>("inbox");
   const [sort, setSort] = useState<SortOption>("date-desc");
-  const [counts, setCounts] = useState<Record<MailFolder, { total: number; unread: number; supported: boolean }>>({
+  const [counts, setCounts] = useState<
+    Record<MailFolder, { total: number; unread: number; supported: boolean }>
+  >({
     inbox: { total: 0, unread: 0, supported: true },
     starred: { total: 0, unread: 0, supported: true },
     sent: { total: 0, unread: 0, supported: true },
@@ -256,7 +252,9 @@ function useMailData(session: MailSession | null) {
   const loadCounts = useCallback(async () => {
     if (!session) return;
     try {
-      const result = await getCounts({ data: { account: session.account, password: session.password } });
+      const result = await getCounts({
+        data: { account: session.account, password: session.password },
+      });
       const map: Record<MailFolder, { total: number; unread: number; supported: boolean }> = {
         inbox: { total: 0, unread: 0, supported: true },
         starred: { total: 0, unread: 0, supported: true },
@@ -278,7 +276,14 @@ function useMailData(session: MailSession | null) {
       setBridgeError(null);
     } catch (err: any) {
       setBridgeError(err?.message || "فشل الاتصال بخادم البريد");
-      setCounts(Object.fromEntries(getMockFolderCounts().map((c) => [c.folder, { total: c.total, unread: c.unread, supported: true }])) as Record<MailFolder, { total: number; unread: number; supported: boolean }>);
+      setCounts(
+        Object.fromEntries(
+          getMockFolderCounts().map((c) => [
+            c.folder,
+            { total: c.total, unread: c.unread, supported: true },
+          ]),
+        ) as Record<MailFolder, { total: number; unread: number; supported: boolean }>,
+      );
     }
   }, [session, getCounts]);
 
@@ -286,10 +291,7 @@ function useMailData(session: MailSession | null) {
   // Only "date-desc" is index-native; other sorts fall back to the bridge.
   const canUseIndex = useCallback(
     (f: MailFolder, s: SortOption) =>
-      MAIL_INDEX_ENABLED &&
-      s === "date-desc" &&
-      !!session?.mailSessionToken &&
-      !!folderPaths[f],
+      MAIL_INDEX_ENABLED && s === "date-desc" && !!session?.mailSessionToken && !!folderPaths[f],
     [session, folderPaths],
   );
 
@@ -298,7 +300,14 @@ function useMailData(session: MailSession | null) {
       if (!session) return;
       try {
         const result = await getMessages({
-          data: { account: session.account, password: session.password, folder, limit: PAGE, offset: 0, sort },
+          data: {
+            account: session.account,
+            password: session.password,
+            folder,
+            limit: PAGE,
+            offset: 0,
+            sort,
+          },
         });
         if (loadReqIdRef.current !== reqId) return;
         if (!result.ok) throw new Error(result.error);
@@ -389,7 +398,14 @@ function useMailData(session: MailSession | null) {
       // Bridge pagination (offset-based).
       const offset = messages.length;
       const result = await getMessages({
-        data: { account: session.account, password: session.password, folder, limit: PAGE, offset, sort },
+        data: {
+          account: session.account,
+          password: session.password,
+          folder,
+          limit: PAGE,
+          offset,
+          sort,
+        },
       });
       if (!result.ok) throw new Error(result.error);
       setMessages((prev) => {
@@ -405,8 +421,18 @@ function useMailData(session: MailSession | null) {
       setLoadingMore(false);
     }
   }, [
-    session, folder, sort, getMessages, listIndex, messages.length,
-    loadingMore, loading, hasMore, source, indexCursor, canUseIndex,
+    session,
+    folder,
+    sort,
+    getMessages,
+    listIndex,
+    messages.length,
+    loadingMore,
+    loading,
+    hasMore,
+    source,
+    indexCursor,
+    canUseIndex,
   ]);
 
   useEffect(() => {
@@ -485,9 +511,6 @@ function useMailData(session: MailSession | null) {
   };
 }
 
-
-
-
 function MailApp() {
   const navigate = useNavigate();
   const { confirm } = useConfirm();
@@ -508,9 +531,25 @@ function MailApp() {
   const [deepLoading, setDeepLoading] = useState(false);
   const [deepError, setDeepError] = useState<string | null>(null);
 
-  const { folder, setFolder, sort, setSort, counts, setCounts, messages, setMessages, loading, loadingMore, hasMore, loadMore, bridgeError, useMock, loadCounts, refresh: rawRefresh, onAfterSend } =
-    useMailData(session || null);
-
+  const {
+    folder,
+    setFolder,
+    sort,
+    setSort,
+    counts,
+    setCounts,
+    messages,
+    setMessages,
+    loading,
+    loadingMore,
+    hasMore,
+    loadMore,
+    bridgeError,
+    useMock,
+    loadCounts,
+    refresh: rawRefresh,
+    onAfterSend,
+  } = useMailData(session || null);
 
   const refresh = useCallback(async () => {
     // No artificial delay. rawRefresh coalesces sync + list + counts into a
@@ -523,7 +562,6 @@ function MailApp() {
       setRefreshing(false);
     }
   }, [rawRefresh, refreshing]);
-
 
   const getOne = useServerFn(bridgeGetMessage);
   const markRead = useServerFn(bridgeMarkRead);
@@ -557,11 +595,23 @@ function MailApp() {
       }
       if (kind === "seen") {
         await markRead({
-          data: { account: session.account, password: session.password, folder: canonical, uid, read: value },
+          data: {
+            account: session.account,
+            password: session.password,
+            folder: canonical,
+            uid,
+            read: value,
+          },
         });
       } else {
         await star({
-          data: { account: session.account, password: session.password, folder: canonical, uid, starred: value },
+          data: {
+            account: session.account,
+            password: session.password,
+            folder: canonical,
+            uid,
+            starred: value,
+          },
         });
       }
     },
@@ -767,9 +817,7 @@ function MailApp() {
       // Local Index write-through happens inside mutateFlag on the server side
       // (indexUpdateFlag), so a follow-up loadCountsSoft is no longer required.
     } catch (err: any) {
-      setMessages((prev) =>
-        prev.map((m) => (m.id === id ? { ...m, starred: !nextStarred } : m)),
-      );
+      setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, starred: !nextStarred } : m)));
       const c = messageCache.current.get(id);
       if (c) messageCache.current.set(id, { ...c, starred: !nextStarred });
       toast.error(err?.message || "فشل تحديث المميّز");
@@ -876,7 +924,12 @@ function MailApp() {
     try {
       if (isTrash) {
         await deleteFn({
-          data: { account: session.account, password: session.password, folder: parsed.folder, uid: parsed.uid },
+          data: {
+            account: session.account,
+            password: session.password,
+            folder: parsed.folder,
+            uid: parsed.uid,
+          },
         });
         forgetOrigin(msg?.threadId);
         toast.success("تم حذف الرسالة نهائياً");
@@ -935,9 +988,6 @@ function MailApp() {
       toast.error(err?.message || "فشل استعادة الرسالة");
     }
   }
-
-
-
 
   async function handleMarkUnread(id: string) {
     const parsed = parseMessageId(id);
@@ -1113,9 +1163,15 @@ function MailApp() {
       setMessages(snapshot);
       setSelectedId(prevSelectedId);
       setSelectedMessage(prevSelected);
-      toast.error(isTrash ? `فشل حذف ${failed} من ${ids.length} رسالة` : `فشل نقل ${failed} من ${ids.length} رسالة إلى المهملات`);
+      toast.error(
+        isTrash
+          ? `فشل حذف ${failed} من ${ids.length} رسالة`
+          : `فشل نقل ${failed} من ${ids.length} رسالة إلى المهملات`,
+      );
     } else {
-      toast.success(isTrash ? `تم حذف ${ids.length} رسالة` : `تم نقل ${ids.length} رسالة إلى المهملات`);
+      toast.success(
+        isTrash ? `تم حذف ${ids.length} رسالة` : `تم نقل ${ids.length} رسالة إلى المهملات`,
+      );
       loadCountsSoft();
     }
   }
@@ -1165,7 +1221,6 @@ function MailApp() {
     }
   }
 
-
   async function bulkMarkUnread() {
     if (!session || selection.size === 0 || bulkBusy) return;
     const ids = Array.from(selection);
@@ -1191,7 +1246,6 @@ function MailApp() {
     // Refresh counters only — never touch messages or sort order.
     setTimeout(() => loadCounts(), 300);
   }
-
 
   function handleSignOut() {
     clearMailSession();
@@ -1257,11 +1311,7 @@ function MailApp() {
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder={
-              searchMode === "deep"
-                ? "بحث شامل على السيرفر…"
-                : "ابحث في البريد..."
-            }
+            placeholder={searchMode === "deep" ? "بحث شامل على السيرفر…" : "ابحث في البريد..."}
             className="w-full bg-transparent px-1 text-sm outline-none placeholder:text-muted-foreground"
           />
           {query && (
@@ -1275,7 +1325,6 @@ function MailApp() {
             </button>
           )}
           <DropdownMenu dir="rtl">
-
             <DropdownMenuTrigger asChild>
               <button
                 className={`flex shrink-0 items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium transition ${
@@ -1290,9 +1339,7 @@ function MailApp() {
                 ) : (
                   <Zap className="h-3.5 w-3.5" />
                 )}
-                <span className="hidden sm:inline">
-                  {searchMode === "deep" ? "شامل" : "سريع"}
-                </span>
+                <span className="hidden sm:inline">{searchMode === "deep" ? "شامل" : "سريع"}</span>
                 <ChevronDown className="h-3 w-3 opacity-60" />
               </button>
             </DropdownMenuTrigger>
@@ -1308,9 +1355,7 @@ function MailApp() {
                 <div className="flex-1">
                   <div className="flex items-center justify-between">
                     <span className="font-medium">بحث سريع</span>
-                    {searchMode === "quick" && (
-                      <Check className="h-3.5 w-3.5 text-primary" />
-                    )}
+                    {searchMode === "quick" && <Check className="h-3.5 w-3.5 text-primary" />}
                   </div>
                   <div className="text-[11px] text-muted-foreground">
                     فوري في الرسائل المعروضة — دون أي طلب للسيرفر
@@ -1326,9 +1371,7 @@ function MailApp() {
                 <div className="flex-1">
                   <div className="flex items-center justify-between">
                     <span className="font-medium">بحث شامل على السيرفر</span>
-                    {searchMode === "deep" && (
-                      <Check className="h-3.5 w-3.5 text-primary" />
-                    )}
+                    {searchMode === "deep" && <Check className="h-3.5 w-3.5 text-primary" />}
                   </div>
                   <div className="text-[11px] text-muted-foreground">
                     IMAP SEARCH على كامل المجلد الحالي (الموضوع + المرسل + المستلمين)
@@ -1359,7 +1402,6 @@ function MailApp() {
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
-
 
         <div className="ms-auto flex shrink-0 items-center gap-1.5">
           <div
@@ -1428,39 +1470,39 @@ function MailApp() {
             {(Object.keys(FOLDER_META) as MailFolder[])
               .filter((f) => counts[f]?.supported !== false)
               .map((f) => {
-              const meta = FOLDER_META[f];
-              const active = f === folder;
-              const Icon = meta.icon;
-              const { total } = counts[f] || { total: 0 };
-              return (
-                <button
-                  key={f}
-                  onClick={() => {
-                    setFolder(f);
-                    setSelectedId(null);
-                    setSelectedMessage(null);
-                    setSidebarOpen(false);
-                  }}
-                  className={`mb-0.5 flex w-full items-center gap-3 rounded-r-full rounded-l-md px-4 py-2.5 text-sm transition ${
-                    active
-                      ? "bg-sidebar-hover font-semibold text-foreground"
-                      : "text-sidebar-foreground hover:bg-sidebar-hover/60"
-                  }`}
-                >
-                  <Icon className={`h-4 w-4 ${active ? "text-primary" : ""}`} />
-                  <span className="flex-1 text-right">{meta.label}</span>
-                  {total > 0 && (
-                    <span
-                      className={`rounded-full px-1.5 text-[11px] font-bold ${
-                        active ? "text-primary" : "text-muted-foreground"
-                      }`}
-                    >
-                      {total}
-                    </span>
-                  )}
-                </button>
-              );
-            })}
+                const meta = FOLDER_META[f];
+                const active = f === folder;
+                const Icon = meta.icon;
+                const { total } = counts[f] || { total: 0 };
+                return (
+                  <button
+                    key={f}
+                    onClick={() => {
+                      setFolder(f);
+                      setSelectedId(null);
+                      setSelectedMessage(null);
+                      setSidebarOpen(false);
+                    }}
+                    className={`mb-0.5 flex w-full items-center gap-3 rounded-r-full rounded-l-md px-4 py-2.5 text-sm transition ${
+                      active
+                        ? "bg-sidebar-hover font-semibold text-foreground"
+                        : "text-sidebar-foreground hover:bg-sidebar-hover/60"
+                    }`}
+                  >
+                    <Icon className={`h-4 w-4 ${active ? "text-primary" : ""}`} />
+                    <span className="flex-1 text-right">{meta.label}</span>
+                    {total > 0 && (
+                      <span
+                        className={`rounded-full px-1.5 text-[11px] font-bold ${
+                          active ? "text-primary" : "text-muted-foreground"
+                        }`}
+                      >
+                        {total}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
           </nav>
         </aside>
 
@@ -1482,7 +1524,11 @@ function MailApp() {
               <button
                 onClick={toggleSelectAllVisible}
                 className="flex h-9 w-9 shrink-0 items-center justify-center rounded hover:bg-muted"
-                title={selection.size >= filteredMessages.length && filteredMessages.length > 0 ? "إلغاء التحديد" : "تحديد الكل"}
+                title={
+                  selection.size >= filteredMessages.length && filteredMessages.length > 0
+                    ? "إلغاء التحديد"
+                    : "تحديد الكل"
+                }
               >
                 {selection.size >= filteredMessages.length && filteredMessages.length > 0 ? (
                   <CheckSquare className="h-5 w-5 text-primary" />
@@ -1572,7 +1618,6 @@ function MailApp() {
                 إلغاء
               </button>
             </div>
-
           ) : (
             <div className="flex h-11 shrink-0 items-center justify-between border-b border-border px-4 text-xs">
               <div className="flex items-center gap-3">
@@ -1593,16 +1638,12 @@ function MailApp() {
                       <span>
                         نتائج السيرفر · {filteredMessages.length}
                         {deepIncludeBody && (
-                          <span className="ms-1 text-[10px] text-primary/70">
-                            (يشمل المحتوى)
-                          </span>
+                          <span className="ms-1 text-[10px] text-primary/70">(يشمل المحتوى)</span>
                         )}
                       </span>
                     </span>
                   ) : (
-                    <>
-                      المعروضة · {filteredMessages.length}
-                    </>
+                    <>المعروضة · {filteredMessages.length}</>
                   )}
                 </span>
               </div>
@@ -1611,7 +1652,9 @@ function MailApp() {
                 <button
                   onClick={toggleSelectMode}
                   className={`rounded px-2 py-1.5 text-xs font-medium transition ${
-                    selectMode ? "bg-primary text-primary-foreground hover:bg-primary/90" : "text-foreground hover:bg-muted"
+                    selectMode
+                      ? "bg-primary text-primary-foreground hover:bg-primary/90"
+                      : "text-foreground hover:bg-muted"
                   }`}
                 >
                   {selectMode ? "إلغاء" : "تحديد"}
@@ -1628,12 +1671,14 @@ function MailApp() {
                       </button>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="start" className="w-56">
-                      {([
-                        { value: "date-desc", label: "الأحدث أولاً" },
-                        { value: "date-asc", label: "الأقدم أولاً" },
-                        { value: "unread-first", label: "غير المقروءة أولاً" },
-                        { value: "starred-first", label: "المميّزة بنجمة أولاً" },
-                      ] as { value: SortOption; label: string }[]).map((opt, i) => {
+                      {(
+                        [
+                          { value: "date-desc", label: "الأحدث أولاً" },
+                          { value: "date-asc", label: "الأقدم أولاً" },
+                          { value: "unread-first", label: "غير المقروءة أولاً" },
+                          { value: "starred-first", label: "المميّزة بنجمة أولاً" },
+                        ] as { value: SortOption; label: string }[]
+                      ).map((opt, i) => {
                         const disabled = folder === "starred" && opt.value === "starred-first";
                         return (
                           <div key={opt.value}>
@@ -1661,9 +1706,7 @@ function MailApp() {
               <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
                 <Loader2 className="h-6 w-6 animate-spin text-primary" />
                 {inDeepSearch && (
-                  <p className="text-xs text-muted-foreground">
-                    جاري البحث على السيرفر…
-                  </p>
+                  <p className="text-xs text-muted-foreground">جاري البحث على السيرفر…</p>
                 )}
               </div>
             ) : filteredMessages.length === 0 ? (
@@ -1671,9 +1714,7 @@ function MailApp() {
                 <MailIcon className="h-10 w-10 opacity-30" />
                 {inDeepSearch ? (
                   <>
-                    <p className="text-sm">
-                      {deepError ? deepError : "لا توجد نتائج على السيرفر"}
-                    </p>
+                    <p className="text-sm">{deepError ? deepError : "لا توجد نتائج على السيرفر"}</p>
                     {!deepError && !deepIncludeBody && (
                       <p className="text-[11px] text-muted-foreground/70">
                         جرّب تفعيل «تضمين نص الرسالة» من خيارات البحث
@@ -1725,7 +1766,6 @@ function MailApp() {
                 }}
               />
             )}
-
           </div>
         </div>
 
@@ -1744,15 +1784,21 @@ function MailApp() {
                 setSelectedId(null);
                 setSelectedMessage(null);
               }}
-              onReply={() => setCompose(buildReply(selectedMessage, session.account.email_address, false))}
-              onReplyAll={() => setCompose(buildReply(selectedMessage, session.account.email_address, true))}
+              onReply={() =>
+                setCompose(buildReply(selectedMessage, session.account.email_address, false))
+              }
+              onReplyAll={() =>
+                setCompose(buildReply(selectedMessage, session.account.email_address, true))
+              }
               onForward={() => setCompose(buildForward(selectedMessage))}
               onArchive={() => handleMove(selectedMessage.id, "archive")}
               onDelete={() => handleDelete(selectedMessage.id)}
               onSpam={() => handleMove(selectedMessage.id, "spam")}
               onMarkUnread={() => handleMarkUnread(selectedMessage.id)}
               onRestore={() => handleRestore(selectedMessage.id)}
-              onPrint={() => { /* handled inside MessageView */ }}
+              onPrint={() => {
+                /* handled inside MessageView */
+              }}
             />
           ) : selectedId && reading ? (
             <LoadingViewer
@@ -1865,7 +1911,9 @@ function MessageRow({
           >
             {message.from.name || message.from.email}
           </span>
-          <span className="shrink-0 text-[11px] text-muted-foreground">{formatDate(message.date)}</span>
+          <span className="shrink-0 text-[11px] text-muted-foreground">
+            {formatDate(message.date)}
+          </span>
         </div>
         <p
           className={`truncate text-sm ${
@@ -1951,18 +1999,14 @@ function MessageView({
     ...message.to.map((t) => ({ ...t, kind: "to" as const })),
     ...(message.cc || []).map((c) => ({ ...c, kind: "cc" as const })),
   ];
-  const toSummary =
-    recipientsAll.length > 0
-      ? recipientsAll.map((r) => r.email).join("، ")
-      : "—";
+  const toSummary = recipientsAll.length > 0 ? recipientsAll.map((r) => r.email).join("، ") : "—";
 
   const fullDate = new Date(message.date).toLocaleString("ar", {
     dateStyle: "full",
     timeStyle: "short",
   });
   const isTrash = message.folder === "trash";
-  const isSecure =
-    !!message.security && !/غير/.test(message.security);
+  const isSecure = !!message.security && !/غير/.test(message.security);
 
   async function copyEmail() {
     try {
@@ -1980,15 +2024,20 @@ function MessageView({
       return;
     }
     const esc = (s: string) =>
-      s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]!));
+      s.replace(
+        /[&<>"']/g,
+        (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!,
+      );
     const subject = esc(message.subject || "(بدون موضوع)");
     const fromName = esc(message.from.name || message.from.email);
     const fromEmail = esc(message.from.email);
     const to = esc(message.to.map((t) => t.email).join(", "));
-    const cc = message.cc && message.cc.length > 0 ? esc(message.cc.map((c) => c.email).join(", ")) : "";
+    const cc =
+      message.cc && message.cc.length > 0 ? esc(message.cc.map((c) => c.email).join(", ")) : "";
     const date = esc(new Date(message.date).toLocaleString("ar"));
     const body = message.body || esc(message.preview);
-    win.document.write(`<!doctype html><html dir="rtl" lang="ar"><head><meta charset="utf-8"><title>${subject}</title>
+    win.document
+      .write(`<!doctype html><html dir="rtl" lang="ar"><head><meta charset="utf-8"><title>${subject}</title>
 <style>
   body{font-family:'IBM Plex Sans Arabic',system-ui,sans-serif;color:#111;padding:24px;line-height:1.6}
   h1{font-size:20px;margin:0 0 16px}
@@ -2025,7 +2074,11 @@ function MessageView({
           <button onClick={onReply} className="rounded-lg p-2 hover:bg-muted" title="رد">
             <Reply className="h-4 w-4" />
           </button>
-          <button onClick={onReplyAll} className="rounded-lg p-2 hover:bg-muted" title="رد على الكل">
+          <button
+            onClick={onReplyAll}
+            className="rounded-lg p-2 hover:bg-muted"
+            title="رد على الكل"
+          >
             <ReplyAll className="h-4 w-4" />
           </button>
           <button onClick={onForward} className="rounded-lg p-2 hover:bg-muted" title="إعادة توجيه">
@@ -2057,7 +2110,11 @@ function MessageView({
           <button onClick={printMessage} className="rounded-lg p-2 hover:bg-muted" title="طباعة">
             <Printer className="h-4 w-4" />
           </button>
-          <button onClick={copyEmail} className="rounded-lg p-2 hover:bg-muted" title="نسخ عنوان المرسل">
+          <button
+            onClick={copyEmail}
+            className="rounded-lg p-2 hover:bg-muted"
+            title="نسخ عنوان المرسل"
+          >
             <Copy className="h-4 w-4" />
           </button>
           <div className="mx-1 h-6 w-px bg-border" />
@@ -2071,10 +2128,7 @@ function MessageView({
         </div>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <button
-              className="rounded-lg p-2 hover:bg-muted"
-              aria-label="خيارات أكثر"
-            >
+            <button className="rounded-lg p-2 hover:bg-muted" aria-label="خيارات أكثر">
               <MoreVertical className="h-4 w-4" />
             </button>
           </DropdownMenuTrigger>
@@ -2155,7 +2209,6 @@ function MessageView({
                         </span>
                       </div>
                     )}
-
                   </div>
                   <span
                     className="shrink-0 whitespace-nowrap text-xs text-muted-foreground"
@@ -2174,7 +2227,9 @@ function MessageView({
                   >
                     <span className="truncate">
                       <span className="text-foreground/70">إلى </span>
-                      <span dir="ltr" className="unicode-bidi-isolate">{toSummary}</span>
+                      <span dir="ltr" className="unicode-bidi-isolate">
+                        {toSummary}
+                      </span>
                     </span>
                     <ChevronDown
                       className={`h-3.5 w-3.5 shrink-0 transition-transform ${detailsOpen ? "rotate-180" : ""}`}
@@ -2185,7 +2240,9 @@ function MessageView({
                       <dl className="grid grid-cols-[max-content_1fr] gap-x-2 gap-y-1.5 text-xs">
                         <dt className="text-foreground/70 whitespace-nowrap">المرسل:</dt>
                         <dd className="min-w-0 break-all">
-                          {message.from.name ? <span className="ml-1">{message.from.name}</span> : null}
+                          {message.from.name ? (
+                            <span className="ml-1">{message.from.name}</span>
+                          ) : null}
                           <span dir="ltr" className="text-muted-foreground">
                             &lt;{message.from.email || "—"}&gt;
                           </span>
@@ -2194,7 +2251,9 @@ function MessageView({
                         <dt className="text-foreground/70 whitespace-nowrap">المستلم:</dt>
                         <dd className="min-w-0 break-all">
                           <span dir="ltr" style={{ unicodeBidi: "isolate" }}>
-                            {message.to.length > 0 ? message.to.map((t) => t.email).join(", ") : "—"}
+                            {message.to.length > 0
+                              ? message.to.map((t) => t.email).join(", ")
+                              : "—"}
                           </span>
                         </dd>
 
@@ -2216,7 +2275,9 @@ function MessageView({
                           <>
                             <dt className="text-foreground/70 whitespace-nowrap">الخادم:</dt>
                             <dd className="min-w-0 break-all">
-                              <span dir="ltr" style={{ unicodeBidi: "isolate" }}>{message.mailedBy}</span>
+                              <span dir="ltr" style={{ unicodeBidi: "isolate" }}>
+                                {message.mailedBy}
+                              </span>
                             </dd>
                           </>
                         )}
@@ -2224,7 +2285,9 @@ function MessageView({
                           <>
                             <dt className="text-foreground/70 whitespace-nowrap">التوقيع:</dt>
                             <dd className="min-w-0 break-all">
-                              <span dir="ltr" style={{ unicodeBidi: "isolate" }}>{message.signedBy}</span>
+                              <span dir="ltr" style={{ unicodeBidi: "isolate" }}>
+                                {message.signedBy}
+                              </span>
                             </dd>
                           </>
                         )}
@@ -2244,7 +2307,6 @@ function MessageView({
                       </dl>
                     </div>
                   )}
-
                 </div>
               </div>
             </div>
@@ -2322,7 +2384,6 @@ function LoadingViewer({ onBack }: { onBack: () => void }) {
     </>
   );
 }
-
 
 const COMPOSE_MAX_TOTAL_BYTES = 25 * 1024 * 1024;
 const COMPOSE_MAX_FILES = 10;
@@ -2487,7 +2548,9 @@ function Composer({
                   key={`${f.name}-${i}`}
                   className="group inline-flex items-center gap-2 rounded-lg border border-border bg-muted/40 px-2.5 py-1.5 text-xs"
                 >
-                  <span className={`inline-flex h-6 w-6 items-center justify-center rounded-md ${tint}`}>
+                  <span
+                    className={`inline-flex h-6 w-6 items-center justify-center rounded-md ${tint}`}
+                  >
                     <Icon className="h-3.5 w-3.5" />
                   </span>
                   <div className="flex flex-col leading-tight">
@@ -2551,7 +2614,6 @@ function Composer({
   );
 }
 
-
 // ---- Attachment card with download + inline preview ----
 const INLINE_PREVIEW_MIME = new Set<string>([
   "image/png",
@@ -2562,34 +2624,61 @@ const INLINE_PREVIEW_MIME = new Set<string>([
   "application/pdf",
 ]);
 
-function getAttachmentIcon(mimeType: string, filename: string): {
+function getAttachmentIcon(
+  mimeType: string,
+  filename: string,
+): {
   Icon: typeof Paperclip;
   tint: string;
 } {
   const mime = (mimeType || "").toLowerCase();
   const ext = (filename.split(".").pop() || "").toLowerCase();
 
-  if (mime.startsWith("image/")) return { Icon: FileImage, tint: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400" };
-  if (mime.startsWith("video/")) return { Icon: FileVideo, tint: "bg-purple-500/10 text-purple-600 dark:text-purple-400" };
-  if (mime.startsWith("audio/")) return { Icon: FileAudio, tint: "bg-pink-500/10 text-pink-600 dark:text-pink-400" };
-  if (mime === "application/pdf" || ext === "pdf") return { Icon: FileType, tint: "bg-red-500/10 text-red-600 dark:text-red-400" };
-  if (/zip|rar|7z|tar|gzip|compressed/.test(mime) || ["zip","rar","7z","tar","gz"].includes(ext))
+  if (mime.startsWith("image/"))
+    return { Icon: FileImage, tint: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400" };
+  if (mime.startsWith("video/"))
+    return { Icon: FileVideo, tint: "bg-purple-500/10 text-purple-600 dark:text-purple-400" };
+  if (mime.startsWith("audio/"))
+    return { Icon: FileAudio, tint: "bg-pink-500/10 text-pink-600 dark:text-pink-400" };
+  if (mime === "application/pdf" || ext === "pdf")
+    return { Icon: FileType, tint: "bg-red-500/10 text-red-600 dark:text-red-400" };
+  if (
+    /zip|rar|7z|tar|gzip|compressed/.test(mime) ||
+    ["zip", "rar", "7z", "tar", "gz"].includes(ext)
+  )
     return { Icon: FileArchive, tint: "bg-amber-500/10 text-amber-600 dark:text-amber-400" };
-  if (/sheet|excel|csv/.test(mime) || ["xls","xlsx","csv","ods"].includes(ext))
+  if (/sheet|excel|csv/.test(mime) || ["xls", "xlsx", "csv", "ods"].includes(ext))
     return { Icon: FileSpreadsheet, tint: "bg-green-500/10 text-green-600 dark:text-green-400" };
-  if (/word|document|opendocument\.text/.test(mime) || ["doc","docx","odt","rtf"].includes(ext))
+  if (/word|document|opendocument\.text/.test(mime) || ["doc", "docx", "odt", "rtf"].includes(ext))
     return { Icon: FileText, tint: "bg-blue-500/10 text-blue-600 dark:text-blue-400" };
-  if (/presentation|powerpoint/.test(mime) || ["ppt","pptx","odp","key"].includes(ext))
+  if (/presentation|powerpoint/.test(mime) || ["ppt", "pptx", "odp", "key"].includes(ext))
     return { Icon: FileType, tint: "bg-orange-500/10 text-orange-600 dark:text-orange-400" };
-  if (/json|xml|javascript|typescript|html|css|x-sh|x-python/.test(mime) ||
-      ["js","ts","tsx","jsx","json","xml","html","css","py","sh","java","c","cpp","go","rs"].includes(ext))
+  if (
+    /json|xml|javascript|typescript|html|css|x-sh|x-python/.test(mime) ||
+    [
+      "js",
+      "ts",
+      "tsx",
+      "jsx",
+      "json",
+      "xml",
+      "html",
+      "css",
+      "py",
+      "sh",
+      "java",
+      "c",
+      "cpp",
+      "go",
+      "rs",
+    ].includes(ext)
+  )
     return { Icon: FileCode, tint: "bg-indigo-500/10 text-indigo-600 dark:text-indigo-400" };
-  if (mime.startsWith("text/") || ["txt","md","log"].includes(ext))
+  if (mime.startsWith("text/") || ["txt", "md", "log"].includes(ext))
     return { Icon: FileText, tint: "bg-slate-500/10 text-slate-600 dark:text-slate-400" };
 
   return { Icon: Paperclip, tint: "bg-brand-gradient/10 text-brand-accent" };
 }
-
 
 function AttachmentCard({
   attachment,
@@ -2676,7 +2765,9 @@ function AttachmentCard({
   return (
     <>
       <div className="flex items-center gap-2.5 rounded-xl border border-border bg-card p-2.5 sm:gap-3 sm:p-3">
-        <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg sm:h-10 sm:w-10 ${tint}`}>
+        <div
+          className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg sm:h-10 sm:w-10 ${tint}`}
+        >
           <FileIcon className="h-4 w-4 sm:h-5 sm:w-5" />
         </div>
         <div className="min-w-0 flex-1">
@@ -2700,7 +2791,11 @@ function AttachmentCard({
               aria-label="معاينة"
               className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-background text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50 sm:h-8 sm:w-8"
             >
-              {busy === "preview" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Eye className="h-4 w-4" />}
+              {busy === "preview" ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Eye className="h-4 w-4" />
+              )}
             </button>
           )}
           <button
@@ -2711,7 +2806,11 @@ function AttachmentCard({
             aria-label="تنزيل"
             className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-background text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50 sm:h-8 sm:w-8"
           >
-            {busy === "download" ? <CircleArrowDown className="h-4 w-4 animate-bounce text-primary" /> : <Download className="h-4 w-4" />}
+            {busy === "download" ? (
+              <CircleArrowDown className="h-4 w-4 animate-bounce text-primary" />
+            ) : (
+              <Download className="h-4 w-4" />
+            )}
           </button>
         </div>
       </div>

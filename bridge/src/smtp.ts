@@ -79,10 +79,9 @@ async function messageExistsInFolder(
     try {
       // Some IMAP servers include the surrounding <> in header searches, some
       // don't. Try the raw ID first; imapflow will quote appropriately.
-      const uids = (await client.search(
-        { header: { "message-id": messageId } } as never,
-        { uid: true },
-      )) as number[] | false;
+      const uids = (await client.search({ header: { "message-id": messageId } } as never, {
+        uid: true,
+      })) as number[] | false;
       return Array.isArray(uids) && uids.length > 0;
     } finally {
       lock.release();
@@ -92,16 +91,10 @@ async function messageExistsInFolder(
   }
 }
 
-async function buildMime(
-  payload: SendMessagePayload,
-): Promise<{ raw: Buffer; messageId: string }> {
+async function buildMime(payload: SendMessagePayload): Promise<{ raw: Buffer; messageId: string }> {
   const composerOpts: Record<string, unknown> = {
-    from: payload.from.name
-      ? `"${payload.from.name}" <${payload.from.email}>`
-      : payload.from.email,
-    to: payload.to
-      .map((t) => (t.name ? `"${t.name}" <${t.email}>` : t.email))
-      .join(", "),
+    from: payload.from.name ? `"${payload.from.name}" <${payload.from.email}>` : payload.from.email,
+    to: payload.to.map((t) => (t.name ? `"${t.name}" <${t.email}>` : t.email)).join(", "),
     subject: payload.subject,
     text: payload.bodyText || "",
     html: payload.bodyHtml || "",
@@ -171,11 +164,9 @@ export async function sendMessage(
     tls: { rejectUnauthorized: false },
   });
   try {
-    const envelopeRecipients = [
-      ...payload.to,
-      ...(payload.cc || []),
-      ...(payload.bcc || []),
-    ].map((r) => r.email);
+    const envelopeRecipients = [...payload.to, ...(payload.cc || []), ...(payload.bcc || [])].map(
+      (r) => r.email,
+    );
     await transporter.sendMail({
       raw,
       envelope: { from: payload.from.email, to: envelopeRecipients },
