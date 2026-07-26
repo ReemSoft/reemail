@@ -65,6 +65,7 @@ export const Route = createFileRoute("/_authenticated/dashboard")({
 
 function CompanyDashboard() {
   const [company, setCompany] = useState<Company | null>(null);
+  const [originalCompany, setOriginalCompany] = useState<Company | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [tab, setTab] = useState<"branding" | "accounts" | "domains">("branding");
@@ -115,7 +116,10 @@ function CompanyDashboard() {
         .order("created_at", { ascending: false }),
     ]);
 
-    if (co) setCompany(co as Company);
+    if (co) {
+      setCompany(co as Company);
+      setOriginalCompany(co as Company);
+    }
     if (ma) setAccounts(ma as MailAccount[]);
     if (dm) setDomains(dm as EmailDomain[]);
     setLoading(false);
@@ -124,6 +128,15 @@ function CompanyDashboard() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  const hasChanges =
+    !!company &&
+    !!originalCompany &&
+    (company.name !== originalCompany.name ||
+      company.brand_primary !== originalCompany.brand_primary ||
+      company.brand_accent !== originalCompany.brand_accent ||
+      company.app_name !== originalCompany.app_name ||
+      company.logo_url !== originalCompany.logo_url);
 
   async function handleSave() {
     if (!company) return;
@@ -140,6 +153,7 @@ function CompanyDashboard() {
       .eq("id", company.id);
     setSaving(false);
     if (error) return toast.error(error.message);
+    setOriginalCompany(company);
     toast.success("تم حفظ التغييرات");
   }
 
@@ -194,18 +208,24 @@ function CompanyDashboard() {
           </div>
           <div className="flex items-center gap-2">
             {tab === "branding" && (
-              <button
-                onClick={handleSave}
-                disabled={saving}
-                className="inline-flex items-center gap-1.5 rounded-lg bg-brand-gradient px-4 py-2 text-sm font-semibold text-white shadow-soft disabled:opacity-60"
+              <div
+                className={`overflow-hidden transition-all duration-200 ease-out ${
+                  hasChanges ? "max-w-[120px] opacity-100" : "max-w-0 opacity-0"
+                }`}
               >
-                {saving ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <Save className="h-4 w-4" />
-                )}
-                حفظ
-              </button>
+                <button
+                  onClick={handleSave}
+                  disabled={saving}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-brand-gradient px-4 py-2 text-sm font-semibold text-white shadow-soft disabled:opacity-60"
+                >
+                  {saving ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Save className="h-4 w-4" />
+                  )}
+                  حفظ
+                </button>
+              </div>
             )}
             <button
               onClick={handleLogout}
