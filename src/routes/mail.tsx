@@ -942,15 +942,7 @@ function MailApp() {
     setSelectedId(null);
     setSelectedMessage(null);
     try {
-      await markRead({
-        data: {
-          account: session.account,
-          password: session.password,
-          folder: parsed.folder,
-          uid: parsed.uid,
-          read: false,
-        },
-      });
+      await mutateFlag(parsed.folder, parsed.uid, "seen", false);
     } catch (err: any) {
       toast.error(err?.message || "فشل التعليم كغير مقروءة");
     }
