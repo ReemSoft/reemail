@@ -633,6 +633,9 @@ function useMailData(session: MailSession | null) {
     },
     hideRow: (id: string) => hideId(pendingHiddenRef.current, id),
     unhideRow: (id: string) => unhideId(pendingHiddenRef.current, id),
+    confirmHideRow: (id: string, at: number = Date.now()) =>
+      confirmHide(pendingHiddenRef.current, id, at),
+
     applyPendingOne,
   };
 }
