@@ -2354,11 +2354,13 @@ function AttachmentCard({
     }
   }
 
+  const { Icon: FileIcon, tint } = getAttachmentIcon(attachment.mimeType, attachment.filename);
+
   return (
     <>
       <div className="flex items-center gap-3 rounded-xl border border-border bg-card p-3">
-        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-brand-gradient/10 text-brand-accent">
-          <Paperclip className="h-4 w-4" />
+        <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg ${tint}`}>
+          <FileIcon className="h-5 w-5" />
         </div>
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-medium" title={attachment.filename}>
