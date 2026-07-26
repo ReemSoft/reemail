@@ -65,6 +65,7 @@ export const Route = createFileRoute("/_authenticated/dashboard")({
 
 function CompanyDashboard() {
   const [company, setCompany] = useState<Company | null>(null);
+  const [originalCompany, setOriginalCompany] = useState<Company | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [tab, setTab] = useState<"branding" | "accounts" | "domains">("branding");
