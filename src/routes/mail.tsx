@@ -343,7 +343,7 @@ function useMailData(session: MailSession | null) {
         });
         if (loadReqIdRef.current !== reqId) return;
         if (!result.ok) throw new Error(result.error);
-        setMessages(result.messages);
+        setMessages(applyPending(result.messages));
         setHasMore(result.messages.length >= PAGE);
         setBridgeError(null);
         setUseMock(false);
@@ -352,14 +352,14 @@ function useMailData(session: MailSession | null) {
       } catch (err: any) {
         if (loadReqIdRef.current !== reqId) return;
         setBridgeError(err?.message || "فشل جلب الرسائل");
-        setMessages(getMockMessages(folder));
+        setMessages(applyPending(getMockMessages(folder)));
         setHasMore(false);
         setUseMock(true);
         setSource("mock");
         setIndexCursor(null);
       }
     },
-    [session, folder, sort, getMessages],
+    [session, folder, sort, getMessages, applyPending],
   );
 
   const loadMessages = useCallback(async () => {
