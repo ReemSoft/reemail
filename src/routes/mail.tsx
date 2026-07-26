@@ -68,7 +68,6 @@ import {
   bridgeStar,
   bridgeMove,
   bridgeDelete,
-  bridgeSend,
   bridgeSearch,
 } from "@/lib/mail-bridge.functions";
 import {
@@ -2160,6 +2159,15 @@ function EmptyViewer() {
   );
 }
 
+const COMPOSE_MAX_TOTAL_BYTES = 25 * 1024 * 1024;
+const COMPOSE_MAX_FILES = 10;
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 function Composer({
   session,
   initial,
@@ -2171,16 +2179,46 @@ function Composer({
   onClose: () => void;
   onSent: () => void;
 }) {
-  const send = useServerFn(bridgeSend);
   const [to, setTo] = useState(initial?.to ?? "");
   const [cc, setCc] = useState(initial?.cc ?? "");
   const [subject, setSubject] = useState(initial?.subject ?? "");
   const [body, setBody] = useState(initial?.body ?? "");
+  const [files, setFiles] = useState<File[]>([]);
   const [sending, setSending] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const totalBytes = files.reduce((acc, f) => acc + f.size, 0);
+
+  function handlePickFiles(list: FileList | null) {
+    if (!list || list.length === 0) return;
+    const incoming = Array.from(list);
+    const merged: File[] = [...files];
+    let runningTotal = totalBytes;
+    for (const f of incoming) {
+      if (merged.length >= COMPOSE_MAX_FILES) {
+        toast.error(`الحد الأقصى ${COMPOSE_MAX_FILES} ملفات`);
+        break;
+      }
+      if (runningTotal + f.size > COMPOSE_MAX_TOTAL_BYTES) {
+        toast.error(`تجاوزت الحد الكلّي (25MB)`);
+        break;
+      }
+      merged.push(f);
+      runningTotal += f.size;
+    }
+    setFiles(merged);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  }
+
+  function removeFile(index: number) {
+    setFiles((prev) => prev.filter((_, i) => i !== index));
+  }
 
   async function handleSend() {
     if (!to || !subject) return;
     setSending(true);
+    setProgress(0);
     try {
       const parseAddresses = (raw: string) =>
         raw
@@ -2189,17 +2227,44 @@ function Composer({
           .filter(Boolean)
           .map((email) => ({ name: "", email }));
 
-      await send({
-        data: {
-          account: session.account,
-          password: session.password,
-          to: parseAddresses(to),
-          cc: parseAddresses(cc),
-          subject,
-          bodyHtml: body,
-          bodyText: body,
-        },
+      const payload = {
+        account: session.account,
+        password: session.password,
+        to: parseAddresses(to),
+        cc: parseAddresses(cc),
+        bcc: [],
+        subject,
+        bodyHtml: body,
+        bodyText: body,
+      };
+
+      const form = new FormData();
+      form.append("payload", JSON.stringify(payload));
+      for (const f of files) form.append("attachments", f, f.name);
+
+      const result = await new Promise<{ ok: boolean; error?: string }>((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open("POST", "/api/mail-send");
+        xhr.upload.onprogress = (e) => {
+          if (e.lengthComputable) setProgress(Math.round((e.loaded / e.total) * 100));
+        };
+        xhr.onload = () => {
+          try {
+            const json = JSON.parse(xhr.responseText || "{}");
+            if (xhr.status >= 200 && xhr.status < 300 && json.ok) resolve({ ok: true });
+            else resolve({ ok: false, error: json.error || `HTTP ${xhr.status}` });
+          } catch {
+            resolve({ ok: false, error: `HTTP ${xhr.status}` });
+          }
+        };
+        xhr.onerror = () => reject(new Error("Network error"));
+        xhr.send(form);
       });
+
+      if (!result.ok) {
+        toast.error(result.error || "فشل إرسال الرسالة");
+        return;
+      }
       toast.success("تم إرسال الرسالة");
       onClose();
       onSent();
@@ -2207,6 +2272,7 @@ function Composer({
       toast.error(err?.message || "فشل إرسال الرسالة");
     } finally {
       setSending(false);
+      setProgress(0);
     }
   }
 
@@ -2246,6 +2312,48 @@ function Composer({
           placeholder="اكتب رسالتك هنا..."
           className="w-full resize-none bg-transparent px-1 py-2 text-sm outline-none"
         />
+
+        {files.length > 0 && (
+          <div className="mt-2 flex flex-wrap gap-2 border-t border-border pt-3">
+            {files.map((f, i) => {
+              const { Icon, tint } = getAttachmentIcon(f.type, f.name);
+              return (
+                <div
+                  key={`${f.name}-${i}`}
+                  className="group inline-flex items-center gap-2 rounded-lg border border-border bg-muted/40 px-2.5 py-1.5 text-xs"
+                >
+                  <span className={`inline-flex h-6 w-6 items-center justify-center rounded-md ${tint}`}>
+                    <Icon className="h-3.5 w-3.5" />
+                  </span>
+                  <div className="flex flex-col leading-tight">
+                    <span className="max-w-[160px] truncate font-medium">{f.name}</span>
+                    <span className="text-[10px] text-muted-foreground">{formatBytes(f.size)}</span>
+                  </div>
+                  <button
+                    onClick={() => removeFile(i)}
+                    disabled={sending}
+                    className="rounded p-0.5 opacity-60 hover:bg-background hover:opacity-100"
+                    aria-label="حذف المرفق"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              );
+            })}
+            <span className="self-center text-[11px] text-muted-foreground">
+              {formatBytes(totalBytes)} / 25 MB
+            </span>
+          </div>
+        )}
+
+        {sending && progress > 0 && (
+          <div className="mt-3 h-1 overflow-hidden rounded-full bg-muted">
+            <div
+              className="h-full bg-brand-gradient transition-all"
+              style={{ width: `${progress}%` }}
+            />
+          </div>
+        )}
       </div>
       <div className="flex items-center justify-between border-t border-border px-4 py-2.5">
         <button
@@ -2254,15 +2362,30 @@ function Composer({
           className="inline-flex items-center gap-1.5 rounded-lg bg-brand-gradient px-4 py-2 text-sm font-semibold text-white shadow-soft disabled:opacity-60"
         >
           {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-          إرسال
+          {sending ? (progress > 0 ? `جاري الإرسال ${progress}%` : "جاري الإرسال") : "إرسال"}
         </button>
-        <button className="rounded-md p-2 hover:bg-muted">
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          className="hidden"
+          onChange={(e) => handlePickFiles(e.target.files)}
+        />
+        <button
+          type="button"
+          onClick={() => fileInputRef.current?.click()}
+          disabled={sending || files.length >= COMPOSE_MAX_FILES}
+          className="rounded-md p-2 hover:bg-muted disabled:opacity-40"
+          aria-label="إرفاق ملف"
+          title="إرفاق ملف"
+        >
           <Paperclip className="h-4 w-4" />
         </button>
       </div>
     </div>
   );
 }
+
 
 // ---- Attachment card with download + inline preview ----
 const INLINE_PREVIEW_MIME = new Set<string>([

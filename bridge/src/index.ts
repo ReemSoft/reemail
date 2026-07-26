@@ -1,6 +1,8 @@
 import "dotenv/config";
 import express from "express";
 import cors from "cors";
+import multer from "multer";
+
 import { z } from "zod";
 import {
   verifyCredentials,
@@ -249,6 +251,74 @@ app.post("/api/send", requireKey, async (req, res) => {
     return res.status(500).json({ ok: false, error: err?.message || "Failed to send message" });
   }
 });
+
+// ---- Send with attachments (multipart/form-data, streamed via multer) ----
+const SEND_MAX_TOTAL_BYTES = Number(process.env.SEND_MAX_TOTAL_BYTES || 25 * 1024 * 1024);
+const SEND_MAX_FILES = Number(process.env.SEND_MAX_FILES || 10);
+const sendUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: SEND_MAX_TOTAL_BYTES,
+    files: SEND_MAX_FILES,
+    fields: 20,
+    fieldSize: 5 * 1024 * 1024, // body HTML can be up to 5MB
+  },
+});
+
+app.post(
+  "/api/send-multipart",
+  requireKey,
+  sendUpload.array("attachments", SEND_MAX_FILES),
+  async (req, res) => {
+    try {
+      const raw = req.body?.payload;
+      if (typeof raw !== "string") {
+        return res.status(400).json({ ok: false, error: "Missing payload field" });
+      }
+      const parsed = JSON.parse(raw);
+      const payload = SendPayloadSchema.parse(parsed);
+
+      const files = (req.files as Express.Multer.File[] | undefined) ?? [];
+      const totalBytes = files.reduce((acc, f) => acc + f.size, 0);
+      if (totalBytes > SEND_MAX_TOTAL_BYTES) {
+        return res.status(413).json({ ok: false, error: "المرفقات تتجاوز الحد المسموح" });
+      }
+
+      const attachments = files.map((f) => ({
+        filename: f.originalname,
+        content: f.buffer,
+        contentType: f.mimetype,
+      }));
+
+      const result = await sendMessage(payload.account as any, payload.password, {
+        from: {
+          name: payload.account.display_name || payload.account.email_address,
+          email: payload.account.email_address,
+        },
+        to: payload.to as any,
+        cc: payload.cc as any,
+        bcc: payload.bcc as any,
+        subject: payload.subject,
+        bodyHtml: payload.bodyHtml,
+        bodyText: payload.bodyText,
+        attachments,
+      });
+      if (!result.ok && "error" in result) {
+        return res.status(500).json({ ok: false, error: result.error });
+      }
+      return res.json({ ok: true, messageId: result.messageId });
+    } catch (err: any) {
+      if (err?.code === "LIMIT_FILE_SIZE") {
+        return res.status(413).json({ ok: false, error: "ملف يتجاوز الحد المسموح (25MB)" });
+      }
+      if (err?.code === "LIMIT_FILE_COUNT") {
+        return res.status(413).json({ ok: false, error: "عدد الملفات يتجاوز الحد (10)" });
+      }
+      console.error("[bridge] /api/send-multipart error:", err);
+      return res.status(500).json({ ok: false, error: err?.message || "Failed to send message" });
+    }
+  },
+);
 
 // ---- Attachment download (streamed) ----
 const ATTACHMENT_MAX_BYTES = Number(process.env.ATTACHMENT_MAX_BYTES || 50 * 1024 * 1024);
