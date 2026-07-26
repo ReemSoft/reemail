@@ -1577,10 +1577,16 @@ function MailApp() {
     const idSet = new Set(ids);
     const prevSelectedId = selectedId;
     const prevSelected = selectedMessage;
+    // Per-id cache snapshots so bulk-delete rollback restores only the
+    // failed items' bodies — successful items stay purged.
+    const cachedBodies = new Map<string, any>();
+    for (const id of ids) {
+      const c = messageCache.current.get(id);
+      if (c) cachedBodies.set(id, c);
+    }
     setBulkBusy(true);
     setMessages((prev) => prev.filter((m) => !selection.has(m.id)));
     if (isTrash) {
-      // Ghost prevention (Blocker 1): purge deleted ids from deep-search results.
       setDeepResults((prev) => (prev ? prev.filter((m) => !idSet.has(m.id)) : prev));
     }
     if (prevSelectedId && selection.has(prevSelectedId)) {
@@ -1631,6 +1637,9 @@ function MailApp() {
           const info = meta.get(id);
           applyMoveCountsDelta(destForCounts ?? parsed.folder, parsed.folder, info?.wasUnread ?? false); // revert
         }
+        // Restore cached body for failed id only.
+        const c = cachedBodies.get(id);
+        if (c) messageCache.current.set(id, c);
       }
       setMessages((prev) => {
         const seen = new Set(prev.map((m) => m.id));
