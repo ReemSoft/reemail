@@ -762,6 +762,7 @@ function MailApp() {
   const updateFlag = useServerFn(indexUpdateFlag);
   const move = useServerFn(bridgeMove);
   const deleteFn = useServerFn(bridgeDelete);
+  const moveIndex = useServerFn(indexMoveMessage);
   const searchFn = useServerFn(bridgeSearch);
 
   // Preferred path for \Seen / \Flagged mutations:
