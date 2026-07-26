@@ -82,6 +82,8 @@ import {
   applyHidden as applyHiddenIds,
   clearOverride as clearFlagOverride,
   clearOverrideField as clearFlagOverrideField,
+  confirmHide,
+  gcHiddenBefore,
   hideId,
   reconcileOverrides as reconcileFlagOverrides,
   setOverride as setFlagOverride,
@@ -89,6 +91,7 @@ import {
   type HiddenIdsSet,
   type OverridesMap as FlagOverridesMap,
 } from "@/lib/mail-pending-overrides";
+
 import { runManualRefresh } from "@/lib/mail-refresh-orchestration";
 import { createSingleFlight } from "@/lib/single-flight";
 import {
