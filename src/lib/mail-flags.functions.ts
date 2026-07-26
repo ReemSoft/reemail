@@ -139,11 +139,18 @@ export const indexUpdateFlag = createServerFn({ method: "POST" })
     } = await import("./mail-flags-writer.server");
     let folderId: string | null = null;
     try {
+      // V4: "starred" is a virtual view over INBOX (\Flagged). The Local
+      // Index only stores an INBOX row for this UID, so the write-through
+      // MUST target `inbox` — otherwise `resolveFolderForFlag` returns null
+      // and the DB `flagged` column stays stale forever. The Bridge call
+      // above still uses the raw canonical name because the Bridge selects
+      // the mailbox path from it.
+      const indexCanonical = data.canonical === "starred" ? "inbox" : data.canonical;
       const folder = await resolveFolderForFlag(
         supabaseAdmin,
         accountId,
         companyId,
-        data.canonical,
+        indexCanonical,
       );
       if (!folder) {
         // Folder not yet indexed — nothing to write.
