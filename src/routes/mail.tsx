@@ -71,6 +71,9 @@ import {
   bridgeDelete,
   bridgeSearch,
 } from "@/lib/mail-bridge.functions";
+import { indexListMessages } from "@/lib/mail-index.functions";
+import { MAIL_INDEX_ENABLED } from "@/lib/mail-feature-flags";
+import { useMailIndexSync } from "@/hooks/use-mail-index-sync";
 import {
   formatDate,
   formatSize,
@@ -214,9 +217,12 @@ function buildForward(message: MailMessage): ComposeInitial {
 
 type SortOption = "date-desc" | "date-asc" | "unread-first" | "starred-first";
 
+type SourceKind = "index" | "bridge" | "mock";
+
 function useMailData(session: MailSession | null) {
   const getCounts = useServerFn(bridgeGetFolderCounts);
   const getMessages = useServerFn(bridgeGetMessages);
+  const listIndex = useServerFn(indexListMessages);
   const [folder, setFolder] = useState<MailFolder>("inbox");
   const [sort, setSort] = useState<SortOption>("date-desc");
   const [counts, setCounts] = useState<Record<MailFolder, { total: number; unread: number; supported: boolean }>>({
@@ -229,13 +235,22 @@ function useMailData(session: MailSession | null) {
     archive: { total: 0, unread: 0, supported: true },
     all: { total: 0, unread: 0, supported: true },
   });
+  const [folderPaths, setFolderPaths] = useState<Partial<Record<MailFolder, string>>>({});
   const [messages, setMessages] = useState<MailMessage[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(false);
   const [bridgeError, setBridgeError] = useState<string | null>(null);
   const [useMock, setUseMock] = useState(false);
+  const [source, setSource] = useState<SourceKind>("bridge");
+  const [indexCursor, setIndexCursor] = useState<string | null>(null);
+  // Per-folder "index ready" flag, used to drive the sync hook.
+  const [indexReady, setIndexReady] = useState<Partial<Record<MailFolder, boolean>>>({});
+  // Race guard: only accept a load result whose id matches the latest request.
+  const loadReqIdRef = useRef(0);
   const PAGE = 50;
+
+  const folderPath = folderPaths[folder] ?? null;
 
   const loadCounts = useCallback(async () => {
     if (!session) return;
@@ -252,8 +267,13 @@ function useMailData(session: MailSession | null) {
         all: { total: 0, unread: 0, supported: false },
       };
       if (!result.ok) throw new Error(result.error);
-      result.counts.forEach((c) => (map[c.folder] = { total: c.total, unread: c.unread, supported: c.supported !== false }));
+      const paths: Partial<Record<MailFolder, string>> = {};
+      result.counts.forEach((c) => {
+        map[c.folder] = { total: c.total, unread: c.unread, supported: c.supported !== false };
+        if (c.path) paths[c.folder] = c.path;
+      });
       setCounts(map);
+      setFolderPaths(paths);
       setBridgeError(null);
     } catch (err: any) {
       setBridgeError(err?.message || "فشل الاتصال بخادم البريد");
@@ -261,33 +281,111 @@ function useMailData(session: MailSession | null) {
     }
   }, [session, getCounts]);
 
+  // Decide whether this (folder, sort, session) call can use the Local Mail Index.
+  // Only "date-desc" is index-native; other sorts fall back to the bridge.
+  const canUseIndex = useCallback(
+    (f: MailFolder, s: SortOption) =>
+      MAIL_INDEX_ENABLED &&
+      s === "date-desc" &&
+      !!session?.mailSessionToken &&
+      !!folderPaths[f],
+    [session, folderPaths],
+  );
+
+  const loadFromBridge = useCallback(
+    async (reqId: number) => {
+      if (!session) return;
+      try {
+        const result = await getMessages({
+          data: { account: session.account, password: session.password, folder, limit: PAGE, offset: 0, sort },
+        });
+        if (loadReqIdRef.current !== reqId) return;
+        if (!result.ok) throw new Error(result.error);
+        setMessages(result.messages);
+        setHasMore(result.messages.length >= PAGE);
+        setBridgeError(null);
+        setUseMock(false);
+        setSource("bridge");
+        setIndexCursor(null);
+      } catch (err: any) {
+        if (loadReqIdRef.current !== reqId) return;
+        setBridgeError(err?.message || "فشل جلب الرسائل");
+        setMessages(getMockMessages(folder));
+        setHasMore(false);
+        setUseMock(true);
+        setSource("mock");
+        setIndexCursor(null);
+      }
+    },
+    [session, folder, sort, getMessages],
+  );
+
   const loadMessages = useCallback(async () => {
     if (!session) return;
+    const reqId = ++loadReqIdRef.current;
     setLoading(true);
     try {
-      const result = await getMessages({
-        data: { account: session.account, password: session.password, folder, limit: PAGE, offset: 0, sort },
-      });
-      if (!result.ok) throw new Error(result.error);
-      setMessages(result.messages);
-      setHasMore(result.messages.length >= PAGE);
-      setBridgeError(null);
-      setUseMock(false);
-    } catch (err: any) {
-      setBridgeError(err?.message || "فشل جلب الرسائل");
-      setMessages(getMockMessages(folder));
-      setHasMore(false);
-      setUseMock(true);
+      if (canUseIndex(folder, sort)) {
+        try {
+          const res = await listIndex({
+            data: {
+              mailSessionToken: session.mailSessionToken!,
+              canonical: folder,
+              limit: PAGE,
+            },
+          });
+          if (loadReqIdRef.current !== reqId) return;
+          if (res.ok && res.indexed) {
+            setMessages(res.messages);
+            setHasMore(res.hasMore);
+            setIndexCursor(res.nextCursor);
+            setSource("index");
+            setUseMock(false);
+            setBridgeError(null);
+            setIndexReady((prev) => (prev[folder] ? prev : { ...prev, [folder]: true }));
+            return;
+          }
+          // Not indexed yet OR transient error → mark not-ready and fall back.
+          setIndexReady((prev) => (prev[folder] === false ? prev : { ...prev, [folder]: false }));
+        } catch {
+          setIndexReady((prev) => (prev[folder] === false ? prev : { ...prev, [folder]: false }));
+        }
+      }
+      await loadFromBridge(reqId);
     } finally {
-      setLoading(false);
+      if (loadReqIdRef.current === reqId) setLoading(false);
     }
-
-  }, [session, folder, sort, getMessages]);
+  }, [session, folder, sort, canUseIndex, listIndex, loadFromBridge]);
 
   const loadMore = useCallback(async () => {
     if (!session || loadingMore || loading || !hasMore) return;
     setLoadingMore(true);
     try {
+      if (source === "index" && indexCursor && canUseIndex(folder, sort)) {
+        const res = await listIndex({
+          data: {
+            mailSessionToken: session.mailSessionToken!,
+            canonical: folder,
+            limit: PAGE,
+            cursor: indexCursor,
+          },
+        });
+        if (res.ok && res.indexed) {
+          setMessages((prev) => {
+            const seen = new Set(prev.map((m) => m.id));
+            const merged = [...prev];
+            for (const m of res.messages) if (!seen.has(m.id)) merged.push(m);
+            return merged;
+          });
+          setHasMore(res.hasMore);
+          setIndexCursor(res.nextCursor);
+          return;
+        }
+        // Index no longer usable — stop paginating gracefully.
+        setHasMore(false);
+        return;
+      }
+      // Bridge pagination (offset-based).
       const offset = messages.length;
       const result = await getMessages({
         data: { account: session.account, password: session.password, folder, limit: PAGE, offset, sort },
@@ -305,7 +403,10 @@ function useMailData(session: MailSession | null) {
     } finally {
       setLoadingMore(false);
     }
-  }, [session, folder, sort, getMessages, messages.length, loadingMore, loading, hasMore]);
+  }, [
+    session, folder, sort, getMessages, listIndex, messages.length,
+    loadingMore, loading, hasMore, source, indexCursor, canUseIndex,
+  ]);
 
   useEffect(() => {
     loadCounts();
@@ -319,6 +420,22 @@ function useMailData(session: MailSession | null) {
   useEffect(() => {
     setSort("date-desc");
   }, [folder]);
+
+  // Background Local Mail Index sync — initial when not ready, incremental
+  // afterwards. Pauses when the tab is hidden and never overlaps itself.
+  const isFolderIndexed = indexReady[folder] === true;
+  useMailIndexSync({
+    session,
+    folderPath,
+    canonical: folder,
+    indexed: isFolderIndexed,
+    enabled: MAIL_INDEX_ENABLED && !!session?.mailSessionToken && sort === "date-desc",
+    onSynced: () => {
+      // Refresh the current folder from the index after a successful round.
+      loadMessages();
+      loadCounts();
+    },
+  });
 
   return {
     folder,
@@ -336,8 +453,8 @@ function useMailData(session: MailSession | null) {
     bridgeError,
     useMock,
     loadCounts,
+    source,
     refresh: () => {
-      // Preserve current sort on manual refresh so user's choice is not lost.
       loadCounts();
       loadMessages();
     },

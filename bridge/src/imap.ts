@@ -100,18 +100,18 @@ export async function getFolderCounts(
     for (const folder of allFolders) {
       // Starred is a virtual folder (\Flagged in INBOX). Always supported.
       if (folder === "starred") {
+        const inboxPath = resolveFolderPath(mailboxes, "inbox") || "INBOX";
         try {
-          const inboxPath = resolveFolderPath(mailboxes, "inbox") || "INBOX";
           const lock = await client.getMailboxLock(inboxPath);
           try {
             const uids = (await client.search({ flagged: true } as SearchObject, { uid: true })) as number[];
             const unseen = (await client.search({ flagged: true, seen: false } as SearchObject, { uid: true })) as number[];
-            counts.push({ folder, total: uids?.length ?? 0, unread: unseen?.length ?? 0, supported: true });
+            counts.push({ folder, total: uids?.length ?? 0, unread: unseen?.length ?? 0, supported: true, path: inboxPath });
           } finally {
             lock.release();
           }
         } catch {
-          counts.push({ folder, total: 0, unread: 0, supported: true });
+          counts.push({ folder, total: 0, unread: 0, supported: true, path: inboxPath });
         }
         continue;
       }
@@ -133,9 +133,10 @@ export async function getFolderCounts(
             total: status.messages ?? 0,
             unread: status.unseen ?? 0,
             supported: true,
+            path: allMailPath,
           });
         } catch {
-          counts.push({ folder, total: 0, unread: 0, supported: false });
+          counts.push({ folder, total: 0, unread: 0, supported: false, path: allMailPath });
         }
         continue;
       }
@@ -153,9 +154,10 @@ export async function getFolderCounts(
           total: status.messages ?? 0,
           unread: status.unseen ?? 0,
           supported: true,
+          path,
         });
       } catch {
-        counts.push({ folder, total: 0, unread: 0, supported: true });
+        counts.push({ folder, total: 0, unread: 0, supported: true, path });
       }
     }
     return counts;

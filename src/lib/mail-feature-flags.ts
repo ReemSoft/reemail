@@ -4,8 +4,16 @@
 export const MAIL_INDEX_ENABLED: boolean =
   (import.meta.env.VITE_MAIL_INDEX_ENABLED ?? "true") !== "false";
 
-/** Which canonical folders read from the Local Mail Index in Pass B.
- *  Only "inbox" is enabled initially because the sync writer's folder-path
- *  resolution is currently hard-coded to "INBOX"; other folders continue
- *  through the direct IMAP bridge until path resolution ships. */
-export const INDEXED_FOLDERS = new Set<string>(["inbox"]);
+/** Which canonical folders may read from the Local Mail Index.
+ *  All standard folders are enabled now that the bridge returns real IMAP
+ *  paths on FolderCount and sync uses that path directly. Custom folders
+ *  (canonical=null) are handled by the sync writer but are not enumerated
+ *  here. */
+export const INDEXED_FOLDERS = new Set<string>([
+  "inbox",
+  "sent",
+  "drafts",
+  "spam",
+  "trash",
+  "archive",
+]);
