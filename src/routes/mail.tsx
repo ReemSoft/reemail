@@ -271,7 +271,7 @@ function useMailData(session: MailSession | null) {
   const pendingOverridesRef = useRef<FlagOverridesMap>(new Map());
   // Optimistic hide set — rows removed by the user (unstar in the "starred"
   // folder) that must NOT be resurrected by a racing sync response.
-  const pendingHiddenRef = useRef<HiddenIdsSet>(new Set());
+  const pendingHiddenRef = useRef<HiddenIdsSet>(new Map());
 
   /** Apply overrides + hidden filter to `list`, GC confirmed entries. */
   const applyPending = useCallback((list: MailMessage[]): MailMessage[] => {
