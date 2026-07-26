@@ -373,6 +373,13 @@ function useMailData(session: MailSession | null) {
             const next = { ...prev };
             for (const c of res.counts) {
               if (!c.hasUidvalidity) continue;
+              // V4 count race guard: skip starred.total while a mutation is
+              // hot; keep the optimistic value the toggle already applied.
+              if (c.folder === "starred" && isStarCountHot() && prev.starred) {
+                const cur = next.starred ?? { total: 0, unread: 0, supported: true };
+                next.starred = { total: prev.starred.total, unread: c.unread, supported: cur.supported };
+                continue;
+              }
               const cur = next[c.folder] ?? { total: 0, unread: 0, supported: true };
               next[c.folder] = { total: c.total, unread: c.unread, supported: cur.supported };
             }
