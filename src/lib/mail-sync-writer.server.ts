@@ -269,7 +269,7 @@ export async function upsertMessagesInBatches(
     const chunk = slice.map((m) => mapSyncMessageToRow(args, m));
     const { error } = await admin
       .from("mail_messages")
-      .upsert(chunk, { onConflict: "account_id,folder_id,uidvalidity,uid" });
+      .upsert(chunk as never, { onConflict: "account_id,folder_id,uidvalidity,uid" });
     if (error) throw error;
     wrote += chunk.length;
   }
@@ -395,7 +395,7 @@ export async function writeFolderMailboxState(
     .update({
       uidvalidity: mb.uidValidity ? Number(mb.uidValidity) : null,
       uidnext: mb.uidNext,
-      highest_modseq: mb.highestModseq,
+      highest_modseq: mb.highestModseq == null ? null : Number(mb.highestModseq),
       last_synced_at: new Date().toISOString(),
     })
     .eq("id", folderId);
@@ -420,7 +420,7 @@ export async function updateSyncCursor(
   const patch: Record<string, unknown> = {
     uidvalidity: Number(args.uidValidity),
     uidnext: args.uidNext,
-    highest_modseq: args.highestModseq,
+    highest_modseq: args.highestModseq == null ? null : Number(args.highestModseq),
   };
   if (args.oldestSyncedUid != null) patch.oldest_synced_uid = args.oldestSyncedUid;
   if (args.newestSyncedUid != null) patch.newest_synced_uid = args.newestSyncedUid;
@@ -428,7 +428,7 @@ export async function updateSyncCursor(
   if (args.markReconciledAt) patch.last_reconcile_at = new Date().toISOString();
   const up = await admin
     .from("mail_sync_state")
-    .update(patch)
+    .update(patch as never)
     .eq("account_id", args.accountId)
     .eq("folder_id", args.folderId);
   if (up.error) throw up.error;
