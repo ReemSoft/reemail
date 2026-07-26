@@ -1,60 +1,93 @@
 // Unit tests for the Local Mail Index permanent-delete writer (Blocker 1).
 //
-// The writer's contract:
-//   1) No source folder row indexed → applied: "no-source-folder", NO tombstone,
-//      NO RPC call.
-//   2) Source row missing (already tombstoned or never seen) → applied:
-//      "already-tombstoned", NO RPC call (would double-decrement counters).
-//   3) Source row present and unread → tombstone + RPC with total=-1, unread=-1.
-//   4) Source row present and read   → tombstone + RPC with total=-1, unread=0.
-//   5) RPC failure surfaces as ok:false; row still tombstoned (IMAP is truth,
-//      counters self-heal on next poll).
-import { describe, it, expect, vi, beforeEach } from "vitest";
+// Contract exercised:
+//   1) No source folder row indexed → "no-source-folder", no RPC, no writes.
+//   2) Conditional UPDATE matches 0 rows (missing OR already tombstoned) →
+//      "already-tombstoned", NO RPC — idempotency guarantee that fixes the
+//      duplicate-decrement bug caught in FIX_BLOCKER_1 review.
+//   3) Conditional UPDATE matches 1 row → tombstone + RPC exactly once,
+//      with unread delta driven by the row's `seen` flag.
+//   4) Two concurrent callers → only ONE RPC decrement (fake DB models the
+//      Postgres `WHERE deleted_at IS NULL` serialization).
+//   5) RPC failure surfaces as ok:false; row still tombstoned.
+import { describe, it, expect, beforeEach } from "vitest";
 import { applyDeleteWriteThrough } from "@/lib/mail-delete-writer.server";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
+// Fake DB modeling the ONE row we care about + its `deleted_at` gate.
+interface Row {
+  id: string;
+  seen: boolean;
+  deleted_at: string | null;
+}
 interface FakeState {
   folderRow: { id: string; uidvalidity: number | null; path: string | null } | null;
-  messageRow: { id: string; seen: boolean; deleted_at: string | null } | null;
-  updates: Array<{ table: string; patch: unknown; matchId?: string }>;
-  rpcCalls: Array<{ name: string; args: unknown }>;
+  row: Row | null; // null → missing entirely
+  updates: number;
+  rpcCalls: Array<{ name: string; args: any }>;
   rpcError: string | null;
 }
 
 function makeSupabase(state: FakeState): SupabaseClient {
-  const from = (table: string) => {
-    const chain: any = {
-      _table: table,
+  const from = (table: string): any => {
+    const ctx: any = {
       _filters: {} as Record<string, unknown>,
-      _selectCols: "*",
-      select(cols: string) {
-        this._selectCols = cols;
+      _isNull: null as string | null,
+      select() {
         return this;
       },
       eq(col: string, val: unknown) {
         this._filters[col] = val;
         return this;
       },
+      is(col: string, val: unknown) {
+        if (val === null) this._isNull = col;
+        return this;
+      },
       async maybeSingle() {
         if (table === "mail_folders") return { data: state.folderRow, error: null };
-        if (table === "mail_messages") return { data: state.messageRow, error: null };
         return { data: null, error: null };
       },
-      update(patch: unknown) {
-        return {
-          eq: (_c: string, id: unknown) => {
-            state.updates.push({ table, patch, matchId: String(id) });
-            return Promise.resolve({ error: null });
+      update(patch: Record<string, unknown>) {
+        // Return a builder that awaits to the conditional-UPDATE result.
+        const b: any = {
+          _filters: {} as Record<string, unknown>,
+          _isNull: null as string | null,
+          eq(col: string, val: unknown) {
+            this._filters[col] = val;
+            return this;
+          },
+          is(col: string, val: unknown) {
+            if (val === null) this._isNull = col;
+            return this;
+          },
+          select() {
+            return this;
+          },
+          async maybeSingle() {
+            if (table !== "mail_messages") return { data: null, error: null };
+            // Simulate atomic conditional UPDATE: match only if
+            // deleted_at IS NULL currently.
+            if (!state.row) return { data: null, error: null };
+            if (this._isNull === "deleted_at" && state.row.deleted_at != null) {
+              return { data: null, error: null };
+            }
+            state.row.deleted_at = String(patch.deleted_at ?? new Date().toISOString());
+            state.updates++;
+            return { data: { id: state.row.id, seen: state.row.seen }, error: null };
           },
         };
+        return b;
       },
     };
-    return chain;
+    return ctx;
   };
   const rpc = (name: string, args: unknown) => {
     state.rpcCalls.push({ name, args });
     return Promise.resolve(
-      state.rpcError ? { data: null, error: { message: state.rpcError } } : { data: null, error: null },
+      state.rpcError
+        ? { data: null, error: { message: state.rpcError } }
+        : { data: null, error: null },
     );
   };
   return { from, rpc } as unknown as SupabaseClient;
@@ -63,42 +96,50 @@ function makeSupabase(state: FakeState): SupabaseClient {
 const baseInput = {
   accountId: "acc-1",
   companyId: "co-1",
-  sourceCanonical: "trash",
+  sourceCanonical: "trash" as const,
   sourceUid: 42,
 };
 
-describe("applyDeleteWriteThrough", () => {
+describe("applyDeleteWriteThrough (idempotent)", () => {
   let state: FakeState;
   beforeEach(() => {
     state = {
       folderRow: { id: "f-trash", uidvalidity: 100, path: "Trash" },
-      messageRow: { id: "m-1", seen: false, deleted_at: null },
-      updates: [],
+      row: { id: "m-1", seen: false, deleted_at: null },
+      updates: 0,
       rpcCalls: [],
       rpcError: null,
     };
   });
 
-  it("no source folder row → no-source-folder, no RPC", async () => {
+  it("no source folder row → no-source-folder, no RPC, no update", async () => {
     state.folderRow = null;
     const out = await applyDeleteWriteThrough(makeSupabase(state), baseInput);
     expect(out).toEqual({ ok: true, applied: "no-source-folder", wasUnread: false });
     expect(state.rpcCalls).toHaveLength(0);
-    expect(state.updates).toHaveLength(0);
+    expect(state.updates).toBe(0);
   });
 
-  it("row missing → already-tombstoned, no RPC", async () => {
-    state.messageRow = null;
+  it("row missing → already-tombstoned, NO RPC, NO update", async () => {
+    state.row = null;
     const out = await applyDeleteWriteThrough(makeSupabase(state), baseInput);
     expect(out).toEqual({ ok: true, applied: "already-tombstoned", wasUnread: false });
     expect(state.rpcCalls).toHaveLength(0);
+    expect(state.updates).toBe(0);
   });
 
-  it("unread row → tombstone + RPC(-1,-1)", async () => {
+  it("row already tombstoned → already-tombstoned, NO RPC, NO update", async () => {
+    state.row = { id: "m-1", seen: false, deleted_at: "2026-01-01T00:00:00Z" };
+    const out = await applyDeleteWriteThrough(makeSupabase(state), baseInput);
+    expect(out).toEqual({ ok: true, applied: "already-tombstoned", wasUnread: false });
+    expect(state.rpcCalls).toHaveLength(0);
+    expect(state.updates).toBe(0);
+  });
+
+  it("unread row → tombstone + RPC(-1,-1) exactly once", async () => {
     const out = await applyDeleteWriteThrough(makeSupabase(state), baseInput);
     expect(out).toEqual({ ok: true, applied: "tombstoned", wasUnread: true });
-    expect(state.updates).toHaveLength(1);
-    expect(state.updates[0].table).toBe("mail_messages");
+    expect(state.updates).toBe(1);
     expect(state.rpcCalls).toEqual([
       {
         name: "adjust_mail_folder_counts_atomic",
@@ -114,28 +155,42 @@ describe("applyDeleteWriteThrough", () => {
   });
 
   it("read row → tombstone + RPC(-1, 0)", async () => {
-    state.messageRow = { id: "m-1", seen: true, deleted_at: null };
+    state.row = { id: "m-1", seen: true, deleted_at: null };
     const out = await applyDeleteWriteThrough(makeSupabase(state), baseInput);
     expect(out).toEqual({ ok: true, applied: "tombstoned", wasUnread: false });
     expect(state.rpcCalls[0].args).toMatchObject({ p_total_delta: -1, p_unread_delta: 0 });
   });
 
-  it("already-tombstoned row (deleted_at set) → no second UPDATE, no RPC", async () => {
-    state.messageRow = { id: "m-1", seen: false, deleted_at: "2026-01-01" };
-    const out = await applyDeleteWriteThrough(makeSupabase(state), baseInput);
-    expect(out.ok).toBe(true);
-    // tombstoneSourceRow returns { wasUnread } without writing when already deleted;
-    // so the writer proceeds to RPC. Verify RPC is called exactly once and
-    // no additional UPDATE was performed against mail_messages.
-    expect(state.updates).toHaveLength(0);
+  it("calling twice in sequence → second call is a no-op (RPC still =1)", async () => {
+    const supabase = makeSupabase(state);
+    const first = await applyDeleteWriteThrough(supabase, baseInput);
+    expect(first).toMatchObject({ ok: true, applied: "tombstoned" });
     expect(state.rpcCalls).toHaveLength(1);
+    expect(state.updates).toBe(1);
+
+    const second = await applyDeleteWriteThrough(supabase, baseInput);
+    expect(second).toMatchObject({ ok: true, applied: "already-tombstoned" });
+    expect(state.rpcCalls).toHaveLength(1); // no additional RPC
+    expect(state.updates).toBe(1); // no additional update
   });
 
-  it("RPC error surfaces as ok:false", async () => {
+  it("two concurrent callers → RPC decrement called exactly once", async () => {
+    const supabase = makeSupabase(state);
+    const [a, b] = await Promise.all([
+      applyDeleteWriteThrough(supabase, baseInput),
+      applyDeleteWriteThrough(supabase, baseInput),
+    ]);
+    const applied = [a, b].map((r) => (r.ok ? r.applied : "err")).sort();
+    expect(applied).toEqual(["already-tombstoned", "tombstoned"]);
+    expect(state.rpcCalls).toHaveLength(1);
+    expect(state.updates).toBe(1);
+  });
+
+  it("RPC error surfaces as ok:false; row is still tombstoned", async () => {
     state.rpcError = "boom";
     const out = await applyDeleteWriteThrough(makeSupabase(state), baseInput);
     expect(out).toEqual({ ok: false, error: "boom" });
-    // Row was still tombstoned before the RPC failed.
-    expect(state.updates).toHaveLength(1);
+    expect(state.updates).toBe(1);
+    expect(state.row?.deleted_at).not.toBeNull();
   });
 });

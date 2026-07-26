@@ -1328,11 +1328,10 @@ function MailApp() {
       const deepSnapshot = deepResults;
       const prevSelectedId = selectedId;
       const prevSelected = selectedMessage;
-      // Trash-delete = permanent delete via indexDeleteMessage / bridge
-      // messageDelete (Blocker 1). No target folder gains a row, so
-      // counters model source-1 only. Ghost prevention: also purge from
-      // deep-search results — the tombstone will keep it out of the next
-      // index page, and this covers the currently-visible in-memory list.
+      // Cache snapshot (Blocker 1 rollback): if this row was fully cached
+      // we must restore it on failure so re-open doesn't re-fetch/re-render
+      // a stale body — only the failed id, not a full-map wipe.
+      const cachedBody = messageCache.current.get(id);
       const destForCounts: MailFolder | null = isTrash ? null : "trash";
       setMessages((prev) => prev.filter((m) => m.id !== id));
       if (isTrash) {
@@ -1360,8 +1359,11 @@ function MailApp() {
       } catch (err: any) {
         unhideRow(id);
         applyMoveCountsDelta(destForCounts ?? parsed.folder, parsed.folder, wasUnread); // revert
-        setMessages(snapshot);
+        // Re-insert with a duplicate guard so we never clobber a concurrent
+        // mutation that already re-added the row.
+        setMessages((prev) => (prev.some((m) => m.id === id) ? prev : snapshot));
         if (isTrash) setDeepResults(deepSnapshot);
+        if (cachedBody) messageCache.current.set(id, cachedBody);
         setSelectedId(prevSelectedId);
         setSelectedMessage(prevSelected);
         toast.error(err?.message || (isTrash ? "فشل حذف الرسالة" : "فشل نقل الرسالة إلى المهملات"));
@@ -1575,10 +1577,16 @@ function MailApp() {
     const idSet = new Set(ids);
     const prevSelectedId = selectedId;
     const prevSelected = selectedMessage;
+    // Per-id cache snapshots so bulk-delete rollback restores only the
+    // failed items' bodies — successful items stay purged.
+    const cachedBodies = new Map<string, any>();
+    for (const id of ids) {
+      const c = messageCache.current.get(id);
+      if (c) cachedBodies.set(id, c);
+    }
     setBulkBusy(true);
     setMessages((prev) => prev.filter((m) => !selection.has(m.id)));
     if (isTrash) {
-      // Ghost prevention (Blocker 1): purge deleted ids from deep-search results.
       setDeepResults((prev) => (prev ? prev.filter((m) => !idSet.has(m.id)) : prev));
     }
     if (prevSelectedId && selection.has(prevSelectedId)) {
@@ -1629,6 +1637,9 @@ function MailApp() {
           const info = meta.get(id);
           applyMoveCountsDelta(destForCounts ?? parsed.folder, parsed.folder, info?.wasUnread ?? false); // revert
         }
+        // Restore cached body for failed id only.
+        const c = cachedBodies.get(id);
+        if (c) messageCache.current.set(id, c);
       }
       setMessages((prev) => {
         const seen = new Set(prev.map((m) => m.id));
