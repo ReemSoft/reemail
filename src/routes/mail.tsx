@@ -670,8 +670,8 @@ function useMailData(session: MailSession | null) {
       if (field) clearFlagOverrideField(pendingOverridesRef.current, id, field);
       else clearFlagOverride(pendingOverridesRef.current, id);
     },
-    hideRow: (id: string) => hideId(pendingHiddenRef.current, id),
-    unhideRow: (id: string) => unhideId(pendingHiddenRef.current, id),
+    hideRow: (id: string) => hideRow(id),
+    unhideRow: (id: string) => unhideRow(id),
     confirmHideRow: (id: string, at: number = Date.now()) =>
       confirmHide(pendingHiddenRef.current, id, at),
     // V4: star-mutation lifecycle hooks used by toggleStar to hold the
@@ -1266,7 +1266,7 @@ function MailApp() {
       setSelectedId(null);
       setSelectedMessage(null);
       messageCache.current.delete(id);
-      hideId(pendingHiddenRef.current, id);
+      hideRow(id);
       applyMoveCountsDelta(parsed.folder, toFolder, wasUnread);
       try {
         await mutateMoveOrDelete({
@@ -1276,10 +1276,10 @@ function MailApp() {
         });
         if (toFolder === "trash") rememberOrigin(msg?.threadId, parsed.folder);
         else forgetOrigin(msg?.threadId);
-        confirmHide(pendingHiddenRef.current, id, Date.now());
+        confirmHideRow(id);
         toast.success("تم نقل الرسالة");
       } catch (err: any) {
-        unhideId(pendingHiddenRef.current, id);
+        unhideRow(id);
         applyMoveCountsDelta(toFolder, parsed.folder, wasUnread); // revert
         setMessages(snapshot);
         setSelectedId(prevSelectedId);
@@ -1317,7 +1317,7 @@ function MailApp() {
       setSelectedId(null);
       setSelectedMessage(null);
       messageCache.current.delete(id);
-      hideId(pendingHiddenRef.current, id);
+      hideRow(id);
       applyMoveCountsDelta(parsed.folder, destForCounts, wasUnread);
       try {
         if (isTrash) {
@@ -1331,10 +1331,10 @@ function MailApp() {
           });
           rememberOrigin(msg?.threadId, parsed.folder);
         }
-        confirmHide(pendingHiddenRef.current, id, Date.now());
+        confirmHideRow(id);
         toast.success(isTrash ? "تم حذف الرسالة نهائياً" : "تم نقل الرسالة إلى المهملات");
       } catch (err: any) {
-        unhideId(pendingHiddenRef.current, id);
+        unhideRow(id);
         applyMoveCountsDelta(destForCounts ?? parsed.folder, parsed.folder, wasUnread); // revert
         setMessages(snapshot);
         setSelectedId(prevSelectedId);
@@ -1359,7 +1359,7 @@ function MailApp() {
       setSelectedId(null);
       setSelectedMessage(null);
       messageCache.current.delete(id);
-      hideId(pendingHiddenRef.current, id);
+      hideRow(id);
       applyMoveCountsDelta(parsed.folder, target, wasUnread);
       try {
         await mutateMoveOrDelete({
@@ -1368,11 +1368,11 @@ function MailApp() {
           toFolder: target,
         });
         forgetOrigin(msg?.threadId);
-        confirmHide(pendingHiddenRef.current, id, Date.now());
+        confirmHideRow(id);
         const label = FOLDER_META[target]?.label || target;
         toast.success(`تم استعادة الرسالة إلى ${label}`);
       } catch (err: any) {
-        unhideId(pendingHiddenRef.current, id);
+        unhideRow(id);
         applyMoveCountsDelta(target, parsed.folder, wasUnread); // revert
         setMessages(snapshot);
         setSelectedId(prevSelectedId);
