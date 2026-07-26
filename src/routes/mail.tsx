@@ -982,8 +982,16 @@ function MailApp() {
         setMessages((prev) => prev.filter((m) => m.id !== id));
       }
     } else {
-      // Re-starring: make sure a stale hide entry can't keep the row hidden.
+      // Re-starring anywhere: clear any hide for THIS id and, crucially,
+      // clear the "starred:<uid>" namespaced hide too — the row might
+      // have been unstarred from the Starred view earlier and its hide
+      // entry is keyed by that folder-prefixed id. Without this, the
+      // freshly-restarred row would still be filtered out of the Starred
+      // view on next visit.
       unhideRow(id);
+      if (parsed.folder !== "starred") {
+        unhideRow(`starred:${parsed.uid}`);
+      }
       setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, starred: nextStarred } : m)));
     }
     setDeepResults((prev) =>
@@ -993,8 +1001,14 @@ function MailApp() {
     if (cached) messageCache.current.set(id, { ...cached, starred: nextStarred });
     try {
       await mutateFlag(parsed.folder, parsed.uid, "flagged", nextStarred);
-      // Local Index write-through happens inside mutateFlag on the server side
-      // (indexUpdateFlag), so a follow-up loadCountsSoft is no longer required.
+      // IMAP + Local Index write-through succeeded. If we optimistically
+      // hid a row in the Starred view, mark the hide as CONFIRMED so the
+      // next primary list load (which is guaranteed to reflect the flag
+      // flip) auto-drops it via gcHiddenBefore. A pre-mutation racing
+      // response still can't resurrect the row in the meantime.
+      if (starredFolderSnapshot) {
+        confirmHideRow(id, Date.now());
+      }
     } catch (err: any) {
       clearPendingFlagOverride(id, "starred");
       // Rollback counter with the inverse delta (single, exact revert).
@@ -1006,10 +1020,13 @@ function MailApp() {
       });
       if (starredFolderSnapshot) {
         // Restore the row at its previous position, then unhide.
+        // Duplicate guard: a racing sync may have already re-inserted
+        // the row while the mutation was in flight — never insert twice.
         unhideRow(id);
         const { list, index } = starredFolderSnapshot;
         const revived = list[index];
         setMessages((prev) => {
+          if (prev.some((m) => m.id === id)) return prev;
           const next = prev.slice();
           const clampedIdx = Math.min(index, next.length);
           next.splice(clampedIdx, 0, revived);
@@ -1028,6 +1045,7 @@ function MailApp() {
       toast.error(err?.message || "فشل تحديث المميّز");
     }
   }
+
 
   async function toggleRead(e: React.MouseEvent, id: string) {
     e.stopPropagation();
