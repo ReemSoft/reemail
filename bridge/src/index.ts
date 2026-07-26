@@ -264,15 +264,13 @@ app.post("/api/send", requireKey, async (req, res) => {
   }
 });
 
-// ---- Send with attachments (multipart/form-data, streamed via multer) ----
-const SEND_MAX_TOTAL_BYTES = Number(process.env.SEND_MAX_TOTAL_BYTES || 25 * 1024 * 1024);
-const SEND_MAX_FILES = Number(process.env.SEND_MAX_FILES || 10);
 // ---- Send with attachments (multipart/form-data, streamed to disk) ----
 // Streaming to disk (see uploads.ts) keeps RSS flat under upload bursts.
 // A dedicated concurrency gate then caps how many sends can be in flight so
 // SMTP dial-out itself cannot blow up memory.
 const SEND_MAX_TOTAL_BYTES = Number(process.env.SEND_MAX_TOTAL_BYTES || 25 * 1024 * 1024);
 const SEND_MAX_FILES = Number(process.env.SEND_MAX_FILES || 10);
+
 const SEND_GLOBAL_MAX = Number(process.env.SEND_GLOBAL_MAX || 20);
 const SEND_PER_ACCOUNT_MAX = Number(process.env.SEND_PER_ACCOUNT_MAX || 3);
 
