@@ -530,4 +530,9 @@ app.post("/api/sync/reconcile", requireKey, async (req, res) => {
 const HOST = process.env.HOST || "127.0.0.1";
 app.listen(PORT, HOST, () => {
   console.log(`[bridge] MailMaestro Bridge running on ${HOST}:${PORT}`);
+  // Best-effort sweep of stale uploads from a previous crashed run.
+  startupCleanup()
+    .then((n) => n > 0 && console.log(`[bridge] cleaned ${n} stale upload(s)`))
+    .catch(() => {});
 });
+
