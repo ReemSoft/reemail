@@ -249,3 +249,52 @@
     transform: none;
   }
 }
+
+/* =========================================================
+ * Toast stack — bottom-side, elegant slide in/out from left
+ * ========================================================= */
+
+/* Position the toaster at the bottom-left with generous spacing */
+[data-sonner-toaster][data-x-position="left"][data-y-position="bottom"] {
+  --offset-left: 1.25rem;
+  --offset-bottom: 1.25rem;
+  --mobile-offset-left: 1rem;
+  --mobile-offset-right: 1rem;
+  --mobile-offset-bottom: 1rem;
+}
+
+/* Front toast: slide in/out from the left side (only when not expanded) */
+[data-sonner-toaster][data-x-position="left"][data-y-position="bottom"]:not([data-expanded="true"]) [data-sonner-toast][data-front="true"] {
+  transition: transform 0.45s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.35s ease;
+}
+
+[data-sonner-toaster][data-x-position="left"][data-y-position="bottom"]:not([data-expanded="true"]) [data-sonner-toast][data-front="true"]:not([data-mounted="true"]):not([data-removed="true"]) {
+  transform: translateX(-100%);
+  opacity: 0;
+}
+
+[data-sonner-toaster][data-x-position="left"][data-y-position="bottom"]:not([data-expanded="true"]) [data-sonner-toast][data-front="true"][data-mounted="true"]:not([data-removed="true"]) {
+  transform: translateX(0);
+  opacity: 1;
+}
+
+[data-sonner-toaster][data-x-position="left"][data-y-position="bottom"]:not([data-expanded="true"]) [data-sonner-toast][data-front="true"][data-removed="true"] {
+  transform: translateX(-100%);
+  opacity: 0;
+}
+
+/* Restore Sonner's native swipe behaviour on the front toast */
+[data-sonner-toaster][data-x-position="left"][data-y-position="bottom"]:not([data-expanded="true"]) [data-sonner-toast][data-front="true"][data-swiping="true"] {
+  transform: var(--y) translateY(var(--swipe-amount-y, 0)) translateX(var(--swipe-amount-x, 0)) !important;
+  transition: none !important;
+  opacity: 1 !important;
+}
+
+/* Mobile: make sure the toast stays off the screen edges */
+@media (max-width: 600px) {
+  [data-sonner-toaster][data-x-position="left"][data-y-position="bottom"] {
+    --mobile-offset-left: 1rem;
+    --mobile-offset-right: 1rem;
+    --mobile-offset-bottom: 1rem;
+  }
+}
