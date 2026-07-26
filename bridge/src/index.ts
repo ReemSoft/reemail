@@ -18,6 +18,15 @@ import {
 } from "./imap.js";
 import { sendMessage } from "./smtp.js";
 import type { MailAccount, MailFolder } from "./types.js";
+import {
+  InitialSyncSchema,
+  IncrementalSyncSchema,
+  ReconcileSyncSchema,
+  runInitialSync,
+  runIncrementalSync,
+  runReconcileSync,
+  safeError,
+} from "./sync.js";
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
