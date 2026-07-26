@@ -4,12 +4,16 @@
 // when the server confirms the expected value.
 import { describe, it, expect } from "vitest";
 import {
+  applyHidden,
   applyOverrides,
   applyOverrideToOne,
   clearOverride,
   clearOverrideField,
+  hideId,
   reconcileOverrides,
   setOverride,
+  unhideId,
+  type HiddenIdsSet,
   type OverridesMap,
 } from "../mail-pending-overrides";
 import type { MailMessage } from "@/lib/mail-types";
