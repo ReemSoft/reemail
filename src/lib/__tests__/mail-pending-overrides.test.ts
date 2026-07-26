@@ -103,6 +103,8 @@ describe("mail-pending-overrides", () => {
     expect(ov.get("inbox:1")).toEqual({ starred: true });
     // And the applied list shows the intended value, not the stale one.
     expect(applyOverrides(stale, ov)[0]!.starred).toBe(true);
+  });
+
   it("applyHidden is a no-op when the set is empty", () => {
     const list = [msg("inbox:1"), msg("inbox:2")];
     const out = applyHidden(list, new Set());
