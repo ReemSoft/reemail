@@ -84,33 +84,36 @@ export async function resolveFolderByPath(
 }
 
 /**
- * Soft-delete a source row (identity: account+folder+uidvalidity+uid).
- * Returns whether the row's `seen` flag was false so callers can update the
- * source folder's `unread` counter with the correct delta.
- * Returns `null` when no matching row exists (already tombstoned or the
- * folder hadn't been indexed yet).
+ * Idempotent, atomic soft-delete of a source row (identity:
+ * account+folder+uidvalidity+uid). Uses a single conditional UPDATE with
+ * `.is("deleted_at", null)` so two concurrent callers cannot both observe
+ * "row changed" — Postgres serializes the WHERE + UPDATE and only one wins.
+ *
+ * Returns `{ changed: true, wasUnread }` exactly once per row. Any
+ * subsequent call (row missing OR already tombstoned) returns
+ * `{ changed: false }` — callers MUST NOT decrement folder counters when
+ * `changed === false`, otherwise counts drift permanently on retries /
+ * double-clicks.
  */
+export type TombstoneResult = { changed: true; wasUnread: boolean } | { changed: false };
+
 export async function tombstoneSourceRow(
   supabase: SupabaseClient,
   params: { accountId: string; folderId: string; uidvalidity: number; uid: number },
-): Promise<{ wasUnread: boolean } | null> {
-  const sel = await supabase
+): Promise<TombstoneResult> {
+  const up = await supabase
     .from("mail_messages")
-    .select("id, seen, deleted_at")
+    .update({ deleted_at: new Date().toISOString() })
     .eq("account_id", params.accountId)
     .eq("folder_id", params.folderId)
     .eq("uidvalidity", params.uidvalidity)
     .eq("uid", params.uid)
+    .is("deleted_at", null)
+    .select("id, seen")
     .maybeSingle();
-  if (sel.error) throw sel.error;
-  if (!sel.data?.id) return null;
-  if (sel.data.deleted_at) return { wasUnread: !sel.data.seen };
-  const up = await supabase
-    .from("mail_messages")
-    .update({ deleted_at: new Date().toISOString() })
-    .eq("id", sel.data.id);
   if (up.error) throw up.error;
-  return { wasUnread: !sel.data.seen };
+  if (!up.data?.id) return { changed: false };
+  return { changed: true, wasUnread: !up.data.seen };
 }
 
 /**
