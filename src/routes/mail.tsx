@@ -658,19 +658,22 @@ function MailApp() {
     applyPendingOne,
   } = useMailData(session || null);
 
-  // Serialize Refresh with a ref (not React state) so a double-click that
-  // fires before the re-render can't spawn a second incrementalNow.
-  const refreshInFlightRef = useRef<Promise<void> | null>(null);
+  // Serialize Refresh with a single-flight guard (ref, not React state) so a
+  // double-click that fires before the next render can't spawn a second
+  // incrementalNow. `refreshing` state stays as the visual spinner only.
+  const refreshFlightRef = useRef(createSingleFlight<void>());
   const refresh = useCallback((): Promise<void> => {
-    const existing = refreshInFlightRef.current;
-    if (existing) return existing;
+    if (refreshFlightRef.current.isBusy()) {
+      return refreshFlightRef.current.run(() => Promise.resolve());
+    }
     setRefreshing(true);
-    const p = rawRefresh().finally(() => {
-      refreshInFlightRef.current = null;
-      setRefreshing(false);
+    return refreshFlightRef.current.run(async () => {
+      try {
+        await rawRefresh();
+      } finally {
+        setRefreshing(false);
+      }
     });
-    refreshInFlightRef.current = p;
-    return p;
   }, [rawRefresh]);
 
   const getOne = useServerFn(bridgeGetMessage);
