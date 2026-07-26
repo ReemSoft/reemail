@@ -1676,7 +1676,7 @@ function MessageRow({
       onMouseEnter={onPrefetch}
       onFocus={onPrefetch}
       onTouchStart={onPrefetch}
-      className={`group flex w-full cursor-pointer items-start gap-3 border-b border-border/60 px-4 py-3 text-right transition hover:bg-muted/50 ${
+      className={`group flex w-full cursor-pointer items-start gap-3 border-b border-border/60 px-4 py-3 text-right transition-colors duration-150 hover:bg-muted/50 active:bg-muted active:duration-75 ${
         active ? "bg-accent" : ""
       } ${selected ? "bg-primary/5" : ""} ${!message.read ? "bg-card" : "bg-card/70"}`}
     >
