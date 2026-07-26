@@ -79,13 +79,18 @@ import { useMailIndexSync } from "@/hooks/use-mail-index-sync";
 import {
   applyOverrides as applyFlagOverrides,
   applyOverrideToOne as applyFlagOverrideToOne,
+  applyHidden as applyHiddenIds,
   clearOverride as clearFlagOverride,
   clearOverrideField as clearFlagOverrideField,
+  hideId,
   reconcileOverrides as reconcileFlagOverrides,
   setOverride as setFlagOverride,
+  unhideId,
+  type HiddenIdsSet,
   type OverridesMap as FlagOverridesMap,
 } from "@/lib/mail-pending-overrides";
 import { runManualRefresh } from "@/lib/mail-refresh-orchestration";
+import { createSingleFlight } from "@/lib/single-flight";
 import {
   formatDate,
   formatSize,
@@ -264,11 +269,15 @@ function useMailData(session: MailSession | null) {
   // deep search). Entries are cleared on mutation failure (rollback) or
   // when a fresh server row confirms the expected value.
   const pendingOverridesRef = useRef<FlagOverridesMap>(new Map());
+  // Optimistic hide set — rows removed by the user (unstar in the "starred"
+  // folder) that must NOT be resurrected by a racing sync response.
+  const pendingHiddenRef = useRef<HiddenIdsSet>(new Set());
 
-  /** Apply overrides to `list`, GC confirmed entries, and return the patched list. */
+  /** Apply overrides + hidden filter to `list`, GC confirmed entries. */
   const applyPending = useCallback((list: MailMessage[]): MailMessage[] => {
     reconcileFlagOverrides(list, pendingOverridesRef.current);
-    return applyFlagOverrides(list, pendingOverridesRef.current);
+    const patched = applyFlagOverrides(list, pendingOverridesRef.current);
+    return applyHiddenIds(patched, pendingHiddenRef.current);
   }, []);
 
   /** Wrap a single incoming message the same way (used by messageCache). */
@@ -599,6 +608,8 @@ function useMailData(session: MailSession | null) {
       if (field) clearFlagOverrideField(pendingOverridesRef.current, id, field);
       else clearFlagOverride(pendingOverridesRef.current, id);
     },
+    hideRow: (id: string) => hideId(pendingHiddenRef.current, id),
+    unhideRow: (id: string) => unhideId(pendingHiddenRef.current, id),
     applyPendingOne,
   };
 }
@@ -643,20 +654,28 @@ function MailApp() {
     onAfterSend,
     setPendingFlagOverride,
     clearPendingFlagOverride,
+    hideRow,
+    unhideRow,
     applyPendingOne,
   } = useMailData(session || null);
 
-  const refresh = useCallback(async () => {
-    // No artificial delay. rawRefresh coalesces sync + list + counts into a
-    // single UI update pass.
-    if (refreshing) return;
-    setRefreshing(true);
-    try {
-      await rawRefresh();
-    } finally {
-      setRefreshing(false);
+  // Serialize Refresh with a single-flight guard (ref, not React state) so a
+  // double-click that fires before the next render can't spawn a second
+  // incrementalNow. `refreshing` state stays as the visual spinner only.
+  const refreshFlightRef = useRef(createSingleFlight<void>());
+  const refresh = useCallback((): Promise<void> => {
+    if (refreshFlightRef.current.isBusy()) {
+      return refreshFlightRef.current.run(() => Promise.resolve());
     }
-  }, [rawRefresh, refreshing]);
+    setRefreshing(true);
+    return refreshFlightRef.current.run(async () => {
+      try {
+        await rawRefresh();
+      } finally {
+        setRefreshing(false);
+      }
+    });
+  }, [rawRefresh]);
 
   const getOne = useServerFn(bridgeGetMessage);
   const markRead = useServerFn(bridgeMarkRead);
@@ -736,8 +755,11 @@ function MailApp() {
       })
         .then((result) => {
           if (result.ok && result.message) {
-            messageCache.current.set(id, result.message);
-            return result.message;
+            // Patch through pending overrides so a slow fetch response cannot
+            // overwrite an in-flight optimistic star/read the user just set.
+            const patched = applyPendingOne(result.message);
+            messageCache.current.set(id, patched);
+            return patched;
           }
           return null;
         })
@@ -748,7 +770,7 @@ function MailApp() {
       inflight.current.set(id, p);
       return p;
     },
-    [session, getOne],
+    [session, getOne, applyPendingOne],
   );
 
   const prefetchMessage = useCallback(
@@ -904,13 +926,38 @@ function MailApp() {
     e.stopPropagation();
     const parsed = parseMessageId(id);
     if (!parsed || !session) return;
-    const msg = messages.find((m) => m.id === id);
+    // Prev value from the ACTUALLY VISIBLE source: Deep Search overrides the
+    // regular list, and messages the row may not exist in at all.
+    const inDeep = searchMode === "deep" && query.trim().length >= 2;
+    const source = inDeep && deepResults ? deepResults : messages;
+    const msg = source.find((m) => m.id === id);
     const nextStarred = !msg?.starred;
     // Record expected value first so any in-flight list write (background
     // sync, refresh, pagination, deep search) cannot clobber it.
     setPendingFlagOverride(id, { starred: nextStarred });
-    // Optimistic
-    setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, starred: nextStarred } : m)));
+    // Optimistic counter — starred.total moves by exactly one and never
+    // dips below zero. Rolled back below on failure via the inverse delta.
+    setCounts((prev) => {
+      const cur = prev.starred;
+      if (!cur) return prev;
+      const delta = nextStarred ? 1 : -1;
+      return { ...prev, starred: { ...cur, total: Math.max(0, cur.total + delta) } };
+    });
+    // Snapshot for potential rollback (used when we optimistically REMOVE
+    // the row from the "starred" folder view on unstar).
+    let starredFolderSnapshot: { list: MailMessage[]; index: number } | null = null;
+    if (folder === "starred" && !nextStarred) {
+      const idx = messages.findIndex((m) => m.id === id);
+      if (idx >= 0) {
+        starredFolderSnapshot = { list: messages, index: idx };
+        hideRow(id);
+        setMessages((prev) => prev.filter((m) => m.id !== id));
+      }
+    } else {
+      // Re-starring: make sure a stale hide entry can't keep the row hidden.
+      unhideRow(id);
+      setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, starred: nextStarred } : m)));
+    }
     setDeepResults((prev) =>
       prev ? prev.map((m) => (m.id === id ? { ...m, starred: nextStarred } : m)) : prev,
     );
@@ -922,7 +969,29 @@ function MailApp() {
       // (indexUpdateFlag), so a follow-up loadCountsSoft is no longer required.
     } catch (err: any) {
       clearPendingFlagOverride(id, "starred");
-      setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, starred: !nextStarred } : m)));
+      // Rollback counter with the inverse delta (single, exact revert).
+      setCounts((prev) => {
+        const cur = prev.starred;
+        if (!cur) return prev;
+        const delta = nextStarred ? -1 : 1;
+        return { ...prev, starred: { ...cur, total: Math.max(0, cur.total + delta) } };
+      });
+      if (starredFolderSnapshot) {
+        // Restore the row at its previous position, then unhide.
+        unhideRow(id);
+        const { list, index } = starredFolderSnapshot;
+        const revived = list[index];
+        setMessages((prev) => {
+          const next = prev.slice();
+          const clampedIdx = Math.min(index, next.length);
+          next.splice(clampedIdx, 0, revived);
+          return next;
+        });
+      } else {
+        setMessages((prev) =>
+          prev.map((m) => (m.id === id ? { ...m, starred: !nextStarred } : m)),
+        );
+      }
       setDeepResults((prev) =>
         prev ? prev.map((m) => (m.id === id ? { ...m, starred: !nextStarred } : m)) : prev,
       );
