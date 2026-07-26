@@ -358,7 +358,6 @@ export const runMailSync = createServerFn({ method: "POST" })
           return { ok: false, error: "نطاق التوفيق غير صالح.", code: "INVALID_RANGE" };
         }
 
-
         const result = (await bridgePost("/api/sync/reconcile", {
           account: bridgeAccount,
           password: data.password,

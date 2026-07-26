@@ -57,7 +57,9 @@ export interface StoredUpload {
 }
 
 /** Delete every listed file, tolerating already-gone paths. Idempotent. */
-export async function cleanupFiles(files: Array<{ path?: string } | undefined | null>): Promise<void> {
+export async function cleanupFiles(
+  files: Array<{ path?: string } | undefined | null>,
+): Promise<void> {
   if (!files?.length) return;
   await Promise.all(
     files.map(async (f) => {
