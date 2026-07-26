@@ -507,6 +507,19 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      adjust_mail_folder_counts_atomic: {
+        Args: {
+          p_account_id: string
+          p_company_id: string
+          p_folder_id: string
+          p_total_delta: number
+          p_unread_delta: number
+        }
+        Returns: {
+          total: number
+          unread: number
+        }[]
+      }
       claim_mail_sync_lock: {
         Args: {
           p_account_id: string
