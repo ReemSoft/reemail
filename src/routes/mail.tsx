@@ -1325,13 +1325,19 @@ function MailApp() {
     return runMoveFlight(id, async () => {
       const wasUnread = msg ? !msg.read : false;
       const snapshot = messages;
+      const deepSnapshot = deepResults;
       const prevSelectedId = selectedId;
       const prevSelected = selectedMessage;
-      // Trash-delete = move-to-trash on the server (see bridge/imap.ts).
-      // Same-folder move contributes no counter delta, so treat isTrash
-      // as "permanent" for the UI counter model: source-1 only.
+      // Trash-delete = permanent delete via indexDeleteMessage / bridge
+      // messageDelete (Blocker 1). No target folder gains a row, so
+      // counters model source-1 only. Ghost prevention: also purge from
+      // deep-search results — the tombstone will keep it out of the next
+      // index page, and this covers the currently-visible in-memory list.
       const destForCounts: MailFolder | null = isTrash ? null : "trash";
       setMessages((prev) => prev.filter((m) => m.id !== id));
+      if (isTrash) {
+        setDeepResults((prev) => (prev ? prev.filter((m) => m.id !== id) : prev));
+      }
       setSelectedId(null);
       setSelectedMessage(null);
       messageCache.current.delete(id);
@@ -1355,6 +1361,7 @@ function MailApp() {
         unhideRow(id);
         applyMoveCountsDelta(destForCounts ?? parsed.folder, parsed.folder, wasUnread); // revert
         setMessages(snapshot);
+        if (isTrash) setDeepResults(deepSnapshot);
         setSelectedId(prevSelectedId);
         setSelectedMessage(prevSelected);
         toast.error(err?.message || (isTrash ? "فشل حذف الرسالة" : "فشل نقل الرسالة إلى المهملات"));
