@@ -176,9 +176,9 @@ export const clientLogin = createServerFn({ method: "POST" })
         }),
       });
       const rawText = await res.text();
-      let json: { error?: string } = {};
+      let json: { ok?: boolean; error?: string } = {};
       try {
-        json = JSON.parse(rawText) as { error?: string };
+        json = JSON.parse(rawText) as { ok?: boolean; error?: string };
       } catch {
         /* not json */
       }
