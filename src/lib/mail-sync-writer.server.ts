@@ -101,7 +101,7 @@ export function mapSyncMessageToRow(
     folder_id: args.folderId,
     uid: m.uid,
     uidvalidity: Number(args.uidValidity),
-    modseq: m.modseq,
+    modseq: m.modseq == null ? null : Number(m.modseq),
     message_id: m.messageId,
     in_reply_to: m.inReplyTo,
     subject: m.subject && m.subject.length ? m.subject : null,
@@ -122,7 +122,7 @@ export function mapSyncMessageToRow(
 
 export function mapFlagStateToUpdate(s: SyncFlagStatePayload) {
   return {
-    modseq: s.modseq,
+    modseq: s.modseq == null ? null : Number(s.modseq),
     seen: s.flagSeen,
     flagged: s.flagFlagged,
     answered: s.flagAnswered,
