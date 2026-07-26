@@ -1592,7 +1592,7 @@ function MailApp() {
         {/* Message viewer */}
         <div
           className={`flex-1 overflow-hidden bg-surface ${
-            selectedMessage ? "flex" : "hidden md:flex"
+            selectedMessage || (selectedId && reading) ? "flex" : "hidden md:flex"
           } flex-col`}
         >
           {selectedMessage ? (
@@ -1613,6 +1613,13 @@ function MailApp() {
               onMarkUnread={() => handleMarkUnread(selectedMessage.id)}
               onRestore={() => handleRestore(selectedMessage.id)}
               onPrint={() => { /* handled inside MessageView */ }}
+            />
+          ) : selectedId && reading ? (
+            <LoadingViewer
+              onBack={() => {
+                setSelectedId(null);
+                setSelectedMessage(null);
+              }}
             />
           ) : (
             <EmptyViewer />
