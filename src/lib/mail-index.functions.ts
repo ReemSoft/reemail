@@ -70,6 +70,20 @@ export const indexListMessages = createServerFn({ method: "POST" })
     const companyId = claims.cid;
     const canonical = data.canonical as MailFolder;
 
+    // ---- 1.5) Starred is a virtual IMAP view (INBOX + \Flagged) that
+    // shares its mailbox path with "inbox". In the current Local Index
+    // schema, `mail_folders` is uniquely keyed by (account_id, path), so
+    // there is no distinct row for starred — the INBOX row wins on first
+    // sync and canonical='starred' effectively never resolves. Serving
+    // starred from the index today would either return zero rows or
+    // (worse) return all inbox rows regardless of the \Flagged flag.
+    // Bail out cleanly and force the caller to use the bridge listing,
+    // which honours \Flagged natively.
+    if (canonical === "starred") {
+      return { ok: true, indexed: false, reason: "NO_FOLDER" };
+    }
+
+
     // ---- 2) Resolve folder row by (account_id, canonical) ----
     const folderQ = await supabaseAdmin
       .from("mail_folders")

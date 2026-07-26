@@ -82,6 +82,8 @@ import {
   applyHidden as applyHiddenIds,
   clearOverride as clearFlagOverride,
   clearOverrideField as clearFlagOverrideField,
+  confirmHide,
+  gcHiddenBefore,
   hideId,
   reconcileOverrides as reconcileFlagOverrides,
   setOverride as setFlagOverride,
@@ -89,6 +91,7 @@ import {
   type HiddenIdsSet,
   type OverridesMap as FlagOverridesMap,
 } from "@/lib/mail-pending-overrides";
+
 import { runManualRefresh } from "@/lib/mail-refresh-orchestration";
 import { createSingleFlight } from "@/lib/single-flight";
 import {
@@ -271,7 +274,7 @@ function useMailData(session: MailSession | null) {
   const pendingOverridesRef = useRef<FlagOverridesMap>(new Map());
   // Optimistic hide set — rows removed by the user (unstar in the "starred"
   // folder) that must NOT be resurrected by a racing sync response.
-  const pendingHiddenRef = useRef<HiddenIdsSet>(new Set());
+  const pendingHiddenRef = useRef<HiddenIdsSet>(new Map());
 
   /** Apply overrides + hidden filter to `list`, GC confirmed entries. */
   const applyPending = useCallback((list: MailMessage[]): MailMessage[] => {
@@ -419,6 +422,11 @@ function useMailData(session: MailSession | null) {
   const loadMessages = useCallback(async () => {
     if (!session) return;
     const reqId = ++loadReqIdRef.current;
+    // Timestamp captured BEFORE the request is issued. After the load
+    // succeeds we drop every "confirmed" hide whose confirmedAt <= this
+    // value: any mutation that confirmed before this load started is
+    // guaranteed to be reflected in the response.
+    const startedAt = Date.now();
     setLoading(true);
     try {
       if (canUseIndex(folder, sort)) {
@@ -439,6 +447,7 @@ function useMailData(session: MailSession | null) {
             setUseMock(false);
             setBridgeError(null);
             setIndexReady((prev) => (prev[folder] ? prev : { ...prev, [folder]: true }));
+            gcHiddenBefore(pendingHiddenRef.current, startedAt);
             return;
           }
           // Not indexed yet OR transient error → mark not-ready and fall back.
@@ -448,10 +457,14 @@ function useMailData(session: MailSession | null) {
         }
       }
       await loadFromBridge(reqId);
+      if (loadReqIdRef.current === reqId) {
+        gcHiddenBefore(pendingHiddenRef.current, startedAt);
+      }
     } finally {
       if (loadReqIdRef.current === reqId) setLoading(false);
     }
   }, [session, folder, sort, canUseIndex, listIndex, loadFromBridge, applyPending]);
+
 
   const loadMore = useCallback(async () => {
     if (!session || loadingMore || loading || !hasMore) return;
@@ -545,7 +558,16 @@ function useMailData(session: MailSession | null) {
     folderPath,
     canonical: folder,
     indexed: isFolderIndexed,
-    enabled: MAIL_INDEX_ENABLED && !!session?.mailSessionToken && sort === "date-desc",
+    enabled:
+      MAIL_INDEX_ENABLED &&
+      !!session?.mailSessionToken &&
+      sort === "date-desc" &&
+      // "starred" is a virtual view over INBOX (see mail-index.functions.ts):
+      // its canonical name collides with inbox on the (account_id, path)
+      // uniqueness of mail_folders, so a starred sync round would just
+      // overwrite the inbox folder row with duplicate work and never serve
+      // starred correctly. Bridge listing owns starred; do not sync it here.
+      folder !== "starred",
     onSynced: () => {
       // Background rounds only: refresh the current folder from the index
       // when the sync actually changed something (the hook already gates on
@@ -554,6 +576,7 @@ function useMailData(session: MailSession | null) {
       loadCountsFast();
     },
   });
+
 
   return {
     folder,
@@ -610,6 +633,9 @@ function useMailData(session: MailSession | null) {
     },
     hideRow: (id: string) => hideId(pendingHiddenRef.current, id),
     unhideRow: (id: string) => unhideId(pendingHiddenRef.current, id),
+    confirmHideRow: (id: string, at: number = Date.now()) =>
+      confirmHide(pendingHiddenRef.current, id, at),
+
     applyPendingOne,
   };
 }
@@ -656,6 +682,8 @@ function MailApp() {
     clearPendingFlagOverride,
     hideRow,
     unhideRow,
+    confirmHideRow,
+
     applyPendingOne,
   } = useMailData(session || null);
 
@@ -954,8 +982,16 @@ function MailApp() {
         setMessages((prev) => prev.filter((m) => m.id !== id));
       }
     } else {
-      // Re-starring: make sure a stale hide entry can't keep the row hidden.
+      // Re-starring anywhere: clear any hide for THIS id and, crucially,
+      // clear the "starred:<uid>" namespaced hide too — the row might
+      // have been unstarred from the Starred view earlier and its hide
+      // entry is keyed by that folder-prefixed id. Without this, the
+      // freshly-restarred row would still be filtered out of the Starred
+      // view on next visit.
       unhideRow(id);
+      if (parsed.folder !== "starred") {
+        unhideRow(`starred:${parsed.uid}`);
+      }
       setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, starred: nextStarred } : m)));
     }
     setDeepResults((prev) =>
@@ -965,8 +1001,14 @@ function MailApp() {
     if (cached) messageCache.current.set(id, { ...cached, starred: nextStarred });
     try {
       await mutateFlag(parsed.folder, parsed.uid, "flagged", nextStarred);
-      // Local Index write-through happens inside mutateFlag on the server side
-      // (indexUpdateFlag), so a follow-up loadCountsSoft is no longer required.
+      // IMAP + Local Index write-through succeeded. If we optimistically
+      // hid a row in the Starred view, mark the hide as CONFIRMED so the
+      // next primary list load (which is guaranteed to reflect the flag
+      // flip) auto-drops it via gcHiddenBefore. A pre-mutation racing
+      // response still can't resurrect the row in the meantime.
+      if (starredFolderSnapshot) {
+        confirmHideRow(id, Date.now());
+      }
     } catch (err: any) {
       clearPendingFlagOverride(id, "starred");
       // Rollback counter with the inverse delta (single, exact revert).
@@ -978,10 +1020,13 @@ function MailApp() {
       });
       if (starredFolderSnapshot) {
         // Restore the row at its previous position, then unhide.
+        // Duplicate guard: a racing sync may have already re-inserted
+        // the row while the mutation was in flight — never insert twice.
         unhideRow(id);
         const { list, index } = starredFolderSnapshot;
         const revived = list[index];
         setMessages((prev) => {
+          if (prev.some((m) => m.id === id)) return prev;
           const next = prev.slice();
           const clampedIdx = Math.min(index, next.length);
           next.splice(clampedIdx, 0, revived);
@@ -1000,6 +1045,7 @@ function MailApp() {
       toast.error(err?.message || "فشل تحديث المميّز");
     }
   }
+
 
   async function toggleRead(e: React.MouseEvent, id: string) {
     e.stopPropagation();
