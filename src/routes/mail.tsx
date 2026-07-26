@@ -812,6 +812,78 @@ function MailApp() {
     [session, updateFlag, markRead, star],
   );
 
+  // Move/Trash orchestration
+  // ------------------------
+  // Preferred path when a mail-session JWT is present: `indexMoveMessage`
+  // performs Bridge move + Local Index write-through in one round and
+  // throws on any failure (including bridge non-ok). Legacy sessions with
+  // no token fall back to the raw bridge endpoints (`move` / `deleteFn`).
+  const mutateMoveOrDelete = useCallback(
+    async (params: {
+      sourceCanonical: MailFolder;
+      uid: number;
+      /** Omit → permanent delete route (bridge `/api/delete`). */
+      toFolder?: MailFolder;
+    }) => {
+      if (!session) throw new Error("لا توجد جلسة بريد");
+      const dest = params.toFolder;
+      if (session.mailSessionToken) {
+        // Delete path currently maps to move-to-trash server-side; keep
+        // parity with legacy behavior when no explicit destination given.
+        const destCanonical = (dest ?? "trash") as MailFolder;
+        const res = await moveIndex({
+          data: {
+            mailSessionToken: session.mailSessionToken,
+            password: session.password,
+            sourceCanonical: params.sourceCanonical,
+            destCanonical,
+            uid: params.uid,
+          },
+        });
+        if (!res.ok) throw new Error(res.error);
+        return;
+      }
+      // Legacy bridge fallback (no JWT).
+      if (dest === undefined) {
+        await deleteFn({
+          data: {
+            account: session.account,
+            password: session.password,
+            folder: params.sourceCanonical,
+            uid: params.uid,
+          },
+        });
+      } else {
+        await move({
+          data: {
+            account: session.account,
+            password: session.password,
+            folder: params.sourceCanonical,
+            uid: params.uid,
+            toFolder: dest,
+          },
+        });
+      }
+    },
+    [session, moveIndex, deleteFn, move],
+  );
+
+  // Per-id single-flight guard against double-click on Move/Delete/Restore.
+  // Same id in flight → returns the same promise instead of firing IMAP twice.
+  const moveFlightRef = useRef<Map<string, Promise<void>>>(new Map());
+  const runMoveFlight = useCallback(
+    async (id: string, worker: () => Promise<void>): Promise<void> => {
+      const existing = moveFlightRef.current.get(id);
+      if (existing) return existing;
+      const p = worker().finally(() => {
+        moveFlightRef.current.delete(id);
+      });
+      moveFlightRef.current.set(id, p);
+      return p;
+    },
+    [],
+  );
+
   // In-memory caches for instant open (prefetch on hover)
   const messageCache = useRef<Map<string, MailMessage>>(new Map());
   const inflight = useRef<Map<string, Promise<MailMessage | null>>>(new Map());
