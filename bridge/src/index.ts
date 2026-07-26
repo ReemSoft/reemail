@@ -18,6 +18,15 @@ import {
 } from "./imap.js";
 import { sendMessage } from "./smtp.js";
 import type { MailAccount, MailFolder } from "./types.js";
+import {
+  InitialSyncSchema,
+  IncrementalSyncSchema,
+  ReconcileSyncSchema,
+  runInitialSync,
+  runIncrementalSync,
+  runReconcileSync,
+  safeError,
+} from "./sync.js";
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
@@ -400,6 +409,70 @@ app.post("/api/attachment", requireKey, async (req, res) => {
     res.end();
   }
 });
+
+// ---- Sync endpoints (metadata-only, no DB writes) ----
+
+app.post("/api/sync/initial", requireKey, async (req, res) => {
+  try {
+    const p = InitialSyncSchema.parse(req.body);
+    const result = await runInitialSync(p.account as MailAccount, p.password, {
+      folderPath: p.folderPath,
+      limit: p.limit,
+    });
+    return res.json(result);
+  } catch (err: unknown) {
+    if (err instanceof z.ZodError) {
+      return res.status(400).json({ ok: false, error: "INVALID_PAYLOAD", issues: err.issues });
+    }
+    const safe = safeError(err);
+    console.error("[bridge] /api/sync/initial error:", safe.code);
+    return res.status(500).json({ ok: false, error: safe.code, message: safe.message });
+  }
+});
+
+app.post("/api/sync/incremental", requireKey, async (req, res) => {
+  try {
+    const p = IncrementalSyncSchema.parse(req.body);
+    const result = await runIncrementalSync(p.account as MailAccount, p.password, {
+      folderPath: p.folderPath,
+      expectedUidValidity: p.expectedUidValidity,
+      sinceUid: p.sinceUid,
+      sinceModseq: p.sinceModseq,
+      flagsFromUid: p.flagsFromUid,
+      flagsToUid: p.flagsToUid,
+      limit: p.limit,
+    });
+    return res.json(result);
+  } catch (err: unknown) {
+    if (err instanceof z.ZodError) {
+      return res.status(400).json({ ok: false, error: "INVALID_PAYLOAD", issues: err.issues });
+    }
+    const safe = safeError(err);
+    console.error("[bridge] /api/sync/incremental error:", safe.code);
+    return res.status(500).json({ ok: false, error: safe.code, message: safe.message });
+  }
+});
+
+app.post("/api/sync/reconcile", requireKey, async (req, res) => {
+  try {
+    const p = ReconcileSyncSchema.parse(req.body);
+    const result = await runReconcileSync(p.account as MailAccount, p.password, {
+      folderPath: p.folderPath,
+      expectedUidValidity: p.expectedUidValidity,
+      fromUid: p.fromUid,
+      toUid: p.toUid,
+    });
+    return res.json(result);
+  } catch (err: unknown) {
+    if (err instanceof z.ZodError) {
+      return res.status(400).json({ ok: false, error: "INVALID_PAYLOAD", issues: err.issues });
+    }
+    const safe = safeError(err);
+    console.error("[bridge] /api/sync/reconcile error:", safe.code);
+    return res.status(500).json({ ok: false, error: safe.code, message: safe.message });
+  }
+});
+
 const HOST = process.env.HOST || "127.0.0.1";
 app.listen(PORT, HOST, () => {
   console.log(`[bridge] MailMaestro Bridge running on ${HOST}:${PORT}`);
