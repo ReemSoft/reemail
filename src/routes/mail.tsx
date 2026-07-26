@@ -563,30 +563,43 @@ function useMailData(session: MailSession | null) {
     useMock,
     loadCounts,
     source,
-    refresh: async () => {
-      // Coalesced manual Refresh:
-      //   1) incremental (always) — suppress onSynced
-      //   2) reconcile — only when due (5 min elapsed OR flags drift)
-      //   3) ONE final Promise.all([loadMessages, loadCounts])
-      // No artificial delay, no intermediate re-renders.
-      const needsReconcile = shouldReconcile();
-      await incrementalNow({ suppressOnSynced: true });
-      if (needsReconcile) {
-        await reconcileNow({ suppressOnSynced: true });
-      }
-      await Promise.all([loadMessages(), loadCounts()]);
-    },
+    /**
+     * Manual Refresh contract (locked by tests):
+     *   incrementalNow=1, list=1, counts=1 (via loadCountsFast → Local Index),
+     *   reconcileNow is NEVER awaited on the manual path. When it's due,
+     *   scheduleBackground fires it after the spinner has already ended.
+     */
+    refresh: () =>
+      runManualRefresh({
+        incrementalNow,
+        reconcileNow,
+        shouldReconcile,
+        loadMessages,
+        loadCounts: loadCountsFast,
+      }),
     onAfterSend: async () => {
       // After a successful send: only refresh the Sent folder itself, and
       // only if the user is currently viewing it. From any other folder we
       // just pull counts once (Sent count moves; Inbox does not).
       if (folder === "sent") {
         await incrementalNow({ suppressOnSynced: true });
-        await Promise.all([loadMessages(), loadCounts()]);
+        await Promise.all([loadMessages(), loadCountsFast()]);
       } else {
-        await loadCounts();
+        await loadCountsFast();
       }
     },
+    // Pending Flag Overrides — exposed so MailApp toggleStar/toggleRead can
+    // record the expected value BEFORE the mutation resolves. All server-
+    // list writers inside useMailData already patch through applyPending.
+    pendingOverridesRef,
+    setPendingFlagOverride: (id: string, patch: { starred?: boolean; read?: boolean }) => {
+      setFlagOverride(pendingOverridesRef.current, id, patch);
+    },
+    clearPendingFlagOverride: (id: string, field?: "starred" | "read") => {
+      if (field) clearFlagOverrideField(pendingOverridesRef.current, id, field);
+      else clearFlagOverride(pendingOverridesRef.current, id);
+    },
+    applyPendingOne,
   };
 }
 
