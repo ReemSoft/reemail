@@ -140,10 +140,72 @@ async function buildMime(payload: SendMessagePayload): Promise<{ raw: Buffer; me
  * SMTP success + sent-copy failure is still a successful send:
  *   returns { ok: true, sentCopySaved: false }. Never asks the user to resend.
  */
+/**
+ * Injectable IO surface for `sendMessage`. Production wires these to the real
+ * nodemailer transport and imapflow client; tests inject fakes to drive
+ * every branch of the Sent-copy state machine without touching the network.
+ *
+ * Do NOT export "convenience" wrappers over these — keeping the surface
+ * minimal is the whole point: the regression tests must fail if a real code
+ * path stops calling Search or APPEND.
+ */
+export interface SmtpTransport {
+  sendMail(opts: { raw: Buffer; envelope: { from: string; to: string[] } }): Promise<unknown>;
+  close(): void;
+}
+export interface ImapSentClient {
+  connect(): Promise<void>;
+  list(): Promise<ListResponse[]>;
+  searchMessageId(folderPath: string, messageId: string): Promise<boolean>;
+  append(folderPath: string, raw: Buffer, flags: string[]): Promise<void>;
+  logout(): Promise<void>;
+}
+export interface SendMessageDeps {
+  createTransport: (account: MailAccount, password: string) => SmtpTransport;
+  createImapSentClient: (account: MailAccount, password: string) => ImapSentClient;
+  sleep?: (ms: number) => Promise<void>;
+}
+
+/** Production deps — real nodemailer + imapflow. Kept out of module scope so
+ *  test builds don't pay for it and so mis-wired tests can't accidentally
+ *  reach the network. */
+function defaultDeps(): SendMessageDeps {
+  return {
+    createTransport(account, password) {
+      const t = createTransport({
+        host: account.smtp_host,
+        port: account.smtp_port,
+        secure: account.smtp_secure,
+        auth: { user: account.email_address, pass: password },
+        tls: { rejectUnauthorized: false },
+      });
+      return {
+        sendMail: (opts) => t.sendMail(opts),
+        close: () => t.close(),
+      };
+    },
+    createImapSentClient(account, password) {
+      const client = makeImapClient(account, password);
+      return {
+        connect: () => client.connect(),
+        list: () => listMailboxes(client),
+        searchMessageId: (folderPath, messageId) =>
+          messageExistsInFolder(client, folderPath, messageId),
+        append: async (folderPath, raw, flags) => {
+          await client.append(folderPath, raw, flags);
+        },
+        logout: () => client.logout().catch(() => {}) as unknown as Promise<void>,
+      };
+    },
+    sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+  };
+}
+
 export async function sendMessage(
   account: MailAccount,
   password: string,
   payload: SendMessagePayload,
+  deps: SendMessageDeps = defaultDeps(),
 ): Promise<SendMessageOk | SendMessageErr> {
   // Build the MIME once so SMTP send and IMAP APPEND use byte-identical bytes.
   let raw: Buffer;
@@ -156,13 +218,7 @@ export async function sendMessage(
   }
 
   // 1) SMTP send (single connection).
-  const transporter = createTransport({
-    host: account.smtp_host,
-    port: account.smtp_port,
-    secure: account.smtp_secure,
-    auth: { user: account.email_address, pass: password },
-    tls: { rejectUnauthorized: false },
-  });
+  const transporter = deps.createTransport(account, password);
   try {
     const envelopeRecipients = [...payload.to, ...(payload.cc || []), ...(payload.bcc || [])].map(
       (r) => r.email,
@@ -181,21 +237,22 @@ export async function sendMessage(
 
   // 2) Best-effort Sent copy. NEVER fails the send.
   let sentCopySaved = false;
-  const client = makeImapClient(account, password);
+  const client = deps.createImapSentClient(account, password);
+  const sleep = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
   try {
     await client.connect();
-    const mailboxes = await listMailboxes(client);
+    const mailboxes = await client.list();
     const sentPath = resolveSentPath(mailboxes);
     if (sentPath) {
       // Search for our Message-ID with short retries — the provider may have
       // auto-saved a copy already (Gmail, most managed hosts).
       for (let i = 0; i < SENT_SEARCH_RETRIES; i++) {
-        if (await messageExistsInFolder(client, sentPath, messageId)) {
+        if (await client.searchMessageId(sentPath, messageId)) {
           sentCopySaved = true;
           break;
         }
         if (i < SENT_SEARCH_RETRIES - 1) {
-          await new Promise((r) => setTimeout(r, SENT_SEARCH_INTERVAL_MS));
+          await sleep(SENT_SEARCH_INTERVAL_MS);
         }
       }
       // No auto-saved copy → APPEND the exact MIME with \Seen.
@@ -218,3 +275,4 @@ export async function sendMessage(
 
   return { ok: true, messageId, sentCopySaved };
 }
+
