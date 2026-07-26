@@ -35,7 +35,12 @@ export async function runManualRefresh(deps: RefreshDeps): Promise<void> {
         Promise.resolve().then(fn);
       });
     schedule(() => {
-      void deps.reconcileNow({ suppressOnSynced: true });
+      // Defer the actual reconcile one more microtask so the caller's
+      // `await runManualRefresh(...)` continuation runs FIRST — the spinner
+      // ends before any reconcile work touches IMAP.
+      queueMicrotask(() => {
+        void deps.reconcileNow({ suppressOnSynced: true });
+      });
     });
   }
 }
