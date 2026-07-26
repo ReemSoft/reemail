@@ -119,9 +119,11 @@ export type Database = {
           imap_secure: boolean | null
           is_default: boolean
           last_synced_at: string | null
+          normalized_email: string | null
           smtp_host: string | null
           smtp_port: number | null
           smtp_secure: boolean | null
+          source_domain_id: string | null
           updated_at: string
           user_id: string | null
         }
@@ -137,9 +139,11 @@ export type Database = {
           imap_secure?: boolean | null
           is_default?: boolean
           last_synced_at?: string | null
+          normalized_email?: string | null
           smtp_host?: string | null
           smtp_port?: number | null
           smtp_secure?: boolean | null
+          source_domain_id?: string | null
           updated_at?: string
           user_id?: string | null
         }
@@ -155,9 +159,11 @@ export type Database = {
           imap_secure?: boolean | null
           is_default?: boolean
           last_synced_at?: string | null
+          normalized_email?: string | null
           smtp_host?: string | null
           smtp_port?: number | null
           smtp_secure?: boolean | null
+          source_domain_id?: string | null
           updated_at?: string
           user_id?: string | null
         }
@@ -168,6 +174,213 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "companies"
             referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "mail_accounts_source_domain_fkey"
+            columns: ["source_domain_id", "company_id"]
+            isOneToOne: false
+            referencedRelation: "email_domains"
+            referencedColumns: ["id", "company_id"]
+          },
+        ]
+      }
+      mail_folders: {
+        Row: {
+          account_id: string
+          canonical: string
+          company_id: string
+          created_at: string
+          delimiter: string | null
+          id: string
+          path: string
+          supported: boolean
+          total: number
+          uidvalidity: number | null
+          unread: number
+          updated_at: string
+        }
+        Insert: {
+          account_id: string
+          canonical: string
+          company_id: string
+          created_at?: string
+          delimiter?: string | null
+          id?: string
+          path: string
+          supported?: boolean
+          total?: number
+          uidvalidity?: number | null
+          unread?: number
+          updated_at?: string
+        }
+        Update: {
+          account_id?: string
+          canonical?: string
+          company_id?: string
+          created_at?: string
+          delimiter?: string | null
+          id?: string
+          path?: string
+          supported?: boolean
+          total?: number
+          uidvalidity?: number | null
+          unread?: number
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "mail_folders_account_company_fkey"
+            columns: ["account_id", "company_id"]
+            isOneToOne: false
+            referencedRelation: "mail_accounts"
+            referencedColumns: ["id", "company_id"]
+          },
+        ]
+      }
+      mail_messages: {
+        Row: {
+          account_id: string
+          cc_addrs: Json | null
+          company_id: string
+          created_at: string
+          flagged: boolean
+          flags: string[]
+          folder_id: string
+          from_addr: Json | null
+          has_attachments: boolean
+          id: string
+          internal_date: string | null
+          message_id: string | null
+          preview: string | null
+          seen: boolean
+          size_bytes: number | null
+          subject: string | null
+          thread_id: string | null
+          to_addrs: Json | null
+          uid: number
+          uidvalidity: number
+          updated_at: string
+        }
+        Insert: {
+          account_id: string
+          cc_addrs?: Json | null
+          company_id: string
+          created_at?: string
+          flagged?: boolean
+          flags?: string[]
+          folder_id: string
+          from_addr?: Json | null
+          has_attachments?: boolean
+          id?: string
+          internal_date?: string | null
+          message_id?: string | null
+          preview?: string | null
+          seen?: boolean
+          size_bytes?: number | null
+          subject?: string | null
+          thread_id?: string | null
+          to_addrs?: Json | null
+          uid: number
+          uidvalidity: number
+          updated_at?: string
+        }
+        Update: {
+          account_id?: string
+          cc_addrs?: Json | null
+          company_id?: string
+          created_at?: string
+          flagged?: boolean
+          flags?: string[]
+          folder_id?: string
+          from_addr?: Json | null
+          has_attachments?: boolean
+          id?: string
+          internal_date?: string | null
+          message_id?: string | null
+          preview?: string | null
+          seen?: boolean
+          size_bytes?: number | null
+          subject?: string | null
+          thread_id?: string | null
+          to_addrs?: Json | null
+          uid?: number
+          uidvalidity?: number
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "mail_messages_account_company_fkey"
+            columns: ["account_id", "company_id"]
+            isOneToOne: false
+            referencedRelation: "mail_accounts"
+            referencedColumns: ["id", "company_id"]
+          },
+          {
+            foreignKeyName: "mail_messages_folder_company_fkey"
+            columns: ["folder_id", "company_id"]
+            isOneToOne: false
+            referencedRelation: "mail_folders"
+            referencedColumns: ["id", "company_id"]
+          },
+        ]
+      }
+      mail_sync_state: {
+        Row: {
+          account_id: string
+          company_id: string
+          created_at: string
+          folder_id: string
+          id: string
+          last_error: string | null
+          last_full_sync_at: string | null
+          last_synced_at: string | null
+          last_synced_uid: number | null
+          sync_in_progress: boolean
+          sync_lock_at: string | null
+          updated_at: string
+        }
+        Insert: {
+          account_id: string
+          company_id: string
+          created_at?: string
+          folder_id: string
+          id?: string
+          last_error?: string | null
+          last_full_sync_at?: string | null
+          last_synced_at?: string | null
+          last_synced_uid?: number | null
+          sync_in_progress?: boolean
+          sync_lock_at?: string | null
+          updated_at?: string
+        }
+        Update: {
+          account_id?: string
+          company_id?: string
+          created_at?: string
+          folder_id?: string
+          id?: string
+          last_error?: string | null
+          last_full_sync_at?: string | null
+          last_synced_at?: string | null
+          last_synced_uid?: number | null
+          sync_in_progress?: boolean
+          sync_lock_at?: string | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "mail_sync_state_account_company_fkey"
+            columns: ["account_id", "company_id"]
+            isOneToOne: false
+            referencedRelation: "mail_accounts"
+            referencedColumns: ["id", "company_id"]
+          },
+          {
+            foreignKeyName: "mail_sync_state_folder_company_fkey"
+            columns: ["folder_id", "company_id"]
+            isOneToOne: false
+            referencedRelation: "mail_folders"
+            referencedColumns: ["id", "company_id"]
           },
         ]
       }
