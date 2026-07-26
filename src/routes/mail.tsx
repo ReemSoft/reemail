@@ -731,6 +731,8 @@ function MailApp() {
     hideRow,
     unhideRow,
     confirmHideRow,
+    beginStarMutation,
+    endStarMutation,
 
     applyPendingOne,
   } = useMailData(session || null);
