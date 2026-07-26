@@ -81,7 +81,7 @@ describe("mapSyncMessageToRow", () => {
     expect(row.folder_id).toBe(FID);
     expect(row.uid).toBe(42);
     expect(row.uidvalidity).toBe(17);
-    expect(row.modseq).toBe("1000");
+    expect(row.modseq).toBe(1000);
     expect(row.message_id).toBe("<abc@x>");
     expect(row.in_reply_to).toBe("<parent@x>");
     expect(row.subject).toBe("hi");
@@ -121,7 +121,7 @@ describe("mapFlagStateToUpdate", () => {
     };
     const patch = mapFlagStateToUpdate(s);
     expect(patch).toEqual({
-      modseq: "9",
+      modseq: 9,
       seen: false,
       flagged: true,
       answered: false,
@@ -190,7 +190,7 @@ function makeChainAdmin(seed: { uidsInRange?: number[] } = {}) {
       mode = "upsert";
       rows = r;
       onConflict = opts?.onConflict;
-      return chain;
+      return Object.assign(chain, promise);
     };
     chain.update = (p: Record<string, unknown>, opts?: { count?: string }) => {
       mode = "update";
