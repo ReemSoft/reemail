@@ -275,6 +275,20 @@ function useMailData(session: MailSession | null) {
   // Optimistic hide set — rows removed by the user (unstar in the "starred"
   // folder) that must NOT be resurrected by a racing sync response.
   const pendingHiddenRef = useRef<HiddenIdsSet>(new Map());
+  // V4: Starred-count race guard. `active` = in-flight star mutations;
+  // `settledAt` = timestamp of the most recent resolution. While either
+  // is "hot" (active > 0 OR within 2s of settledAt), counts loaders must
+  // NOT overwrite `starred.total` — a stale server value would clobber
+  // the optimistic delta applied by toggleStar.
+  const pendingStarMutRef = useRef<{ active: number; settledAt: number }>({
+    active: 0,
+    settledAt: 0,
+  });
+  const STAR_COUNT_HOT_MS = 2000;
+  const isStarCountHot = useCallback(() => {
+    const s = pendingStarMutRef.current;
+    return s.active > 0 || Date.now() - s.settledAt < STAR_COUNT_HOT_MS;
+  }, []);
 
   /** Apply overrides + hidden filter to `list`, GC confirmed entries. */
   const applyPending = useCallback((list: MailMessage[]): MailMessage[] => {
@@ -315,7 +329,15 @@ function useMailData(session: MailSession | null) {
         map[c.folder] = { total: c.total, unread: c.unread, supported: c.supported !== false };
         if (c.path) paths[c.folder] = c.path;
       });
-      setCounts(map);
+      setCounts((prev) => {
+        // V4 count race guard: while a star mutation is in flight (or was
+        // very recently), keep the optimistic starred.total instead of the
+        // possibly-stale server value.
+        if (isStarCountHot() && prev.starred) {
+          map.starred = { ...map.starred, total: prev.starred.total };
+        }
+        return map;
+      });
       setFolderPaths(paths);
       setBridgeError(null);
     } catch (err: any) {
@@ -329,7 +351,8 @@ function useMailData(session: MailSession | null) {
         ) as Record<MailFolder, { total: number; unread: number; supported: boolean }>,
       );
     }
-  }, [session, getCounts]);
+  }, [session, getCounts, isStarCountHot]);
+
 
   /**
    * Manual-Refresh counts path: prefer Local Mail Index (single Supabase
@@ -350,6 +373,13 @@ function useMailData(session: MailSession | null) {
             const next = { ...prev };
             for (const c of res.counts) {
               if (!c.hasUidvalidity) continue;
+              // V4 count race guard: skip starred.total while a mutation is
+              // hot; keep the optimistic value the toggle already applied.
+              if (c.folder === "starred" && isStarCountHot() && prev.starred) {
+                const cur = next.starred ?? { total: 0, unread: 0, supported: true };
+                next.starred = { total: prev.starred.total, unread: c.unread, supported: cur.supported };
+                continue;
+              }
               const cur = next[c.folder] ?? { total: 0, unread: 0, supported: true };
               next[c.folder] = { total: c.total, unread: c.unread, supported: cur.supported };
             }
@@ -374,13 +404,21 @@ function useMailData(session: MailSession | null) {
       }
     }
     await loadCounts();
-  }, [session, listIndexCounts, loadCounts]);
+  }, [session, listIndexCounts, loadCounts, isStarCountHot]);
 
   // Decide whether this (folder, sort, session) call can use the Local Mail Index.
   // Only "date-desc" is index-native; other sorts fall back to the bridge.
   const canUseIndex = useCallback(
     (f: MailFolder, s: SortOption) =>
-      MAIL_INDEX_ENABLED && s === "date-desc" && !!session?.mailSessionToken && !!folderPaths[f],
+      MAIL_INDEX_ENABLED &&
+      s === "date-desc" &&
+      !!session?.mailSessionToken &&
+      !!folderPaths[f] &&
+      // V4: "starred" is a virtual view over INBOX (\Flagged). The Local
+      // Index has no distinct row for it, so serving it from the index
+      // would either return zero rows or (worse) return every inbox row
+      // regardless of the \Flagged flag. Always fall through to the Bridge.
+      f !== "starred",
     [session, folderPaths],
   );
 
@@ -635,6 +673,16 @@ function useMailData(session: MailSession | null) {
     unhideRow: (id: string) => unhideId(pendingHiddenRef.current, id),
     confirmHideRow: (id: string, at: number = Date.now()) =>
       confirmHide(pendingHiddenRef.current, id, at),
+    // V4: star-mutation lifecycle hooks used by toggleStar to hold the
+    // Starred count against racing loaders.
+    beginStarMutation: () => {
+      pendingStarMutRef.current.active++;
+    },
+    endStarMutation: () => {
+      const s = pendingStarMutRef.current;
+      if (s.active > 0) s.active--;
+      s.settledAt = Date.now();
+    },
 
     applyPendingOne,
   };
@@ -683,6 +731,8 @@ function MailApp() {
     hideRow,
     unhideRow,
     confirmHideRow,
+    beginStarMutation,
+    endStarMutation,
 
     applyPendingOne,
   } = useMailData(session || null);
@@ -963,6 +1013,9 @@ function MailApp() {
     // Record expected value first so any in-flight list write (background
     // sync, refresh, pagination, deep search) cannot clobber it.
     setPendingFlagOverride(id, { starred: nextStarred });
+    // V4: mark the star-count "hot" so any concurrent counts loader keeps
+    // the optimistic value instead of the still-stale server total.
+    beginStarMutation();
     // Optimistic counter — starred.total moves by exactly one and never
     // dips below zero. Rolled back below on failure via the inverse delta.
     setCounts((prev) => {
@@ -1043,8 +1096,12 @@ function MailApp() {
       const c = messageCache.current.get(id);
       if (c) messageCache.current.set(id, { ...c, starred: !nextStarred });
       toast.error(err?.message || "فشل تحديث المميّز");
+    } finally {
+      // V4: always release the star-count "hot" window, success or failure.
+      endStarMutation();
     }
   }
+
 
 
   async function toggleRead(e: React.MouseEvent, id: string) {

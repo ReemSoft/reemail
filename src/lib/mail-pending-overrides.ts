@@ -40,6 +40,28 @@ export interface FlagOverride {
 
 export type OverridesMap = Map<string, FlagOverride>;
 
+/**
+ * Unified flag identity (V4).
+ *
+ * "Starred" is a virtual IMAP view over INBOX filtered by `\Flagged`. The
+ * physical row is the same as `inbox:<uid>`. Flag overrides must therefore
+ * be keyed by the PHYSICAL identity so a Star/Read toggle applied inside
+ * one view is reflected in the other without depending on a reload or
+ * background sync.
+ *
+ * Hidden-ids (row suppression) still key by the ORIGINAL view id, because
+ * hiding is a per-view concern (only the Starred list drops rows on unstar).
+ */
+export function normalizeFlagIdentity(id: string): string {
+  const colonIdx = id.indexOf(":");
+  if (colonIdx <= 0) return id;
+  const folder = id.slice(0, colonIdx);
+  if (folder !== "starred") return id;
+  const uidStr = id.slice(colonIdx + 1);
+  if (!uidStr || !/^\d+$/.test(uidStr)) return id;
+  return `inbox:${uidStr}`;
+}
+
 /** Apply overrides to a list (pure — returns a new array). */
 export function applyOverrides(list: MailMessage[], overrides: OverridesMap): MailMessage[] {
   if (overrides.size === 0) return list;
@@ -48,7 +70,7 @@ export function applyOverrides(list: MailMessage[], overrides: OverridesMap): Ma
 
 /** Apply overrides to a single message (pure). */
 export function applyOverrideToOne(m: MailMessage, overrides: OverridesMap): MailMessage {
-  const o = overrides.get(m.id);
+  const o = overrides.get(normalizeFlagIdentity(m.id));
   if (!o) return m;
   if (o.starred === undefined && o.read === undefined) return m;
   return {
@@ -64,8 +86,9 @@ export function setOverride(
   id: string,
   patch: FlagOverride,
 ): OverridesMap {
-  const existing = overrides.get(id) ?? {};
-  overrides.set(id, { ...existing, ...patch });
+  const key = normalizeFlagIdentity(id);
+  const existing = overrides.get(key) ?? {};
+  overrides.set(key, { ...existing, ...patch });
   return overrides;
 }
 
@@ -75,17 +98,18 @@ export function clearOverrideField(
   id: string,
   field: keyof FlagOverride,
 ): void {
-  const existing = overrides.get(id);
+  const key = normalizeFlagIdentity(id);
+  const existing = overrides.get(key);
   if (!existing) return;
   const next: FlagOverride = { ...existing };
   delete next[field];
-  if (next.starred === undefined && next.read === undefined) overrides.delete(id);
-  else overrides.set(id, next);
+  if (next.starred === undefined && next.read === undefined) overrides.delete(key);
+  else overrides.set(key, next);
 }
 
 /** Clear the whole entry (used on mutation failure rollback). */
 export function clearOverride(overrides: OverridesMap, id: string): void {
-  overrides.delete(id);
+  overrides.delete(normalizeFlagIdentity(id));
 }
 
 /**
@@ -97,16 +121,18 @@ export function clearOverride(overrides: OverridesMap, id: string): void {
 export function reconcileOverrides(list: MailMessage[], overrides: OverridesMap): void {
   if (overrides.size === 0) return;
   for (const m of list) {
-    const o = overrides.get(m.id);
+    const key = normalizeFlagIdentity(m.id);
+    const o = overrides.get(key);
     if (!o) continue;
     if (o.starred !== undefined && m.starred === o.starred) {
-      clearOverrideField(overrides, m.id, "starred");
+      clearOverrideField(overrides, key, "starred");
     }
     if (o.read !== undefined && m.read === o.read) {
-      clearOverrideField(overrides, m.id, "read");
+      clearOverrideField(overrides, key, "read");
     }
   }
 }
+
 
 // ==============================================================
 // Hidden ids (V3 lifecycle)

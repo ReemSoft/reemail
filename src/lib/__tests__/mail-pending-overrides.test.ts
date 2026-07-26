@@ -12,6 +12,7 @@ import {
   confirmHide,
   gcHiddenBefore,
   hideId,
+  normalizeFlagIdentity,
   reconcileOverrides,
   setOverride,
   unhideId,
@@ -185,5 +186,54 @@ describe("mail-pending-overrides", () => {
     const list = [msg("starred:5", true, false)];
     expect(applyHidden(list, hidden).map((m) => m.id)).toEqual(["starred:5"]);
   });
+
+  // ==============================================================
+  // V4 — Unified flag identity (Starred ↔ Inbox)
+  // ==============================================================
+
+  it("normalizeFlagIdentity maps starred:<uid> → inbox:<uid>, leaves others alone", () => {
+    expect(normalizeFlagIdentity("starred:42")).toBe("inbox:42");
+    expect(normalizeFlagIdentity("inbox:42")).toBe("inbox:42");
+    expect(normalizeFlagIdentity("sent:7")).toBe("sent:7");
+    // Robust to malformed inputs — pass through unchanged.
+    expect(normalizeFlagIdentity("starred:")).toBe("starred:");
+    expect(normalizeFlagIdentity("starred:abc")).toBe("starred:abc");
+    expect(normalizeFlagIdentity("noop")).toBe("noop");
+  });
+
+  it("V4: an override set under 'starred:<uid>' also patches 'inbox:<uid>' rows", () => {
+    // User toggled star inside Starred view (id=starred:9); the primary
+    // Inbox list arrives with the OLD flag. It must be patched.
+    const ov: OverridesMap = new Map();
+    setOverride(ov, "starred:9", { starred: false });
+    const inboxRow = msg("inbox:9", true, false);
+    expect(applyOverrideToOne(inboxRow, ov).starred).toBe(false);
+  });
+
+  it("V4: an override set under 'inbox:<uid>' also patches 'starred:<uid>' rows", () => {
+    // User toggled star inside Inbox; a subsequent Starred fetch returns
+    // the row keyed as starred:9 with the OLD flag. It must be patched.
+    const ov: OverridesMap = new Map();
+    setOverride(ov, "inbox:9", { starred: true });
+    const starredRow = msg("starred:9", false, false);
+    expect(applyOverrideToOne(starredRow, ov).starred).toBe(true);
+  });
+
+  it("V4: reconcile drops a starred override when the inbox row now matches", () => {
+    const ov: OverridesMap = new Map();
+    setOverride(ov, "starred:9", { starred: true });
+    // Fresh Inbox load: row already carries the intended flag.
+    reconcileOverrides([msg("inbox:9", true, false)], ov);
+    expect(ov.has("inbox:9")).toBe(false);
+    expect(ov.has("starred:9")).toBe(false);
+  });
+
+  it("V4: clearOverride via starred: id removes the unified inbox: entry", () => {
+    const ov: OverridesMap = new Map();
+    setOverride(ov, "inbox:9", { starred: true });
+    clearOverride(ov, "starred:9");
+    expect(ov.has("inbox:9")).toBe(false);
+  });
 });
+
 
