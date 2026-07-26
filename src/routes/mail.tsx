@@ -682,6 +682,8 @@ function MailApp() {
     clearPendingFlagOverride,
     hideRow,
     unhideRow,
+    confirmHideRow,
+
     applyPendingOne,
   } = useMailData(session || null);
 
