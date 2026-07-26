@@ -79,10 +79,14 @@ import { useMailIndexSync } from "@/hooks/use-mail-index-sync";
 import {
   applyOverrides as applyFlagOverrides,
   applyOverrideToOne as applyFlagOverrideToOne,
+  applyHidden as applyHiddenIds,
   clearOverride as clearFlagOverride,
   clearOverrideField as clearFlagOverrideField,
+  hideId,
   reconcileOverrides as reconcileFlagOverrides,
   setOverride as setFlagOverride,
+  unhideId,
+  type HiddenIdsSet,
   type OverridesMap as FlagOverridesMap,
 } from "@/lib/mail-pending-overrides";
 import { runManualRefresh } from "@/lib/mail-refresh-orchestration";
