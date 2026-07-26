@@ -1571,10 +1571,16 @@ function MailApp() {
     if (!confirmed) return;
     const meta = collectBulkMeta(ids);
     const snapshot = messages;
+    const deepSnapshot = deepResults;
+    const idSet = new Set(ids);
     const prevSelectedId = selectedId;
     const prevSelected = selectedMessage;
     setBulkBusy(true);
     setMessages((prev) => prev.filter((m) => !selection.has(m.id)));
+    if (isTrash) {
+      // Ghost prevention (Blocker 1): purge deleted ids from deep-search results.
+      setDeepResults((prev) => (prev ? prev.filter((m) => !idSet.has(m.id)) : prev));
+    }
     if (prevSelectedId && selection.has(prevSelectedId)) {
       setSelectedId(null);
       setSelectedMessage(null);
@@ -1629,6 +1635,15 @@ function MailApp() {
         const revived = snapshot.filter((m) => failedSet.has(m.id) && !seen.has(m.id));
         return revived.length ? [...revived, ...prev] : prev;
       });
+      if (isTrash && deepSnapshot) {
+        // Restore only the failed items back into deep-search results.
+        setDeepResults((prev) => {
+          if (!prev) return deepSnapshot;
+          const seen = new Set(prev.map((m) => m.id));
+          const revived = deepSnapshot.filter((m) => failedSet.has(m.id) && !seen.has(m.id));
+          return revived.length ? [...revived, ...prev] : prev;
+        });
+      }
       if (prevSelectedId && failedSet.has(prevSelectedId)) {
         setSelectedId(prevSelectedId);
         setSelectedMessage(prevSelected);
