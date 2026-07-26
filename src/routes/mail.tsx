@@ -268,11 +268,15 @@ function useMailData(session: MailSession | null) {
   // deep search). Entries are cleared on mutation failure (rollback) or
   // when a fresh server row confirms the expected value.
   const pendingOverridesRef = useRef<FlagOverridesMap>(new Map());
+  // Optimistic hide set — rows removed by the user (unstar in the "starred"
+  // folder) that must NOT be resurrected by a racing sync response.
+  const pendingHiddenRef = useRef<HiddenIdsSet>(new Set());
 
-  /** Apply overrides to `list`, GC confirmed entries, and return the patched list. */
+  /** Apply overrides + hidden filter to `list`, GC confirmed entries. */
   const applyPending = useCallback((list: MailMessage[]): MailMessage[] => {
     reconcileFlagOverrides(list, pendingOverridesRef.current);
-    return applyFlagOverrides(list, pendingOverridesRef.current);
+    const patched = applyFlagOverrides(list, pendingOverridesRef.current);
+    return applyHiddenIds(patched, pendingHiddenRef.current);
   }, []);
 
   /** Wrap a single incoming message the same way (used by messageCache). */
