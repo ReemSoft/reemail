@@ -1096,8 +1096,12 @@ function MailApp() {
       const c = messageCache.current.get(id);
       if (c) messageCache.current.set(id, { ...c, starred: !nextStarred });
       toast.error(err?.message || "فشل تحديث المميّز");
+    } finally {
+      // V4: always release the star-count "hot" window, success or failure.
+      endStarMutation();
     }
   }
+
 
 
   async function toggleRead(e: React.MouseEvent, id: string) {
