@@ -380,7 +380,15 @@ function useMailData(session: MailSession | null) {
   // Only "date-desc" is index-native; other sorts fall back to the bridge.
   const canUseIndex = useCallback(
     (f: MailFolder, s: SortOption) =>
-      MAIL_INDEX_ENABLED && s === "date-desc" && !!session?.mailSessionToken && !!folderPaths[f],
+      MAIL_INDEX_ENABLED &&
+      s === "date-desc" &&
+      !!session?.mailSessionToken &&
+      !!folderPaths[f] &&
+      // V4: "starred" is a virtual view over INBOX (\Flagged). The Local
+      // Index has no distinct row for it, so serving it from the index
+      // would either return zero rows or (worse) return every inbox row
+      // regardless of the \Flagged flag. Always fall through to the Bridge.
+      f !== "starred",
     [session, folderPaths],
   );
 
