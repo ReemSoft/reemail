@@ -75,6 +75,7 @@ import { indexListMessages } from "@/lib/mail-index.functions";
 import { indexListFolderCounts } from "@/lib/mail-index-counts.functions";
 import { indexUpdateFlag } from "@/lib/mail-flags.functions";
 import { indexMoveMessage } from "@/lib/mail-move.functions";
+import { indexDeleteMessage } from "@/lib/mail-delete.functions";
 import { MAIL_INDEX_ENABLED } from "@/lib/mail-feature-flags";
 import { useMailIndexSync } from "@/hooks/use-mail-index-sync";
 import {
@@ -763,6 +764,7 @@ function MailApp() {
   const move = useServerFn(bridgeMove);
   const deleteFn = useServerFn(bridgeDelete);
   const moveIndex = useServerFn(indexMoveMessage);
+  const deleteIndex = useServerFn(indexDeleteMessage);
   const searchFn = useServerFn(bridgeSearch);
 
   // Preferred path for \Seen / \Flagged mutations:
@@ -822,29 +824,31 @@ function MailApp() {
     async (params: {
       sourceCanonical: MailFolder;
       uid: number;
-      /** Omit → permanent delete route (bridge `/api/delete`). */
+      /** Omit → permanent delete (only valid when sourceCanonical === "trash"). */
       toFolder?: MailFolder;
     }) => {
       if (!session) throw new Error("لا توجد جلسة بريد");
       const dest = params.toFolder;
-      if (session.mailSessionToken) {
-        // Delete path currently maps to move-to-trash server-side; keep
-        // parity with legacy behavior when no explicit destination given.
-        const destCanonical = (dest ?? "trash") as MailFolder;
-        const res = await moveIndex({
-          data: {
-            mailSessionToken: session.mailSessionToken,
-            password: session.password,
-            sourceCanonical: params.sourceCanonical,
-            destCanonical,
-            uid: params.uid,
-          },
-        });
-        if (!res.ok) throw new Error(res.error);
-        return;
-      }
-      // Legacy bridge fallback (no JWT).
+      // Permanent-delete branch — MUST use indexDeleteMessage (Blocker 1).
+      // Never delegates to moveIndex; the Bridge decider on "trash" would
+      // otherwise take an unrelated code path.
       if (dest === undefined) {
+        if (params.sourceCanonical !== "trash") {
+          throw new Error("الحذف النهائي مسموح فقط من مجلد المهملات");
+        }
+        if (session.mailSessionToken) {
+          const res = await deleteIndex({
+            data: {
+              mailSessionToken: session.mailSessionToken,
+              password: session.password,
+              canonical: "trash",
+              uid: params.uid,
+            },
+          });
+          if (!res.ok) throw new Error(res.error);
+          return;
+        }
+        // Legacy fallback (no JWT): bridge /api/delete decides on trash → permanent.
         await deleteFn({
           data: {
             account: session.account,
@@ -853,19 +857,33 @@ function MailApp() {
             uid: params.uid,
           },
         });
-      } else {
-        await move({
+        return;
+      }
+      // Move branch — IMAP MOVE + local write-through in one round.
+      if (session.mailSessionToken) {
+        const res = await moveIndex({
           data: {
-            account: session.account,
+            mailSessionToken: session.mailSessionToken,
             password: session.password,
-            folder: params.sourceCanonical,
+            sourceCanonical: params.sourceCanonical,
+            destCanonical: dest,
             uid: params.uid,
-            toFolder: dest,
           },
         });
+        if (!res.ok) throw new Error(res.error);
+        return;
       }
+      await move({
+        data: {
+          account: session.account,
+          password: session.password,
+          folder: params.sourceCanonical,
+          uid: params.uid,
+          toFolder: dest,
+        },
+      });
     },
-    [session, moveIndex, deleteFn, move],
+    [session, moveIndex, deleteIndex, deleteFn, move],
   );
 
   // Per-id single-flight guard against double-click on Move/Delete/Restore.
@@ -1307,13 +1325,19 @@ function MailApp() {
     return runMoveFlight(id, async () => {
       const wasUnread = msg ? !msg.read : false;
       const snapshot = messages;
+      const deepSnapshot = deepResults;
       const prevSelectedId = selectedId;
       const prevSelected = selectedMessage;
-      // Trash-delete = move-to-trash on the server (see bridge/imap.ts).
-      // Same-folder move contributes no counter delta, so treat isTrash
-      // as "permanent" for the UI counter model: source-1 only.
+      // Trash-delete = permanent delete via indexDeleteMessage / bridge
+      // messageDelete (Blocker 1). No target folder gains a row, so
+      // counters model source-1 only. Ghost prevention: also purge from
+      // deep-search results — the tombstone will keep it out of the next
+      // index page, and this covers the currently-visible in-memory list.
       const destForCounts: MailFolder | null = isTrash ? null : "trash";
       setMessages((prev) => prev.filter((m) => m.id !== id));
+      if (isTrash) {
+        setDeepResults((prev) => (prev ? prev.filter((m) => m.id !== id) : prev));
+      }
       setSelectedId(null);
       setSelectedMessage(null);
       messageCache.current.delete(id);
@@ -1337,6 +1361,7 @@ function MailApp() {
         unhideRow(id);
         applyMoveCountsDelta(destForCounts ?? parsed.folder, parsed.folder, wasUnread); // revert
         setMessages(snapshot);
+        if (isTrash) setDeepResults(deepSnapshot);
         setSelectedId(prevSelectedId);
         setSelectedMessage(prevSelected);
         toast.error(err?.message || (isTrash ? "فشل حذف الرسالة" : "فشل نقل الرسالة إلى المهملات"));
@@ -1546,10 +1571,16 @@ function MailApp() {
     if (!confirmed) return;
     const meta = collectBulkMeta(ids);
     const snapshot = messages;
+    const deepSnapshot = deepResults;
+    const idSet = new Set(ids);
     const prevSelectedId = selectedId;
     const prevSelected = selectedMessage;
     setBulkBusy(true);
     setMessages((prev) => prev.filter((m) => !selection.has(m.id)));
+    if (isTrash) {
+      // Ghost prevention (Blocker 1): purge deleted ids from deep-search results.
+      setDeepResults((prev) => (prev ? prev.filter((m) => !idSet.has(m.id)) : prev));
+    }
     if (prevSelectedId && selection.has(prevSelectedId)) {
       setSelectedId(null);
       setSelectedMessage(null);
@@ -1604,6 +1635,15 @@ function MailApp() {
         const revived = snapshot.filter((m) => failedSet.has(m.id) && !seen.has(m.id));
         return revived.length ? [...revived, ...prev] : prev;
       });
+      if (isTrash && deepSnapshot) {
+        // Restore only the failed items back into deep-search results.
+        setDeepResults((prev) => {
+          if (!prev) return deepSnapshot;
+          const seen = new Set(prev.map((m) => m.id));
+          const revived = deepSnapshot.filter((m) => failedSet.has(m.id) && !seen.has(m.id));
+          return revived.length ? [...revived, ...prev] : prev;
+        });
+      }
       if (prevSelectedId && failedSet.has(prevSelectedId)) {
         setSelectedId(prevSelectedId);
         setSelectedMessage(prevSelected);

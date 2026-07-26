@@ -245,9 +245,12 @@ app.post("/api/delete", requireKey, async (req, res) => {
       payload.folder,
       payload.uid,
     );
-    // Typed contract: today `/api/delete` always routes through move-to-trash.
-    // `kind` lets callers branch when a true permanent-delete path lands
-    // later without a breaking change.
+    // Blocker 1 contract:
+    //   trash source → { ok:true, kind:"permanent-delete", sourceUid }
+    //   other        → { ok:true, kind:"moved-to-trash",  move: MoveResult }
+    if (result.kind === "permanent-delete") {
+      return res.json({ ok: true, kind: result.kind, sourceUid: result.sourceUid });
+    }
     return res.json({ ok: true, kind: result.kind, move: result.move });
   } catch (err: any) {
     console.error("[bridge] /api/delete error:", err);

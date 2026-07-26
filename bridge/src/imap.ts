@@ -826,18 +826,53 @@ export function parseMoveResponse(
 }
 
 /**
- * Permanent-delete vs move-to-trash decision.
+ * Delete-mode routing contract (Blocker 1).
  *
- * Behavior contract (preserved from the pre-refactor bridge): calling
- * `/api/delete` on ANY folder currently routes through
- * `moveMessage(..., "trash")`. We surface the FULL move contract on delete so
- * the caller can apply a local-index write-through and drop the source row.
+ *   folder === "trash"  → permanent-delete via IMAP `messageDelete` (STORE
+ *                         \Deleted + EXPUNGE). NEVER calls `messageMove`.
+ *   any other folder    → move-to-trash via `messageMove(..., "trash")`.
  *
- * The response is typed as `{ kind: "moved-to-trash", move: MoveResult }`
- * so a future permanent-delete code path can be added later without
- * breaking existing callers.
+ * The pure `decideDeleteMode` helper exists so the routing invariant is
+ * unit-testable without a live IMAP server.
  */
-export type DeleteResult = { kind: "moved-to-trash"; move: MoveResult };
+export type DeleteMode = "permanent" | "trash";
+export function decideDeleteMode(folder: MailFolder): DeleteMode {
+  return folder === "trash" ? "permanent" : "trash";
+}
+
+export type DeleteResult =
+  | { kind: "moved-to-trash"; move: MoveResult }
+  | { kind: "permanent-delete"; sourceUid: number };
+
+export async function permanentDeleteMessage(
+  account: MailAccount,
+  password: string,
+  folder: MailFolder,
+  uid: number,
+): Promise<{ kind: "permanent-delete"; sourceUid: number }> {
+  const client = makeImapClient(account, password);
+  try {
+    await client.connect();
+    const mailboxes = await listMailboxes(client);
+    const path = resolveFolderPath(mailboxes, folder);
+    if (!path) throw new Error("Folder not found");
+    const lock = await client.getMailboxLock(path);
+    try {
+      // imapflow's messageDelete flags \Deleted and EXPUNGEs when uid:true.
+      // This never falls back to a MOVE — the message is removed from IMAP.
+      const ok = await client.messageDelete(
+        { uid: String(uid) } as unknown as SearchObject,
+        { uid: true },
+      );
+      if (!ok) throw new Error("IMAP messageDelete returned false");
+      return { kind: "permanent-delete", sourceUid: uid };
+    } finally {
+      lock.release();
+    }
+  } finally {
+    await client.logout().catch(() => {});
+  }
+}
 
 export async function deleteMessage(
   account: MailAccount,
@@ -845,6 +880,9 @@ export async function deleteMessage(
   folder: MailFolder,
   uid: number,
 ): Promise<DeleteResult> {
+  if (decideDeleteMode(folder) === "permanent") {
+    return permanentDeleteMessage(account, password, folder, uid);
+  }
   const move = await moveMessage(account, password, folder, uid, "trash");
   return { kind: "moved-to-trash", move };
 }
