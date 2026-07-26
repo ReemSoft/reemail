@@ -40,6 +40,7 @@ import {
   Check,
   ArrowUpDown,
   Download,
+  CloudDownload,
   Eye,
   FileImage,
   FileVideo,
@@ -2571,7 +2572,7 @@ function AttachmentCard({
             aria-label="تنزيل"
             className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-background text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50 sm:h-8 sm:w-8"
           >
-            {busy === "download" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+            {busy === "download" ? <CloudDownload className="h-4 w-4 animate-pulse text-primary" /> : <Download className="h-4 w-4" />}
           </button>
         </div>
       </div>
