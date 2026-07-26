@@ -1382,6 +1382,7 @@ function MailApp() {
     });
   }
 
+  async function handleMarkUnread(id: string) {
     const parsed = parseMessageId(id);
     if (!parsed || !session) return;
     setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, read: false } : m)));
