@@ -41,6 +41,13 @@ import {
   ArrowUpDown,
   Download,
   Eye,
+  FileImage,
+  FileVideo,
+  FileAudio,
+  FileArchive,
+  FileSpreadsheet,
+  FileCode,
+  FileType,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -2267,6 +2274,35 @@ const INLINE_PREVIEW_MIME = new Set<string>([
   "application/pdf",
 ]);
 
+function getAttachmentIcon(mimeType: string, filename: string): {
+  Icon: typeof Paperclip;
+  tint: string;
+} {
+  const mime = (mimeType || "").toLowerCase();
+  const ext = (filename.split(".").pop() || "").toLowerCase();
+
+  if (mime.startsWith("image/")) return { Icon: FileImage, tint: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400" };
+  if (mime.startsWith("video/")) return { Icon: FileVideo, tint: "bg-purple-500/10 text-purple-600 dark:text-purple-400" };
+  if (mime.startsWith("audio/")) return { Icon: FileAudio, tint: "bg-pink-500/10 text-pink-600 dark:text-pink-400" };
+  if (mime === "application/pdf" || ext === "pdf") return { Icon: FileType, tint: "bg-red-500/10 text-red-600 dark:text-red-400" };
+  if (/zip|rar|7z|tar|gzip|compressed/.test(mime) || ["zip","rar","7z","tar","gz"].includes(ext))
+    return { Icon: FileArchive, tint: "bg-amber-500/10 text-amber-600 dark:text-amber-400" };
+  if (/sheet|excel|csv/.test(mime) || ["xls","xlsx","csv","ods"].includes(ext))
+    return { Icon: FileSpreadsheet, tint: "bg-green-500/10 text-green-600 dark:text-green-400" };
+  if (/word|document|opendocument\.text/.test(mime) || ["doc","docx","odt","rtf"].includes(ext))
+    return { Icon: FileText, tint: "bg-blue-500/10 text-blue-600 dark:text-blue-400" };
+  if (/presentation|powerpoint/.test(mime) || ["ppt","pptx","odp","key"].includes(ext))
+    return { Icon: FileType, tint: "bg-orange-500/10 text-orange-600 dark:text-orange-400" };
+  if (/json|xml|javascript|typescript|html|css|x-sh|x-python/.test(mime) ||
+      ["js","ts","tsx","jsx","json","xml","html","css","py","sh","java","c","cpp","go","rs"].includes(ext))
+    return { Icon: FileCode, tint: "bg-indigo-500/10 text-indigo-600 dark:text-indigo-400" };
+  if (mime.startsWith("text/") || ["txt","md","log"].includes(ext))
+    return { Icon: FileText, tint: "bg-slate-500/10 text-slate-600 dark:text-slate-400" };
+
+  return { Icon: Paperclip, tint: "bg-brand-gradient/10 text-brand-accent" };
+}
+
+
 function AttachmentCard({
   attachment,
   message,
@@ -2347,11 +2383,13 @@ function AttachmentCard({
     }
   }
 
+  const { Icon: FileIcon, tint } = getAttachmentIcon(attachment.mimeType, attachment.filename);
+
   return (
     <>
       <div className="flex items-center gap-3 rounded-xl border border-border bg-card p-3">
-        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-brand-gradient/10 text-brand-accent">
-          <Paperclip className="h-4 w-4" />
+        <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg ${tint}`}>
+          <FileIcon className="h-5 w-5" />
         </div>
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-medium" title={attachment.filename}>
