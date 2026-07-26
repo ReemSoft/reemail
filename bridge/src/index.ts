@@ -5,7 +5,6 @@ import multer from "multer";
 import { uploadStorage, cleanupFiles, startupCleanup } from "./uploads.js";
 import { createSendGates } from "./concurrency.js";
 
-
 import { z } from "zod";
 import {
   verifyCredentials,
@@ -92,11 +91,15 @@ const MovePayloadSchema = MessagePayloadSchema.extend({
 });
 
 const SendPayloadSchema = AuthPayloadSchema.extend({
-  to: z.array(
-    z.object({ name: z.string(), email: z.string().email() }),
-  ),
-  cc: z.array(z.object({ name: z.string(), email: z.string().email() })).optional().default([]),
-  bcc: z.array(z.object({ name: z.string(), email: z.string().email() })).optional().default([]),
+  to: z.array(z.object({ name: z.string(), email: z.string().email() })),
+  cc: z
+    .array(z.object({ name: z.string(), email: z.string().email() }))
+    .optional()
+    .default([]),
+  bcc: z
+    .array(z.object({ name: z.string(), email: z.string().email() }))
+    .optional()
+    .default([]),
   subject: z.string().min(1),
   bodyHtml: z.string().optional(),
   bodyText: z.string().optional(),
@@ -164,7 +167,12 @@ app.post("/api/messages", requireKey, async (req, res) => {
 app.post("/api/message", requireKey, async (req, res) => {
   try {
     const payload = MessagePayloadSchema.parse(req.body);
-    const message = await getMessageBody(payload.account as any, payload.password, payload.folder, payload.uid);
+    const message = await getMessageBody(
+      payload.account as any,
+      payload.password,
+      payload.folder,
+      payload.uid,
+    );
     if (!message) {
       return res.status(404).json({ ok: false, error: "Message not found" });
     }
@@ -178,7 +186,13 @@ app.post("/api/message", requireKey, async (req, res) => {
 app.post("/api/mark-read", requireKey, async (req, res) => {
   try {
     const payload = MarkReadPayloadSchema.parse(req.body);
-    await markRead(payload.account as any, payload.password, payload.folder, payload.uid, payload.read);
+    await markRead(
+      payload.account as any,
+      payload.password,
+      payload.folder,
+      payload.uid,
+      payload.read,
+    );
     return res.json({ ok: true });
   } catch (err: any) {
     console.error("[bridge] /api/mark-read error:", err);
@@ -189,7 +203,13 @@ app.post("/api/mark-read", requireKey, async (req, res) => {
 app.post("/api/star", requireKey, async (req, res) => {
   try {
     const payload = StarPayloadSchema.parse(req.body);
-    await starMessage(payload.account as any, payload.password, payload.folder, payload.uid, payload.starred);
+    await starMessage(
+      payload.account as any,
+      payload.password,
+      payload.folder,
+      payload.uid,
+      payload.starred,
+    );
     return res.json({ ok: true });
   } catch (err: any) {
     console.error("[bridge] /api/star error:", err);
@@ -200,7 +220,13 @@ app.post("/api/star", requireKey, async (req, res) => {
 app.post("/api/move", requireKey, async (req, res) => {
   try {
     const payload = MovePayloadSchema.parse(req.body);
-    await moveMessage(payload.account as any, payload.password, payload.folder, payload.uid, payload.toFolder);
+    await moveMessage(
+      payload.account as any,
+      payload.password,
+      payload.folder,
+      payload.uid,
+      payload.toFolder,
+    );
     return res.json({ ok: true });
   } catch (err: any) {
     console.error("[bridge] /api/move error:", err);
@@ -246,7 +272,10 @@ app.post("/api/send", requireKey, async (req, res) => {
   try {
     const payload = SendPayloadSchema.parse(req.body);
     const result = await sendMessage(payload.account as any, payload.password, {
-      from: { name: payload.account.display_name || payload.account.email_address, email: payload.account.email_address },
+      from: {
+        name: payload.account.display_name || payload.account.email_address,
+        email: payload.account.email_address,
+      },
       to: payload.to as any,
       cc: payload.cc as any,
       bcc: payload.bcc as any,
@@ -257,7 +286,11 @@ app.post("/api/send", requireKey, async (req, res) => {
     if (!result.ok && "error" in result) {
       return res.status(500).json({ ok: false, error: result.error });
     }
-    return res.json({ ok: true, messageId: (result as any).messageId, sentCopySaved: (result as any).sentCopySaved });
+    return res.json({
+      ok: true,
+      messageId: (result as any).messageId,
+      sentCopySaved: (result as any).sentCopySaved,
+    });
   } catch (err: any) {
     console.error("[bridge] /api/send error:", err);
     return res.status(500).json({ ok: false, error: err?.message || "Failed to send message" });
@@ -358,7 +391,11 @@ app.post(
       if (!result.ok && "error" in result) {
         return res.status(500).json({ ok: false, error: result.error });
       }
-      return res.json({ ok: true, messageId: (result as any).messageId, sentCopySaved: (result as any).sentCopySaved });
+      return res.json({
+        ok: true,
+        messageId: (result as any).messageId,
+        sentCopySaved: (result as any).sentCopySaved,
+      });
     } catch (err: any) {
       if (err?.code === "LIMIT_FILE_SIZE") {
         return res.status(413).json({ ok: false, error: "ملف يتجاوز الحد المسموح (25MB)" });
@@ -379,7 +416,6 @@ app.post(
     }
   },
 );
-
 
 // ---- Attachment download (streamed) ----
 const ATTACHMENT_MAX_BYTES = Number(process.env.ATTACHMENT_MAX_BYTES || 50 * 1024 * 1024);
@@ -442,7 +478,9 @@ app.post("/api/attachment", requireKey, async (req, res) => {
     // Cancel IMAP read if client disconnects early.
     res.on("close", () => {
       if (!res.writableEnded) {
-        try { content.destroy(); } catch {}
+        try {
+          content.destroy();
+        } catch {}
         cleanup().catch(() => {});
       }
     });
@@ -456,7 +494,9 @@ app.post("/api/attachment", requireKey, async (req, res) => {
   } catch (err: any) {
     console.error("[bridge] /api/attachment error:", err);
     if (!res.headersSent) {
-      return res.status(500).json({ ok: false, error: err?.message || "Failed to download attachment" });
+      return res
+        .status(500)
+        .json({ ok: false, error: err?.message || "Failed to download attachment" });
     }
     res.end();
   }
@@ -533,4 +573,3 @@ app.listen(PORT, HOST, () => {
     .then((n) => n > 0 && console.log(`[bridge] cleaned ${n} stale upload(s)`))
     .catch(() => {});
 });
-
