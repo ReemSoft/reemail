@@ -877,6 +877,7 @@ function MailApp() {
       const listMsg = messages.find((m) => m.id === id);
       if (listMsg && !listMsg.read) {
         // Optimistic read
+        setPendingFlagOverride(id, { read: true });
         setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, read: true } : m)));
         setCounts((prev) => {
           const cur = prev[parsed.folder];
@@ -885,7 +886,9 @@ function MailApp() {
         });
         const c = messageCache.current.get(id);
         if (c) messageCache.current.set(id, { ...c, read: true });
-        mutateFlag(parsed.folder, parsed.uid, "seen", true).catch(() => {});
+        mutateFlag(parsed.folder, parsed.uid, "seen", true).catch(() => {
+          clearPendingFlagOverride(id, "read");
+        });
       }
     } catch (err: any) {
       if (!cached) {
