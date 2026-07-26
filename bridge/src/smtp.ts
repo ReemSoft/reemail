@@ -3,9 +3,13 @@ import type { MailAccount } from "./types.js";
 
 export interface SendAttachment {
   filename: string;
-  content: Buffer;
+  /** In-memory bytes. Prefer `path` for anything > a few KB. */
+  content?: Buffer;
+  /** On-disk path — nodemailer streams it, keeping RSS flat. */
+  path?: string;
   contentType?: string;
 }
+
 
 export interface SendMessagePayload {
   from: { name: string; email: string };
@@ -49,9 +53,11 @@ export async function sendMessage(
       html: payload.bodyHtml || "",
       attachments: payload.attachments?.map((a) => ({
         filename: a.filename,
-        content: a.content,
+        // Prefer `path` (streamed from disk) over `content` (buffered).
+        ...(a.path ? { path: a.path } : { content: a.content }),
         contentType: a.contentType,
       })),
+
     });
     return { ok: true, messageId: info.messageId || "" };
   } catch (err: any) {

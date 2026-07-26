@@ -422,9 +422,10 @@ function useMailData(session: MailSession | null) {
   }, [folder]);
 
   // Background Local Mail Index sync — initial when not ready, incremental
-  // afterwards. Pauses when the tab is hidden and never overlaps itself.
+  // afterwards, plus a 5-minute reconcile once the folder is indexed.
+  // Pauses when the tab is hidden and never overlaps itself.
   const isFolderIndexed = indexReady[folder] === true;
-  useMailIndexSync({
+  const { reconcileNow, incrementalNow } = useMailIndexSync({
     session,
     folderPath,
     canonical: folder,
@@ -432,6 +433,8 @@ function useMailData(session: MailSession | null) {
     enabled: MAIL_INDEX_ENABLED && !!session?.mailSessionToken && sort === "date-desc",
     onSynced: () => {
       // Refresh the current folder from the index after a successful round.
+      // Tombstoned messages disappear from the list because indexListMessages
+      // filters `deleted_at IS NULL` server-side.
       loadMessages();
       loadCounts();
     },
@@ -454,8 +457,18 @@ function useMailData(session: MailSession | null) {
     useMock,
     loadCounts,
     source,
-    refresh: () => {
+    refresh: async () => {
+      // Manual refresh = pull latest counts + kick both an incremental and a
+      // reconcile round for the current folder (when the index is enabled).
+      // The hook enforces overlap protection, so this is safe to call from a
+      // button handler.
       loadCounts();
+      await incrementalNow();
+      // Only run reconcile after initial has completed (guarded inside the
+      // hook). Awaiting sequentially avoids two IMAP round-trips at once.
+      await reconcileNow();
+      // Ensure the visible list picks up any changes the sync rounds didn't
+      // already broadcast via onSynced.
       loadMessages();
     },
   };
