@@ -522,6 +522,41 @@ function MailApp() {
   const deleteFn = useServerFn(bridgeDelete);
   const searchFn = useServerFn(bridgeSearch);
 
+  // Preferred path for \Seen / \Flagged mutations:
+  //   session has mailSessionToken → indexUpdateFlag (IMAP + Local Index
+  //   write-through in one round). Falls back to raw bridge for legacy
+  //   sessions with no token. Throws on any failure so callers' optimistic
+  //   rollback in .catch fires.
+  const mutateFlag = useCallback(
+    async (canonical: MailFolder, uid: number, kind: "seen" | "flagged", value: boolean) => {
+      if (!session) throw new Error("لا توجد جلسة بريد");
+      if (session.mailSessionToken) {
+        const res = await updateFlag({
+          data: {
+            mailSessionToken: session.mailSessionToken,
+            password: session.password,
+            canonical,
+            uid,
+            kind,
+            value,
+          },
+        });
+        if (!res.ok) throw new Error(res.error);
+        return;
+      }
+      if (kind === "seen") {
+        await markRead({
+          data: { account: session.account, password: session.password, folder: canonical, uid, read: value },
+        });
+      } else {
+        await star({
+          data: { account: session.account, password: session.password, folder: canonical, uid, starred: value },
+        });
+      }
+    },
+    [session, updateFlag, markRead, star],
+  );
+
   // In-memory caches for instant open (prefetch on hover)
   const messageCache = useRef<Map<string, MailMessage>>(new Map());
   const inflight = useRef<Map<string, Promise<MailMessage | null>>>(new Map());
