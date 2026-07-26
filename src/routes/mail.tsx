@@ -413,10 +413,11 @@ function useMailData(session: MailSession | null) {
           },
         });
         if (res.ok && res.indexed) {
+          const patched = applyPending(res.messages);
           setMessages((prev) => {
             const seen = new Set(prev.map((m) => m.id));
             const merged = [...prev];
-            for (const m of res.messages) if (!seen.has(m.id)) merged.push(m);
+            for (const m of patched) if (!seen.has(m.id)) merged.push(m);
             return merged;
           });
           setHasMore(res.hasMore);
@@ -440,10 +441,11 @@ function useMailData(session: MailSession | null) {
         },
       });
       if (!result.ok) throw new Error(result.error);
+      const patched = applyPending(result.messages);
       setMessages((prev) => {
         const seen = new Set(prev.map((m) => m.id));
         const merged = [...prev];
-        for (const m of result.messages) if (!seen.has(m.id)) merged.push(m);
+        for (const m of patched) if (!seen.has(m.id)) merged.push(m);
         return merged;
       });
       setHasMore(result.messages.length >= PAGE);
