@@ -267,8 +267,22 @@ app.post("/api/send", requireKey, async (req, res) => {
 // ---- Send with attachments (multipart/form-data, streamed via multer) ----
 const SEND_MAX_TOTAL_BYTES = Number(process.env.SEND_MAX_TOTAL_BYTES || 25 * 1024 * 1024);
 const SEND_MAX_FILES = Number(process.env.SEND_MAX_FILES || 10);
+// ---- Send with attachments (multipart/form-data, streamed to disk) ----
+// Streaming to disk (see uploads.ts) keeps RSS flat under upload bursts.
+// A dedicated concurrency gate then caps how many sends can be in flight so
+// SMTP dial-out itself cannot blow up memory.
+const SEND_MAX_TOTAL_BYTES = Number(process.env.SEND_MAX_TOTAL_BYTES || 25 * 1024 * 1024);
+const SEND_MAX_FILES = Number(process.env.SEND_MAX_FILES || 10);
+const SEND_GLOBAL_MAX = Number(process.env.SEND_GLOBAL_MAX || 20);
+const SEND_PER_ACCOUNT_MAX = Number(process.env.SEND_PER_ACCOUNT_MAX || 3);
+
+const sendGates = createSendGates({
+  globalMax: SEND_GLOBAL_MAX,
+  perKeyMax: SEND_PER_ACCOUNT_MAX,
+});
+
 const sendUpload = multer({
-  storage: multer.memoryStorage(),
+  storage: uploadStorage,
   limits: {
     fileSize: SEND_MAX_TOTAL_BYTES,
     files: SEND_MAX_FILES,
@@ -282,6 +296,23 @@ app.post(
   requireKey,
   sendUpload.array("attachments", SEND_MAX_FILES),
   async (req, res) => {
+    const files = (req.files as Express.Multer.File[] | undefined) ?? [];
+    let gateKey: string | null = null;
+    let gateAcquired = false;
+    // Belt-and-braces cleanup: if the client aborts before we finish, drop
+    // any files we've already written. Never runs after a normal end because
+    // the finally block will have already unlinked them.
+    const abortHandler = () => {
+      if (!res.writableEnded) {
+        cleanupFiles(files).catch(() => {});
+        if (gateAcquired && gateKey) {
+          sendGates.release(gateKey);
+          gateAcquired = false;
+        }
+      }
+    };
+    req.on("aborted", abortHandler);
+    res.on("close", abortHandler);
     try {
       const raw = req.body?.payload;
       if (typeof raw !== "string") {
@@ -290,15 +321,26 @@ app.post(
       const parsed = JSON.parse(raw);
       const payload = SendPayloadSchema.parse(parsed);
 
-      const files = (req.files as Express.Multer.File[] | undefined) ?? [];
       const totalBytes = files.reduce((acc, f) => acc + f.size, 0);
       if (totalBytes > SEND_MAX_TOTAL_BYTES) {
         return res.status(413).json({ ok: false, error: "المرفقات تتجاوز الحد المسموح" });
       }
 
+      // Acquire concurrency slot AFTER validation so bad requests don't burn
+      // capacity. Reject cleanly if the bridge is saturated.
+      gateKey = payload.account.email_address.toLowerCase();
+      if (!sendGates.tryAcquire(gateKey)) {
+        return res
+          .status(429)
+          .json({ ok: false, error: "SEND_BUSY", message: "الخادم مشغول، حاول بعد قليل" });
+      }
+      gateAcquired = true;
+
+      // Nodemailer accepts `path` — it streams from disk, so we never
+      // materialise the full attachment payload in Node heap.
       const attachments = files.map((f) => ({
         filename: f.originalname,
-        content: f.buffer,
+        path: f.path,
         contentType: f.mimetype,
       }));
 
@@ -326,11 +368,20 @@ app.post(
       if (err?.code === "LIMIT_FILE_COUNT") {
         return res.status(413).json({ ok: false, error: "عدد الملفات يتجاوز الحد (10)" });
       }
-      console.error("[bridge] /api/send-multipart error:", err);
-      return res.status(500).json({ ok: false, error: err?.message || "Failed to send message" });
+      // Log only the coarse error code / message, never the payload.
+      console.error("[bridge] /api/send-multipart error:", err?.code || err?.message || "unknown");
+      return res.status(500).json({ ok: false, error: "Failed to send message" });
+    } finally {
+      req.off("aborted", abortHandler);
+      res.off("close", abortHandler);
+      if (gateAcquired && gateKey) sendGates.release(gateKey);
+      // Always drop temp files: success, SMTP failure, validation error,
+      // or gate rejection all funnel through here.
+      await cleanupFiles(files).catch(() => {});
     }
   },
 );
+
 
 // ---- Attachment download (streamed) ----
 const ATTACHMENT_MAX_BYTES = Number(process.env.ATTACHMENT_MAX_BYTES || 50 * 1024 * 1024);
