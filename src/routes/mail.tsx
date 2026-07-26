@@ -404,7 +404,7 @@ function useMailData(session: MailSession | null) {
       }
     }
     await loadCounts();
-  }, [session, listIndexCounts, loadCounts]);
+  }, [session, listIndexCounts, loadCounts, isStarCountHot]);
 
   // Decide whether this (folder, sort, session) call can use the Local Mail Index.
   // Only "date-desc" is index-native; other sorts fall back to the bridge.
