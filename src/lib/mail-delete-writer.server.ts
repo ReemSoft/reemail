@@ -47,9 +47,12 @@ export async function applyDeleteWriteThrough(
     uid: input.sourceUid,
   });
 
-  // No matching row (already tombstoned / never indexed) — nothing to
-  // decrement. Skipping the RPC prevents a false −1 on stale counters.
-  if (!tomb) {
+  // Idempotency: only the caller whose atomic conditional UPDATE actually
+  // flipped `deleted_at` from NULL is allowed to decrement counters. A
+  // retry, double-click, or racing sibling that lost the race returns
+  // `changed:false` here and MUST NOT call the RPC — otherwise counts
+  // drift by −1 per duplicate.
+  if (!tomb.changed) {
     return { ok: true, applied: "already-tombstoned", wasUnread: false };
   }
 
