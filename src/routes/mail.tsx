@@ -59,11 +59,8 @@ import {
   List,
   ListOrdered,
   Link2,
-  Quote,
-  Minimize2,
-  Maximize2,
-  Minus,
   Type,
+  Quote,
   Eraser,
   AlertTriangle,
   Globe,
@@ -2989,10 +2986,17 @@ function MailApp() {
         {/* Message viewer */}
         <div
           className={`flex-1 overflow-hidden bg-surface ${
-            selectedMessage || (selectedId && reading) ? "flex" : "hidden md:flex"
+            compose || selectedMessage || (selectedId && reading) ? "flex" : "hidden md:flex"
           } flex-col`}
         >
-          {selectedMessage ? (
+          {compose ? (
+            <Composer
+              session={session}
+              initial={compose}
+              onClose={() => setCompose(null)}
+              onSent={onAfterSend}
+            />
+          ) : selectedMessage ? (
             <MessageView
               message={selectedMessage}
               loading={reading}
@@ -3029,18 +3033,10 @@ function MailApp() {
           )}
         </div>
       </div>
-
-      {compose && (
-        <Composer
-          session={session}
-          initial={compose}
-          onClose={() => setCompose(null)}
-          onSent={onAfterSend}
-        />
-      )}
     </div>
   );
 }
+
 
 function MessageRow({
   message,
@@ -3896,7 +3892,7 @@ function Composer({
   const [files, setFiles] = useState<File[]>([]);
   const [sending, setSending] = useState(false);
   const [progress, setProgress] = useState(0);
-  const [windowState, setWindowState] = useState<"normal" | "minimized" | "fullscreen">("normal");
+  // Composer runs inline inside the message-viewer pane (Superhuman-style).
   const [dragging, setDragging] = useState(false);
   const [savedAt, setSavedAt] = useState<number | null>(null);
   const [plainMode, setPlainMode] = useState(false);
@@ -4121,42 +4117,25 @@ function Composer({
       if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
         e.preventDefault();
         handleSend();
-      } else if (e.key === "Escape" && windowState !== "minimized") {
+      } else if (e.key === "Escape") {
         e.preventDefault();
-        setWindowState("minimized");
+        onClose();
       }
     }
     const el = containerRef.current;
     el?.addEventListener("keydown", onKey);
     return () => el?.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [to, cc, bcc, subject, files, windowState]);
+  }, [to, cc, bcc, subject, files]);
 
-  // Minimized view
-  if (windowState === "minimized") {
-    return (
-      <div className="fixed bottom-0 right-4 z-40 w-72 rounded-t-xl border border-border bg-card shadow-float">
-        <button
-          onClick={() => setWindowState("normal")}
-          className="flex w-full items-center justify-between px-4 py-2.5 text-right"
-        >
-          <span className="truncate text-sm font-medium">{subject || "رسالة جديدة"}</span>
-          <div className="flex items-center gap-1 text-muted-foreground">
-            <Maximize2 className="h-3.5 w-3.5" />
-          </div>
-        </button>
-      </div>
-    );
-  }
-
-  const containerClass =
-    windowState === "fullscreen"
-      ? "fixed inset-4 z-40 flex flex-col rounded-xl border border-border bg-card shadow-float sm:inset-8"
-      : "fixed inset-x-0 bottom-0 z-40 mx-auto flex max-h-[92vh] max-w-2xl flex-col rounded-t-2xl border border-border bg-card shadow-float sm:inset-x-auto sm:bottom-4 sm:right-4 sm:w-[600px]";
+  // Inline mode: composer fills the message-viewer pane on the same
+  // light bg-surface used elsewhere, wrapped in an elegant card.
+  const containerClass = "flex h-full w-full flex-col bg-surface";
 
   const savedLabel = savedAt
     ? `تم الحفظ ${new Date(savedAt).toLocaleTimeString("ar", { hour: "2-digit", minute: "2-digit" })}`
     : "مسودّة جديدة";
+
 
   return (
     <div
@@ -4180,42 +4159,21 @@ function Composer({
         setDragging(false);
       }}
     >
-      {/* Header */}
-      <div className="flex items-center justify-between border-b border-border px-4 py-2">
-        <p className="truncate text-sm font-semibold">{subject || "رسالة جديدة"}</p>
-        <div className="flex items-center gap-0.5 text-muted-foreground">
-          <button
-            onClick={() => setWindowState("minimized")}
-            className="rounded-md p-1.5 hover:bg-muted"
-            title="تصغير (Esc)"
-            aria-label="تصغير"
-          >
-            <Minus className="h-4 w-4" />
-          </button>
-          <button
-            onClick={() =>
-              setWindowState((s) => (s === "fullscreen" ? "normal" : "fullscreen"))
-            }
-            className="rounded-md p-1.5 hover:bg-muted"
-            title={windowState === "fullscreen" ? "استعادة" : "ملء الشاشة"}
-            aria-label="تكبير"
-          >
-            {windowState === "fullscreen" ? (
-              <Minimize2 className="h-4 w-4" />
-            ) : (
-              <Maximize2 className="h-4 w-4" />
-            )}
-          </button>
-          <button
-            onClick={onClose}
-            className="rounded-md p-1.5 hover:bg-muted"
-            title="إغلاق"
-            aria-label="إغلاق"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-      </div>
+      <div className="mx-auto flex h-full w-full max-w-3xl flex-col overflow-hidden p-3 sm:p-5">
+        <div className="relative flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-border bg-card shadow-soft">
+          {/* Header */}
+          <div className="flex items-center justify-between border-b border-border px-4 py-2.5">
+            <p className="truncate text-sm font-semibold">{subject || "رسالة جديدة"}</p>
+            <button
+              onClick={onClose}
+              className="rounded-md p-1.5 text-muted-foreground hover:bg-muted"
+              title="إغلاق (Esc)"
+              aria-label="إغلاق"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+
 
       {/* Recipients + subject */}
       <div className="flex-1 overflow-y-auto px-4 pb-2 pt-1">
@@ -4333,7 +4291,7 @@ function Composer({
                 editorRef.current.innerHTML = plainToHtml(e.target.value);
               }
             }}
-            rows={windowState === "fullscreen" ? 20 : 10}
+            rows={14}
             placeholder="اكتب رسالتك هنا..."
             className="mt-2 w-full resize-none bg-transparent px-1 py-2 text-sm outline-none"
           />
@@ -4346,9 +4304,7 @@ function Composer({
             aria-multiline="true"
             aria-label="نص الرسالة"
             data-placeholder="اكتب رسالتك هنا..."
-            className={`composer-editor mt-2 min-h-[180px] w-full whitespace-pre-wrap break-words rounded-md px-1 py-2 text-sm outline-none ${
-              windowState === "fullscreen" ? "min-h-[320px]" : ""
-            }`}
+            className="composer-editor mt-2 min-h-[240px] w-full whitespace-pre-wrap break-words rounded-md px-1 py-2 text-sm outline-none"
           />
         )}
 
@@ -4445,7 +4401,10 @@ function Composer({
           </div>
         </div>
       )}
+        </div>
+      </div>
     </div>
+
   );
 }
 
