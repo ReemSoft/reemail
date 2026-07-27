@@ -1090,9 +1090,11 @@ function useMailData(session: MailSession | null) {
     // consult and advance them without duplicating state.
     pendingMovesRef,
     trashUidValidityRef,
+    archiveUidValidityRef,
     bumpCountsGen,
   };
 }
+
 
 function MailApp() {
   const navigate = useNavigate();
