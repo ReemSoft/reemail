@@ -19,6 +19,18 @@ function sanitizeEmailHtml(html: string): string {
   return clean.replace(/<a\s/gi, '<a target="_blank" rel="noopener noreferrer nofollow" ');
 }
 
+// Sanitizer for OUTGOING composer HTML — allows inline styles/fonts/colors
+// (needed for email) but blocks scripts, event handlers, and dangerous tags.
+function sanitizeComposerHtml(html: string): string {
+  if (!html) return "";
+  return DOMPurify.sanitize(html, {
+    FORBID_TAGS: ["script", "iframe", "object", "embed", "form", "link", "meta", "base", "style"],
+    FORBID_ATTR: ["srcdoc", "formaction", "onerror", "onload", "onclick", "onmouseover", "onfocus"],
+    ALLOW_DATA_ATTR: false,
+  });
+}
+
+
 import {
   Inbox,
   Star,
@@ -56,12 +68,28 @@ import {
   Bold,
   Italic,
   Underline,
+  Strikethrough,
+  Subscript,
+  Superscript,
   List,
   ListOrdered,
   Link2,
   Type,
   Quote,
   Eraser,
+  AlignLeft,
+  AlignCenter,
+  AlignRight,
+  AlignJustify,
+  Indent,
+  Outdent,
+  Undo2,
+  Redo2,
+  Minus,
+  Image as ImageIcon,
+  Palette,
+  Highlighter,
+  ArrowLeftRight,
   AlertTriangle,
   Globe,
   Check,
@@ -4011,6 +4039,79 @@ function Composer({
     }
   }
 
+  function applyFontFamily(family: string) {
+    if (!family) return;
+    exec("fontName", family);
+  }
+  function applyFontSize(px: string) {
+    if (!px || !editorRef.current) return;
+    editorRef.current.focus();
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0 || sel.isCollapsed) {
+      // No selection: apply to next typed via a span
+      insertHtmlAtCursor(`<span style="font-size:${px}">\u200B</span>`);
+      return;
+    }
+    const range = sel.getRangeAt(0);
+    const span = document.createElement("span");
+    span.style.fontSize = px;
+    try {
+      span.appendChild(range.extractContents());
+      range.insertNode(span);
+      // Restore selection over the new span
+      const newRange = document.createRange();
+      newRange.selectNodeContents(span);
+      sel.removeAllRanges();
+      sel.addRange(newRange);
+    } catch {
+      /* noop */
+    }
+  }
+  function applyForeColor(color: string) {
+    exec("foreColor", color);
+  }
+  function applyBackColor(color: string) {
+    // hiliteColor works in Firefox/Chrome; backColor as fallback
+    editorRef.current?.focus();
+    try {
+      if (!document.execCommand("hiliteColor", false, color)) {
+        document.execCommand("backColor", false, color);
+      }
+    } catch {
+      /* noop */
+    }
+  }
+  function setEditorDirection(dir: "rtl" | "ltr") {
+    if (!editorRef.current) return;
+    editorRef.current.dir = dir;
+    editorRef.current.style.textAlign = dir === "rtl" ? "right" : "left";
+    editorRef.current.focus();
+  }
+  function toggleEditorDirection() {
+    if (!editorRef.current) return;
+    const cur = editorRef.current.dir || "rtl";
+    setEditorDirection(cur === "rtl" ? "ltr" : "rtl");
+  }
+  function insertHR() {
+    exec("insertHorizontalRule");
+  }
+  function promptImage() {
+    const url = window.prompt("رابط الصورة (https://):", "https://");
+    if (!url) return;
+    try {
+      const u = new URL(url);
+      if (!/^https?:$/.test(u.protocol)) {
+        toast.error("رابط صورة غير مدعوم");
+        return;
+      }
+      insertHtmlAtCursor(
+        `<img src="${u.toString()}" alt="" style="max-width:100%;height:auto" />`,
+      );
+    } catch {
+      toast.error("رابط غير صالح");
+    }
+  }
+
   const extensionContext = {
     getHtml: () => editorRef.current?.innerHTML ?? "",
     setHtml: (h: string) => {
@@ -4030,7 +4131,7 @@ function Composer({
     setSending(true);
     setProgress(0);
     try {
-      const bodyHtml = editorRef.current?.innerHTML ?? "";
+      const bodyHtml = sanitizeComposerHtml(editorRef.current?.innerHTML ?? "");
       const bodyText = stripHtml(bodyHtml);
 
       const payload = {
@@ -4141,7 +4242,7 @@ function Composer({
   function saveDraftNow() {
     if (typeof window === "undefined") return;
     try {
-      const html = editorRef.current?.innerHTML ?? "";
+      const html = sanitizeComposerHtml(editorRef.current?.innerHTML ?? "");
       const isEmpty =
         to.length === 0 && cc.length === 0 && bcc.length === 0 && !subject && !html.trim();
       if (isEmpty) {
@@ -4262,6 +4363,73 @@ function Composer({
             <div className="overflow-hidden rounded-lg border border-input bg-background transition focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/20">
               {!plainMode && (
                 <div className="flex flex-wrap items-center gap-0.5 border-b border-border/70 bg-muted/30 px-2 py-1.5">
+                  {/* Font family */}
+                  <select
+                    title="الخط"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      e.target.value = "";
+                      applyFontFamily(v);
+                    }}
+                    defaultValue=""
+                    className="h-7 rounded-md border border-input bg-background px-1.5 text-xs text-foreground outline-none hover:bg-muted"
+                  >
+                    <option value="" disabled>الخط</option>
+                    <option value="IBM Plex Sans Arabic, sans-serif">IBM Plex Sans Arabic</option>
+                    <option value="Cairo, sans-serif">Cairo</option>
+                    <option value="Tajawal, sans-serif">Tajawal</option>
+                    <option value="Amiri, serif">Amiri</option>
+                    <option value="Arial, sans-serif">Arial</option>
+                    <option value="Georgia, serif">Georgia</option>
+                    <option value="Times New Roman, serif">Times New Roman</option>
+                    <option value="Courier New, monospace">Courier New</option>
+                    <option value="Tahoma, sans-serif">Tahoma</option>
+                    <option value="Verdana, sans-serif">Verdana</option>
+                  </select>
+                  {/* Font size */}
+                  <select
+                    title="حجم الخط"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      e.target.value = "";
+                      applyFontSize(v);
+                    }}
+                    defaultValue=""
+                    className="h-7 rounded-md border border-input bg-background px-1.5 text-xs text-foreground outline-none hover:bg-muted"
+                  >
+                    <option value="" disabled>الحجم</option>
+                    <option value="10px">10</option>
+                    <option value="12px">12</option>
+                    <option value="14px">14</option>
+                    <option value="16px">16</option>
+                    <option value="18px">18</option>
+                    <option value="20px">20</option>
+                    <option value="24px">24</option>
+                    <option value="28px">28</option>
+                    <option value="32px">32</option>
+                  </select>
+                  {/* Heading */}
+                  <select
+                    title="نمط الفقرة"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      e.target.value = "";
+                      exec("formatBlock", v);
+                    }}
+                    defaultValue=""
+                    className="h-7 rounded-md border border-input bg-background px-1.5 text-xs text-foreground outline-none hover:bg-muted"
+                  >
+                    <option value="" disabled>الفقرة</option>
+                    <option value="p">نص عادي</option>
+                    <option value="h1">عنوان 1</option>
+                    <option value="h2">عنوان 2</option>
+                    <option value="h3">عنوان 3</option>
+                    <option value="pre">كود</option>
+                  </select>
+                  <span className="mx-1 h-4 w-px bg-border" />
                   <ToolbarButton title="عريض (Ctrl+B)" onMouseDown={() => exec("bold")}>
                     <Bold className="h-3.5 w-3.5" />
                   </ToolbarButton>
@@ -4271,19 +4439,95 @@ function Composer({
                   <ToolbarButton title="تسطير (Ctrl+U)" onMouseDown={() => exec("underline")}>
                     <Underline className="h-3.5 w-3.5" />
                   </ToolbarButton>
+                  <ToolbarButton title="يتوسطه خط" onMouseDown={() => exec("strikeThrough")}>
+                    <Strikethrough className="h-3.5 w-3.5" />
+                  </ToolbarButton>
+                  <ToolbarButton title="مرتفع" onMouseDown={() => exec("superscript")}>
+                    <Superscript className="h-3.5 w-3.5" />
+                  </ToolbarButton>
+                  <ToolbarButton title="منخفض" onMouseDown={() => exec("subscript")}>
+                    <Subscript className="h-3.5 w-3.5" />
+                  </ToolbarButton>
                   <span className="mx-1 h-4 w-px bg-border" />
+                  {/* Colors */}
+                  <label
+                    title="لون النص"
+                    className="relative inline-flex h-7 w-7 cursor-pointer items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+                    onMouseDown={(e) => e.preventDefault()}
+                  >
+                    <Palette className="h-3.5 w-3.5" />
+                    <input
+                      type="color"
+                      onChange={(e) => applyForeColor(e.target.value)}
+                      className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+                    />
+                  </label>
+                  <label
+                    title="لون الخلفية"
+                    className="relative inline-flex h-7 w-7 cursor-pointer items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+                    onMouseDown={(e) => e.preventDefault()}
+                  >
+                    <Highlighter className="h-3.5 w-3.5" />
+                    <input
+                      type="color"
+                      onChange={(e) => applyBackColor(e.target.value)}
+                      className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+                    />
+                  </label>
+                  <span className="mx-1 h-4 w-px bg-border" />
+                  {/* Alignment */}
+                  <ToolbarButton title="محاذاة يمين" onMouseDown={() => exec("justifyRight")}>
+                    <AlignRight className="h-3.5 w-3.5" />
+                  </ToolbarButton>
+                  <ToolbarButton title="توسيط" onMouseDown={() => exec("justifyCenter")}>
+                    <AlignCenter className="h-3.5 w-3.5" />
+                  </ToolbarButton>
+                  <ToolbarButton title="محاذاة يسار" onMouseDown={() => exec("justifyLeft")}>
+                    <AlignLeft className="h-3.5 w-3.5" />
+                  </ToolbarButton>
+                  <ToolbarButton title="ضبط" onMouseDown={() => exec("justifyFull")}>
+                    <AlignJustify className="h-3.5 w-3.5" />
+                  </ToolbarButton>
+                  <span className="mx-1 h-4 w-px bg-border" />
+                  {/* Lists & indent */}
                   <ToolbarButton title="قائمة نقطية" onMouseDown={() => exec("insertUnorderedList")}>
                     <List className="h-3.5 w-3.5" />
                   </ToolbarButton>
                   <ToolbarButton title="قائمة مرقمة" onMouseDown={() => exec("insertOrderedList")}>
                     <ListOrdered className="h-3.5 w-3.5" />
                   </ToolbarButton>
+                  <ToolbarButton title="زيادة المسافة البادئة" onMouseDown={() => exec("indent")}>
+                    <Indent className="h-3.5 w-3.5" />
+                  </ToolbarButton>
+                  <ToolbarButton title="تقليل المسافة البادئة" onMouseDown={() => exec("outdent")}>
+                    <Outdent className="h-3.5 w-3.5" />
+                  </ToolbarButton>
                   <ToolbarButton title="اقتباس" onMouseDown={() => exec("formatBlock", "blockquote")}>
                     <Quote className="h-3.5 w-3.5" />
                   </ToolbarButton>
                   <span className="mx-1 h-4 w-px bg-border" />
+                  {/* Insert */}
                   <ToolbarButton title="إدراج رابط" onMouseDown={promptLink}>
                     <Link2 className="h-3.5 w-3.5" />
+                  </ToolbarButton>
+                  <ToolbarButton title="إدراج صورة" onMouseDown={promptImage}>
+                    <ImageIcon className="h-3.5 w-3.5" />
+                  </ToolbarButton>
+                  <ToolbarButton title="خط أفقي" onMouseDown={insertHR}>
+                    <Minus className="h-3.5 w-3.5" />
+                  </ToolbarButton>
+                  <span className="mx-1 h-4 w-px bg-border" />
+                  {/* Direction */}
+                  <ToolbarButton title="تبديل اتجاه النص RTL/LTR" onMouseDown={toggleEditorDirection}>
+                    <ArrowLeftRight className="h-3.5 w-3.5" />
+                  </ToolbarButton>
+                  <span className="mx-1 h-4 w-px bg-border" />
+                  {/* Undo / Redo / Clear */}
+                  <ToolbarButton title="تراجع (Ctrl+Z)" onMouseDown={() => exec("undo")}>
+                    <Undo2 className="h-3.5 w-3.5" />
+                  </ToolbarButton>
+                  <ToolbarButton title="إعادة (Ctrl+Y)" onMouseDown={() => exec("redo")}>
+                    <Redo2 className="h-3.5 w-3.5" />
                   </ToolbarButton>
                   <ToolbarButton title="إزالة التنسيق" onMouseDown={() => exec("removeFormat")}>
                     <Eraser className="h-3.5 w-3.5" />
