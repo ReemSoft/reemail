@@ -4120,42 +4120,25 @@ function Composer({
       if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
         e.preventDefault();
         handleSend();
-      } else if (e.key === "Escape" && windowState !== "minimized") {
+      } else if (e.key === "Escape") {
         e.preventDefault();
-        setWindowState("minimized");
+        onClose();
       }
     }
     const el = containerRef.current;
     el?.addEventListener("keydown", onKey);
     return () => el?.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [to, cc, bcc, subject, files, windowState]);
+  }, [to, cc, bcc, subject, files]);
 
-  // Minimized view
-  if (windowState === "minimized") {
-    return (
-      <div className="fixed bottom-0 right-4 z-40 w-72 rounded-t-xl border border-border bg-card shadow-float">
-        <button
-          onClick={() => setWindowState("normal")}
-          className="flex w-full items-center justify-between px-4 py-2.5 text-right"
-        >
-          <span className="truncate text-sm font-medium">{subject || "رسالة جديدة"}</span>
-          <div className="flex items-center gap-1 text-muted-foreground">
-            <Maximize2 className="h-3.5 w-3.5" />
-          </div>
-        </button>
-      </div>
-    );
-  }
-
-  const containerClass =
-    windowState === "fullscreen"
-      ? "fixed inset-4 z-40 flex flex-col rounded-xl border border-border bg-card shadow-float sm:inset-8"
-      : "fixed inset-x-0 bottom-0 z-40 mx-auto flex max-h-[92vh] max-w-2xl flex-col rounded-t-2xl border border-border bg-card shadow-float sm:inset-x-auto sm:bottom-4 sm:right-4 sm:w-[600px]";
+  // Inline mode: composer fills the message-viewer pane on the same
+  // light bg-surface used elsewhere, wrapped in an elegant card.
+  const containerClass = "flex h-full w-full flex-col bg-surface";
 
   const savedLabel = savedAt
     ? `تم الحفظ ${new Date(savedAt).toLocaleTimeString("ar", { hour: "2-digit", minute: "2-digit" })}`
     : "مسودّة جديدة";
+
 
   return (
     <div
