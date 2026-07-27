@@ -37,23 +37,15 @@ async function bootApp() {
   // the test can hold the sole slot while the second request queues.
   let holderRelease: (() => void) | null = null;
   const holderReleased = new Promise<void>((r) => (holderRelease = r));
-  app.post(
-    "/hold",
-    createImapGateMiddleware(gates, "interactive"),
-    async (_req, res) => {
-      downstreamCalls++;
-      await holderReleased;
-      res.json({ ok: true });
-    },
-  );
-  app.post(
-    "/wait",
-    createImapGateMiddleware(gates, "interactive"),
-    async (_req, res) => {
-      downstreamCalls++;
-      res.json({ ok: true });
-    },
-  );
+  app.post("/hold", createImapGateMiddleware(gates, "interactive"), async (_req, res) => {
+    downstreamCalls++;
+    await holderReleased;
+    res.json({ ok: true });
+  });
+  app.post("/wait", createImapGateMiddleware(gates, "interactive"), async (_req, res) => {
+    downstreamCalls++;
+    res.json({ ok: true });
+  });
   const server = app.listen(0);
   await new Promise((r) => server.once("listening", r));
   const { port } = server.address() as AddressInfo;

@@ -49,8 +49,8 @@ export interface GateMetaExtractor {
 }
 
 export const defaultMetaExtractor: GateMetaExtractor = (req) => {
-  const acct = ((req as unknown as { body?: { account?: Record<string, unknown> } }).body ?? {})
-    .account ?? {};
+  const acct =
+    ((req as unknown as { body?: { account?: Record<string, unknown> } }).body ?? {}).account ?? {};
   return {
     host: String((acct as Record<string, unknown>).imap_host ?? "unknown"),
     company: String(
@@ -120,4 +120,3 @@ export function createImapGateMiddleware(
     next();
   };
 }
-
