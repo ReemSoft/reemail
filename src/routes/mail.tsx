@@ -844,6 +844,10 @@ function MailApp() {
     hideRow,
     unhideRow,
     confirmHideRow,
+    beginPendingMove,
+    confirmPendingMove,
+    rollbackPendingMove,
+    clearAllPendingMoves,
     beginStarMutation,
     endStarMutation,
 
