@@ -365,7 +365,6 @@ test("feature flag OFF: acquire never blocks, never rejects, never emits IMAP_BU
   rs.forEach((r) => r());
 });
 
-
 test("env loader defaults enabled=false with documented caps", () => {
   const c = loadImapGatesConfigFromEnv({});
   assert.equal(c.enabled, false);
