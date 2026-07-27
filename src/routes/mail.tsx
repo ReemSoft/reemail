@@ -4328,9 +4328,9 @@ function Composer({
       }}
     >
       {/* Header — flush with the pane, on the same surface */}
-      <div className="flex shrink-0 items-center justify-between gap-3 border-b border-border/70 bg-surface/80 px-6 py-3 backdrop-blur">
-        <div className="flex min-w-0 items-center gap-3">
-          <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-brand-gradient text-white shadow-brand">
+      <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border/70 bg-surface/80 px-3 py-2.5 backdrop-blur sm:px-6 sm:py-3">
+        <div className="flex min-w-0 items-center gap-2 sm:gap-3">
+          <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-brand-gradient text-white shadow-brand sm:h-9 sm:w-9">
             <Send className="h-4 w-4" />
           </span>
           <div className="min-w-0">
@@ -4338,11 +4338,11 @@ function Composer({
               {subject || "رسالة جديدة"}
             </p>
             <p className="truncate text-[11px] text-muted-foreground">
-              المرسل: {session.account.email_address}
+              {session.account.email_address}
             </p>
           </div>
         </div>
-        <div className="flex shrink-0 items-center gap-3">
+        <div className="flex shrink-0 items-center gap-2 sm:gap-3">
           <span className="hidden text-[11px] text-muted-foreground sm:inline">{savedLabel}</span>
           <button
             onClick={onClose}
@@ -4357,7 +4357,7 @@ function Composer({
 
       {/* Body — full width, scrollable */}
       <div className="flex-1 overflow-y-auto">
-        <div className="mx-auto flex w-full max-w-none flex-col gap-4 px-6 py-5">
+        <div className="mx-auto flex w-full max-w-none flex-col gap-4 px-3 py-4 sm:px-6 sm:py-5">
           {/* Recipients */}
           <RecipientField
             label="المرسل له"
@@ -4536,11 +4536,11 @@ function Composer({
                       <button
                         type="button"
                         title="المزيد من الخيارات"
+                        aria-label="المزيد من الخيارات"
                         onMouseDown={(e) => e.preventDefault()}
-                        className="inline-flex h-7 items-center gap-1 rounded-md px-2 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
+                        className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
                       >
-                        <MoreHorizontal className="h-3.5 w-3.5" />
-                        <span>المزيد</span>
+                        <MoreVertical className="h-3.5 w-3.5" />
                       </button>
                     </PopoverTrigger>
                     <PopoverContent align="end" className="w-auto p-2">
@@ -4691,12 +4691,12 @@ function Composer({
       </div>
 
       {/* Footer */}
-      <div className="flex shrink-0 items-center justify-between gap-3 border-t border-border/70 bg-surface/80 px-6 py-3 backdrop-blur">
-        <div className="flex items-center gap-2">
+      <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-t border-border/70 bg-surface/80 px-3 py-2.5 backdrop-blur sm:gap-3 sm:px-6 sm:py-3">
+        <div className="flex flex-wrap items-center gap-2">
           <button
             onClick={handleSend}
             disabled={sending || to.length === 0}
-            className="inline-flex items-center gap-2 rounded-lg bg-brand-gradient px-5 py-2.5 text-sm font-semibold text-white shadow-brand transition hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-60"
+            className="inline-flex items-center gap-2 rounded-lg bg-brand-gradient px-4 py-2 text-sm font-semibold text-white shadow-brand transition hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-60 sm:px-5 sm:py-2.5"
             title="إرسال (Ctrl+Enter)"
           >
             {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
@@ -4713,7 +4713,7 @@ function Composer({
             type="button"
             onClick={() => fileInputRef.current?.click()}
             disabled={sending || files.length >= COMPOSE_MAX_FILES}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-input bg-background px-3 py-2 text-xs text-muted-foreground transition hover:bg-muted hover:text-foreground disabled:opacity-40"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-input bg-background px-2.5 py-2 text-xs text-muted-foreground transition hover:bg-muted hover:text-foreground disabled:opacity-40 sm:px-3"
             aria-label="إرفاق ملف"
             title="إرفاق ملف"
           >
@@ -4724,7 +4724,7 @@ function Composer({
             type="button"
             onClick={saveDraftNow}
             disabled={sending}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-input bg-background px-3 py-2 text-xs text-muted-foreground transition hover:bg-muted hover:text-foreground disabled:opacity-40"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-input bg-background px-2.5 py-2 text-xs text-muted-foreground transition hover:bg-muted hover:text-foreground disabled:opacity-40 sm:px-3"
             aria-label="حفظ كمسودة"
             title="حفظ كمسودة"
           >
@@ -4732,7 +4732,7 @@ function Composer({
             <span className="hidden sm:inline">حفظ كمسودة</span>
           </button>
         </div>
-        <div className="flex items-center gap-3 text-[11px] text-muted-foreground">
+        <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground sm:gap-3">
           <span className="sm:hidden">{savedLabel}</span>
           {(to.length > 0 || cc.length > 0 || bcc.length > 0) && (
             <span>{to.length + cc.length + bcc.length} مستلم</span>
