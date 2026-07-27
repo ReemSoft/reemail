@@ -756,13 +756,18 @@ function useMailData(session: MailSession | null) {
         // BLOCKER_3: reconcile BEFORE applying overlay so the raw list
         // drives presence checks.
         reconcilePendingMovesForRead(result.messages, folder, bridgeStartedAt);
-        if (folder === "trash") {
-          promotePendingOriginsForTrashList(
+        const promoteKind = originKindForRestore(folder);
+        if (promoteKind) {
+          promotePendingOriginsForDestList(
+            promoteKind,
             currentAccountId,
-            trashUidValidityRef.current,
+            promoteKind === "trash"
+              ? trashUidValidityRef.current
+              : archiveUidValidityRef.current,
             result.messages,
           );
         }
+
         setMessages(applyPending(result.messages));
         setHasMore(result.messages.length >= PAGE);
         setBridgeError(null);
