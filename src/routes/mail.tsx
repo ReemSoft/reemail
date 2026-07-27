@@ -1756,9 +1756,15 @@ function MailApp() {
     if (!session || selection.size === 0 || bulkBusy) return;
     const ids = Array.from(selection);
     const meta = collectBulkMeta(ids);
-    const snapshot = messages;
     const prevSelectedId = selectedId;
     const prevSelected = selectedMessage;
+    // Per-id cache snapshots so bulk-move rollback restores only the failed
+    // items' bodies — successful items stay purged.
+    const cachedBodies = new Map<string, MailMessage>();
+    for (const id of ids) {
+      const c = messageCache.current.get(id);
+      if (c) cachedBodies.set(id, c);
+    }
     setBulkBusy(true);
     setMessages((prev) => prev.filter((m) => !selection.has(m.id)));
     if (prevSelectedId && selection.has(prevSelectedId)) {
@@ -1801,27 +1807,27 @@ function MailApp() {
     });
     setBulkBusy(false);
     if (failedIds.length > 0) {
-      // Per-id rollback: restore rows + counters for failed ids only.
+      // Per-id rollback: restore rows + counters + cache for failed ids only.
+      // Never touch successful items; never rebuild the full list.
       const failedSet = new Set(failedIds);
       for (const id of failedIds) {
         unhideRow(id);
         rollbackPendingMove(id);
         const parsed = parseMessageId(id);
-        if (parsed) {
-          const info = meta.get(id);
-          applyMoveCountsDelta(toFolder, parsed.folder, info?.wasUnread ?? false); // revert
+        const info = meta.get(id);
+        if (parsed && info) {
+          applyMoveCountsDelta(toFolder, parsed.folder, info.wasUnread); // revert
         }
+        if (info) reviveMessageAt(info.original, info.originalIndex);
+        const cached = cachedBodies.get(id);
+        if (cached) messageCache.current.set(id, cached);
       }
-      setMessages((prev) => {
-        const seen = new Set(prev.map((m) => m.id));
-        const revived = snapshot.filter((m) => failedSet.has(m.id) && !seen.has(m.id));
-        return revived.length ? [...revived, ...prev] : prev;
-      });
       if (prevSelectedId && failedSet.has(prevSelectedId)) {
         setSelectedId(prevSelectedId);
         setSelectedMessage(prevSelected);
       }
       toast.error(`فشل نقل ${failedIds.length} من ${ids.length} رسالة`);
+
     } else {
       toast.success(`تم نقل ${ids.length} رسالة`);
     }
