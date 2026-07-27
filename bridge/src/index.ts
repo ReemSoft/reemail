@@ -194,7 +194,7 @@ app.get("/api/metrics/imap-gates", requireKey, (_req, res) => {
   res.json({ ok: true, gates: imapGates.stats() });
 });
 
-app.post("/api/verify", requireKey, async (req, res) => {
+app.post("/api/verify", requireKey, imapGate("interactive"), async (req, res) => {
   try {
     const payload = AuthPayloadSchema.parse(req.body);
     const result = await verifyCredentials(payload.account as any, payload.password);
