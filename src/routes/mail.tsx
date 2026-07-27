@@ -4536,11 +4536,11 @@ function Composer({
                       <button
                         type="button"
                         title="المزيد من الخيارات"
+                        aria-label="المزيد من الخيارات"
                         onMouseDown={(e) => e.preventDefault()}
-                        className="inline-flex h-7 items-center gap-1 rounded-md px-2 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
+                        className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
                       >
-                        <MoreHorizontal className="h-3.5 w-3.5" />
-                        <span>المزيد</span>
+                        <MoreVertical className="h-3.5 w-3.5" />
                       </button>
                     </PopoverTrigger>
                     <PopoverContent align="end" className="w-auto p-2">
