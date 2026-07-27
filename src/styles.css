@@ -180,6 +180,15 @@
     font-feature-settings: "cv02", "cv03", "cv04", "cv11";
   }
 
+  /* Cursor pointer on all clickable elements */
+  a, button, [role="button"], [role="link"], [role="menuitem"], [role="tab"], [role="switch"], summary, input[type="button"], input[type="submit"], input[type="reset"] {
+    cursor: pointer;
+  }
+
+  a:disabled, button:disabled, [role="button"]:disabled, [aria-disabled="true"] {
+    cursor: not-allowed;
+  }
+
   html[dir="rtl"] body {
     font-family: var(--font-arabic);
   }
