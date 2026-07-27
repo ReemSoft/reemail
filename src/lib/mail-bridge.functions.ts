@@ -11,6 +11,11 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import type { MailFolder, FolderCount, MailMessage } from "@/lib/mail-types";
+import {
+  classifyBridgeMessageFailure,
+  type BridgeMessageErrorCode as SharedBridgeMessageErrorCode,
+} from "@/lib/mail-bridge-error";
+
 
 const FolderSchema = z.enum([
   "inbox",
