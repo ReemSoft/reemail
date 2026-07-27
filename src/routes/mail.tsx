@@ -110,6 +110,7 @@ import {
   beginPendingMove as beginPendingMoveEntry,
   clearPendingMovesForAccount,
   confirmPendingMove as confirmPendingMoveEntry,
+  isMessageSuppressed,
   loadPendingMovesFromSession,
   normalizePhysicalFolder,
   reconcilePendingMovesAfterSourceRead,
@@ -118,6 +119,7 @@ import {
   type PendingMoveOperation,
   type PendingMovesMap,
 } from "@/lib/mail-pending-moves";
+
 import {
   rememberOrigin as trackerRememberOrigin,
   getOrigin as trackerGetOrigin,
@@ -293,6 +295,17 @@ function useMailData(session: MailSession | null) {
   const persistPendingMoves = useCallback(() => {
     savePendingMovesToSession(pendingMovesRef.current);
   }, []);
+  // Batch A / Fix #1: Monotonic Count Generation Guard.
+  // Every optimistic mutation (move, delete, restore, permanent delete, star,
+  // read/unread, bulk) bumps `countsMutationGen`. Every counts loader
+  // captures the current gen at call start; if the gen has advanced by the
+  // time the request resolves, the loader MUST drop its result — a mutation
+  // fired mid-flight has already applied a better optimistic value.
+  const countsMutationGen = useRef(0);
+  const bumpCountsGen = useCallback(() => {
+    countsMutationGen.current += 1;
+  }, []);
+
   // V4: Starred-count race guard. `active` = in-flight star mutations;
   // `settledAt` = timestamp of the most recent resolution. While either
   // is "hot" (active > 0 OR within 2s of settledAt), counts loaders must
@@ -367,10 +380,15 @@ function useMailData(session: MailSession | null) {
 
   const loadCounts = useCallback(async () => {
     if (!session) return;
+    // Batch A / Fix #1: capture the mutation generation BEFORE the network
+    // round-trip. Any mutation between now and the response makes this
+    // result stale — drop it rather than overwrite optimistic counters.
+    const gen = countsMutationGen.current;
     try {
       const result = await getCounts({
         data: { account: session.account, password: session.password },
       });
+      if (countsMutationGen.current !== gen) return;
       const map: Record<MailFolder, { total: number; unread: number; supported: boolean }> = {
         inbox: { total: 0, unread: 0, supported: true },
         starred: { total: 0, unread: 0, supported: true },
@@ -399,6 +417,7 @@ function useMailData(session: MailSession | null) {
       setFolderPaths(paths);
       setBridgeError(null);
     } catch (err: any) {
+      if (countsMutationGen.current !== gen) return;
       setBridgeError(err?.message || "فشل الاتصال بخادم البريد");
       setCounts(
         Object.fromEntries(
@@ -412,6 +431,7 @@ function useMailData(session: MailSession | null) {
   }, [session, getCounts, isStarCountHot]);
 
 
+
   /**
    * Manual-Refresh counts path: prefer Local Mail Index (single Supabase
    * SELECT, no IMAP round-trip). Falls back to the bridge only when the
@@ -421,11 +441,18 @@ function useMailData(session: MailSession | null) {
    */
   const loadCountsFast = useCallback(async () => {
     if (!session) return;
+    // Batch A / Fix #1: monotonic guard also applies to the fast (Local
+    // Index) path. If a mutation runs between the request and response,
+    // the fast result is stale — drop it and DO NOT even fall back to
+    // loadCounts (that would race the same way).
+    const gen = countsMutationGen.current;
     if (MAIL_INDEX_ENABLED && session.mailSessionToken) {
       try {
         const res = await listIndexCounts({
           data: { mailSessionToken: session.mailSessionToken },
         });
+        if (countsMutationGen.current !== gen) return;
+
         if (res.ok && res.counts.length > 0) {
           setCounts((prev) => {
             const next = { ...prev };
@@ -727,6 +754,10 @@ function useMailData(session: MailSession | null) {
     // list writers inside useMailData already patch through applyPending.
     pendingOverridesRef,
     setPendingFlagOverride: (id: string, patch: { starred?: boolean; read?: boolean }) => {
+      // Batch A / Fix #1: any user-visible mutation invalidates in-flight
+      // counts loaders — bump the monotonic generation so a stale response
+      // returning after this call cannot overwrite optimistic counters.
+      bumpCountsGen();
       setFlagOverride(pendingOverridesRef.current, id, patch);
     },
     clearPendingFlagOverride: (id: string, field?: "starred" | "read") => {
@@ -744,6 +775,9 @@ function useMailData(session: MailSession | null) {
       if (!currentAccountId) return;
       const parsed = parseMessageId(id);
       if (!parsed) return;
+      // Batch A / Fix #1: bump BEFORE the mutation network call starts so
+      // any counts request already in-flight is invalidated.
+      bumpCountsGen();
       beginPendingMoveEntry(pendingMovesRef.current, {
         accountId: currentAccountId,
         sourceFolder: parsed.folder,
@@ -757,6 +791,8 @@ function useMailData(session: MailSession | null) {
       if (!currentAccountId) return;
       const parsed = parseMessageId(id);
       if (!parsed) return;
+      // Confirmation writes new optimistic counters; invalidate racers.
+      bumpCountsGen();
       confirmPendingMoveEntry(pendingMovesRef.current, {
         accountId: currentAccountId,
         sourceFolder: parsed.folder,
@@ -768,6 +804,8 @@ function useMailData(session: MailSession | null) {
       if (!currentAccountId) return;
       const parsed = parseMessageId(id);
       if (!parsed) return;
+      // Rollback restores previous counters; invalidate racers too.
+      bumpCountsGen();
       rollbackPendingMoveEntry(pendingMovesRef.current, {
         accountId: currentAccountId,
         sourceFolder: parsed.folder,
@@ -783,6 +821,7 @@ function useMailData(session: MailSession | null) {
     // V4: star-mutation lifecycle hooks used by toggleStar to hold the
     // Starred count against racing loaders.
     beginStarMutation: () => {
+      bumpCountsGen();
       pendingStarMutRef.current.active++;
     },
     endStarMutation: () => {
@@ -791,10 +830,18 @@ function useMailData(session: MailSession | null) {
       s.settledAt = Date.now();
     },
 
+
+
     applyPending,
     applyPendingOne,
+    // Batch A: expose the pending-move overlay ref and the monotonic count
+    // generation bumper so MailApp (fetchMessage / mutation handlers) can
+    // consult and advance them without duplicating state.
+    pendingMovesRef,
+    bumpCountsGen,
   };
 }
+
 
 function MailApp() {
   const navigate = useNavigate();
@@ -848,7 +895,10 @@ function MailApp() {
 
     applyPending,
     applyPendingOne,
+    pendingMovesRef,
+    bumpCountsGen,
   } = useMailData(session || null);
+
   // BLOCKER_6 — account identity for origin-tracker calls in this scope.
   const currentAccountId = session?.account.id ?? null;
 
@@ -1023,6 +1073,15 @@ function MailApp() {
   const fetchMessage = useCallback(
     (id: string): Promise<MailMessage | null> => {
       if (!session) return Promise.resolve(null);
+      // Batch A / Fix #2: check the pending-move overlay BEFORE reading
+      // cache. A source row the user just moved must not be resurrected
+      // from a warm cache entry that was stored before the mutation.
+      // Destination rows resolve to a different physical folder — they are
+      // NOT suppressed by design (see isMessageSuppressed).
+      const accountId = currentAccountId;
+      if (accountId && isMessageSuppressed(pendingMovesRef.current, accountId, id)) {
+        return Promise.resolve(null);
+      }
       const cached = messageCache.current.get(id);
       if (cached) return Promise.resolve(cached);
       const existing = inflight.current.get(id);
@@ -1039,6 +1098,13 @@ function MailApp() {
       })
         .then((result) => {
           if (result.ok && result.message) {
+            // Batch A / Fix #2: re-check the overlay AFTER the fetch. The
+            // user may have moved this row during the round-trip; writing
+            // it into messageCache would let it re-appear.
+            const acc = currentAccountId;
+            if (acc && isMessageSuppressed(pendingMovesRef.current, acc, id)) {
+              return null;
+            }
             // Patch through pending overrides so a slow fetch response cannot
             // overwrite an in-flight optimistic star/read the user just set.
             const patched = applyPendingOne(result.message);
@@ -1054,17 +1120,22 @@ function MailApp() {
       inflight.current.set(id, p);
       return p;
     },
-    [session, getOne, applyPendingOne],
+    [session, getOne, applyPendingOne, currentAccountId],
   );
 
   const prefetchMessage = useCallback(
     (id: string) => {
+      // Batch A / Fix #2: never trigger a prefetch for a row already
+      // suppressed by the pending-move overlay.
+      const accountId = currentAccountId;
+      if (accountId && isMessageSuppressed(pendingMovesRef.current, accountId, id)) return;
       if (!messageCache.current.has(id) && !inflight.current.has(id)) {
         void fetchMessage(id);
       }
     },
-    [fetchMessage],
+    [fetchMessage, currentAccountId],
   );
+
 
   useCompanyTheme(
     session?.company
