@@ -151,12 +151,8 @@ export const bridgeGetMessages = createServerFn({ method: "POST" })
  * signal to tombstone the local index row; every other code is preserved
  * verbatim so the UI never invents a ghost cleanup.
  */
-export type BridgeMessageErrorCode =
-  | "NOT_FOUND"
-  | "UNAUTHORIZED"
-  | "UNAVAILABLE"
-  | "NETWORK"
-  | "UNKNOWN";
+export type BridgeMessageErrorCode = SharedBridgeMessageErrorCode;
+
 
 export const bridgeGetMessage = createServerFn({ method: "POST" })
   .inputValidator((v: z.input<typeof MessagePayloadSchema>) => MessagePayloadSchema.parse(v))
