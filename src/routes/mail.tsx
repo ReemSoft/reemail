@@ -852,7 +852,6 @@ function useMailData(session: MailSession | null, onSessionExpired?: () => void)
             setHasMore(res.hasMore);
             setIndexCursor(res.nextCursor);
             setSource("index");
-            setUseMock(false);
             setBridgeError(null);
             setIndexReady((prev) => (prev[folder] ? prev : { ...prev, [folder]: true }));
             gcHiddenBefore(pendingHiddenRef.current, startedAt);
