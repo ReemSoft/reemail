@@ -44,6 +44,17 @@ export type SyncOutcome =
   | { ok: true; busy: true }
   | { ok: false; error: string; code: string };
 
+/**
+ * Result of a 1-UID reconcile against the physical source folder.
+ * `targetUidPresent` MUST be derived from the Bridge's IMAP response
+ * (never from Local Index, which is Tombstoned before this call).
+ */
+export type SourceReconcileOutcome =
+  | { ok: true; busy: false; targetUidPresent: boolean }
+  | { ok: true; busy: true }
+  | { ok: false; error: string; code: string };
+
+
 export interface SourceInfo {
   /** Physical source: `starred` collapses to INBOX. */
   folderId: string;
@@ -95,7 +106,7 @@ export interface MoveOrchestrationDeps {
     folderPath: string;
     canonical: string;
     uid: number;
-  }) => Promise<SyncOutcome>;
+  }) => Promise<SourceReconcileOutcome>;
   /** Safe server-side logger (no secrets). */
   logError?: (label: string, err: unknown) => void;
 }
@@ -106,8 +117,14 @@ export interface MoveOrchestrationInput {
   sourceUid: number;
 }
 
-export type SourceConfirmation = "confirmed-absent" | "tombstone-only" | "busy" | "failed";
+export type SourceConfirmation =
+  | "confirmed-absent"
+  | "still-present"
+  | "tombstone-only"
+  | "busy"
+  | "failed";
 export type DestinationSync = "not-needed" | "incremental" | "initial" | "busy" | "failed";
+
 export type IndexApplied = "full" | "source-only" | "no-source-folder" | "partial";
 
 export type MoveOrchestrationResult =
@@ -157,15 +174,18 @@ export async function moveMessageOrchestration(
   // ---- 3) Write-through against local index ----
   let indexApplied: IndexApplied = "partial";
   let destinationInserted = false;
+  let writeThroughFailed = false;
   try {
     const wt = await deps.applyWriteThrough(move);
     if (wt.ok) {
       indexApplied = wt.applied;
       destinationInserted = wt.destinationInserted;
     } else {
+      writeThroughFailed = true;
       logErr("[move] applyWriteThrough failed", wt.error);
     }
   } catch (e) {
+    writeThroughFailed = true;
     logErr("[move] applyWriteThrough threw", e);
   }
 
@@ -188,11 +208,17 @@ export async function moveMessageOrchestration(
     discoveredUv = move.destinationUidValidity;
   } else {
     // ---- 5) Targeted destination sync + discovery ----
+    // Contract (BLOCKER_2_FIX):
+    //   * destPath existence alone is enough to RUN the targeted sync.
+    //   * A missing fingerprint means we cannot uniquely IDENTIFY the moved
+    //     UID afterwards — but the sync must still hydrate the destination
+    //     folder so the row appears when the user opens it. Never fabricate
+    //     a UID; never call discoverDest without a fingerprint.
     const destPath = move.destinationPath ?? destBefore.folder?.path ?? null;
     const cutoff = destBefore.cursorNewestSyncedUid ?? 0;
 
-    if (!destPath || !source?.fingerprint) {
-      destinationSync = destPath ? "failed" : "failed";
+    if (!destPath) {
+      destinationSync = "failed";
     } else {
       const mode: "initial" | "incremental" =
         destBefore.folder && destBefore.cursorNewestSyncedUid != null ? "incremental" : "initial";
@@ -223,7 +249,12 @@ export async function moveMessageOrchestration(
           logErr("[move] reloadDest failed", e);
         }
 
-        if (currentDest.folder && currentDest.folder.uidvalidity != null) {
+        // Discovery is impossible without a fingerprint (row was not in the
+        // Local Index at capture time). Skip discovery entirely; the sync
+        // still hydrated the destination folder, so the message will
+        // surface when the user opens it. destinationReady stays false —
+        // the UI overlay will clear on the next background poll.
+        if (source?.fingerprint && currentDest.folder && currentDest.folder.uidvalidity != null) {
           try {
             const hit = await deps.discoverDest({
               folderId: currentDest.folder.id,
@@ -249,6 +280,8 @@ export async function moveMessageOrchestration(
   }
 
   // ---- 6) Source confirmation (never rolls back on failure) ----
+  // Presence MUST come from IMAP (Bridge), not Local Index — the source row
+  // is Tombstoned before this call, so the index would always say "absent".
   let sourceConfirmation: SourceConfirmation = "tombstone-only";
   if (source && source.cursorNewestSyncedUid != null) {
     try {
@@ -257,20 +290,35 @@ export async function moveMessageOrchestration(
         canonical: source.canonical,
         uid: input.sourceUid,
       });
-      if (res.ok && !res.busy) sourceConfirmation = "confirmed-absent";
-      else if (res.ok && res.busy) sourceConfirmation = "busy";
-      else sourceConfirmation = "failed";
+      if (res.ok && !res.busy) {
+        sourceConfirmation = res.targetUidPresent ? "still-present" : "confirmed-absent";
+      } else if (res.ok && res.busy) {
+        sourceConfirmation = "busy";
+      } else {
+        sourceConfirmation = "failed";
+      }
     } catch (e) {
       logErr("[move] runSourceReconcile failed", e);
       sourceConfirmation = "failed";
     }
   }
 
+  // ---- 7) Compute final `index` — never claim "full" when destination or
+  // source confirmation is degraded. IMAP success is never rolled back.
+  const hasFailure =
+    writeThroughFailed ||
+    destinationSync === "failed" ||
+    destinationSync === "busy" ||
+    sourceConfirmation === "failed" ||
+    sourceConfirmation === "busy" ||
+    sourceConfirmation === "still-present";
+  const finalIndex: IndexApplied = hasFailure ? "partial" : indexApplied;
+
   const out: MoveOrchestrationResult = {
     ok: true,
     imap: true,
     move,
-    index: indexApplied,
+    index: finalIndex,
     sourceConfirmation,
     destinationSync,
     destinationReady,
@@ -281,3 +329,4 @@ export async function moveMessageOrchestration(
   }
   return out;
 }
+

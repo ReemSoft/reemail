@@ -15,7 +15,7 @@
 //     (starred → INBOX) and NEVER rolls the UI back on failure.
 //   * IMAP success + local write-through/sync failure → `ok:true`,
 //     `destinationReady:false`, `index:"partial"` — no false Rollback.
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect } from "vitest";
 import {
   moveMessageOrchestration,
   MAX_TARGETED_ROUNDS,
@@ -23,10 +23,12 @@ import {
   type BridgeMoveOutcome,
   type WriteThroughOutcome,
   type SyncOutcome,
+  type SourceReconcileOutcome,
   type SourceInfo,
   type DestInfo,
 } from "@/lib/mail-move-orchestration";
 import type { MessageFingerprint } from "@/lib/mail-move-writer.server";
+
 
 const FP: MessageFingerprint = {
   messageId: "<abc@x>",
@@ -69,10 +71,11 @@ function makeDeps(
     bridge?: BridgeMoveOutcome;
     writeThrough?: WriteThroughOutcome;
     destSync?: SyncOutcome | SyncOutcome[];
-    sourceReconcile?: SyncOutcome;
+    sourceReconcile?: SourceReconcileOutcome;
     discoverPlan?: Array<{ uid: number; uidvalidity: number } | null>;
   } = {},
 ): Harness {
+
   const calls = {
     bridgeMove: 0,
     writeThrough: 0,
@@ -127,8 +130,9 @@ function makeDeps(
     runSourceReconcile: async (args) => {
       calls.sourceReconcile += 1;
       reconcileArgs.push(args);
-      return opts.sourceReconcile ?? { ok: true, busy: false, hasMore: false };
+      return opts.sourceReconcile ?? { ok: true, busy: false, targetUidPresent: false };
     },
+
     logError: () => {},
   };
   return { deps, calls, destSyncArgs, reconcileArgs };
@@ -413,7 +417,7 @@ describe("failure semantics", () => {
     expect(res.destinationReady).toBe(true);
   });
 
-  it("IMAP ok + targeted sync fails → ok:true, partial, destinationReady:false", async () => {
+  it("IMAP ok + targeted sync fails → ok:true, index=partial, destinationReady:false", async () => {
     const h = makeDeps({
       destBefore: {
         folder: { id: "f-dst", uidvalidity: 200, path: "Trash" },
@@ -430,9 +434,10 @@ describe("failure semantics", () => {
     if (!res.ok) return;
     expect(res.destinationSync).toBe("failed");
     expect(res.destinationReady).toBe(false);
+    expect(res.index).toBe("partial");
   });
 
-  it("targeted sync busy → destinationSync='busy', no full-sync fallback", async () => {
+  it("targeted sync busy → destinationSync='busy', index=partial, no full-sync fallback", async () => {
     const h = makeDeps({
       destBefore: {
         folder: { id: "f-dst", uidvalidity: 200, path: "Trash" },
@@ -450,9 +455,10 @@ describe("failure semantics", () => {
     if (!res.ok) return;
     expect(res.destinationSync).toBe("busy");
     expect(res.destinationReady).toBe(false);
+    expect(res.index).toBe("partial");
   });
 
-  it("no destinationPath AND no local dest folder → destinationSync='failed'", async () => {
+  it("no destinationPath AND no local dest folder → destinationSync='failed', index=partial", async () => {
     const h = makeDeps({
       destBefore: { folder: null, cursorNewestSyncedUid: null },
       bridge: { ok: true, move: { sourceUid: 42, uidMappingAvailable: false } },
@@ -462,8 +468,121 @@ describe("failure semantics", () => {
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     expect(res.destinationSync).toBe("failed");
+    expect(res.index).toBe("partial");
   });
 });
+
+// -------------------- No-fingerprint contract (BLOCKER_2_FIX) --------------------
+
+describe("no source fingerprint — sync still runs, discovery is skipped", () => {
+  it("no fingerprint + dest cursor → incremental sync runs, 0 discovery calls", async () => {
+    const h = makeDeps({
+      source: makeSource({ fingerprint: null }),
+      destBefore: {
+        folder: { id: "f-dst", uidvalidity: 200, path: "Trash" },
+        cursorNewestSyncedUid: 900,
+      },
+      destAfter: {
+        folder: { id: "f-dst", uidvalidity: 200, path: "Trash" },
+        cursorNewestSyncedUid: 981,
+      },
+      bridge: {
+        ok: true,
+        move: { sourceUid: 42, destinationPath: "Trash", uidMappingAvailable: false },
+      },
+    });
+    const res = await moveMessageOrchestration(h.deps, baseInput);
+    expect(h.calls.destSync).toBe(1);
+    expect(h.destSyncArgs[0].mode).toBe("incremental");
+    expect(h.calls.discover).toBe(0);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.destinationSync).toBe("incremental");
+    expect(res.destinationReady).toBe(false);
+  });
+
+  it("no fingerprint + no dest cursor → initial sync runs, 0 discovery calls", async () => {
+    const h = makeDeps({
+      source: makeSource({ fingerprint: null }),
+      destBefore: { folder: null, cursorNewestSyncedUid: null },
+      destAfter: {
+        folder: { id: "f-dst", uidvalidity: 300, path: "Archive" },
+        cursorNewestSyncedUid: 5,
+      },
+      bridge: {
+        ok: true,
+        move: { sourceUid: 42, destinationPath: "Archive", uidMappingAvailable: false },
+      },
+    });
+    const res = await moveMessageOrchestration(h.deps, { ...baseInput, destCanonical: "archive" });
+    expect(h.calls.destSync).toBe(1);
+    expect(h.destSyncArgs[0].mode).toBe("initial");
+    expect(h.calls.discover).toBe(0);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.destinationSync).toBe("initial");
+    expect(res.destinationReady).toBe(false);
+  });
+});
+
+// -------------------- Source presence contract (BLOCKER_2_FIX) --------------------
+
+describe("source confirmation presence semantics", () => {
+  it("UID absent from Bridge → confirmed-absent, index stays applied", async () => {
+    const h = makeDeps({
+      bridge: {
+        ok: true,
+        move: {
+          sourceUid: 42,
+          destinationPath: "Trash",
+          destinationUid: 981,
+          destinationUidValidity: "200",
+          uidMappingAvailable: true,
+        },
+      },
+      writeThrough: {
+        ok: true,
+        applied: "full",
+        sourceTombstoned: true,
+        destinationInserted: true,
+      },
+      sourceReconcile: { ok: true, busy: false, targetUidPresent: false },
+    });
+    const res = await moveMessageOrchestration(h.deps, baseInput);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.sourceConfirmation).toBe("confirmed-absent");
+    expect(res.index).toBe("full");
+  });
+
+  it("UID still present on Bridge → still-present, index downgraded to partial", async () => {
+    const h = makeDeps({
+      bridge: {
+        ok: true,
+        move: {
+          sourceUid: 42,
+          destinationPath: "Trash",
+          destinationUid: 981,
+          destinationUidValidity: "200",
+          uidMappingAvailable: true,
+        },
+      },
+      writeThrough: {
+        ok: true,
+        applied: "full",
+        sourceTombstoned: true,
+        destinationInserted: true,
+      },
+      sourceReconcile: { ok: true, busy: false, targetUidPresent: true },
+    });
+    const res = await moveMessageOrchestration(h.deps, baseInput);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.sourceConfirmation).toBe("still-present");
+    expect(res.index).toBe("partial");
+  });
+});
+
 
 // -------------------- Call-count invariants --------------------
 

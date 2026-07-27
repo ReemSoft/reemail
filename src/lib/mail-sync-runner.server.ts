@@ -72,11 +72,35 @@ export type RunMailSyncCoreResult =
       oldestSyncedUid: number | null;
       hasMore: boolean;
       flagsSync: "condstore" | "reconcile-required" | "not-requested";
+      /**
+       * Only set for `mode:"reconcile"` with `fromUid === toUid`. Derived
+       * from the Bridge's IMAP `states` array (source of truth), NOT from
+       * the Local Index — the row may have been Tombstoned prior to the
+       * call and would falsely read "absent".
+       */
+      singleUidPresence?: { uid: number; present: boolean };
     }
   | { ok: true; busy: true; reason: "LOCKED" }
   | { ok: false; error: string; code: string };
 
+
 const BRIDGE_TTL_SECONDS = 60;
+
+/**
+ * Pure helper — extracted so we can unit-test the reconcile presence
+ * derivation without wiring a full Bridge + DB fake. Returns `undefined`
+ * when the range is not a 1-UID reconcile (contract: only 1-UID reconcile
+ * yields a `singleUidPresence`).
+ */
+export function derivePresenceForSingleUidReconcile(
+  fromUid: number,
+  toUid: number,
+  states: ReadonlyArray<{ uid: number }>,
+): { uid: number; present: boolean } | undefined {
+  if (fromUid !== toUid) return undefined;
+  return { uid: fromUid, present: states.some((s) => s.uid === fromUid) };
+}
+
 
 export type BridgePost = (path: string, payload: unknown) => Promise<Record<string, unknown>>;
 
@@ -150,6 +174,8 @@ export async function runMailSyncCore(
     let mailboxUidNext: number | null = null;
     let mailboxHighestModseq: string | null = null;
     let mailboxExists = 0;
+    let singleUidPresence: { uid: number; present: boolean } | undefined;
+
 
     if (input.mode === "initial") {
       const result = (await bridgePost("/api/sync/initial", {
@@ -381,6 +407,11 @@ export async function runMailSyncCore(
           toUid,
           presentUids: states.map((s) => s.uid),
         });
+        // 1-UID reconcile: derive presence from the Bridge/IMAP response
+        // directly. This is the ONLY authoritative signal for the Move
+        // source-confirmation contract (Local Index is already Tombstoned).
+        singleUidPresence = derivePresenceForSingleUidReconcile(fromUid, toUid, states);
+
         await updateSyncCursor(admin, {
           accountId: input.accountId,
           folderId,
@@ -393,6 +424,7 @@ export async function runMailSyncCore(
           markReconciledAt: true,
         });
       }
+
     }
 
     await writeFolderMailboxState(admin, folderId, {
@@ -430,7 +462,9 @@ export async function runMailSyncCore(
       oldestSyncedUid: finalCursor?.oldest_synced_uid ?? null,
       hasMore,
       flagsSync,
+      ...(singleUidPresence ? { singleUidPresence } : {}),
     };
+
   } catch (err) {
     releaseStatus = "error";
     const raw = err instanceof Error ? err.message : String(err ?? "");
