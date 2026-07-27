@@ -158,6 +158,8 @@ export async function runMailSyncCore(
     let mailboxUidNext: number | null = null;
     let mailboxHighestModseq: string | null = null;
     let mailboxExists = 0;
+    let singleUidPresence: { uid: number; present: boolean } | undefined;
+
 
     if (input.mode === "initial") {
       const result = (await bridgePost("/api/sync/initial", {
