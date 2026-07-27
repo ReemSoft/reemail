@@ -1371,6 +1371,25 @@ function MailApp() {
             messageCache.current.set(id, patched);
             return patched;
           }
+          // Ghost cleanup: only on proven-absent (NOT_FOUND). Fire the
+          // server-side tombstone (idempotent), then evict the local row
+          // so the list and message view stop pointing at nothing.
+          if (!result.ok && result.code === "NOT_FOUND") {
+            void cleanupGhost({
+              data: {
+                mailSessionToken: session.mailSessionToken ?? "",
+                canonical: parsed.folder,
+                uid: parsed.uid,
+              },
+            }).catch(() => {});
+            messageCache.current.delete(id);
+            setMessages((prev) => prev.filter((m) => m.id !== id));
+            hideRow(id);
+            setSelectedId((cur) => (cur === id ? null : cur));
+            setSelectedMessage((cur) => (cur && cur.id === id ? null : cur));
+            toast.info("تم إزالة رسالة مفقودة من القائمة");
+            return null;
+          }
           return null;
         })
         .catch(() => null)
@@ -1380,8 +1399,9 @@ function MailApp() {
       inflight.current.set(id, p);
       return p;
     },
-    [session, getOne, applyPendingOne, currentAccountId],
+    [session, getOne, applyPendingOne, currentAccountId, cleanupGhost],
   );
+
 
   const prefetchMessage = useCallback(
     (id: string) => {
