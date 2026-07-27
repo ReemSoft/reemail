@@ -176,13 +176,13 @@ export const bridgeGetMessage = createServerFn({ method: "POST" })
         data.password,
       );
       if (!r.ok) {
-        let code: BridgeMessageErrorCode = "UNKNOWN";
-        if (r.unavailable) code = "UNAVAILABLE";
-        else if (r.status === 404) code = "NOT_FOUND";
-        else if (r.status === 401 || r.status === 403) code = "UNAUTHORIZED";
-        else if (r.status == null) code = "NETWORK";
+        const code = classifyBridgeMessageFailure({
+          status: r.status,
+          unavailable: r.unavailable,
+        });
         return { ok: false, code, error: r.error, message: null, status: r.status };
       }
+
       // The bridge may return { ok:true, message:null } on a rare shape
       // mismatch. Treat that as NOT_FOUND for the ghost-cleanup contract.
       const msg = (r.json.message as MailMessage | null) ?? null;
