@@ -460,6 +460,8 @@ export async function applyMoveWriteThrough(
   if (tomb.changed) {
     await adjustFolderCountsDelta(supabase, {
       folderId: src.id,
+      accountId: input.accountId,
+      companyId: input.companyId,
       totalDelta: -1,
       unreadDelta: tomb.wasUnread ? -1 : 0,
     });
@@ -489,9 +491,9 @@ export async function applyMoveWriteThrough(
     if (!dst && input.destinationPath) {
       dst = await resolveFolderByPath(supabase, input.accountId, input.destinationPath);
     }
-    // Only insert-and-count-up the destination when this caller actually
-    // won the source-tombstone race. If a sibling won, they handled the
-    // destination side too — inserting again would double-count.
+    // Only attempt destination insert when this caller actually won the
+    // source-tombstone race. If a sibling won, they handled the destination
+    // side too — inserting again would double-count.
     if (dst && dst.uidvalidity != null && String(dst.uidvalidity) === destUvStr && tomb.changed) {
       const ins = await insertDestinationRowFromSource(supabase, {
         accountId: input.accountId,
@@ -503,16 +505,24 @@ export async function applyMoveWriteThrough(
         destinationUidvalidity: Number(destUvStr),
         destinationUid: destUidNum,
       });
-      if (ins) {
+      // BLOCKER_7: `inserted` is proven from the DB (upsert.select() length),
+      // not assumed from a non-null return value. If a racing Sync already
+      // inserted the row, `inserted === false` — we skip the counter delta
+      // so refreshFolderCounts (owned by Sync) stays authoritative and we
+      // never double-count.
+      if (ins && ins.inserted) {
         destinationInserted = true;
         await adjustFolderCountsDelta(supabase, {
           folderId: dst.id,
+          accountId: input.accountId,
+          companyId: input.companyId,
           totalDelta: 1,
           unreadDelta: ins.wasUnread ? 1 : 0,
         });
         await bumpFolderUidnext(supabase, {
           folderId: dst.id,
           uidnext: destUidNum + 1,
+
         });
       }
     }
