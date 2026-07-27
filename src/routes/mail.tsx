@@ -707,6 +707,13 @@ function useMailData(session: MailSession | null) {
         // BLOCKER_3: reconcile BEFORE applying overlay so the raw list
         // drives presence checks.
         reconcilePendingMovesForRead(result.messages, folder, bridgeStartedAt);
+        if (folder === "trash") {
+          promotePendingOriginsForTrashList(
+            currentAccountId,
+            trashUidValidityRef.current,
+            result.messages,
+          );
+        }
         setMessages(applyPending(result.messages));
         setHasMore(result.messages.length >= PAGE);
         setBridgeError(null);
