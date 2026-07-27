@@ -438,7 +438,12 @@ export async function runMailSyncCore(
       accountId: input.accountId,
       folderId,
       uidValidity: mailboxUidValidity,
+      // Blocker 2 — pass the IMAP-authoritative EXISTS captured from the
+      // sync's mailbox status so the folder total reflects the real
+      // mailbox size, not just the locally-indexed page (max 300).
+      authoritativeTotal: mailboxExists,
     });
+
 
     const finalCursor = await readSyncCursor(admin, {
       accountId: input.accountId,
