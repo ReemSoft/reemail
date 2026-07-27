@@ -45,7 +45,7 @@ export type WorkerJobOutcome =
   | { kind: "dead"; code: MailQueueErrorCode }
   | { kind: "skipped-idempotent" };
 
-const MAX_ATTEMPTS = MAIL_QUEUE_CONFIG.backoff.maxAttempts;
+
 
 /** Look up a folder's `path` from mail_folders — only when the job payload
  *  omitted it (older messages / manual enqueues). */
