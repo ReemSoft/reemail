@@ -96,6 +96,8 @@ import {
 
 import { runManualRefresh } from "@/lib/mail-refresh-orchestration";
 import { createSingleFlight } from "@/lib/single-flight";
+import { reviveAt } from "@/lib/mail-rollback";
+
 import {
   formatDate,
   formatSize,
