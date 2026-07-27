@@ -2467,8 +2467,13 @@ function MailApp() {
       {bridgeError && (
         <div className="flex items-center justify-center gap-2 bg-warning px-3 py-2 text-xs font-medium text-warning-foreground">
           <AlertOctagon className="h-4 w-4" />
-          <span>{bridgeError}</span>
-          {useMock && <span className="opacity-80">(يتم عرض بيانات تجريبية مؤقتًا)</span>}
+          <span>تعذّر الاتصال بخادم البريد. سنعيد المحاولة تلقائياً.</span>
+          <button
+            onClick={() => loadMessages()}
+            className="underline underline-offset-2 hover:opacity-80"
+          >
+            إعادة المحاولة الآن
+          </button>
         </div>
       )}
 
