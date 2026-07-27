@@ -4294,7 +4294,7 @@ function Composer({
                 editorRef.current.innerHTML = plainToHtml(e.target.value);
               }
             }}
-            rows={windowState === "fullscreen" ? 20 : 10}
+            rows={14}
             placeholder="اكتب رسالتك هنا..."
             className="mt-2 w-full resize-none bg-transparent px-1 py-2 text-sm outline-none"
           />
@@ -4307,9 +4307,7 @@ function Composer({
             aria-multiline="true"
             aria-label="نص الرسالة"
             data-placeholder="اكتب رسالتك هنا..."
-            className={`composer-editor mt-2 min-h-[180px] w-full whitespace-pre-wrap break-words rounded-md px-1 py-2 text-sm outline-none ${
-              windowState === "fullscreen" ? "min-h-[320px]" : ""
-            }`}
+            className="composer-editor mt-2 min-h-[240px] w-full whitespace-pre-wrap break-words rounded-md px-1 py-2 text-sm outline-none"
           />
         )}
 
