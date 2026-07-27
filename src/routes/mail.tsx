@@ -127,9 +127,11 @@ import {
   rememberPendingOrigin,
   getOrigin as trackerGetOrigin,
   forgetFinalOrigin,
-  forgetOriginsForMessageId,
+  forgetPendingOrigin,
   purgeStaleTrashUidValidity,
   clearAccountOrigins,
+  buildOriginFingerprint,
+  promoteUniquePendingOriginForTrashMessage,
 } from "@/lib/mail-origin-tracker";
 import type { IndexMoveResult } from "@/lib/mail-move.functions";
 
@@ -200,15 +202,40 @@ function extractTrashIdentity(
   return null;
 }
 
+/** Build a fingerprint from a MailMessage-like row. */
+function fingerprintFromMessage(m: {
+  threadId?: string | null;
+  from?: { email?: string | null } | null;
+  subject?: string | null;
+  date?: string | null;
+}): string {
+  return buildOriginFingerprint({
+    messageId: m.threadId ?? null,
+    fromEmail: m.from?.email ?? null,
+    subject: m.subject ?? null,
+    date: m.date ?? null,
+  });
+}
+
 /** Write origin after a successful move to Trash (final or pending). */
 function writeOriginOnTrash(params: {
   accountId: string | null;
   sourceCanonical: MailFolder;
   sourceUid: number;
+  sourceUidValidity?: number;
   messageId?: string | null;
+  fingerprint?: string | null;
   moveResult: IndexMoveResult | null;
 }) {
-  const { accountId, sourceCanonical, sourceUid, messageId, moveResult } = params;
+  const {
+    accountId,
+    sourceCanonical,
+    sourceUid,
+    sourceUidValidity,
+    messageId,
+    fingerprint,
+    moveResult,
+  } = params;
   if (!accountId || sourceCanonical === "trash") return;
   const storage = safeOriginStorage();
   const trash = extractTrashIdentity(moveResult);
@@ -218,13 +245,24 @@ function writeOriginOnTrash(params: {
       { accountId, trashUidValidity: trash.trashUidValidity, trashUid: trash.trashUid },
       { originalCanonical: sourceCanonical, messageId: messageId ?? null },
     );
-    // Belt & braces: if a pending entry existed for this source, drop it.
-    if (messageId) forgetOriginsForMessageId(storage, accountId, messageId);
+    // Drop ONLY the exact pending entry for this source identity — never a
+    // broad messageId sweep (two rows may share a Message-ID legitimately).
+    forgetPendingOrigin(storage, {
+      accountId,
+      sourceCanonical,
+      sourceUid,
+      sourceUidValidity,
+    });
   } else {
     rememberPendingOrigin(
       storage,
-      { accountId, sourceCanonical, sourceUid },
-      { originalCanonical: sourceCanonical, messageId: messageId ?? null, createdAt: Date.now() },
+      { accountId, sourceCanonical, sourceUid, sourceUidValidity },
+      {
+        originalCanonical: sourceCanonical,
+        messageId: messageId ?? null,
+        fingerprint: fingerprint ?? null,
+        createdAt: Date.now(),
+      },
     );
   }
 }
@@ -244,22 +282,62 @@ function readOriginForTrashUid(
   return (hit?.originalCanonical as MailFolder) ?? "inbox";
 }
 
-/** Forget every origin entry that references this trash row / messageId. */
+/**
+ * Forget the FINAL origin entry for one physical Trash row. Never touches
+ * any other Trash entry (even one that shares the same Message-ID) and
+ * never touches Pending entries — a pending origin belongs to its own
+ * distinct source row.
+ */
 function forgetOriginForTrashUid(
   accountId: string | null,
   trashUid: number,
   trashUidValidity: number | null,
-  messageId?: string | null,
 ) {
-  if (!accountId) return;
-  const storage = safeOriginStorage();
-  if (trashUidValidity != null) {
-    forgetFinalOrigin(storage, { accountId, trashUidValidity, trashUid });
-  }
-  if (messageId) forgetOriginsForMessageId(storage, accountId, messageId);
+  if (!accountId || trashUidValidity == null) return;
+  forgetFinalOrigin(safeOriginStorage(), { accountId, trashUidValidity, trashUid });
 }
 
+/** Drop the exact pending origin entry for an exact source identity. */
+function forgetExactPendingOrigin(
+  accountId: string | null,
+  sourceCanonical: MailFolder,
+  sourceUid: number,
+  sourceUidValidity?: number,
+) {
+  if (!accountId) return;
+  forgetPendingOrigin(safeOriginStorage(), {
+    accountId,
+    sourceCanonical,
+    sourceUid,
+    sourceUidValidity,
+  });
+}
 
+/**
+ * After a Trash list arrives (from Index or Bridge), promote any UNIQUE
+ * pending origin whose fingerprint matches a newly-visible trash row.
+ * Ambiguous matches are ignored — we never guess.
+ */
+function promotePendingOriginsForTrashList(
+  accountId: string | null,
+  trashUidValidity: number | null,
+  messages: ReadonlyArray<MailMessage>,
+) {
+  if (!accountId || trashUidValidity == null) return;
+  const storage = safeOriginStorage();
+  for (const m of messages) {
+    const parsed = parseMessageId(m.id);
+    if (!parsed || parsed.folder !== "trash") continue;
+    const fp = fingerprintFromMessage(m);
+    if (!fp) continue;
+    promoteUniquePendingOriginForTrashMessage(storage, {
+      accountId,
+      trashUidValidity,
+      trashUid: parsed.uid,
+      fingerprint: fp,
+    });
+  }
+}
 
 type ComposeInitial = {
   to?: string;
@@ -458,9 +536,6 @@ function useMailData(session: MailSession | null) {
     }
   }, [currentAccountId, persistPendingMoves]);
 
-
-
-
   const folderPath = folderPaths[folder] ?? null;
 
   const loadCounts = useCallback(async () => {
@@ -515,8 +590,6 @@ function useMailData(session: MailSession | null) {
     }
   }, [session, getCounts, isStarCountHot]);
 
-
-
   /**
    * Manual-Refresh counts path: prefer Local Mail Index (single Supabase
    * SELECT, no IMAP round-trip). Falls back to the bridge only when the
@@ -547,7 +620,11 @@ function useMailData(session: MailSession | null) {
               // hot; keep the optimistic value the toggle already applied.
               if (c.folder === "starred" && isStarCountHot() && prev.starred) {
                 const cur = next.starred ?? { total: 0, unread: 0, supported: true };
-                next.starred = { total: prev.starred.total, unread: c.unread, supported: cur.supported };
+                next.starred = {
+                  total: prev.starred.total,
+                  unread: c.unread,
+                  supported: cur.supported,
+                };
                 continue;
               }
               const cur = next[c.folder] ?? { total: 0, unread: 0, supported: true };
@@ -625,6 +702,13 @@ function useMailData(session: MailSession | null) {
         // BLOCKER_3: reconcile BEFORE applying overlay so the raw list
         // drives presence checks.
         reconcilePendingMovesForRead(result.messages, folder, bridgeStartedAt);
+        if (folder === "trash") {
+          promotePendingOriginsForTrashList(
+            currentAccountId,
+            trashUidValidityRef.current,
+            result.messages,
+          );
+        }
         setMessages(applyPending(result.messages));
         setHasMore(result.messages.length >= PAGE);
         setBridgeError(null);
@@ -643,7 +727,6 @@ function useMailData(session: MailSession | null) {
     },
     [session, folder, sort, getMessages, applyPending, reconcilePendingMovesForRead],
   );
-
 
   const loadMessages = useCallback(async () => {
     if (!session) return;
@@ -667,6 +750,13 @@ function useMailData(session: MailSession | null) {
           if (loadReqIdRef.current !== reqId) return;
           if (res.ok && res.indexed) {
             reconcilePendingMovesForRead(res.messages, folder, startedAt);
+            if (folder === "trash") {
+              promotePendingOriginsForTrashList(
+                currentAccountId,
+                trashUidValidityRef.current,
+                res.messages,
+              );
+            }
             setMessages(applyPending(res.messages));
             setHasMore(res.hasMore);
             setIndexCursor(res.nextCursor);
@@ -691,7 +781,6 @@ function useMailData(session: MailSession | null) {
       if (loadReqIdRef.current === reqId) setLoading(false);
     }
   }, [session, folder, sort, canUseIndex, listIndex, loadFromBridge, applyPending]);
-
 
   const loadMore = useCallback(async () => {
     if (!session || loadingMore || loading || !hasMore) return;
@@ -803,7 +892,6 @@ function useMailData(session: MailSession | null) {
       loadCountsFast();
     },
   });
-
 
   return {
     folder,
@@ -928,8 +1016,6 @@ function useMailData(session: MailSession | null) {
       s.settledAt = Date.now();
     },
 
-
-
     applyPending,
     applyPendingOne,
     // Batch A: expose the pending-move overlay ref and the monotonic count
@@ -940,7 +1026,6 @@ function useMailData(session: MailSession | null) {
     bumpCountsGen,
   };
 }
-
 
 function MailApp() {
   const navigate = useNavigate();
@@ -1001,7 +1086,6 @@ function MailApp() {
 
   // BLOCKER_6 — account identity for origin-tracker calls in this scope.
   const currentAccountId = session?.account.id ?? null;
-
 
   // Serialize Refresh with a single-flight guard (ref, not React state) so a
   // double-click that fires before the next render can't spawn a second
@@ -1153,7 +1237,6 @@ function MailApp() {
     [session, moveIndex, deleteIndex, deleteFn, move],
   );
 
-
   // Per-id single-flight guard against double-click on Move/Delete/Restore.
   // Same id in flight → returns the same promise instead of firing IMAP twice.
   const moveFlightRef = useRef<Map<string, Promise<void>>>(new Map());
@@ -1239,7 +1322,6 @@ function MailApp() {
     },
     [fetchMessage, currentAccountId],
   );
-
 
   useCompanyTheme(
     session?.company
@@ -1467,9 +1549,7 @@ function MailApp() {
           return next;
         });
       } else {
-        setMessages((prev) =>
-          prev.map((m) => (m.id === id ? { ...m, starred: !nextStarred } : m)),
-        );
+        setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, starred: !nextStarred } : m)));
       }
       setDeepResults((prev) =>
         prev ? prev.map((m) => (m.id === id ? { ...m, starred: !nextStarred } : m)) : prev,
@@ -1482,8 +1562,6 @@ function MailApp() {
       endStarMutation();
     }
   }
-
-
 
   async function toggleRead(e: React.MouseEvent, id: string) {
     e.stopPropagation();
@@ -1532,11 +1610,7 @@ function MailApp() {
   // Optimistic-count helper for Move/Trash/Restore. `from` decreases by 1
   // (and unread by 1 if the message was unread). `to` is symmetric. Both
   // clamp at 0 so a stale counter never goes negative.
-  function applyMoveCountsDelta(
-    from: MailFolder,
-    to: MailFolder | null,
-    wasUnread: boolean,
-  ) {
+  function applyMoveCountsDelta(from: MailFolder, to: MailFolder | null, wasUnread: boolean) {
     setCounts((prev) => {
       const next = { ...prev };
       const src = next[from];
@@ -1571,7 +1645,6 @@ function MailApp() {
     setDeepResults((prev) => (prev ? reviveAt(prev, original, originalIndex) : prev));
   }
 
-
   async function handleMove(id: string, toFolder: MailFolder) {
     const parsed = parseMessageId(id);
     if (!parsed || !session) return;
@@ -1591,7 +1664,10 @@ function MailApp() {
       }
       messageCache.current.delete(id);
       hideRow(id);
-      beginPendingMove(id, toFolder === "trash" ? "trash" : toFolder === "archive" ? "archive" : "move");
+      beginPendingMove(
+        id,
+        toFolder === "trash" ? "trash" : toFolder === "archive" ? "archive" : "move",
+      );
       applyMoveCountsDelta(parsed.folder, toFolder, wasUnread);
       try {
         const moveResult = await mutateMoveOrDelete({
@@ -1605,15 +1681,11 @@ function MailApp() {
             sourceCanonical: parsed.folder,
             sourceUid: parsed.uid,
             messageId: original?.threadId ?? null,
+            fingerprint: original ? fingerprintFromMessage(original) : null,
             moveResult,
           });
         } else if (parsed.folder === "trash") {
-          forgetOriginForTrashUid(
-            currentAccountId,
-            parsed.uid,
-            trashUidValidityRef.current,
-            original?.threadId ?? null,
-          );
+          forgetOriginForTrashUid(currentAccountId, parsed.uid, trashUidValidityRef.current);
         }
         confirmHideRow(id);
         confirmPendingMove(id);
@@ -1655,7 +1727,8 @@ function MailApp() {
       const original = originalIndex >= 0 ? messages[originalIndex] : null;
       const wasUnread = original ? !original.read : false;
       const deepOriginalIndex = deepResults ? deepResults.findIndex((m) => m.id === id) : -1;
-      const deepOriginal = deepOriginalIndex >= 0 && deepResults ? deepResults[deepOriginalIndex] : null;
+      const deepOriginal =
+        deepOriginalIndex >= 0 && deepResults ? deepResults[deepOriginalIndex] : null;
       const wasSelected = selectedId === id;
       const prevSelected = wasSelected ? selectedMessage : null;
       const cachedBody = messageCache.current.get(id);
@@ -1675,12 +1748,7 @@ function MailApp() {
       try {
         if (isTrash) {
           await mutateMoveOrDelete({ sourceCanonical: parsed.folder, uid: parsed.uid });
-          forgetOriginForTrashUid(
-            currentAccountId,
-            parsed.uid,
-            trashUidValidityRef.current,
-            original?.threadId ?? null,
-          );
+          forgetOriginForTrashUid(currentAccountId, parsed.uid, trashUidValidityRef.current);
         } else {
           const moveResult = await mutateMoveOrDelete({
             sourceCanonical: parsed.folder,
@@ -1692,6 +1760,7 @@ function MailApp() {
             sourceCanonical: parsed.folder,
             sourceUid: parsed.uid,
             messageId: original?.threadId ?? null,
+            fingerprint: original ? fingerprintFromMessage(original) : null,
             moveResult,
           });
         }
@@ -1746,12 +1815,7 @@ function MailApp() {
           uid: parsed.uid,
           toFolder: target,
         });
-        forgetOriginForTrashUid(
-          currentAccountId,
-          parsed.uid,
-          trashUidValidityRef.current,
-          original?.threadId ?? null,
-        );
+        forgetOriginForTrashUid(currentAccountId, parsed.uid, trashUidValidityRef.current);
         confirmHideRow(id);
         confirmPendingMove(id);
         const label = FOLDER_META[target as MailFolder]?.label || target;
@@ -1770,7 +1834,6 @@ function MailApp() {
       }
     });
   }
-
 
   async function handleMarkUnread(id: string) {
     const parsed = parseMessageId(id);
@@ -1810,7 +1873,6 @@ function MailApp() {
       toast.error(err?.message || "فشل التعليم كغير مقروءة");
     }
   }
-
 
   function toggleSelect(id: string) {
     setSelection((prev) => {
@@ -1872,11 +1934,15 @@ function MailApp() {
     >();
     messages.forEach((m, idx) => {
       if (set.has(m.id))
-        meta.set(m.id, { threadId: m.threadId, wasUnread: !m.read, original: m, originalIndex: idx });
+        meta.set(m.id, {
+          threadId: m.threadId,
+          wasUnread: !m.read,
+          original: m,
+          originalIndex: idx,
+        });
     });
     return meta;
   }
-
 
   async function bulkMove(toFolder: MailFolder) {
     if (!session || selection.size === 0 || bulkBusy) return;
@@ -1928,15 +1994,14 @@ function MailApp() {
             sourceCanonical: parsed.folder,
             sourceUid: parsed.uid,
             messageId: meta.get(id)?.threadId ?? null,
+            fingerprint: (() => {
+              const o = meta.get(id)?.original;
+              return o ? fingerprintFromMessage(o) : null;
+            })(),
             moveResult,
           });
         } else if (parsed.folder === "trash") {
-          forgetOriginForTrashUid(
-            currentAccountId,
-            parsed.uid,
-            trashUidValidityRef.current,
-            meta.get(id)?.threadId ?? null,
-          );
+          forgetOriginForTrashUid(currentAccountId, parsed.uid, trashUidValidityRef.current);
         }
         confirmHideRow(id);
         confirmPendingMove(id);
@@ -1967,7 +2032,6 @@ function MailApp() {
         setSelectedMessage(prevSelected);
       }
       toast.error(`فشل نقل ${failedIds.length} من ${ids.length} رسالة`);
-
     } else {
       toast.success(`تم نقل ${ids.length} رسالة`);
     }
@@ -2037,12 +2101,7 @@ function MailApp() {
       try {
         if (isTrash) {
           await mutateMoveOrDelete({ sourceCanonical: parsed.folder, uid: parsed.uid });
-          forgetOriginForTrashUid(
-            currentAccountId,
-            parsed.uid,
-            trashUidValidityRef.current,
-            meta.get(id)?.threadId ?? null,
-          );
+          forgetOriginForTrashUid(currentAccountId, parsed.uid, trashUidValidityRef.current);
         } else {
           const moveResult = await mutateMoveOrDelete({
             sourceCanonical: parsed.folder,
@@ -2054,6 +2113,10 @@ function MailApp() {
             sourceCanonical: parsed.folder,
             sourceUid: parsed.uid,
             messageId: meta.get(id)?.threadId ?? null,
+            fingerprint: (() => {
+              const o = meta.get(id)?.original;
+              return o ? fingerprintFromMessage(o) : null;
+            })(),
             moveResult,
           });
         }
@@ -2151,12 +2214,7 @@ function MailApp() {
           uid: parsed.uid,
           toFolder: target,
         });
-        forgetOriginForTrashUid(
-          currentAccountId,
-          parsed.uid,
-          trashUidValidityRef.current,
-          meta.get(id)?.threadId ?? null,
-        );
+        forgetOriginForTrashUid(currentAccountId, parsed.uid, trashUidValidityRef.current);
         confirmHideRow(id);
         confirmPendingMove(id);
       } catch (err) {
@@ -2190,7 +2248,6 @@ function MailApp() {
       toast.success(`تم استعادة ${ids.length} رسالة`);
     }
   }
-
 
   async function bulkMarkUnread() {
     if (!session || selection.size === 0 || bulkBusy) return;
