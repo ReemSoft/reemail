@@ -4,6 +4,8 @@ import {
   rememberFinalOrigin,
   rememberPendingOrigin,
   promotePendingOriginToFinal,
+  promoteUniquePendingOriginForTrashMessage,
+  buildOriginFingerprint,
   getOrigin,
   forgetFinalOrigin,
   forgetPendingOrigin,
