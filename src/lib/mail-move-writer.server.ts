@@ -315,12 +315,10 @@ export async function insertDestinationRowFromSource(
     keywords: src.data.keywords,
     deleted_at: null as string | null,
   };
-  const up = await supabase
-    .from("mail_messages")
-    .upsert(row as never, {
-      onConflict: "account_id,folder_id,uidvalidity,uid",
-      ignoreDuplicates: false,
-    });
+  const up = await supabase.from("mail_messages").upsert(row as never, {
+    onConflict: "account_id,folder_id,uidvalidity,uid",
+    ignoreDuplicates: false,
+  });
   if (up.error) throw up.error;
   return { inserted: true, wasUnread: !src.data.seen };
 }
@@ -339,7 +337,10 @@ export async function adjustFolderCountsDelta(
   if (!sel.data) return;
   const total = Math.max(0, (sel.data.total ?? 0) + params.totalDelta);
   const unread = Math.max(0, (sel.data.unread ?? 0) + params.unreadDelta);
-  const up = await supabase.from("mail_folders").update({ total, unread }).eq("id", params.folderId);
+  const up = await supabase
+    .from("mail_folders")
+    .update({ total, unread })
+    .eq("id", params.folderId);
   if (up.error) throw up.error;
 }
 

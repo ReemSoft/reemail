@@ -61,19 +61,18 @@ interface Harness {
   reconcileArgs: Array<{ folderPath: string; canonical: string; uid: number }>;
 }
 
-function makeDeps(opts: {
-  source?: SourceInfo | null;
-  destBefore?: DestInfo;
-  destAfter?: DestInfo;
-  bridge?: BridgeMoveOutcome;
-  writeThrough?: WriteThroughOutcome;
-  destSync?: SyncOutcome | SyncOutcome[];
-  sourceReconcile?: SyncOutcome;
-  discoverPlan?: Array<
-    | { uid: number; uidvalidity: number }
-    | null
-  >;
-} = {}): Harness {
+function makeDeps(
+  opts: {
+    source?: SourceInfo | null;
+    destBefore?: DestInfo;
+    destAfter?: DestInfo;
+    bridge?: BridgeMoveOutcome;
+    writeThrough?: WriteThroughOutcome;
+    destSync?: SyncOutcome | SyncOutcome[];
+    sourceReconcile?: SyncOutcome;
+    discoverPlan?: Array<{ uid: number; uidvalidity: number } | null>;
+  } = {},
+): Harness {
   const calls = {
     bridgeMove: 0,
     writeThrough: 0,
@@ -91,9 +90,8 @@ function makeDeps(opts: {
   const discoverQueue = opts.discoverPlan ?? [null];
 
   const deps: MoveOrchestrationDeps = {
-    loadSource: async () => opts.source === undefined ? makeSource() : opts.source,
-    loadDest: async () =>
-      opts.destBefore ?? { folder: null, cursorNewestSyncedUid: null },
+    loadSource: async () => (opts.source === undefined ? makeSource() : opts.source),
+    loadDest: async () => opts.destBefore ?? { folder: null, cursorNewestSyncedUid: null },
     bridgeMove: async () => {
       calls.bridgeMove += 1;
       return (
@@ -120,8 +118,7 @@ function makeDeps(opts: {
       return syncQueue.shift() ?? { ok: true, busy: false, hasMore: false };
     },
     reloadDest: async () =>
-      opts.destAfter ??
-      opts.destBefore ?? { folder: null, cursorNewestSyncedUid: null },
+      opts.destAfter ?? opts.destBefore ?? { folder: null, cursorNewestSyncedUid: null },
     discoverDest: async () => {
       calls.discover += 1;
       const next = discoverQueue.shift();
@@ -229,7 +226,10 @@ describe("no UIDPLUS mapping — targeted destination sync", () => {
         folder: { id: "f-dst", uidvalidity: 200, path: "Trash" },
         cursorNewestSyncedUid: 981,
       },
-      bridge: { ok: true, move: { sourceUid: 42, destinationPath: "Trash", uidMappingAvailable: false } },
+      bridge: {
+        ok: true,
+        move: { sourceUid: 42, destinationPath: "Trash", uidMappingAvailable: false },
+      },
       discoverPlan: [{ uid: 981, uidvalidity: 200 }],
     });
     const res = await moveMessageOrchestration(h.deps, baseInput);
@@ -253,7 +253,10 @@ describe("no UIDPLUS mapping — targeted destination sync", () => {
         ok: true,
         move: { sourceUid: 42, destinationPath: "Archive", uidMappingAvailable: false },
       },
-      destSync: [{ ok: true, busy: false, hasMore: true }, { ok: true, busy: false, hasMore: true }],
+      destSync: [
+        { ok: true, busy: false, hasMore: true },
+        { ok: true, busy: false, hasMore: true },
+      ],
       discoverPlan: [null, null],
     });
     const res = await moveMessageOrchestration(h.deps, { ...baseInput, destCanonical: "archive" });
@@ -275,7 +278,10 @@ describe("no UIDPLUS mapping — targeted destination sync", () => {
         folder: { id: "f-dst", uidvalidity: 200, path: "Trash" },
         cursorNewestSyncedUid: 950,
       },
-      bridge: { ok: true, move: { sourceUid: 42, destinationPath: "Trash", uidMappingAvailable: false } },
+      bridge: {
+        ok: true,
+        move: { sourceUid: 42, destinationPath: "Trash", uidMappingAvailable: false },
+      },
       destSync: new Array(5).fill({ ok: true, busy: false, hasMore: true }),
       discoverPlan: [null, null, null, null, null],
     });
@@ -296,7 +302,10 @@ describe("no UIDPLUS mapping — targeted destination sync", () => {
         folder: { id: "f-dst", uidvalidity: 200, path: "Trash" },
         cursorNewestSyncedUid: 981,
       },
-      bridge: { ok: true, move: { sourceUid: 42, destinationPath: "Trash", uidMappingAvailable: false } },
+      bridge: {
+        ok: true,
+        move: { sourceUid: 42, destinationPath: "Trash", uidMappingAvailable: false },
+      },
       destSync: [
         { ok: true, busy: false, hasMore: true },
         { ok: true, busy: false, hasMore: true },
@@ -429,7 +438,10 @@ describe("failure semantics", () => {
         folder: { id: "f-dst", uidvalidity: 200, path: "Trash" },
         cursorNewestSyncedUid: 900,
       },
-      bridge: { ok: true, move: { sourceUid: 42, destinationPath: "Trash", uidMappingAvailable: false } },
+      bridge: {
+        ok: true,
+        move: { sourceUid: 42, destinationPath: "Trash", uidMappingAvailable: false },
+      },
       destSync: { ok: true, busy: true },
     });
     const res = await moveMessageOrchestration(h.deps, baseInput);

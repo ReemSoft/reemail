@@ -195,9 +195,7 @@ export async function moveMessageOrchestration(
       destinationSync = destPath ? "failed" : "failed";
     } else {
       const mode: "initial" | "incremental" =
-        destBefore.folder && destBefore.cursorNewestSyncedUid != null
-          ? "incremental"
-          : "initial";
+        destBefore.folder && destBefore.cursorNewestSyncedUid != null ? "incremental" : "initial";
       destinationSync = mode;
 
       let rounds = 0;

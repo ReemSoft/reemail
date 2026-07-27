@@ -67,7 +67,6 @@ export type RunMailSyncResult =
   | { ok: true; busy: true; reason: "LOCKED" }
   | { ok: false; error: string; code: string };
 
-
 export const runMailSync = createServerFn({ method: "POST" })
   .inputValidator((input: RunMailSyncInput) => InputSchema.parse(input))
   .handler(async ({ data }): Promise<RunMailSyncResult> => {

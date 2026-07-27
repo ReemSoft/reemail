@@ -80,10 +80,7 @@ const BRIDGE_TTL_SECONDS = 60;
 
 export type BridgePost = (path: string, payload: unknown) => Promise<Record<string, unknown>>;
 
-async function defaultBridgePost(
-  path: string,
-  payload: unknown,
-): Promise<Record<string, unknown>> {
+async function defaultBridgePost(path: string, payload: unknown): Promise<Record<string, unknown>> {
   const url = process.env.MAIL_BRIDGE_URL;
   const key = process.env.MAIL_BRIDGE_SECRET;
   if (!url || !key) throw new Error("BRIDGE_NOT_CONFIGURED");
