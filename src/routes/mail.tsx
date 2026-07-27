@@ -4328,9 +4328,9 @@ function Composer({
       }}
     >
       {/* Header — flush with the pane, on the same surface */}
-      <div className="flex shrink-0 items-center justify-between gap-3 border-b border-border/70 bg-surface/80 px-6 py-3 backdrop-blur">
-        <div className="flex min-w-0 items-center gap-3">
-          <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-brand-gradient text-white shadow-brand">
+      <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border/70 bg-surface/80 px-3 py-2.5 backdrop-blur sm:px-6 sm:py-3">
+        <div className="flex min-w-0 items-center gap-2 sm:gap-3">
+          <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-brand-gradient text-white shadow-brand sm:h-9 sm:w-9">
             <Send className="h-4 w-4" />
           </span>
           <div className="min-w-0">
@@ -4338,11 +4338,11 @@ function Composer({
               {subject || "رسالة جديدة"}
             </p>
             <p className="truncate text-[11px] text-muted-foreground">
-              المرسل: {session.account.email_address}
+              {session.account.email_address}
             </p>
           </div>
         </div>
-        <div className="flex shrink-0 items-center gap-3">
+        <div className="flex shrink-0 items-center gap-2 sm:gap-3">
           <span className="hidden text-[11px] text-muted-foreground sm:inline">{savedLabel}</span>
           <button
             onClick={onClose}
@@ -4357,7 +4357,7 @@ function Composer({
 
       {/* Body — full width, scrollable */}
       <div className="flex-1 overflow-y-auto">
-        <div className="mx-auto flex w-full max-w-none flex-col gap-4 px-6 py-5">
+        <div className="mx-auto flex w-full max-w-none flex-col gap-4 px-3 py-4 sm:px-6 sm:py-5">
           {/* Recipients */}
           <RecipientField
             label="المرسل له"
