@@ -1050,6 +1050,15 @@ function MailApp() {
   const fetchMessage = useCallback(
     (id: string): Promise<MailMessage | null> => {
       if (!session) return Promise.resolve(null);
+      // Batch A / Fix #2: check the pending-move overlay BEFORE reading
+      // cache. A source row the user just moved must not be resurrected
+      // from a warm cache entry that was stored before the mutation.
+      // Destination rows resolve to a different physical folder — they are
+      // NOT suppressed by design (see isMessageSuppressed).
+      const accountId = currentAccountId;
+      if (accountId && isMessageSuppressed(pendingMovesRef.current, accountId, id)) {
+        return Promise.resolve(null);
+      }
       const cached = messageCache.current.get(id);
       if (cached) return Promise.resolve(cached);
       const existing = inflight.current.get(id);
@@ -1066,6 +1075,13 @@ function MailApp() {
       })
         .then((result) => {
           if (result.ok && result.message) {
+            // Batch A / Fix #2: re-check the overlay AFTER the fetch. The
+            // user may have moved this row during the round-trip; writing
+            // it into messageCache would let it re-appear.
+            const acc = currentAccountId;
+            if (acc && isMessageSuppressed(pendingMovesRef.current, acc, id)) {
+              return null;
+            }
             // Patch through pending overrides so a slow fetch response cannot
             // overwrite an in-flight optimistic star/read the user just set.
             const patched = applyPendingOne(result.message);
@@ -1081,17 +1097,22 @@ function MailApp() {
       inflight.current.set(id, p);
       return p;
     },
-    [session, getOne, applyPendingOne],
+    [session, getOne, applyPendingOne, currentAccountId],
   );
 
   const prefetchMessage = useCallback(
     (id: string) => {
+      // Batch A / Fix #2: never trigger a prefetch for a row already
+      // suppressed by the pending-move overlay.
+      const accountId = currentAccountId;
+      if (accountId && isMessageSuppressed(pendingMovesRef.current, accountId, id)) return;
       if (!messageCache.current.has(id) && !inflight.current.has(id)) {
         void fetchMessage(id);
       }
     },
-    [fetchMessage],
+    [fetchMessage, currentAccountId],
   );
+
 
   useCompanyTheme(
     session?.company
