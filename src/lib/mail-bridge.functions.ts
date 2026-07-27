@@ -72,7 +72,7 @@ async function bridgeCall(
   password: string,
 ): Promise<
   | { ok: true; json: any }
-  | { ok: false; error: string; unavailable?: boolean }
+  | { ok: false; error: string; status?: number; unavailable?: boolean }
 > {
   const { resolveBridgeAuth } = await import("@/lib/mail-bridge-auth.server");
   const auth = await resolveBridgeAuth(mailSessionToken);
@@ -94,7 +94,11 @@ async function bridgeCall(
     });
     const json = await res.json().catch(() => ({ ok: false, error: "Bridge error" }));
     if (!res.ok || !json.ok) {
-      return { ok: false, error: json.error || `Bridge error ${res.status}` };
+      return {
+        ok: false,
+        error: json.error || `Bridge error ${res.status}`,
+        status: res.status,
+      };
     }
     return { ok: true, json };
   } catch (err: any) {
@@ -135,23 +139,58 @@ export const bridgeGetMessages = createServerFn({ method: "POST" })
     return { ok: true as const, messages: (r.json.messages ?? []) as MailMessage[] };
   });
 
+/**
+ * Typed fetch-message code. Callers use it to distinguish a proven-absent
+ * message (`NOT_FOUND` — the bridge received HTTP 404 or explicit null) from
+ * transient failures (`NETWORK`, `UNKNOWN`, etc). Only `NOT_FOUND` is a safe
+ * signal to tombstone the local index row; every other code is preserved
+ * verbatim so the UI never invents a ghost cleanup.
+ */
+export type BridgeMessageErrorCode =
+  | "NOT_FOUND"
+  | "UNAUTHORIZED"
+  | "UNAVAILABLE"
+  | "NETWORK"
+  | "UNKNOWN";
+
 export const bridgeGetMessage = createServerFn({ method: "POST" })
   .inputValidator((v: z.input<typeof MessagePayloadSchema>) => MessagePayloadSchema.parse(v))
-  .handler(async ({ data }) => {
-    const r = await bridgeCall(
-      data.mailSessionToken,
-      "/api/message",
-      { folder: data.folder, uid: data.uid },
-      data.password,
-    );
-    if (!r.ok)
-      return {
-        ok: false as const,
-        error: r.error,
-        message: null as MailMessage | null,
-      };
-    return { ok: true as const, message: (r.json.message as MailMessage | null) ?? null };
-  });
+  .handler(
+    async ({
+      data,
+    }): Promise<
+      | { ok: true; message: MailMessage | null }
+      | {
+          ok: false;
+          code: BridgeMessageErrorCode;
+          error: string;
+          message: null;
+          status?: number;
+        }
+    > => {
+      const r = await bridgeCall(
+        data.mailSessionToken,
+        "/api/message",
+        { folder: data.folder, uid: data.uid },
+        data.password,
+      );
+      if (!r.ok) {
+        let code: BridgeMessageErrorCode = "UNKNOWN";
+        if (r.unavailable) code = "UNAVAILABLE";
+        else if (r.status === 404) code = "NOT_FOUND";
+        else if (r.status === 401 || r.status === 403) code = "UNAUTHORIZED";
+        else if (r.status == null) code = "NETWORK";
+        return { ok: false, code, error: r.error, message: null, status: r.status };
+      }
+      // The bridge may return { ok:true, message:null } on a rare shape
+      // mismatch. Treat that as NOT_FOUND for the ghost-cleanup contract.
+      const msg = (r.json.message as MailMessage | null) ?? null;
+      if (!msg) {
+        return { ok: false, code: "NOT_FOUND", error: "Message not found", message: null };
+      }
+      return { ok: true, message: msg };
+    },
+  );
 
 export const bridgeMarkRead = createServerFn({ method: "POST" })
   .inputValidator((v: z.input<typeof MarkReadPayloadSchema>) => MarkReadPayloadSchema.parse(v))
