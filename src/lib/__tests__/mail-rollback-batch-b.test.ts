@@ -75,7 +75,9 @@ describe("Batch B — per-item rollback (bulk mutations)", () => {
     const afterOptimistic = before.filter((m) => !["b", "c", "d"].includes(m.id));
     // b and d failed; c succeeded and must NOT come back.
     const rolledBack = reviveFailed(afterOptimistic, meta, ["b", "d"]);
-    expect(rolledBack.map((m) => m.id)).toEqual(["a", "b", "d", "e"]);
+    // "c" succeeded so its original slot is gone; "d" clamps to end.
+    expect(rolledBack.map((m) => m.id)).toEqual(["a", "b", "e", "d"]);
+
   });
 
   it("7. bulk success does not revive anything", () => {
