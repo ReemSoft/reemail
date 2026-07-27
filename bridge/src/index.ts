@@ -289,7 +289,7 @@ app.post("/api/star", requireKey, imapGate("interactive"), async (req, res) => {
   }
 });
 
-app.post("/api/move", requireKey, async (req, res) => {
+app.post("/api/move", requireKey, imapGate("interactive"), async (req, res) => {
   try {
     const payload = MovePayloadSchema.parse(req.body);
     const move = await moveMessage(
