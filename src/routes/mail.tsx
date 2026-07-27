@@ -28,6 +28,8 @@ function sanitizeComposerHtml(html: string): string {
     FORBID_ATTR: ["srcdoc", "formaction", "onerror", "onload", "onclick", "onmouseover", "onfocus"],
     ALLOW_DATA_ATTR: false,
   });
+}
+
 
 import {
   Inbox,
