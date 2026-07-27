@@ -4,13 +4,36 @@
  * Extracted so it can be unit / integration tested without booting the
  * full bridge. Contract (locked by tests):
  *
- *   * Waiter cancellation is tied to CLIENT disconnect, not response
- *     completion. We listen on `req` for `aborted` and `close`, wire them
- *     to an AbortController, and pass `controller.signal` to `acquire()`.
+ *   * Waiter cancellation is tied to the CLIENT socket, not response
+ *     completion. When the client disconnects while we are still waiting
+ *     for a permit, the AbortController fires and `acquire()` rejects
+ *     with `ImapBusyError({ reason: "cancelled" })`.
+ *
+ *   * Signals used:
+ *       - `req.once("aborted", ...)`
+ *           Legacy Node signal for premature client abort. Still emitted
+ *           in Node ≥ 20 on request-level abort; kept for defence in depth.
+ *       - `req.socket.once("close", ...)`
+ *           The actual TCP-socket close event. This is the reliable
+ *           client-disconnect primitive on the server side.
+ *
+ *     NOTE: We deliberately do NOT listen on `req.once("close", ...)`.
+ *     Empirically (Node 22 + Express 4 + `express.json()` upstream), the
+ *     server-side IncomingMessage emits `'close'` immediately after the
+ *     body parser finishes draining the request stream — long before
+ *     the client disconnects. Wiring it to `abort()` would cancel every
+ *     waiter the instant it queued. See `imap-gate-middleware.test.ts`
+ *     for the regression fixture that locks this behaviour.
+ *
  *   * The moment `acquire()` settles — admitted OR rejected — we detach
  *     both listeners so no reference leaks past the wait window.
+ *
  *   * After admission, `release` is triggered by whichever of
- *     `res.finish` / `res.close` fires first, exactly once.
+ *     `res.finish` / `res.close` fires first, exactly once. `res.close`
+ *     here is safe: it fires when the response stream is closed
+ *     (either after `finish` on success, or on late socket drop) — it
+ *     is NOT used as a pre-admission cancellation signal.
+ *
  *   * On `ImapBusyError`: HTTP 503 + `IMAP_BUSY` + `Retry-After` header.
  *   * On any other error: forwarded via `next(err)`.
  */
@@ -48,10 +71,6 @@ export function createImapGateMiddleware(
     const meta = extractMeta(req);
     const ac = new AbortController();
 
-    // Client-disconnect signal: fires when the socket goes away BEFORE
-    // we've admitted the caller. We intentionally listen on `req`, not
-    // `res`, because `res.close` only means "response ended" — that
-    // could equally fire on a successful send after admission.
     const onClientGone = () => {
       try {
         ac.abort();
@@ -60,11 +79,13 @@ export function createImapGateMiddleware(
       }
     };
     req.once("aborted", onClientGone);
-    req.once("close", onClientGone);
+    // req.socket may be undefined in exotic transports; guard defensively.
+    const sock = req.socket;
+    if (sock) sock.once("close", onClientGone);
 
     const detachWaiterListeners = () => {
       req.off("aborted", onClientGone);
-      req.off("close", onClientGone);
+      if (sock) sock.off("close", onClientGone);
     };
 
     let release: (() => void) | null = null;
@@ -99,3 +120,4 @@ export function createImapGateMiddleware(
     next();
   };
 }
+
