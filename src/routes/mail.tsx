@@ -2011,18 +2011,16 @@ function MailApp() {
         unhideRow(id);
         rollbackPendingMove(id);
         const parsed = parseMessageId(id);
-        if (parsed) {
-          const target = idToTarget.get(id);
-          if (target) {
-            applyMoveCountsDelta(target, parsed.folder, meta.get(id)?.wasUnread ?? false); // revert
-          }
+        const info = meta.get(id);
+        const target = idToTarget.get(id);
+        if (parsed && info && target) {
+          applyMoveCountsDelta(target, parsed.folder, info.wasUnread); // revert
         }
+        if (info) reviveMessageAt(info.original, info.originalIndex);
+        const cached = cachedBodies.get(id);
+        if (cached) messageCache.current.set(id, cached);
       }
-      setMessages((prev) => {
-        const seen = new Set(prev.map((m) => m.id));
-        const revived = snapshot.filter((m) => failedSet.has(m.id) && !seen.has(m.id));
-        return revived.length ? [...revived, ...prev] : prev;
-      });
+
       if (prevSelectedId && failedSet.has(prevSelectedId)) {
         setSelectedId(prevSelectedId);
         setSelectedMessage(prevSelected);
