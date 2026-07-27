@@ -2469,7 +2469,7 @@ function MailApp() {
           <AlertOctagon className="h-4 w-4" />
           <span>تعذّر الاتصال بخادم البريد. سنعيد المحاولة تلقائياً.</span>
           <button
-            onClick={() => loadMessages()}
+            onClick={() => rawRefresh()}
             className="underline underline-offset-2 hover:opacity-80"
           >
             إعادة المحاولة الآن
