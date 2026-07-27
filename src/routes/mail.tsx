@@ -2014,7 +2014,6 @@ function MailApp() {
             currentAccountId,
             parsed.uid,
             trashUidValidityRef.current,
-            meta.get(id)?.threadId ?? null,
           );
         }
         confirmHideRow(id);
@@ -2120,7 +2119,6 @@ function MailApp() {
             currentAccountId,
             parsed.uid,
             trashUidValidityRef.current,
-            meta.get(id)?.threadId ?? null,
           );
         } else {
           const moveResult = await mutateMoveOrDelete({
@@ -2231,11 +2229,10 @@ function MailApp() {
           toFolder: target,
         });
         forgetOriginForTrashUid(
-          currentAccountId,
+            currentAccountId,
           parsed.uid,
           trashUidValidityRef.current,
-          meta.get(id)?.threadId ?? null,
-        );
+          );
         confirmHideRow(id);
         confirmPendingMove(id);
       } catch (err) {
