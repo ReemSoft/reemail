@@ -1,7 +1,16 @@
+// Server functions that proxy user actions to the private Mail Bridge.
+//
+// Security model (closes bridge_passthrough_open):
+//   * Every function REQUIRES a signed Mail Session Token.
+//   * accountId + companyId come from verified JWT claims.
+//   * IMAP/SMTP host/port/security are loaded from the database by
+//     `resolveMailConfigForAccount` inside the handler — the browser can
+//     never influence which host the bridge connects to.
+//   * The client-facing shapes only change one field: `account` is
+//     replaced by `mailSessionToken`. All response shapes are unchanged.
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import type { MailFolder, FolderCount, MailMessage } from "@/lib/mail-types";
-import type { MailSessionAccount } from "@/lib/mail-session";
 
 const FolderSchema = z.enum([
   "inbox",
@@ -14,174 +23,160 @@ const FolderSchema = z.enum([
   "all",
 ]);
 
-const AccountSchema = z.object({
-  id: z.string().min(1),
-  company_id: z.string().min(1),
-  email_address: z.string().email(),
-  display_name: z.string().nullable().optional(),
-  imap_host: z.string().min(1),
-  imap_port: z.number().int().positive(),
-  imap_secure: z.boolean().default(true),
-  smtp_host: z.string().min(1),
-  smtp_port: z.number().int().positive(),
-  smtp_secure: z.boolean().default(true),
+const AuthSchema = z.object({
+  mailSessionToken: z.string().min(20).max(4096),
+  password: z.string().min(1).max(1024),
 });
 
-const AuthPayloadSchema = z.object({
-  account: AccountSchema,
-  password: z.string().min(1),
-});
-
-const FolderPayloadSchema = AuthPayloadSchema.extend({
+const FolderPayloadSchema = AuthSchema.extend({
   folder: FolderSchema,
-  limit: z.number().int().nonnegative().optional().default(50),
-  offset: z.number().int().nonnegative().optional().default(0),
+  limit: z.number().int().nonnegative().max(500).optional().default(50),
+  offset: z.number().int().nonnegative().max(100000).optional().default(0),
+  sort: z.enum(["date-desc", "date-asc", "unread-first", "starred-first"]).optional(),
 });
 
-const MessagePayloadSchema = FolderPayloadSchema.extend({
+const MessagePayloadSchema = AuthSchema.extend({
+  folder: FolderSchema,
   uid: z.number().int().positive(),
 });
 
-const MarkReadPayloadSchema = MessagePayloadSchema.extend({
-  read: z.boolean(),
-});
-
-const StarPayloadSchema = MessagePayloadSchema.extend({
-  starred: z.boolean(),
-});
-
-const MovePayloadSchema = MessagePayloadSchema.extend({
-  toFolder: FolderSchema,
-});
+const MarkReadPayloadSchema = MessagePayloadSchema.extend({ read: z.boolean() });
+const StarPayloadSchema = MessagePayloadSchema.extend({ starred: z.boolean() });
+const MovePayloadSchema = MessagePayloadSchema.extend({ toFolder: FolderSchema });
 
 const AddressSchema = z.object({
-  name: z.string(),
-  email: z.string().email(),
+  name: z.string().max(256),
+  email: z.string().email().max(320),
 });
 
-const SendPayloadSchema = AuthPayloadSchema.extend({
-  to: z.array(AddressSchema).min(1),
-  cc: z.array(AddressSchema).optional().default([]),
-  bcc: z.array(AddressSchema).optional().default([]),
-  subject: z.string().min(1),
-  bodyHtml: z.string().optional(),
-  bodyText: z.string().optional(),
+const SendPayloadSchema = AuthSchema.extend({
+  to: z.array(AddressSchema).min(1).max(100),
+  cc: z.array(AddressSchema).max(100).optional().default([]),
+  bcc: z.array(AddressSchema).max(100).optional().default([]),
+  subject: z.string().min(1).max(998),
+  bodyHtml: z.string().max(2_000_000).optional(),
+  bodyText: z.string().max(2_000_000).optional(),
 });
 
-function bridgeConfigured() {
-  return Boolean(process.env.MAIL_BRIDGE_URL && process.env.MAIL_BRIDGE_SECRET);
-}
+const SearchPayloadSchema = AuthSchema.extend({
+  folder: FolderSchema,
+  query: z.string().min(1).max(1024),
+  includeBody: z.boolean().optional(),
+  limit: z.number().int().positive().max(500).optional(),
+});
 
-async function bridgePost(path: string, payload: unknown) {
-  const url = process.env.MAIL_BRIDGE_URL;
-  const key = process.env.MAIL_BRIDGE_SECRET;
-  if (!url || !key) {
-    return { ok: false, unavailable: true, error: "لم يتم ربط خادم البريد بعد" };
+async function bridgeCall(
+  mailSessionToken: string,
+  path: string,
+  extraBody: Record<string, unknown>,
+  password: string,
+): Promise<
+  | { ok: true; json: any }
+  | { ok: false; error: string; unavailable?: boolean }
+> {
+  const { resolveBridgeAuth } = await import("@/lib/mail-bridge-auth.server");
+  const auth = await resolveBridgeAuth(mailSessionToken);
+  if (!auth.ok) {
+    return { ok: false, error: auth.error, unavailable: auth.code === "BRIDGE_NOT_CONFIGURED" };
   }
-
   try {
-    const res = await fetch(`${url.replace(/\/$/, "")}${path}`, {
+    const res = await fetch(`${auth.bridgeUrl}${path}`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "X-Bridge-Key": key,
+        "X-Bridge-Key": auth.bridgeKey,
       },
-      body: JSON.stringify(payload),
+      body: JSON.stringify({
+        account: auth.bridgeAccount,
+        password,
+        ...extraBody,
+      }),
     });
     const json = await res.json().catch(() => ({ ok: false, error: "Bridge error" }));
     if (!res.ok || !json.ok) {
       return { ok: false, error: json.error || `Bridge error ${res.status}` };
     }
-    return json;
+    return { ok: true, json };
   } catch (err: any) {
     return { ok: false, error: err?.message || "تعذر الاتصال بخادم البريد" };
   }
 }
 
 export const bridgeVerify = createServerFn({ method: "POST" })
-  .inputValidator((input: { account: MailSessionAccount; password: string }) => input)
+  .inputValidator((v: z.input<typeof AuthSchema>) => AuthSchema.parse(v))
   .handler(async ({ data }) => {
-    return bridgePost("/api/verify", data);
+    const r = await bridgeCall(data.mailSessionToken, "/api/verify", {}, data.password);
+    if (!r.ok) return { ok: false, error: r.error };
+    return r.json;
   });
 
 export const bridgeGetFolderCounts = createServerFn({ method: "POST" })
-  .inputValidator((input: { account: MailSessionAccount; password: string }) => input)
+  .inputValidator((v: z.input<typeof AuthSchema>) => AuthSchema.parse(v))
   .handler(async ({ data }) => {
-    const result = await bridgePost("/api/folders", data);
-    if (!result.ok)
-      return { ok: false as const, error: result.error as string, counts: [] as FolderCount[] };
-    return { ok: true as const, counts: (result.counts ?? []) as FolderCount[] };
+    const r = await bridgeCall(data.mailSessionToken, "/api/folders", {}, data.password);
+    if (!r.ok)
+      return { ok: false as const, error: r.error, counts: [] as FolderCount[] };
+    return { ok: true as const, counts: (r.json.counts ?? []) as FolderCount[] };
   });
 
 export type MailSortOption = "date-desc" | "date-asc" | "unread-first" | "starred-first";
 
 export const bridgeGetMessages = createServerFn({ method: "POST" })
-  .inputValidator(
-    (input: {
-      account: MailSessionAccount;
-      password: string;
-      folder: MailFolder;
-      limit?: number;
-      offset?: number;
-      sort?: MailSortOption;
-    }) => input,
-  )
+  .inputValidator((v: z.input<typeof FolderPayloadSchema>) => FolderPayloadSchema.parse(v))
   .handler(async ({ data }) => {
-    const result = await bridgePost("/api/messages", data);
-    if (!result.ok)
-      return { ok: false as const, error: result.error as string, messages: [] as MailMessage[] };
-    return { ok: true as const, messages: (result.messages ?? []) as MailMessage[] };
+    const r = await bridgeCall(
+      data.mailSessionToken,
+      "/api/messages",
+      { folder: data.folder, limit: data.limit, offset: data.offset, sort: data.sort },
+      data.password,
+    );
+    if (!r.ok)
+      return { ok: false as const, error: r.error, messages: [] as MailMessage[] };
+    return { ok: true as const, messages: (r.json.messages ?? []) as MailMessage[] };
   });
 
 export const bridgeGetMessage = createServerFn({ method: "POST" })
-  .inputValidator(
-    (input: { account: MailSessionAccount; password: string; folder: MailFolder; uid: number }) =>
-      input,
-  )
+  .inputValidator((v: z.input<typeof MessagePayloadSchema>) => MessagePayloadSchema.parse(v))
   .handler(async ({ data }) => {
-    const result = await bridgePost("/api/message", data);
-    if (!result.ok)
+    const r = await bridgeCall(
+      data.mailSessionToken,
+      "/api/message",
+      { folder: data.folder, uid: data.uid },
+      data.password,
+    );
+    if (!r.ok)
       return {
         ok: false as const,
-        error: result.error as string,
+        error: r.error,
         message: null as MailMessage | null,
       };
-    return { ok: true as const, message: (result.message as MailMessage | null) ?? null };
+    return { ok: true as const, message: (r.json.message as MailMessage | null) ?? null };
   });
 
 export const bridgeMarkRead = createServerFn({ method: "POST" })
-  .inputValidator(
-    (input: {
-      account: MailSessionAccount;
-      password: string;
-      folder: MailFolder;
-      uid: number;
-      read: boolean;
-    }) => input,
-  )
+  .inputValidator((v: z.input<typeof MarkReadPayloadSchema>) => MarkReadPayloadSchema.parse(v))
   .handler(async ({ data }) => {
-    const result = await bridgePost("/api/mark-read", data);
-    if (!result.ok)
-      throw new Error((result.error as string) || "فشل تحديث حالة القراءة على الخادم");
-    return result;
+    const r = await bridgeCall(
+      data.mailSessionToken,
+      "/api/mark-read",
+      { folder: data.folder, uid: data.uid, read: data.read },
+      data.password,
+    );
+    if (!r.ok) throw new Error(r.error || "فشل تحديث حالة القراءة على الخادم");
+    return r.json;
   });
 
 export const bridgeStar = createServerFn({ method: "POST" })
-  .inputValidator(
-    (input: {
-      account: MailSessionAccount;
-      password: string;
-      folder: MailFolder;
-      uid: number;
-      starred: boolean;
-    }) => input,
-  )
+  .inputValidator((v: z.input<typeof StarPayloadSchema>) => StarPayloadSchema.parse(v))
   .handler(async ({ data }) => {
-    const result = await bridgePost("/api/star", data);
-    // Symmetric with bridgeMarkRead: throw on bridge failure so callers'
-    // optimistic-UI rollback paths (which rely on .catch) fire correctly.
-    if (!result.ok) throw new Error((result.error as string) || "فشل تحديث المميّز على الخادم");
-    return result;
+    const r = await bridgeCall(
+      data.mailSessionToken,
+      "/api/star",
+      { folder: data.folder, uid: data.uid, starred: data.starred },
+      data.password,
+    );
+    if (!r.ok) throw new Error(r.error || "فشل تحديث المميّز على الخادم");
+    return r.json;
   });
 
 /**
@@ -198,19 +193,16 @@ export interface BridgeMoveResult {
 }
 
 export const bridgeMove = createServerFn({ method: "POST" })
-  .inputValidator(
-    (input: {
-      account: MailSessionAccount;
-      password: string;
-      folder: MailFolder;
-      uid: number;
-      toFolder: MailFolder;
-    }) => input,
-  )
+  .inputValidator((v: z.input<typeof MovePayloadSchema>) => MovePayloadSchema.parse(v))
   .handler(async ({ data }): Promise<{ ok: true; move: BridgeMoveResult }> => {
-    const result = await bridgePost("/api/move", data);
-    if (!result.ok) throw new Error((result.error as string) || "فشل نقل الرسالة");
-    const move = (result.move as BridgeMoveResult | undefined) ?? {
+    const r = await bridgeCall(
+      data.mailSessionToken,
+      "/api/move",
+      { folder: data.folder, uid: data.uid, toFolder: data.toFolder },
+      data.password,
+    );
+    if (!r.ok) throw new Error(r.error || "فشل نقل الرسالة");
+    const move = (r.json.move as BridgeMoveResult | undefined) ?? {
       sourceUid: data.uid,
       uidMappingAvailable: false,
     };
@@ -218,56 +210,62 @@ export const bridgeMove = createServerFn({ method: "POST" })
   });
 
 export const bridgeDelete = createServerFn({ method: "POST" })
-  .inputValidator(
-    (input: { account: MailSessionAccount; password: string; folder: MailFolder; uid: number }) =>
-      input,
-  )
+  .inputValidator((v: z.input<typeof MessagePayloadSchema>) => MessagePayloadSchema.parse(v))
   .handler(
     async ({
       data,
     }): Promise<{ ok: true; kind: "moved-to-trash"; move: BridgeMoveResult }> => {
-      const result = await bridgePost("/api/delete", data);
-      if (!result.ok) throw new Error((result.error as string) || "فشل حذف الرسالة");
-      const move = (result.move as BridgeMoveResult | undefined) ?? {
+      const r = await bridgeCall(
+        data.mailSessionToken,
+        "/api/delete",
+        { folder: data.folder, uid: data.uid },
+        data.password,
+      );
+      if (!r.ok) throw new Error(r.error || "فشل حذف الرسالة");
+      const move = (r.json.move as BridgeMoveResult | undefined) ?? {
         sourceUid: data.uid,
         uidMappingAvailable: false,
       };
-      const kind = (result.kind as "moved-to-trash" | undefined) ?? "moved-to-trash";
+      const kind = (r.json.kind as "moved-to-trash" | undefined) ?? "moved-to-trash";
       return { ok: true, kind, move };
     },
   );
 
 export const bridgeSearch = createServerFn({ method: "POST" })
-  .inputValidator(
-    (input: {
-      account: MailSessionAccount;
-      password: string;
-      folder: MailFolder;
-      query: string;
-      includeBody?: boolean;
-      limit?: number;
-    }) => input,
-  )
+  .inputValidator((v: z.input<typeof SearchPayloadSchema>) => SearchPayloadSchema.parse(v))
   .handler(async ({ data }) => {
-    const result = await bridgePost("/api/search", data);
-    if (!result.ok)
-      return { ok: false as const, error: result.error as string, messages: [] as MailMessage[] };
-    return { ok: true as const, messages: (result.messages ?? []) as MailMessage[] };
+    const r = await bridgeCall(
+      data.mailSessionToken,
+      "/api/search",
+      {
+        folder: data.folder,
+        query: data.query,
+        includeBody: data.includeBody,
+        limit: data.limit,
+      },
+      data.password,
+    );
+    if (!r.ok)
+      return { ok: false as const, error: r.error, messages: [] as MailMessage[] };
+    return { ok: true as const, messages: (r.json.messages ?? []) as MailMessage[] };
   });
 
 export const bridgeSend = createServerFn({ method: "POST" })
-  .inputValidator(
-    (input: {
-      account: MailSessionAccount;
-      password: string;
-      to: { name: string; email: string }[];
-      cc?: { name: string; email: string }[];
-      bcc?: { name: string; email: string }[];
-      subject: string;
-      bodyHtml?: string;
-      bodyText?: string;
-    }) => input,
-  )
+  .inputValidator((v: z.input<typeof SendPayloadSchema>) => SendPayloadSchema.parse(v))
   .handler(async ({ data }) => {
-    return bridgePost("/api/send", data);
+    const r = await bridgeCall(
+      data.mailSessionToken,
+      "/api/send",
+      {
+        to: data.to,
+        cc: data.cc,
+        bcc: data.bcc,
+        subject: data.subject,
+        bodyHtml: data.bodyHtml,
+        bodyText: data.bodyText,
+      },
+      data.password,
+    );
+    if (!r.ok) return { ok: false, error: r.error };
+    return r.json;
   });

@@ -1,6 +1,23 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { Virtuoso } from "react-virtuoso";
+import DOMPurify from "dompurify";
+
+// Strict allow-list sanitizer for inbound email HTML. DOMPurify's defaults
+// already strip <script>, on*= handlers, and javascript: URLs; we harden a
+// bit further by forbidding tags that can execute or exfiltrate (iframe,
+// object, embed, form, link, meta, base, style) and by forcing external
+// links to open in a new tab without leaking the referrer.
+function sanitizeEmailHtml(html: string): string {
+  if (!html) return "";
+  const clean = DOMPurify.sanitize(html, {
+    FORBID_TAGS: ["script", "iframe", "object", "embed", "form", "link", "meta", "base", "style"],
+    FORBID_ATTR: ["style", "srcdoc", "formaction"],
+    ALLOW_DATA_ATTR: false,
+  });
+  // Best-effort target hardening — DOMPurify already blocks javascript: URLs.
+  return clean.replace(/<a\s/gi, '<a target="_blank" rel="noopener noreferrer nofollow" ');
+}
 
 import {
   Inbox,
@@ -546,7 +563,7 @@ function useMailData(session: MailSession | null) {
     const gen = countsMutationGen.current;
     try {
       const result = await getCounts({
-        data: { account: session.account, password: session.password },
+        data: { mailSessionToken: session.mailSessionToken ?? "", password: session.password },
       });
       if (countsMutationGen.current !== gen) return;
       const map: Record<MailFolder, { total: number; unread: number; supported: boolean }> = {
@@ -689,7 +706,7 @@ function useMailData(session: MailSession | null) {
       try {
         const result = await getMessages({
           data: {
-            account: session.account,
+            mailSessionToken: session.mailSessionToken ?? "",
             password: session.password,
             folder,
             limit: PAGE,
@@ -815,7 +832,7 @@ function useMailData(session: MailSession | null) {
       const offset = messages.length;
       const result = await getMessages({
         data: {
-          account: session.account,
+          mailSessionToken: session.mailSessionToken ?? "",
           password: session.password,
           folder,
           limit: PAGE,
@@ -1140,7 +1157,7 @@ function MailApp() {
       if (kind === "seen") {
         await markRead({
           data: {
-            account: session.account,
+            mailSessionToken: session.mailSessionToken ?? "",
             password: session.password,
             folder: canonical,
             uid,
@@ -1150,7 +1167,7 @@ function MailApp() {
       } else {
         await star({
           data: {
-            account: session.account,
+            mailSessionToken: session.mailSessionToken ?? "",
             password: session.password,
             folder: canonical,
             uid,
@@ -1196,7 +1213,7 @@ function MailApp() {
         }
         await deleteFn({
           data: {
-            account: session.account,
+            mailSessionToken: session.mailSessionToken ?? "",
             password: session.password,
             folder: params.sourceCanonical,
             uid: params.uid,
@@ -1225,7 +1242,7 @@ function MailApp() {
       }
       await move({
         data: {
-          account: session.account,
+          mailSessionToken: session.mailSessionToken ?? "",
           password: session.password,
           folder: params.sourceCanonical,
           uid: params.uid,
@@ -1277,7 +1294,7 @@ function MailApp() {
       if (!parsed) return Promise.resolve(null);
       const p = getOne({
         data: {
-          account: session.account,
+          mailSessionToken: session.mailSessionToken ?? "",
           password: session.password,
           folder: parsed.folder,
           uid: parsed.uid,
@@ -1370,7 +1387,7 @@ function MailApp() {
       try {
         const res = await searchFn({
           data: {
-            account: session.account,
+            mailSessionToken: session.mailSessionToken ?? "",
             password: session.password,
             folder,
             query: q,
@@ -3070,7 +3087,7 @@ function MessageView({
     const cc =
       message.cc && message.cc.length > 0 ? esc(message.cc.map((c) => c.email).join(", ")) : "";
     const date = esc(new Date(message.date).toLocaleString("ar"));
-    const body = message.body || esc(message.preview);
+    const body = message.body ? sanitizeEmailHtml(message.body) : esc(message.preview);
     win.document
       .write(`<!doctype html><html dir="rtl" lang="ar"><head><meta charset="utf-8"><title>${subject}</title>
 <style>
@@ -3348,7 +3365,9 @@ function MessageView({
 
             <article
               className="prose prose-sm mt-6 max-w-none break-words text-foreground prose-a:text-brand-accent prose-img:rounded-lg"
-              dangerouslySetInnerHTML={{ __html: message.body || message.preview }}
+              dangerouslySetInnerHTML={{
+                __html: sanitizeEmailHtml(message.body || message.preview || ""),
+              }}
             />
 
             {message.attachments && message.attachments.length > 0 && (
@@ -3489,7 +3508,7 @@ function Composer({
           .map((email) => ({ name: "", email }));
 
       const payload = {
-        account: session.account,
+        mailSessionToken: session.mailSessionToken ?? "",
         password: session.password,
         to: parseAddresses(to),
         cc: parseAddresses(cc),
@@ -3748,7 +3767,7 @@ function AttachmentCard({
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        account: session.account,
+        mailSessionToken: session.mailSessionToken ?? "",
         password: session.password,
         folder: parsed.folder,
         uid: parsed.uid,
