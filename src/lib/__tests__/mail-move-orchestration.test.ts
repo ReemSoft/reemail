@@ -15,7 +15,7 @@
 //     (starred → INBOX) and NEVER rolls the UI back on failure.
 //   * IMAP success + local write-through/sync failure → `ok:true`,
 //     `destinationReady:false`, `index:"partial"` — no false Rollback.
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect } from "vitest";
 import {
   moveMessageOrchestration,
   MAX_TARGETED_ROUNDS,
@@ -23,10 +23,12 @@ import {
   type BridgeMoveOutcome,
   type WriteThroughOutcome,
   type SyncOutcome,
+  type SourceReconcileOutcome,
   type SourceInfo,
   type DestInfo,
 } from "@/lib/mail-move-orchestration";
 import type { MessageFingerprint } from "@/lib/mail-move-writer.server";
+
 
 const FP: MessageFingerprint = {
   messageId: "<abc@x>",
