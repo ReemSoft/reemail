@@ -620,7 +620,13 @@ function useMailData(session: MailSession | null, onSessionExpired?: () => void)
         archive: { total: 0, unread: 0, supported: false },
         all: { total: 0, unread: 0, supported: false },
       };
-      if (!result.ok) throw new Error(result.error);
+      if (!result.ok) {
+        if (isInvalidTokenCode((result as { code?: string }).code)) {
+          notifySessionExpired();
+          return;
+        }
+        throw new Error(result.error);
+      }
       const paths: Partial<Record<MailFolder, string>> = {};
       result.counts.forEach((c) => {
         map[c.folder] = { total: c.total, unread: c.unread, supported: c.supported !== false };
@@ -639,17 +645,11 @@ function useMailData(session: MailSession | null, onSessionExpired?: () => void)
       setBridgeError(null);
     } catch (err: any) {
       if (countsMutationGen.current !== gen) return;
-      setBridgeError(err?.message || "فشل الاتصال بخادم البريد");
-      setCounts(
-        Object.fromEntries(
-          getMockFolderCounts().map((c) => [
-            c.folder,
-            { total: c.total, unread: c.unread, supported: true },
-          ]),
-        ) as Record<MailFolder, { total: number; unread: number; supported: boolean }>,
-      );
+      // Preserve previous counters instead of overwriting with fake data —
+      // a transient bridge failure should never destroy legitimate state.
+      setBridgeError(err?.message || "تعذّر الاتصال بخادم البريد. سيتم إعادة المحاولة تلقائياً.");
     }
-  }, [session, getCounts, isStarCountHot]);
+  }, [session, getCounts, isStarCountHot, notifySessionExpired]);
 
   /**
    * Manual-Refresh counts path: prefer Local Mail Index (single Supabase
