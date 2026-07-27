@@ -512,6 +512,9 @@ function useMailData(session: MailSession | null) {
   // Used to (a) purge stale final-origin entries on IMAP UIDVALIDITY change
   // and (b) look up the origin for a Restore action by physical trash id.
   const trashUidValidityRef = useRef<number | null>(null);
+  // Same for Archive — enables restore-from-archive alongside restore-from-trash.
+  const archiveUidValidityRef = useRef<number | null>(null);
+
   // Batch A / Fix #1: Monotonic Count Generation Guard.
   // Every optimistic mutation (move, delete, restore, permanent delete, star,
   // read/unread, bulk) bumps `countsMutationGen`. Every counts loader
