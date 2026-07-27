@@ -32,9 +32,10 @@ export const credentialRoundTripCheck = createServerFn({ method: "POST" })
     );
     const result = await serverSideVerifyWithStoredCredentials(
       supabaseAdmin,
-      claims.accountId,
-      claims.companyId,
+      claims.sub,
+      claims.cid,
     );
+
     // Result already excludes plaintext by construction.
     return result;
   });
