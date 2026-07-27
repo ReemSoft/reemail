@@ -113,7 +113,9 @@ export interface ImapGates {
 export interface ImapGateStats {
   enabled: boolean;
   activeGlobal: number;
-  activeByHost: Record<string, number>;
+  /** Number of distinct hosts with in-flight work. Host names are never
+   * exposed here — this is a bounded count for capacity monitoring only. */
+  activeHostCount: number;
   waitingInteractive: number;
   waitingBackground: number;
   admitted: number;
@@ -122,6 +124,7 @@ export interface ImapGateStats {
   cancelled: number;
   waitMsP50: number;
   waitMsP95: number;
+
   limits: {
     globalMax: number;
     perHostMax: number;
