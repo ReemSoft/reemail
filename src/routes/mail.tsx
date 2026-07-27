@@ -47,6 +47,7 @@ import {
   ArrowLeft,
   RefreshCw,
   MoreVertical,
+  MoreHorizontal,
   LogOut,
   Mail as MailIcon,
   Loader2,
@@ -112,6 +113,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useServerFn } from "@tanstack/react-start";
 import { toast } from "sonner";
 import { useConfirm } from "@/components/ui/confirm-provider";
@@ -3867,6 +3869,48 @@ function ToolbarButton({
   );
 }
 
+function ToolbarSelect({
+  title,
+  ariaLabel,
+  placeholder,
+  options,
+  onChange,
+  className,
+}: {
+  title: string;
+  ariaLabel: string;
+  placeholder: string;
+  options: { value: string; label: string }[];
+  onChange: (value: string) => void;
+  className?: string;
+}) {
+  return (
+    <div className={`relative inline-flex h-7 items-center ${className ?? ""}`}>
+      <select
+        title={title}
+        aria-label={ariaLabel}
+        defaultValue=""
+        onChange={(e) => {
+          const v = e.target.value;
+          e.target.value = "";
+          if (v) onChange(v);
+        }}
+        className="peer h-7 w-full cursor-pointer appearance-none rounded-md border border-input bg-background ps-2 pe-6 text-xs text-foreground outline-none hover:bg-muted focus:ring-2 focus:ring-ring/40"
+      >
+        <option value="" disabled>
+          {placeholder}
+        </option>
+        {options.map((o) => (
+          <option key={o.value} value={o.value}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+      <ChevronDown className="pointer-events-none absolute end-1.5 h-3 w-3 text-muted-foreground" />
+    </div>
+  );
+}
+
 function Composer({
   session,
   initial,
@@ -4364,71 +4408,59 @@ function Composer({
               {!plainMode && (
                 <div className="flex flex-wrap items-center gap-0.5 border-b border-border/70 bg-muted/30 px-2 py-1.5">
                   {/* Font family */}
-                  <select
+                  <ToolbarSelect
                     title="الخط"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onChange={(e) => {
-                      const v = e.target.value;
-                      e.target.value = "";
-                      applyFontFamily(v);
-                    }}
-                    defaultValue=""
-                    className="h-7 rounded-md border border-input bg-background px-1.5 text-xs text-foreground outline-none hover:bg-muted"
-                  >
-                    <option value="" disabled>الخط</option>
-                    <option value="IBM Plex Sans Arabic, sans-serif">IBM Plex Sans Arabic</option>
-                    <option value="Cairo, sans-serif">Cairo</option>
-                    <option value="Tajawal, sans-serif">Tajawal</option>
-                    <option value="Amiri, serif">Amiri</option>
-                    <option value="Arial, sans-serif">Arial</option>
-                    <option value="Georgia, serif">Georgia</option>
-                    <option value="Times New Roman, serif">Times New Roman</option>
-                    <option value="Courier New, monospace">Courier New</option>
-                    <option value="Tahoma, sans-serif">Tahoma</option>
-                    <option value="Verdana, sans-serif">Verdana</option>
-                  </select>
+                    ariaLabel="الخط"
+                    placeholder="الخط"
+                    onChange={applyFontFamily}
+                    className="min-w-[7.5rem]"
+                    options={[
+                      { value: "IBM Plex Sans Arabic, sans-serif", label: "IBM Plex Sans Arabic" },
+                      { value: "Cairo, sans-serif", label: "Cairo" },
+                      { value: "Tajawal, sans-serif", label: "Tajawal" },
+                      { value: "Amiri, serif", label: "Amiri" },
+                      { value: "Arial, sans-serif", label: "Arial" },
+                      { value: "Georgia, serif", label: "Georgia" },
+                      { value: "Times New Roman, serif", label: "Times New Roman" },
+                      { value: "Courier New, monospace", label: "Courier New" },
+                      { value: "Tahoma, sans-serif", label: "Tahoma" },
+                      { value: "Verdana, sans-serif", label: "Verdana" },
+                    ]}
+                  />
                   {/* Font size */}
-                  <select
+                  <ToolbarSelect
                     title="حجم الخط"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onChange={(e) => {
-                      const v = e.target.value;
-                      e.target.value = "";
-                      applyFontSize(v);
-                    }}
-                    defaultValue=""
-                    className="h-7 rounded-md border border-input bg-background px-1.5 text-xs text-foreground outline-none hover:bg-muted"
-                  >
-                    <option value="" disabled>الحجم</option>
-                    <option value="10px">10</option>
-                    <option value="12px">12</option>
-                    <option value="14px">14</option>
-                    <option value="16px">16</option>
-                    <option value="18px">18</option>
-                    <option value="20px">20</option>
-                    <option value="24px">24</option>
-                    <option value="28px">28</option>
-                    <option value="32px">32</option>
-                  </select>
-                  {/* Heading */}
-                  <select
+                    ariaLabel="حجم الخط"
+                    placeholder="الحجم"
+                    onChange={applyFontSize}
+                    className="min-w-[4.5rem]"
+                    options={[
+                      { value: "10px", label: "10" },
+                      { value: "12px", label: "12" },
+                      { value: "14px", label: "14" },
+                      { value: "16px", label: "16" },
+                      { value: "18px", label: "18" },
+                      { value: "20px", label: "20" },
+                      { value: "24px", label: "24" },
+                      { value: "28px", label: "28" },
+                      { value: "32px", label: "32" },
+                    ]}
+                  />
+                  {/* Paragraph */}
+                  <ToolbarSelect
                     title="نمط الفقرة"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onChange={(e) => {
-                      const v = e.target.value;
-                      e.target.value = "";
-                      exec("formatBlock", v);
-                    }}
-                    defaultValue=""
-                    className="h-7 rounded-md border border-input bg-background px-1.5 text-xs text-foreground outline-none hover:bg-muted"
-                  >
-                    <option value="" disabled>الفقرة</option>
-                    <option value="p">نص عادي</option>
-                    <option value="h1">عنوان 1</option>
-                    <option value="h2">عنوان 2</option>
-                    <option value="h3">عنوان 3</option>
-                    <option value="pre">كود</option>
-                  </select>
+                    ariaLabel="نمط الفقرة"
+                    placeholder="الفقرة"
+                    onChange={(v) => exec("formatBlock", v)}
+                    className="min-w-[6rem]"
+                    options={[
+                      { value: "p", label: "نص عادي" },
+                      { value: "h1", label: "عنوان 1" },
+                      { value: "h2", label: "عنوان 2" },
+                      { value: "h3", label: "عنوان 3" },
+                      { value: "pre", label: "كود" },
+                    ]}
+                  />
                   <span className="mx-1 h-4 w-px bg-border" />
                   <ToolbarButton title="عريض (Ctrl+B)" onMouseDown={() => exec("bold")}>
                     <Bold className="h-3.5 w-3.5" />
@@ -4438,15 +4470,6 @@ function Composer({
                   </ToolbarButton>
                   <ToolbarButton title="تسطير (Ctrl+U)" onMouseDown={() => exec("underline")}>
                     <Underline className="h-3.5 w-3.5" />
-                  </ToolbarButton>
-                  <ToolbarButton title="يتوسطه خط" onMouseDown={() => exec("strikeThrough")}>
-                    <Strikethrough className="h-3.5 w-3.5" />
-                  </ToolbarButton>
-                  <ToolbarButton title="مرتفع" onMouseDown={() => exec("superscript")}>
-                    <Superscript className="h-3.5 w-3.5" />
-                  </ToolbarButton>
-                  <ToolbarButton title="منخفض" onMouseDown={() => exec("subscript")}>
-                    <Subscript className="h-3.5 w-3.5" />
                   </ToolbarButton>
                   <span className="mx-1 h-4 w-px bg-border" />
                   {/* Colors */}
@@ -4485,53 +4508,79 @@ function Composer({
                   <ToolbarButton title="محاذاة يسار" onMouseDown={() => exec("justifyLeft")}>
                     <AlignLeft className="h-3.5 w-3.5" />
                   </ToolbarButton>
-                  <ToolbarButton title="ضبط" onMouseDown={() => exec("justifyFull")}>
-                    <AlignJustify className="h-3.5 w-3.5" />
-                  </ToolbarButton>
                   <span className="mx-1 h-4 w-px bg-border" />
-                  {/* Lists & indent */}
+                  {/* Lists */}
                   <ToolbarButton title="قائمة نقطية" onMouseDown={() => exec("insertUnorderedList")}>
                     <List className="h-3.5 w-3.5" />
                   </ToolbarButton>
                   <ToolbarButton title="قائمة مرقمة" onMouseDown={() => exec("insertOrderedList")}>
                     <ListOrdered className="h-3.5 w-3.5" />
                   </ToolbarButton>
-                  <ToolbarButton title="زيادة المسافة البادئة" onMouseDown={() => exec("indent")}>
-                    <Indent className="h-3.5 w-3.5" />
-                  </ToolbarButton>
-                  <ToolbarButton title="تقليل المسافة البادئة" onMouseDown={() => exec("outdent")}>
-                    <Outdent className="h-3.5 w-3.5" />
-                  </ToolbarButton>
-                  <ToolbarButton title="اقتباس" onMouseDown={() => exec("formatBlock", "blockquote")}>
-                    <Quote className="h-3.5 w-3.5" />
-                  </ToolbarButton>
                   <span className="mx-1 h-4 w-px bg-border" />
-                  {/* Insert */}
+                  {/* Link */}
                   <ToolbarButton title="إدراج رابط" onMouseDown={promptLink}>
                     <Link2 className="h-3.5 w-3.5" />
                   </ToolbarButton>
-                  <ToolbarButton title="إدراج صورة" onMouseDown={promptImage}>
-                    <ImageIcon className="h-3.5 w-3.5" />
-                  </ToolbarButton>
-                  <ToolbarButton title="خط أفقي" onMouseDown={insertHR}>
-                    <Minus className="h-3.5 w-3.5" />
-                  </ToolbarButton>
                   <span className="mx-1 h-4 w-px bg-border" />
-                  {/* Direction */}
-                  <ToolbarButton title="تبديل اتجاه النص RTL/LTR" onMouseDown={toggleEditorDirection}>
-                    <ArrowLeftRight className="h-3.5 w-3.5" />
-                  </ToolbarButton>
-                  <span className="mx-1 h-4 w-px bg-border" />
-                  {/* Undo / Redo / Clear */}
+                  {/* Undo / Redo */}
                   <ToolbarButton title="تراجع (Ctrl+Z)" onMouseDown={() => exec("undo")}>
                     <Undo2 className="h-3.5 w-3.5" />
                   </ToolbarButton>
                   <ToolbarButton title="إعادة (Ctrl+Y)" onMouseDown={() => exec("redo")}>
                     <Redo2 className="h-3.5 w-3.5" />
                   </ToolbarButton>
-                  <ToolbarButton title="إزالة التنسيق" onMouseDown={() => exec("removeFormat")}>
-                    <Eraser className="h-3.5 w-3.5" />
-                  </ToolbarButton>
+                  <span className="mx-1 h-4 w-px bg-border" />
+                  {/* More options */}
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <button
+                        type="button"
+                        title="المزيد من الخيارات"
+                        onMouseDown={(e) => e.preventDefault()}
+                        className="inline-flex h-7 items-center gap-1 rounded-md px-2 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
+                      >
+                        <MoreHorizontal className="h-3.5 w-3.5" />
+                        <span>المزيد</span>
+                      </button>
+                    </PopoverTrigger>
+                    <PopoverContent align="end" className="w-auto p-2">
+                      <div className="grid grid-cols-6 gap-0.5">
+                        <ToolbarButton title="يتوسطه خط" onMouseDown={() => exec("strikeThrough")}>
+                          <Strikethrough className="h-3.5 w-3.5" />
+                        </ToolbarButton>
+                        <ToolbarButton title="مرتفع" onMouseDown={() => exec("superscript")}>
+                          <Superscript className="h-3.5 w-3.5" />
+                        </ToolbarButton>
+                        <ToolbarButton title="منخفض" onMouseDown={() => exec("subscript")}>
+                          <Subscript className="h-3.5 w-3.5" />
+                        </ToolbarButton>
+                        <ToolbarButton title="ضبط" onMouseDown={() => exec("justifyFull")}>
+                          <AlignJustify className="h-3.5 w-3.5" />
+                        </ToolbarButton>
+                        <ToolbarButton title="زيادة المسافة البادئة" onMouseDown={() => exec("indent")}>
+                          <Indent className="h-3.5 w-3.5" />
+                        </ToolbarButton>
+                        <ToolbarButton title="تقليل المسافة البادئة" onMouseDown={() => exec("outdent")}>
+                          <Outdent className="h-3.5 w-3.5" />
+                        </ToolbarButton>
+                        <ToolbarButton title="اقتباس" onMouseDown={() => exec("formatBlock", "blockquote")}>
+                          <Quote className="h-3.5 w-3.5" />
+                        </ToolbarButton>
+                        <ToolbarButton title="إدراج صورة" onMouseDown={promptImage}>
+                          <ImageIcon className="h-3.5 w-3.5" />
+                        </ToolbarButton>
+                        <ToolbarButton title="خط أفقي" onMouseDown={insertHR}>
+                          <Minus className="h-3.5 w-3.5" />
+                        </ToolbarButton>
+                        <ToolbarButton title="تبديل اتجاه النص RTL/LTR" onMouseDown={toggleEditorDirection}>
+                          <ArrowLeftRight className="h-3.5 w-3.5" />
+                        </ToolbarButton>
+                        <ToolbarButton title="إزالة التنسيق" onMouseDown={() => exec("removeFormat")}>
+                          <Eraser className="h-3.5 w-3.5" />
+                        </ToolbarButton>
+                      </div>
+                    </PopoverContent>
+                  </Popover>
                   {extensions.length > 0 && <span className="mx-1 h-4 w-px bg-border" />}
                   {extensions.map((ext) => (
                     <button
@@ -4552,6 +4601,7 @@ function Composer({
                       <span>{ext.label}</span>
                     </button>
                   ))}
+
                   <div className="mx-auto" />
                   <button
                     type="button"
