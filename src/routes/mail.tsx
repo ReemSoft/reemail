@@ -1462,25 +1462,13 @@ function MailApp() {
   // concurrent mutation that already re-added the row, and never rebuild the
   // full list from a stale snapshot.
   function reviveMessageAt(original: MailMessage, originalIndex: number) {
-    setMessages((prev) => {
-      if (prev.some((m) => m.id === original.id)) return prev;
-      const next = prev.slice();
-      const insertAt = Math.min(Math.max(originalIndex, 0), next.length);
-      next.splice(insertAt, 0, original);
-      return next;
-    });
+    setMessages((prev) => reviveAt(prev, original, originalIndex));
   }
 
   function reviveDeepResultAt(original: MailMessage, originalIndex: number) {
-    setDeepResults((prev) => {
-      if (!prev) return prev;
-      if (prev.some((m) => m.id === original.id)) return prev;
-      const next = prev.slice();
-      const insertAt = Math.min(Math.max(originalIndex, 0), next.length);
-      next.splice(insertAt, 0, original);
-      return next;
-    });
+    setDeepResults((prev) => (prev ? reviveAt(prev, original, originalIndex) : prev));
   }
+
 
   async function handleMove(id: string, toFolder: MailFolder) {
     const parsed = parseMessageId(id);
