@@ -189,6 +189,26 @@
     cursor: not-allowed;
   }
 
+  /* Remove default focus outline/ring on buttons, selects and role=button.
+     Keep it on real form inputs (input, textarea, [contenteditable]) for a11y. */
+  button:focus,
+  button:focus-visible,
+  [role="button"]:focus,
+  [role="button"]:focus-visible,
+  [role="tab"]:focus,
+  [role="tab"]:focus-visible,
+  [role="menuitem"]:focus,
+  [role="menuitem"]:focus-visible,
+  select:focus,
+  select:focus-visible,
+  summary:focus,
+  summary:focus-visible {
+    outline: none !important;
+    box-shadow: none !important;
+    --tw-ring-shadow: 0 0 #0000 !important;
+    --tw-ring-offset-shadow: 0 0 #0000 !important;
+  }
+
   html[dir="rtl"] body {
     font-family: var(--font-arabic);
   }
