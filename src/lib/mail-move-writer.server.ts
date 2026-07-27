@@ -264,12 +264,15 @@ export async function tombstoneSourceRow(
 
 /**
  * Copy the source row's envelope into a fresh destination row at the given
- * (folderId, uidvalidity, uid). Used only when the Bridge returned a
- * UIDPLUS COPYUID mapping — the caller already validated uidvalidity.
+ * (folderId, uidvalidity, uid).
  *
- * Uses UPSERT with onConflict on the (account, folder, uidvalidity, uid)
- * unique constraint so a racing incremental sync cannot cause a duplicate
- * or a "row already exists" hard error.
+ * BLOCKER_7 (upsert race safety): uses `ignoreDuplicates: true` + `.select()`
+ * so the DB — not us — decides whether an insert actually happened. If a
+ * racing incremental sync already inserted this (folder, uidvalidity, uid)
+ * row, its NEWER data is preserved (we do NOT overwrite with the source
+ * envelope), and we return `{ inserted: false }`. Callers use that flag to
+ * skip the destination counter increment (Sync's refreshFolderCounts owns
+ * the count in that case) and avoid double-counting.
  */
 export async function insertDestinationRowFromSource(
   supabase: SupabaseClient,
@@ -320,34 +323,51 @@ export async function insertDestinationRowFromSource(
     keywords: src.data.keywords,
     deleted_at: null as string | null,
   };
-  const up = await supabase.from("mail_messages").upsert(row as never, {
-    onConflict: "account_id,folder_id,uidvalidity,uid",
-    ignoreDuplicates: false,
-  });
+  // ignoreDuplicates=true: if the (account, folder, uidvalidity, uid) row
+  // already exists (racing Sync won), Postgres does DO NOTHING; the SELECT
+  // returns 0 rows. Otherwise the SELECT returns the freshly-inserted row.
+  const up = await supabase
+    .from("mail_messages")
+    .upsert(row as never, {
+      onConflict: "account_id,folder_id,uidvalidity,uid",
+      ignoreDuplicates: true,
+    })
+    .select("id");
   if (up.error) throw up.error;
-  return { inserted: true, wasUnread: !src.data.seen };
+  const inserted = Array.isArray(up.data) && up.data.length > 0;
+  return { inserted, wasUnread: !src.data.seen };
 }
 
-/** Apply a total/unread delta to a folder row atomically-in-application. */
+/**
+ * Apply a total/unread delta to a folder row via the approved atomic RPC
+ * `public.adjust_mail_folder_counts_atomic`. BLOCKER_4: this is the ONLY
+ * path allowed to mutate folder counts on the Move / Delete / Restore
+ * write-through hot paths — a Read-Modify-Write is unsafe under
+ * concurrent bulk operations.
+ *
+ * `accountId` and `companyId` are REQUIRED so the RPC can enforce identity
+ * (guards against a folderId collision across companies / accounts).
+ */
 export async function adjustFolderCountsDelta(
   supabase: SupabaseClient,
-  params: { folderId: string; totalDelta: number; unreadDelta: number },
+  params: {
+    folderId: string;
+    accountId: string;
+    companyId: string;
+    totalDelta: number;
+    unreadDelta: number;
+  },
 ): Promise<void> {
-  const sel = await supabase
-    .from("mail_folders")
-    .select("total, unread")
-    .eq("id", params.folderId)
-    .maybeSingle();
-  if (sel.error) throw sel.error;
-  if (!sel.data) return;
-  const total = Math.max(0, (sel.data.total ?? 0) + params.totalDelta);
-  const unread = Math.max(0, (sel.data.unread ?? 0) + params.unreadDelta);
-  const up = await supabase
-    .from("mail_folders")
-    .update({ total, unread })
-    .eq("id", params.folderId);
-  if (up.error) throw up.error;
+  const rpc = await supabase.rpc("adjust_mail_folder_counts_atomic", {
+    p_folder_id: params.folderId,
+    p_account_id: params.accountId,
+    p_company_id: params.companyId,
+    p_total_delta: params.totalDelta,
+    p_unread_delta: params.unreadDelta,
+  });
+  if (rpc.error) throw rpc.error;
 }
+
 
 /**
  * Bump the destination folder's `uidnext` past the newly-arrived UID so a
@@ -440,6 +460,8 @@ export async function applyMoveWriteThrough(
   if (tomb.changed) {
     await adjustFolderCountsDelta(supabase, {
       folderId: src.id,
+      accountId: input.accountId,
+      companyId: input.companyId,
       totalDelta: -1,
       unreadDelta: tomb.wasUnread ? -1 : 0,
     });
@@ -469,9 +491,9 @@ export async function applyMoveWriteThrough(
     if (!dst && input.destinationPath) {
       dst = await resolveFolderByPath(supabase, input.accountId, input.destinationPath);
     }
-    // Only insert-and-count-up the destination when this caller actually
-    // won the source-tombstone race. If a sibling won, they handled the
-    // destination side too — inserting again would double-count.
+    // Only attempt destination insert when this caller actually won the
+    // source-tombstone race. If a sibling won, they handled the destination
+    // side too — inserting again would double-count.
     if (dst && dst.uidvalidity != null && String(dst.uidvalidity) === destUvStr && tomb.changed) {
       const ins = await insertDestinationRowFromSource(supabase, {
         accountId: input.accountId,
@@ -483,16 +505,24 @@ export async function applyMoveWriteThrough(
         destinationUidvalidity: Number(destUvStr),
         destinationUid: destUidNum,
       });
-      if (ins) {
+      // BLOCKER_7: `inserted` is proven from the DB (upsert.select() length),
+      // not assumed from a non-null return value. If a racing Sync already
+      // inserted the row, `inserted === false` — we skip the counter delta
+      // so refreshFolderCounts (owned by Sync) stays authoritative and we
+      // never double-count.
+      if (ins && ins.inserted) {
         destinationInserted = true;
         await adjustFolderCountsDelta(supabase, {
           folderId: dst.id,
+          accountId: input.accountId,
+          companyId: input.companyId,
           totalDelta: 1,
           unreadDelta: ins.wasUnread ? 1 : 0,
         });
         await bumpFolderUidnext(supabase, {
           folderId: dst.id,
           uidnext: destUidNum + 1,
+
         });
       }
     }

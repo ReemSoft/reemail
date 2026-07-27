@@ -118,6 +118,12 @@ import {
   type PendingMoveOperation,
   type PendingMovesMap,
 } from "@/lib/mail-pending-moves";
+import {
+  rememberOrigin as trackerRememberOrigin,
+  getOrigin as trackerGetOrigin,
+  forgetOrigin as trackerForgetOrigin,
+  clearAccountOrigins,
+} from "@/lib/mail-origin-tracker";
 
 export const Route = createFileRoute("/mail")({
   ssr: false,
@@ -145,44 +151,32 @@ function parseMessageId(id: string): { folder: MailFolder; uid: number } | null 
   return { folder: folder as MailFolder, uid };
 }
 
-// ---- Trash origin tracking (for restore-to-original-folder) ----
-const TRASH_ORIGIN_KEY = "mailmaestro:trash-origin";
-type OriginMap = Record<string, MailFolder>;
-function loadOriginMap(): OriginMap {
-  if (typeof localStorage === "undefined") return {};
-  try {
-    return JSON.parse(localStorage.getItem(TRASH_ORIGIN_KEY) || "{}") as OriginMap;
-  } catch {
-    return {};
+// ---- Trash origin tracking (moved to `mail-origin-tracker`) ----
+// The legacy unscoped helpers were replaced by account-scoped calls at
+// each call site (BLOCKER_6). Two accounts on the same device no longer
+// collide on a shared threadId.
+function safeOriginStorage() {
+  if (typeof localStorage === "undefined") {
+    // SSR / test fallback: a no-op storage keeps the code path defined
+    // without touching a nonexistent global.
+    return {
+      getItem: () => null,
+      setItem: () => {},
+      removeItem: () => {},
+    };
   }
+  return localStorage;
 }
-function saveOriginMap(map: OriginMap) {
-  if (typeof localStorage === "undefined") return;
-  try {
-    localStorage.setItem(TRASH_ORIGIN_KEY, JSON.stringify(map));
-  } catch {
-    /* ignore quota errors */
-  }
+function rememberOrigin(accountId: string | null, threadId: string | undefined, folder: MailFolder) {
+  trackerRememberOrigin(safeOriginStorage(), accountId, threadId, folder);
 }
-function rememberOrigin(threadId: string | undefined, folder: MailFolder) {
-  if (!threadId || folder === "trash") return;
-  const m = loadOriginMap();
-  m[threadId] = folder;
-  saveOriginMap(m);
+function getOrigin(accountId: string | null, threadId: string | undefined): MailFolder {
+  return trackerGetOrigin(safeOriginStorage(), accountId, threadId);
 }
-function getOrigin(threadId: string | undefined): MailFolder {
-  if (!threadId) return "inbox";
-  const m = loadOriginMap();
-  return m[threadId] || "inbox";
+function forgetOrigin(accountId: string | null, threadId: string | undefined) {
+  trackerForgetOrigin(safeOriginStorage(), accountId, threadId);
 }
-function forgetOrigin(threadId: string | undefined) {
-  if (!threadId) return;
-  const m = loadOriginMap();
-  if (threadId in m) {
-    delete m[threadId];
-    saveOriginMap(m);
-  }
-}
+
 
 type ComposeInitial = {
   to?: string;
@@ -855,6 +849,9 @@ function MailApp() {
     applyPending,
     applyPendingOne,
   } = useMailData(session || null);
+  // BLOCKER_6 — account identity for origin-tracker calls in this scope.
+  const currentAccountId = session?.account.id ?? null;
+
 
   // Serialize Refresh with a single-flight guard (ref, not React state) so a
   // double-click that fires before the next render can't spawn a second
@@ -1410,8 +1407,8 @@ function MailApp() {
           uid: parsed.uid,
           toFolder,
         });
-        if (toFolder === "trash") rememberOrigin(msg?.threadId, parsed.folder);
-        else forgetOrigin(msg?.threadId);
+        if (toFolder === "trash") rememberOrigin(currentAccountId, msg?.threadId, parsed.folder);
+        else forgetOrigin(currentAccountId, msg?.threadId);
         confirmHideRow(id);
         confirmPendingMove(id);
         toast.success("تم نقل الرسالة");
@@ -1466,14 +1463,14 @@ function MailApp() {
       try {
         if (isTrash) {
           await mutateMoveOrDelete({ sourceCanonical: parsed.folder, uid: parsed.uid });
-          forgetOrigin(msg?.threadId);
+          forgetOrigin(currentAccountId, msg?.threadId);
         } else {
           await mutateMoveOrDelete({
             sourceCanonical: parsed.folder,
             uid: parsed.uid,
             toFolder: "trash",
           });
-          rememberOrigin(msg?.threadId, parsed.folder);
+          rememberOrigin(currentAccountId, msg?.threadId, parsed.folder);
         }
         confirmHideRow(id);
         confirmPendingMove(id);
@@ -1501,7 +1498,7 @@ function MailApp() {
     return runMoveFlight(id, async () => {
       const msg = messages.find((m) => m.id === id);
       const wasUnread = msg ? !msg.read : false;
-      const target = getOrigin(msg?.threadId);
+      const target = getOrigin(currentAccountId, msg?.threadId);
       const snapshot = messages;
       const prevSelectedId = selectedId;
       const prevSelected = selectedMessage;
@@ -1518,7 +1515,7 @@ function MailApp() {
           uid: parsed.uid,
           toFolder: target,
         });
-        forgetOrigin(msg?.threadId);
+        forgetOrigin(currentAccountId, msg?.threadId);
         confirmHideRow(id);
         confirmPendingMove(id);
         const label = FOLDER_META[target]?.label || target;
@@ -1538,22 +1535,42 @@ function MailApp() {
   async function handleMarkUnread(id: string) {
     const parsed = parseMessageId(id);
     if (!parsed || !session) return;
+    // BLOCKER_5 — complete rollback for handleMarkUnread on failure so a
+    // failed IMAP flag write can't leave the UI (list row, counter, cache,
+    // selection) permanently pretending the message is unread.
+    const msg = messages.find((m) => m.id === id);
+    if (!msg || !msg.read) return; // no-op if already unread
+    const prevSelectedId = selectedId;
+    const prevSelected = selectedMessage;
+    const prevCache = messageCache.current.get(id);
     setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, read: false } : m)));
     setCounts((prev) => {
       const cur = prev[parsed.folder];
       if (!cur) return prev;
       return { ...prev, [parsed.folder]: { ...cur, unread: cur.unread + 1 } };
     });
-    const c = messageCache.current.get(id);
-    if (c) messageCache.current.set(id, { ...c, read: false });
+    if (prevCache) messageCache.current.set(id, { ...prevCache, read: false });
     setSelectedId(null);
     setSelectedMessage(null);
     try {
       await mutateFlag(parsed.folder, parsed.uid, "seen", false);
     } catch (err: any) {
+      // Full revert — row, counter, cache, selection.
+      setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, read: true } : m)));
+      setCounts((prev) => {
+        const cur = prev[parsed.folder];
+        if (!cur) return prev;
+        return { ...prev, [parsed.folder]: { ...cur, unread: Math.max(0, cur.unread - 1) } };
+      });
+      if (prevCache) messageCache.current.set(id, prevCache);
+      if (prevSelectedId === id) {
+        setSelectedId(prevSelectedId);
+        setSelectedMessage(prevSelected);
+      }
       toast.error(err?.message || "فشل التعليم كغير مقروءة");
     }
   }
+
 
   function toggleSelect(id: string) {
     setSelection((prev) => {
@@ -1651,8 +1668,8 @@ function MailApp() {
           uid: parsed.uid,
           toFolder,
         });
-        if (toFolder === "trash") rememberOrigin(meta.get(id)?.threadId, parsed.folder);
-        else forgetOrigin(meta.get(id)?.threadId);
+        if (toFolder === "trash") rememberOrigin(currentAccountId, meta.get(id)?.threadId, parsed.folder);
+        else forgetOrigin(currentAccountId, meta.get(id)?.threadId);
         confirmHideRow(id);
         confirmPendingMove(id);
       } catch (err) {
@@ -1745,14 +1762,14 @@ function MailApp() {
       try {
         if (isTrash) {
           await mutateMoveOrDelete({ sourceCanonical: parsed.folder, uid: parsed.uid });
-          forgetOrigin(meta.get(id)?.threadId);
+          forgetOrigin(currentAccountId, meta.get(id)?.threadId);
         } else {
           await mutateMoveOrDelete({
             sourceCanonical: parsed.folder,
             uid: parsed.uid,
             toFolder: "trash",
           });
-          rememberOrigin(meta.get(id)?.threadId, parsed.folder);
+          rememberOrigin(currentAccountId, meta.get(id)?.threadId, parsed.folder);
         }
         confirmHideRow(id);
         confirmPendingMove(id);
@@ -1830,7 +1847,7 @@ function MailApp() {
     for (const id of ids) {
       const parsed = parseMessageId(id);
       if (!parsed) continue;
-      const target = getOrigin(meta.get(id)?.threadId);
+      const target = getOrigin(currentAccountId, meta.get(id)?.threadId);
       idToTarget.set(id, target);
       applyMoveCountsDelta(parsed.folder, target, meta.get(id)?.wasUnread ?? false);
     }
@@ -1846,7 +1863,7 @@ function MailApp() {
           uid: parsed.uid,
           toFolder: target,
         });
-        forgetOrigin(meta.get(id)?.threadId);
+        forgetOrigin(currentAccountId, meta.get(id)?.threadId);
         confirmHideRow(id);
         confirmPendingMove(id);
       } catch (err) {
@@ -1914,6 +1931,10 @@ function MailApp() {
     // Wipe pending-move overlay for this account so a subsequent sign-in
     // cannot inherit stale suppressions from the previous session.
     clearAllPendingMoves();
+    // BLOCKER_6 — drop this account's origin map so a fresh sign-in on the
+    // same device doesn't inherit stale restore targets.
+    clearAccountOrigins(safeOriginStorage(), currentAccountId);
+
     clearMailSession();
     navigate({ to: "/login" });
   }
