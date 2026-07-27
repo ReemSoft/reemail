@@ -1455,19 +1455,48 @@ function MailApp() {
     });
   }
 
+  // Per-item revive helper (Batch B): re-inserts a single message into the
+  // list at its original index with a duplicate guard so we never clobber a
+  // concurrent mutation that already re-added the row, and never rebuild the
+  // full list from a stale snapshot.
+  function reviveMessageAt(original: MailMessage, originalIndex: number) {
+    setMessages((prev) => {
+      if (prev.some((m) => m.id === original.id)) return prev;
+      const next = prev.slice();
+      const insertAt = Math.min(Math.max(originalIndex, 0), next.length);
+      next.splice(insertAt, 0, original);
+      return next;
+    });
+  }
+
+  function reviveDeepResultAt(original: MailMessage, originalIndex: number) {
+    setDeepResults((prev) => {
+      if (!prev) return prev;
+      if (prev.some((m) => m.id === original.id)) return prev;
+      const next = prev.slice();
+      const insertAt = Math.min(Math.max(originalIndex, 0), next.length);
+      next.splice(insertAt, 0, original);
+      return next;
+    });
+  }
+
   async function handleMove(id: string, toFolder: MailFolder) {
     const parsed = parseMessageId(id);
     if (!parsed || !session) return;
     return runMoveFlight(id, async () => {
-      const msg = messages.find((m) => m.id === id);
-      const wasUnread = msg ? !msg.read : false;
-      const snapshot = messages;
-      const prevSelectedId = selectedId;
-      const prevSelected = selectedMessage;
-      // Optimistic — hide row, drop selection, adjust counters.
+      // Batch B: capture per-item snapshot BEFORE optimistic mutation.
+      const originalIndex = messages.findIndex((m) => m.id === id);
+      const original = originalIndex >= 0 ? messages[originalIndex] : null;
+      const wasUnread = original ? !original.read : false;
+      const wasSelected = selectedId === id;
+      const prevSelected = wasSelected ? selectedMessage : null;
+      const cachedBody = messageCache.current.get(id);
+      // Optimistic — hide row, drop selection if it was the moved one.
       setMessages((prev) => prev.filter((m) => m.id !== id));
-      setSelectedId(null);
-      setSelectedMessage(null);
+      if (wasSelected) {
+        setSelectedId(null);
+        setSelectedMessage(null);
+      }
       messageCache.current.delete(id);
       hideRow(id);
       beginPendingMove(id, toFolder === "trash" ? "trash" : toFolder === "archive" ? "archive" : "move");
@@ -1478,18 +1507,23 @@ function MailApp() {
           uid: parsed.uid,
           toFolder,
         });
-        if (toFolder === "trash") rememberOrigin(currentAccountId, msg?.threadId, parsed.folder);
-        else forgetOrigin(currentAccountId, msg?.threadId);
+        if (toFolder === "trash") rememberOrigin(currentAccountId, original?.threadId, parsed.folder);
+        else forgetOrigin(currentAccountId, original?.threadId);
         confirmHideRow(id);
         confirmPendingMove(id);
         toast.success("تم نقل الرسالة");
       } catch (err: any) {
+        // Per-item rollback ONLY. Do not touch other messages that may have
+        // changed concurrently.
         unhideRow(id);
         rollbackPendingMove(id);
         applyMoveCountsDelta(toFolder, parsed.folder, wasUnread); // revert
-        setMessages(snapshot);
-        setSelectedId(prevSelectedId);
-        setSelectedMessage(prevSelected);
+        if (original) reviveMessageAt(original, originalIndex);
+        if (cachedBody) messageCache.current.set(id, cachedBody);
+        if (wasSelected) {
+          setSelectedId(id);
+          if (prevSelected) setSelectedMessage(prevSelected);
+        }
         toast.error(err?.message || "فشل نقل الرسالة");
       }
     });
@@ -1498,7 +1532,6 @@ function MailApp() {
   async function handleDelete(id: string) {
     const parsed = parseMessageId(id);
     if (!parsed || !session) return;
-    const msg = messages.find((m) => m.id === id);
     const isTrash = parsed.folder === "trash";
     const confirmed = await confirm({
       title: isTrash ? "حذف نهائي" : "نقل إلى المهملات",
@@ -1511,22 +1544,24 @@ function MailApp() {
     });
     if (!confirmed) return;
     return runMoveFlight(id, async () => {
-      const wasUnread = msg ? !msg.read : false;
-      const snapshot = messages;
-      const deepSnapshot = deepResults;
-      const prevSelectedId = selectedId;
-      const prevSelected = selectedMessage;
-      // Cache snapshot (Blocker 1 rollback): if this row was fully cached
-      // we must restore it on failure so re-open doesn't re-fetch/re-render
-      // a stale body — only the failed id, not a full-map wipe.
+      // Batch B: per-item snapshot captured BEFORE optimistic mutation.
+      const originalIndex = messages.findIndex((m) => m.id === id);
+      const original = originalIndex >= 0 ? messages[originalIndex] : null;
+      const wasUnread = original ? !original.read : false;
+      const deepOriginalIndex = deepResults ? deepResults.findIndex((m) => m.id === id) : -1;
+      const deepOriginal = deepOriginalIndex >= 0 && deepResults ? deepResults[deepOriginalIndex] : null;
+      const wasSelected = selectedId === id;
+      const prevSelected = wasSelected ? selectedMessage : null;
       const cachedBody = messageCache.current.get(id);
       const destForCounts: MailFolder | null = isTrash ? null : "trash";
       setMessages((prev) => prev.filter((m) => m.id !== id));
       if (isTrash) {
         setDeepResults((prev) => (prev ? prev.filter((m) => m.id !== id) : prev));
       }
-      setSelectedId(null);
-      setSelectedMessage(null);
+      if (wasSelected) {
+        setSelectedId(null);
+        setSelectedMessage(null);
+      }
       messageCache.current.delete(id);
       hideRow(id);
       beginPendingMove(id, isTrash ? "permanent-delete" : "trash");
@@ -1534,14 +1569,14 @@ function MailApp() {
       try {
         if (isTrash) {
           await mutateMoveOrDelete({ sourceCanonical: parsed.folder, uid: parsed.uid });
-          forgetOrigin(currentAccountId, msg?.threadId);
+          forgetOrigin(currentAccountId, original?.threadId);
         } else {
           await mutateMoveOrDelete({
             sourceCanonical: parsed.folder,
             uid: parsed.uid,
             toFolder: "trash",
           });
-          rememberOrigin(currentAccountId, msg?.threadId, parsed.folder);
+          rememberOrigin(currentAccountId, original?.threadId, parsed.folder);
         }
         confirmHideRow(id);
         confirmPendingMove(id);
@@ -1550,13 +1585,13 @@ function MailApp() {
         unhideRow(id);
         rollbackPendingMove(id);
         applyMoveCountsDelta(destForCounts ?? parsed.folder, parsed.folder, wasUnread); // revert
-        // Re-insert with a duplicate guard so we never clobber a concurrent
-        // mutation that already re-added the row.
-        setMessages((prev) => (prev.some((m) => m.id === id) ? prev : snapshot));
-        if (isTrash) setDeepResults(deepSnapshot);
+        if (original) reviveMessageAt(original, originalIndex);
+        if (isTrash && deepOriginal) reviveDeepResultAt(deepOriginal, deepOriginalIndex);
         if (cachedBody) messageCache.current.set(id, cachedBody);
-        setSelectedId(prevSelectedId);
-        setSelectedMessage(prevSelected);
+        if (wasSelected) {
+          setSelectedId(id);
+          if (prevSelected) setSelectedMessage(prevSelected);
+        }
         toast.error(err?.message || (isTrash ? "فشل حذف الرسالة" : "فشل نقل الرسالة إلى المهملات"));
       }
     });
@@ -1567,15 +1602,19 @@ function MailApp() {
     if (!parsed || !session) return;
     if (parsed.folder !== "trash") return;
     return runMoveFlight(id, async () => {
-      const msg = messages.find((m) => m.id === id);
-      const wasUnread = msg ? !msg.read : false;
-      const target = getOrigin(currentAccountId, msg?.threadId);
-      const snapshot = messages;
-      const prevSelectedId = selectedId;
-      const prevSelected = selectedMessage;
+      // Batch B: per-item snapshot captured BEFORE optimistic mutation.
+      const originalIndex = messages.findIndex((m) => m.id === id);
+      const original = originalIndex >= 0 ? messages[originalIndex] : null;
+      const wasUnread = original ? !original.read : false;
+      const target = getOrigin(currentAccountId, original?.threadId);
+      const wasSelected = selectedId === id;
+      const prevSelected = wasSelected ? selectedMessage : null;
+      const cachedBody = messageCache.current.get(id);
       setMessages((prev) => prev.filter((m) => m.id !== id));
-      setSelectedId(null);
-      setSelectedMessage(null);
+      if (wasSelected) {
+        setSelectedId(null);
+        setSelectedMessage(null);
+      }
       messageCache.current.delete(id);
       hideRow(id);
       beginPendingMove(id, "restore");
@@ -1586,7 +1625,7 @@ function MailApp() {
           uid: parsed.uid,
           toFolder: target,
         });
-        forgetOrigin(currentAccountId, msg?.threadId);
+        forgetOrigin(currentAccountId, original?.threadId);
         confirmHideRow(id);
         confirmPendingMove(id);
         const label = FOLDER_META[target]?.label || target;
@@ -1595,13 +1634,17 @@ function MailApp() {
         unhideRow(id);
         rollbackPendingMove(id);
         applyMoveCountsDelta(target, parsed.folder, wasUnread); // revert
-        setMessages(snapshot);
-        setSelectedId(prevSelectedId);
-        setSelectedMessage(prevSelected);
+        if (original) reviveMessageAt(original, originalIndex);
+        if (cachedBody) messageCache.current.set(id, cachedBody);
+        if (wasSelected) {
+          setSelectedId(id);
+          if (prevSelected) setSelectedMessage(prevSelected);
+        }
         toast.error(err?.message || "فشل استعادة الرسالة");
       }
     });
   }
+
 
   async function handleMarkUnread(id: string) {
     const parsed = parseMessageId(id);
