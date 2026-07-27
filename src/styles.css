@@ -298,3 +298,19 @@
     --mobile-offset-bottom: 1rem;
   }
 }
+
+/* ---- Composer rich-text editor ---- */
+.composer-editor:empty::before {
+  content: attr(data-placeholder);
+  color: hsl(var(--muted-foreground));
+  pointer-events: none;
+}
+.composer-editor blockquote {
+  border-inline-start: 3px solid hsl(var(--border));
+  padding-inline-start: 0.75rem;
+  color: hsl(var(--muted-foreground));
+  margin: 0.5rem 0;
+}
+.composer-editor ul { list-style: disc; padding-inline-start: 1.5rem; }
+.composer-editor ol { list-style: decimal; padding-inline-start: 1.5rem; }
+.composer-editor a { color: hsl(var(--primary)); text-decoration: underline; }
