@@ -87,7 +87,7 @@ export const Route = createFileRoute("/api/public/hooks/mail-sync-tick")({
           );
         }
 
-        const rows = (claim.data ?? []) as Array<{
+        const rows = ((claim.data ?? []) as unknown) as Array<{
           msg_id: number;
           read_ct: number;
           message: {
