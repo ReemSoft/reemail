@@ -1829,22 +1829,38 @@ function MailApp() {
       try {
         if (isTrash) {
           await mutateMoveOrDelete({ sourceCanonical: parsed.folder, uid: parsed.uid });
-          forgetOriginForTrashUid(currentAccountId, parsed.uid, trashUidValidityRef.current);
+          forgetOriginForDestUid(
+            "trash",
+            currentAccountId,
+            parsed.uid,
+            trashUidValidityRef.current,
+          );
         } else {
           const moveResult = await mutateMoveOrDelete({
             sourceCanonical: parsed.folder,
             uid: parsed.uid,
             toFolder: "trash",
           });
-          writeOriginOnTrash({
+          writeOriginOnDestination({
             accountId: currentAccountId,
+            destKind: "trash",
             sourceCanonical: parsed.folder,
             sourceUid: parsed.uid,
             messageId: original?.threadId ?? null,
             fingerprint: original ? fingerprintFromMessage(original) : null,
             moveResult,
           });
+          // If source was archive, drop its archive origin too.
+          if (parsed.folder === "archive") {
+            forgetOriginForDestUid(
+              "archive",
+              currentAccountId,
+              parsed.uid,
+              archiveUidValidityRef.current,
+            );
+          }
         }
+
         confirmHideRow(id);
         confirmPendingMove(id);
         toast.success(isTrash ? "تم حذف الرسالة نهائياً" : "تم نقل الرسالة إلى المهملات");
