@@ -83,6 +83,147 @@ export async function resolveFolderByPath(
   };
 }
 
+// ============================================================================
+// Fingerprint capture + destination UID discovery (Blocker 2: targeted sync)
+// ============================================================================
+
+export interface MessageFingerprint {
+  messageId: string | null;
+  internalDate: string | null;
+  sizeBytes: number | null;
+  subject: string | null;
+  fromEmail: string | null;
+}
+
+/**
+ * Snapshot the identity of a locally-indexed row BEFORE a Move so we can
+ * later find its new UID at the destination without trusting Bridge-provided
+ * UIDs (many servers don't return UIDPLUS COPYUID). Returns null when the
+ * row is missing — the caller must degrade gracefully in that case.
+ */
+export async function captureSourceFingerprint(
+  supabase: SupabaseClient,
+  params: { accountId: string; folderId: string; uidvalidity: number; uid: number },
+): Promise<MessageFingerprint | null> {
+  const q = await supabase
+    .from("mail_messages")
+    .select("message_id, internal_date, size_bytes, subject, from_addr")
+    .eq("account_id", params.accountId)
+    .eq("folder_id", params.folderId)
+    .eq("uidvalidity", params.uidvalidity)
+    .eq("uid", params.uid)
+    .maybeSingle();
+  if (q.error) throw q.error;
+  if (!q.data) return null;
+  const from = q.data.from_addr as { email?: unknown } | null;
+  const fromEmail =
+    from && typeof from === "object" && typeof from.email === "string"
+      ? (from.email as string).toLowerCase()
+      : null;
+  return {
+    messageId: (q.data.message_id as string | null) ?? null,
+    internalDate: (q.data.internal_date as string | null) ?? null,
+    sizeBytes: (q.data.size_bytes as number | null) ?? null,
+    subject: (q.data.subject as string | null) ?? null,
+    fromEmail,
+  };
+}
+
+export interface DiscoveredDestination {
+  uid: number;
+  uidvalidity: number;
+}
+
+/**
+ * Find the moved message's new UID at the destination folder using the
+ * fingerprint captured before the Move.
+ *
+ * Priority:
+ *   1) Match by `message_id` (fastest, most reliable). If exactly one live
+ *      row above the cutoff matches → return it.
+ *   2) Fingerprint match on (internal_date, size_bytes, subject, from.email)
+ *      when the message_id was absent OR yielded 0/multiple rows. Only a
+ *      unique candidate above the cutoff is accepted.
+ *
+ * `cutoffUid` is the destination folder's `newest_synced_uid` from BEFORE
+ * the Move; anything at-or-below cutoff is treated as pre-existing and
+ * ignored. This blocks stale duplicates (same Message-ID from an older
+ * send) from being mistaken for the just-moved copy.
+ *
+ * Returns `null` when 0 or >1 candidates remain — callers surface this as
+ * `destinationReady: false` rather than guessing a UID.
+ */
+export async function discoverDestinationUid(
+  supabase: SupabaseClient,
+  params: {
+    accountId: string;
+    folderId: string;
+    uidvalidity: number;
+    cutoffUid: number;
+    fingerprint: MessageFingerprint;
+  },
+): Promise<DiscoveredDestination | null> {
+  const acceptable = (rows: Array<{ uid: unknown; uidvalidity: unknown }>) => {
+    if (rows.length !== 1) return null;
+    const r = rows[0];
+    return {
+      uid: Number(r.uid),
+      uidvalidity: Number(r.uidvalidity),
+    } as DiscoveredDestination;
+  };
+
+  if (params.fingerprint.messageId) {
+    const q = await supabase
+      .from("mail_messages")
+      .select("uid, uidvalidity")
+      .eq("account_id", params.accountId)
+      .eq("folder_id", params.folderId)
+      .eq("uidvalidity", params.uidvalidity)
+      .eq("message_id", params.fingerprint.messageId)
+      .gt("uid", params.cutoffUid)
+      .is("deleted_at", null);
+    if (q.error) throw q.error;
+    const hit = acceptable((q.data ?? []) as Array<{ uid: unknown; uidvalidity: unknown }>);
+    if (hit) return hit;
+    // fall through to fingerprint
+  }
+
+  const fp = params.fingerprint;
+  // Fingerprint fallback requires enough identity to be meaningful.
+  if (fp.internalDate == null || fp.sizeBytes == null) return null;
+
+  let q = supabase
+    .from("mail_messages")
+    .select("uid, uidvalidity, from_addr, subject")
+    .eq("account_id", params.accountId)
+    .eq("folder_id", params.folderId)
+    .eq("uidvalidity", params.uidvalidity)
+    .eq("internal_date", fp.internalDate)
+    .eq("size_bytes", fp.sizeBytes)
+    .gt("uid", params.cutoffUid)
+    .is("deleted_at", null);
+  if (fp.subject != null) q = q.eq("subject", fp.subject);
+  const res = await q;
+  if (res.error) throw res.error;
+  const rows = (res.data ?? []) as Array<{
+    uid: unknown;
+    uidvalidity: unknown;
+    from_addr: unknown;
+    subject: unknown;
+  }>;
+  const filtered = fp.fromEmail
+    ? rows.filter((r) => {
+        const f = r.from_addr as { email?: unknown } | null;
+        const e =
+          f && typeof f === "object" && typeof f.email === "string"
+            ? (f.email as string).toLowerCase()
+            : null;
+        return e === fp.fromEmail;
+      })
+    : rows;
+  return acceptable(filtered);
+}
+
 /**
  * Idempotent, atomic soft-delete of a source row (identity:
  * account+folder+uidvalidity+uid). Uses a single conditional UPDATE with
