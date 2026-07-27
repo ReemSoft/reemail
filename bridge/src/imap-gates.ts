@@ -377,14 +377,13 @@ export function createImapGates(cfg: ImapGatesConfig): ImapGates {
   }
 
   function stats(): ImapGateStats {
-    const byHost: Record<string, number> = {};
-    for (const [k, v] of activeByHost) byHost[k] = v;
     return {
       enabled: cfg.enabled,
       activeGlobal,
-      activeByHost: byHost,
+      activeHostCount: activeByHost.size,
       waitingInteractive: waitingInteractive.length,
       waitingBackground: waitingBackground.length,
+
       admitted: counters.admitted,
       rejected: counters.rejectedQueueFull,
       timedOut: counters.timedOut,
