@@ -1,1 +1,0 @@
-var e=`mailmaestro.mail.session`;function t(t){typeof window>`u`||sessionStorage.setItem(e,JSON.stringify(t))}function n(){if(typeof window>`u`)return null;let t=sessionStorage.getItem(e);if(!t)return null;try{return JSON.parse(t)}catch{return null}}function r(){typeof window>`u`||sessionStorage.removeItem(e)}export{n,t as r,r as t};

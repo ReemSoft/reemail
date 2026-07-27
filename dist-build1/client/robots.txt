@@ -1,5 +1,0 @@
-User-agent: *
-Allow: /
-Disallow: /mail
-Disallow: /company
-Disallow: /admin
