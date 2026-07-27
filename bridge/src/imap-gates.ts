@@ -339,8 +339,9 @@ export function createImapGates(cfg: ImapGatesConfig): ImapGates {
         settleWaiter(waiter);
         reject(new ImapBusyError("timeout", Math.max(1, Math.ceil(timeoutMs / 1000))));
       }, timeoutMs);
-      // Do not keep the event loop alive just for a wait timer.
-      if (typeof waiter.timer.unref === "function") waiter.timer.unref();
+      // Timers are always cleared on settle (admit/timeout/abort), so they
+      // never outlive the waiter — no unref needed and unref would break
+      // node:test awaits on the timer's own reject path.
 
       if (opts.signal) {
         const onAbort = () => {
