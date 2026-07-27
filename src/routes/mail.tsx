@@ -1534,7 +1534,7 @@ function MailApp() {
     setSelectedId(id);
     const parsed = parseMessageId(id);
     if (!parsed || !session) {
-      setSelectedMessage(getMockMessage(id) ?? null);
+      setSelectedMessage(null);
       return;
     }
     const cached = messageCache.current.get(id);
