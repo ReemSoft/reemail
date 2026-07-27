@@ -793,11 +793,9 @@ function useMailData(session: MailSession | null) {
         setIndexCursor(null);
       } catch (err: any) {
         if (loadReqIdRef.current !== reqId) return;
-        setBridgeError(err?.message || "فشل جلب الرسائل");
-        setMessages(applyPending(getMockMessages(folder)));
+        setBridgeError(err?.message || "تعذّر الاتصال بخادم البريد");
         setHasMore(false);
-        setUseMock(true);
-        setSource("mock");
+        setUseMock(false);
         setIndexCursor(null);
       }
     },
