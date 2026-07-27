@@ -711,9 +711,26 @@ function useMailData(session: MailSession | null) {
             trashUidValidityRef.current !== nextTrashUV &&
             currentAccountId
           ) {
-            purgeStaleTrashUidValidity(safeOriginStorage(), currentAccountId, nextTrashUV);
+            purgeStaleTrashUidValidity(safeOriginStorage(), currentAccountId, nextTrashUV, "trash");
           }
           trashUidValidityRef.current = nextTrashUV;
+          // Mirror for Archive: capture current Archive UIDVALIDITY so restore
+          // from Archive can validate final-origin entries the same way Trash does.
+          const archiveCount = res.counts.find((c) => c.folder === "archive");
+          const nextArchiveUV = archiveCount?.uidvalidity ?? null;
+          if (
+            nextArchiveUV != null &&
+            archiveUidValidityRef.current !== nextArchiveUV &&
+            currentAccountId
+          ) {
+            purgeStaleTrashUidValidity(
+              safeOriginStorage(),
+              currentAccountId,
+              nextArchiveUV,
+              "archive",
+            );
+          }
+          archiveUidValidityRef.current = nextArchiveUV;
           return;
         }
       } catch {
