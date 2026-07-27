@@ -1883,16 +1883,20 @@ function MailApp() {
   async function handleRestore(id: string) {
     const parsed = parseMessageId(id);
     if (!parsed || !session) return;
-    if (parsed.folder !== "trash") return;
+    const restoreKind = originKindForRestore(parsed.folder);
+    if (!restoreKind) return;
+    const destUidValidity =
+      restoreKind === "trash" ? trashUidValidityRef.current : archiveUidValidityRef.current;
     return runMoveFlight(id, async () => {
       // Batch B: per-item snapshot captured BEFORE optimistic mutation.
       const originalIndex = messages.findIndex((m) => m.id === id);
       const original = originalIndex >= 0 ? messages[originalIndex] : null;
       const wasUnread = original ? !original.read : false;
-      const target = readOriginForTrashUid(
+      const target = readOriginForDestUid(
+        restoreKind,
         currentAccountId,
         parsed.uid,
-        trashUidValidityRef.current,
+        destUidValidity,
       );
       const wasSelected = selectedId === id;
       const prevSelected = wasSelected ? selectedMessage : null;
@@ -1912,7 +1916,7 @@ function MailApp() {
           uid: parsed.uid,
           toFolder: target,
         });
-        forgetOriginForTrashUid(currentAccountId, parsed.uid, trashUidValidityRef.current);
+        forgetOriginForDestUid(restoreKind, currentAccountId, parsed.uid, destUidValidity);
         confirmHideRow(id);
         confirmPendingMove(id);
         const label = FOLDER_META[target as MailFolder]?.label || target;
@@ -1931,6 +1935,7 @@ function MailApp() {
       }
     });
   }
+
 
   async function handleMarkUnread(id: string) {
     const parsed = parseMessageId(id);
