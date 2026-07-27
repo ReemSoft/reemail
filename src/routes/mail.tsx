@@ -3199,6 +3199,7 @@ function MessageView({
   });
   const isTrash = message.folder === "trash";
   const canRestore = message.folder === "trash" || message.folder === "archive";
+  const canArchive = message.folder !== "archive" && message.folder !== "trash";
 
   const isSecure = !!message.security && !/غير/.test(message.security);
 
