@@ -166,11 +166,16 @@ export async function discoverDestinationUid(
   const acceptable = (rows: Array<{ uid: unknown; uidvalidity: unknown }>) => {
     if (rows.length !== 1) return null;
     const r = rows[0];
-    return {
-      uid: Number(r.uid),
-      uidvalidity: Number(r.uidvalidity),
-    } as DiscoveredDestination;
+    const uid = Number(r.uid);
+    const uidvalidity = Number(r.uidvalidity);
+    // Reject anything that isn't a strictly-positive integer for both
+    // fields. Guards against Postgres bigint strings that decode oddly,
+    // NaN from NULL columns, or negative fixtures.
+    if (!Number.isInteger(uid) || uid <= 0) return null;
+    if (!Number.isInteger(uidvalidity) || uidvalidity <= 0) return null;
+    return { uid, uidvalidity } as DiscoveredDestination;
   };
+
 
   if (params.fingerprint.messageId) {
     const q = await supabase
