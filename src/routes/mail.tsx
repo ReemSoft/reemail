@@ -117,13 +117,7 @@ import { runManualRefresh } from "@/lib/mail-refresh-orchestration";
 import { createSingleFlight } from "@/lib/single-flight";
 import { reviveAt } from "@/lib/mail-rollback";
 
-import {
-  formatDate,
-  formatSize,
-  getFolderCounts as getMockFolderCounts,
-  getMessages as getMockMessages,
-  getMessage as getMockMessage,
-} from "@/lib/mail-mock";
+import { formatDate, formatSize } from "@/lib/mail-mock";
 import type { MailFolder, MailMessage } from "@/lib/mail-types";
 import { clearMailSession, getMailSession, type MailSession } from "@/lib/mail-session";
 import {
@@ -454,9 +448,13 @@ function buildForward(message: MailMessage): ComposeInitial {
 
 type SortOption = "date-desc" | "date-asc" | "unread-first" | "starred-first";
 
-type SourceKind = "index" | "bridge" | "mock";
+type SourceKind = "index" | "bridge";
 
-function useMailData(session: MailSession | null) {
+function isInvalidTokenCode(code: unknown): boolean {
+  return code === "INVALID_TOKEN";
+}
+
+function useMailData(session: MailSession | null, onSessionExpired?: () => void) {
   const getCounts = useServerFn(bridgeGetFolderCounts);
   const getMessages = useServerFn(bridgeGetMessages);
   const listIndex = useServerFn(indexListMessages);
@@ -481,13 +479,20 @@ function useMailData(session: MailSession | null) {
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(false);
   const [bridgeError, setBridgeError] = useState<string | null>(null);
-  const [useMock, setUseMock] = useState(false);
   const [source, setSource] = useState<SourceKind>("bridge");
   const [indexCursor, setIndexCursor] = useState<string | null>(null);
   // Per-folder "index ready" flag, used to drive the sync hook.
   const [indexReady, setIndexReady] = useState<Partial<Record<MailFolder, boolean>>>({});
   // Race guard: only accept a load result whose id matches the latest request.
   const loadReqIdRef = useRef(0);
+  // Fire onSessionExpired exactly once per hook lifetime; subsequent calls
+  // are no-ops so a burst of stale requests can't spam navigation/toasts.
+  const sessionExpiredFiredRef = useRef(false);
+  const notifySessionExpired = useCallback(() => {
+    if (sessionExpiredFiredRef.current) return;
+    sessionExpiredFiredRef.current = true;
+    onSessionExpired?.();
+  }, [onSessionExpired]);
   const PAGE = 50;
 
   // Pending Flag Overrides — persist optimistic star/read across any
@@ -615,7 +620,13 @@ function useMailData(session: MailSession | null) {
         archive: { total: 0, unread: 0, supported: false },
         all: { total: 0, unread: 0, supported: false },
       };
-      if (!result.ok) throw new Error(result.error);
+      if (!result.ok) {
+        if (isInvalidTokenCode((result as { code?: string }).code)) {
+          notifySessionExpired();
+          return;
+        }
+        throw new Error(result.error);
+      }
       const paths: Partial<Record<MailFolder, string>> = {};
       result.counts.forEach((c) => {
         map[c.folder] = { total: c.total, unread: c.unread, supported: c.supported !== false };
@@ -634,17 +645,11 @@ function useMailData(session: MailSession | null) {
       setBridgeError(null);
     } catch (err: any) {
       if (countsMutationGen.current !== gen) return;
-      setBridgeError(err?.message || "فشل الاتصال بخادم البريد");
-      setCounts(
-        Object.fromEntries(
-          getMockFolderCounts().map((c) => [
-            c.folder,
-            { total: c.total, unread: c.unread, supported: true },
-          ]),
-        ) as Record<MailFolder, { total: number; unread: number; supported: boolean }>,
-      );
+      // Preserve previous counters instead of overwriting with fake data —
+      // a transient bridge failure should never destroy legitimate state.
+      setBridgeError(err?.message || "تعذّر الاتصال بخادم البريد. سيتم إعادة المحاولة تلقائياً.");
     }
-  }, [session, getCounts, isStarCountHot]);
+  }, [session, getCounts, isStarCountHot, notifySessionExpired]);
 
   /**
    * Manual-Refresh counts path: prefer Local Mail Index (single Supabase
@@ -771,7 +776,13 @@ function useMailData(session: MailSession | null) {
           },
         });
         if (loadReqIdRef.current !== reqId) return;
-        if (!result.ok) throw new Error(result.error);
+        if (!result.ok) {
+          if (isInvalidTokenCode((result as { code?: string }).code)) {
+            notifySessionExpired();
+            return;
+          }
+          throw new Error(result.error);
+        }
         // BLOCKER_3: reconcile BEFORE applying overlay so the raw list
         // drives presence checks.
         reconcilePendingMovesForRead(result.messages, folder, bridgeStartedAt);
@@ -788,20 +799,19 @@ function useMailData(session: MailSession | null) {
         setMessages(applyPending(result.messages));
         setHasMore(result.messages.length >= PAGE);
         setBridgeError(null);
-        setUseMock(false);
         setSource("bridge");
         setIndexCursor(null);
       } catch (err: any) {
         if (loadReqIdRef.current !== reqId) return;
-        setBridgeError(err?.message || "فشل جلب الرسائل");
-        setMessages(applyPending(getMockMessages(folder)));
+        // Never inject fake data on failure. Keep the list empty and surface
+        // a professional error message; the polling loop will retry silently.
+        setBridgeError(err?.message || "تعذّر جلب الرسائل. سيتم إعادة المحاولة تلقائياً.");
+        setMessages([]);
         setHasMore(false);
-        setUseMock(true);
-        setSource("mock");
         setIndexCursor(null);
       }
     },
-    [session, folder, sort, getMessages, applyPending, reconcilePendingMovesForRead],
+    [session, folder, sort, getMessages, applyPending, reconcilePendingMovesForRead, notifySessionExpired],
   );
 
   const loadMessages = useCallback(async () => {
@@ -842,7 +852,6 @@ function useMailData(session: MailSession | null) {
             setHasMore(res.hasMore);
             setIndexCursor(res.nextCursor);
             setSource("index");
-            setUseMock(false);
             setBridgeError(null);
             setIndexReady((prev) => (prev[folder] ? prev : { ...prev, [folder]: true }));
             gcHiddenBefore(pendingHiddenRef.current, startedAt);
@@ -988,7 +997,6 @@ function useMailData(session: MailSession | null) {
     hasMore,
     loadMore,
     bridgeError,
-    useMock,
     loadCounts,
     source,
     /**
@@ -1143,7 +1151,6 @@ function MailApp() {
     hasMore,
     loadMore,
     bridgeError,
-    useMock,
     loadCounts,
     refresh: rawRefresh,
     onAfterSend,
@@ -1165,7 +1172,16 @@ function MailApp() {
     trashUidValidityRef,
     archiveUidValidityRef,
     bumpCountsGen,
-  } = useMailData(session || null);
+  } = useMailData(
+    session || null,
+    useCallback(() => {
+      // Session expired or invalid — clean up locally and route to /login
+      // silently. No fake data is ever shown to the customer.
+      clearMailSession();
+      toast.info("انتهت الجلسة، يرجى تسجيل الدخول مجدداً");
+      navigate({ to: "/login", replace: true });
+    }, [navigate]),
+  );
 
   // BLOCKER_6 — account identity for origin-tracker calls in this scope.
   const currentAccountId = session?.account.id ?? null;
@@ -1527,7 +1543,7 @@ function MailApp() {
     setSelectedId(id);
     const parsed = parseMessageId(id);
     if (!parsed || !session) {
-      setSelectedMessage(getMockMessage(id) ?? null);
+      setSelectedMessage(null);
       return;
     }
     const cached = messageCache.current.get(id);
@@ -1563,7 +1579,7 @@ function MailApp() {
     } catch (err: any) {
       if (!cached) {
         toast.error(err?.message || "فشل فتح الرسالة");
-        setSelectedMessage(getMockMessage(id) ?? null);
+        setSelectedMessage(null);
       }
     } finally {
       setReading(false);
@@ -2467,10 +2483,13 @@ function MailApp() {
   return (
     <div className="flex h-screen w-full flex-col bg-background">
       {bridgeError && (
-        <div className="flex items-center justify-center gap-2 bg-warning px-3 py-2 text-xs font-medium text-warning-foreground">
+        <div
+          role="status"
+          aria-live="polite"
+          className="flex items-center justify-center gap-2 bg-warning px-3 py-2 text-xs font-medium text-warning-foreground"
+        >
           <AlertOctagon className="h-4 w-4" />
           <span>{bridgeError}</span>
-          {useMock && <span className="opacity-80">(يتم عرض بيانات تجريبية مؤقتًا)</span>}
         </div>
       )}
 
