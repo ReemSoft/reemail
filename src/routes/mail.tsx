@@ -19,6 +19,16 @@ function sanitizeEmailHtml(html: string): string {
   return clean.replace(/<a\s/gi, '<a target="_blank" rel="noopener noreferrer nofollow" ');
 }
 
+// Sanitizer for OUTGOING composer HTML — allows inline styles/fonts/colors
+// (needed for email) but blocks scripts, event handlers, and dangerous tags.
+function sanitizeComposerHtml(html: string): string {
+  if (!html) return "";
+  return DOMPurify.sanitize(html, {
+    FORBID_TAGS: ["script", "iframe", "object", "embed", "form", "link", "meta", "base", "style"],
+    FORBID_ATTR: ["srcdoc", "formaction", "onerror", "onload", "onclick", "onmouseover", "onfocus"],
+    ALLOW_DATA_ATTR: false,
+  });
+
 import {
   Inbox,
   Star,
