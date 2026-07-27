@@ -849,6 +849,9 @@ function MailApp() {
     applyPending,
     applyPendingOne,
   } = useMailData(session || null);
+  // BLOCKER_6 — account identity for origin-tracker calls in this scope.
+  const currentAccountId = session?.account.id ?? null;
+
 
   // Serialize Refresh with a single-flight guard (ref, not React state) so a
   // double-click that fires before the next render can't spawn a second
