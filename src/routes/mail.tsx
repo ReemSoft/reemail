@@ -997,7 +997,6 @@ function useMailData(session: MailSession | null, onSessionExpired?: () => void)
     hasMore,
     loadMore,
     bridgeError,
-    useMock,
     loadCounts,
     source,
     /**
