@@ -4,6 +4,12 @@ import cors from "cors";
 import multer from "multer";
 import { uploadStorage, cleanupFiles, startupCleanup } from "./uploads.js";
 import { createSendGates } from "./concurrency.js";
+import {
+  createImapGates,
+  loadImapGatesConfigFromEnv,
+  ImapBusyError,
+  type ImapPriority,
+} from "./imap-gates.js";
 
 import { z } from "zod";
 import {
@@ -117,12 +123,78 @@ function requireKey(req: express.Request, res: express.Response, next: express.N
   next();
 }
 
+// --- IMAP concurrency limiter (MAILMAESTRO_IMAP_LIMITER_R3) ---
+//
+// One slot per real IMAP connection. `interactive` is user-facing; `background`
+// is Worker sync. Waiters that overflow / time out / are cancelled fail fast
+// with HTTP 503 + `IMAP_BUSY`, which the queue backoff classifier already
+// treats as a transient retry (via the "busy" string match).
+const imapGatesConfig = loadImapGatesConfigFromEnv();
+const imapGates = createImapGates(imapGatesConfig);
+if (imapGatesConfig.enabled) {
+  console.log(
+    `[bridge] IMAP gates enabled — global=${imapGatesConfig.globalMax} host=${imapGatesConfig.perHostMax} company=${imapGatesConfig.perCompanyMax} account=${imapGatesConfig.perAccountMax}`,
+  );
+}
+
+function imapGate(priority: ImapPriority): express.RequestHandler {
+  return async (req, res, next) => {
+    // Pull gate keys from raw body — zod schemas strip company_id on parse.
+    const acct = (req.body ?? {}).account ?? {};
+    const meta = {
+      host: String(acct.imap_host ?? "unknown"),
+      company: String(acct.company_id ?? acct.companyId ?? ""),
+      account: String(acct.email_address ?? "unknown"),
+      priority,
+    };
+    const ac = new AbortController();
+    const onEarlyClose = () => { try { ac.abort(); } catch { /* noop */ } };
+    res.once("close", onEarlyClose);
+
+    let release: (() => void) | null = null;
+    try {
+      release = await imapGates.acquire({ ...meta, signal: ac.signal });
+    } catch (err) {
+      res.off("close", onEarlyClose);
+      if (res.writableEnded || res.destroyed) return;
+      if (err instanceof ImapBusyError) {
+        res.setHeader("Retry-After", String(err.retryAfterSeconds));
+        return res.status(503).json({
+          ok: false,
+          error: "IMAP_BUSY",
+          message: "الخادم مشغول، حاول بعد قليل",
+        });
+      }
+      return next(err);
+    }
+
+    // Release exactly once — whichever event fires first: response finished
+    // (success/error) or the socket dropped after we admitted the caller.
+    let released = false;
+    const doRelease = () => {
+      if (released) return;
+      released = true;
+      res.off("close", onEarlyClose);
+      release!();
+    };
+    res.once("finish", doRelease);
+    res.once("close", doRelease);
+    next();
+  };
+}
+
 // --- Routes ---
 app.get("/health", (_req, res) => {
   res.json({ status: "ok", timestamp: new Date().toISOString() });
 });
 
-app.post("/api/verify", requireKey, async (req, res) => {
+// Bounded, side-effect-free limiter metrics. No PII (no emails, no company ids
+// beyond aggregated in-flight counts by host). Auth-gated to keep it internal.
+app.get("/api/metrics/imap-gates", requireKey, (_req, res) => {
+  res.json({ ok: true, gates: imapGates.stats() });
+});
+
+app.post("/api/verify", requireKey, imapGate("interactive"), async (req, res) => {
   try {
     const payload = AuthPayloadSchema.parse(req.body);
     const result = await verifyCredentials(payload.account as any, payload.password);
@@ -135,7 +207,7 @@ app.post("/api/verify", requireKey, async (req, res) => {
   }
 });
 
-app.post("/api/folders", requireKey, async (req, res) => {
+app.post("/api/folders", requireKey, imapGate("interactive"), async (req, res) => {
   try {
     const payload = AuthPayloadSchema.parse(req.body);
     const counts = await getFolderCounts(payload.account as any, payload.password);
@@ -148,7 +220,7 @@ app.post("/api/folders", requireKey, async (req, res) => {
 
 const SortOptionSchema = z.enum(["date-desc", "date-asc", "unread-first", "starred-first"]);
 
-app.post("/api/messages", requireKey, async (req, res) => {
+app.post("/api/messages", requireKey, imapGate("interactive"), async (req, res) => {
   try {
     const payload = FolderPayloadSchema.parse(req.body);
     const sort = SortOptionSchema.optional().parse(req.body.sort) ?? "date-desc";
@@ -164,7 +236,7 @@ app.post("/api/messages", requireKey, async (req, res) => {
   }
 });
 
-app.post("/api/message", requireKey, async (req, res) => {
+app.post("/api/message", requireKey, imapGate("interactive"), async (req, res) => {
   try {
     const payload = MessagePayloadSchema.parse(req.body);
     const message = await getMessageBody(
@@ -183,7 +255,7 @@ app.post("/api/message", requireKey, async (req, res) => {
   }
 });
 
-app.post("/api/mark-read", requireKey, async (req, res) => {
+app.post("/api/mark-read", requireKey, imapGate("interactive"), async (req, res) => {
   try {
     const payload = MarkReadPayloadSchema.parse(req.body);
     await markRead(
@@ -200,7 +272,7 @@ app.post("/api/mark-read", requireKey, async (req, res) => {
   }
 });
 
-app.post("/api/star", requireKey, async (req, res) => {
+app.post("/api/star", requireKey, imapGate("interactive"), async (req, res) => {
   try {
     const payload = StarPayloadSchema.parse(req.body);
     await starMessage(
@@ -217,7 +289,7 @@ app.post("/api/star", requireKey, async (req, res) => {
   }
 });
 
-app.post("/api/move", requireKey, async (req, res) => {
+app.post("/api/move", requireKey, imapGate("interactive"), async (req, res) => {
   try {
     const payload = MovePayloadSchema.parse(req.body);
     const move = await moveMessage(
@@ -236,7 +308,7 @@ app.post("/api/move", requireKey, async (req, res) => {
   }
 });
 
-app.post("/api/delete", requireKey, async (req, res) => {
+app.post("/api/delete", requireKey, imapGate("interactive"), async (req, res) => {
   try {
     const payload = MessagePayloadSchema.parse(req.body);
     const result = await deleteMessage(
@@ -264,7 +336,7 @@ const SearchPayloadSchema = FolderPayloadSchema.extend({
   limit: z.number().int().positive().max(200).optional().default(100),
 });
 
-app.post("/api/search", requireKey, async (req, res) => {
+app.post("/api/search", requireKey, imapGate("interactive"), async (req, res) => {
   try {
     const payload = SearchPayloadSchema.parse(req.body);
     const messages = await searchMessages(
@@ -464,7 +536,7 @@ const AttachmentPayloadSchema = MessagePayloadSchema.extend({
   part: z.string().min(1).max(50),
 });
 
-app.post("/api/attachment", requireKey, async (req, res) => {
+app.post("/api/attachment", requireKey, imapGate("interactive"), async (req, res) => {
   try {
     const payload = AttachmentPayloadSchema.parse(req.body);
     const result = await downloadAttachment(
@@ -519,7 +591,7 @@ app.post("/api/attachment", requireKey, async (req, res) => {
 
 // ---- Sync endpoints (metadata-only, no DB writes) ----
 
-app.post("/api/sync/initial", requireKey, async (req, res) => {
+app.post("/api/sync/initial", requireKey, imapGate("background"), async (req, res) => {
   try {
     const p = InitialSyncSchema.parse(req.body);
     const result = await runInitialSync(p.account as MailAccount, p.password, {
@@ -537,7 +609,7 @@ app.post("/api/sync/initial", requireKey, async (req, res) => {
   }
 });
 
-app.post("/api/sync/incremental", requireKey, async (req, res) => {
+app.post("/api/sync/incremental", requireKey, imapGate("background"), async (req, res) => {
   try {
     const p = IncrementalSyncSchema.parse(req.body);
     const result = await runIncrementalSync(p.account as MailAccount, p.password, {
@@ -560,7 +632,7 @@ app.post("/api/sync/incremental", requireKey, async (req, res) => {
   }
 });
 
-app.post("/api/sync/reconcile", requireKey, async (req, res) => {
+app.post("/api/sync/reconcile", requireKey, imapGate("background"), async (req, res) => {
   try {
     const p = ReconcileSyncSchema.parse(req.body);
     const result = await runReconcileSync(p.account as MailAccount, p.password, {
