@@ -34,14 +34,31 @@ export interface OriginStorage {
   removeItem: (k: string) => void;
 }
 
-const FINAL_PREFIX = "mailmaestro:trash-origin:v3:";
-const PENDING_PREFIX = "mailmaestro:trash-pending-origin:v3:";
+/**
+ * Destination folder kind for a Restore-capable Move. Origins are stored in
+ * separate namespaces per kind so a Trash origin can never collide with an
+ * Archive origin even when both destinations expose the same physical UID
+ * across two mailboxes.
+ *
+ * The default value is `"trash"` so pre-existing callers, tests, and the
+ * on-disk storage keys (`mailmaestro:trash-origin:v3:*`) continue to work
+ * byte-identically without migration.
+ */
+export type OriginKind = "trash" | "archive";
 
 // -------- Types --------
 
 export interface FinalOriginKey {
   accountId: string;
+  /**
+   * UIDVALIDITY of the DESTINATION folder (Trash for kind="trash", Archive
+   * for kind="archive"). Field name kept for backward-compat.
+   */
   trashUidValidity: number;
+  /**
+   * UID inside the DESTINATION folder (Trash/Archive per kind). Field name
+   * kept for backward-compat.
+   */
   trashUid: number;
 }
 
@@ -72,11 +89,11 @@ export interface PendingOriginEntry {
 
 // -------- Key builders --------
 
-function finalStorageKey(accountId: string): string {
-  return `${FINAL_PREFIX}${accountId}`;
+function finalStorageKey(accountId: string, kind: OriginKind = "trash"): string {
+  return `mailmaestro:${kind}-origin:v3:${accountId}`;
 }
-function pendingStorageKey(accountId: string): string {
-  return `${PENDING_PREFIX}${accountId}`;
+function pendingStorageKey(accountId: string, kind: OriginKind = "trash"): string {
+  return `mailmaestro:${kind}-pending-origin:v3:${accountId}`;
 }
 function finalEntryKey(uv: number, uid: number): string {
   return `${uv}:${uid}`;
