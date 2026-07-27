@@ -11,6 +11,10 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import type { MailFolder, FolderCount, MailMessage } from "@/lib/mail-types";
+import {
+  classifyBridgeMessageFailure,
+  type BridgeMessageErrorCode as SharedBridgeMessageErrorCode,
+} from "@/lib/mail-bridge-error";
 
 const FolderSchema = z.enum([
   "inbox",
@@ -71,8 +75,7 @@ async function bridgeCall(
   extraBody: Record<string, unknown>,
   password: string,
 ): Promise<
-  | { ok: true; json: any }
-  | { ok: false; error: string; status?: number; unavailable?: boolean }
+  { ok: true; json: any } | { ok: false; error: string; status?: number; unavailable?: boolean }
 > {
   const { resolveBridgeAuth } = await import("@/lib/mail-bridge-auth.server");
   const auth = await resolveBridgeAuth(mailSessionToken);
@@ -118,8 +121,7 @@ export const bridgeGetFolderCounts = createServerFn({ method: "POST" })
   .inputValidator((v: z.input<typeof AuthSchema>) => AuthSchema.parse(v))
   .handler(async ({ data }) => {
     const r = await bridgeCall(data.mailSessionToken, "/api/folders", {}, data.password);
-    if (!r.ok)
-      return { ok: false as const, error: r.error, counts: [] as FolderCount[] };
+    if (!r.ok) return { ok: false as const, error: r.error, counts: [] as FolderCount[] };
     return { ok: true as const, counts: (r.json.counts ?? []) as FolderCount[] };
   });
 
@@ -134,8 +136,7 @@ export const bridgeGetMessages = createServerFn({ method: "POST" })
       { folder: data.folder, limit: data.limit, offset: data.offset, sort: data.sort },
       data.password,
     );
-    if (!r.ok)
-      return { ok: false as const, error: r.error, messages: [] as MailMessage[] };
+    if (!r.ok) return { ok: false as const, error: r.error, messages: [] as MailMessage[] };
     return { ok: true as const, messages: (r.json.messages ?? []) as MailMessage[] };
   });
 
@@ -146,12 +147,7 @@ export const bridgeGetMessages = createServerFn({ method: "POST" })
  * signal to tombstone the local index row; every other code is preserved
  * verbatim so the UI never invents a ghost cleanup.
  */
-export type BridgeMessageErrorCode =
-  | "NOT_FOUND"
-  | "UNAUTHORIZED"
-  | "UNAVAILABLE"
-  | "NETWORK"
-  | "UNKNOWN";
+export type BridgeMessageErrorCode = SharedBridgeMessageErrorCode;
 
 export const bridgeGetMessage = createServerFn({ method: "POST" })
   .inputValidator((v: z.input<typeof MessagePayloadSchema>) => MessagePayloadSchema.parse(v))
@@ -175,13 +171,13 @@ export const bridgeGetMessage = createServerFn({ method: "POST" })
         data.password,
       );
       if (!r.ok) {
-        let code: BridgeMessageErrorCode = "UNKNOWN";
-        if (r.unavailable) code = "UNAVAILABLE";
-        else if (r.status === 404) code = "NOT_FOUND";
-        else if (r.status === 401 || r.status === 403) code = "UNAUTHORIZED";
-        else if (r.status == null) code = "NETWORK";
+        const code = classifyBridgeMessageFailure({
+          status: r.status,
+          unavailable: r.unavailable,
+        });
         return { ok: false, code, error: r.error, message: null, status: r.status };
       }
+
       // The bridge may return { ok:true, message:null } on a rare shape
       // mismatch. Treat that as NOT_FOUND for the ghost-cleanup contract.
       const msg = (r.json.message as MailMessage | null) ?? null;
@@ -251,9 +247,7 @@ export const bridgeMove = createServerFn({ method: "POST" })
 export const bridgeDelete = createServerFn({ method: "POST" })
   .inputValidator((v: z.input<typeof MessagePayloadSchema>) => MessagePayloadSchema.parse(v))
   .handler(
-    async ({
-      data,
-    }): Promise<{ ok: true; kind: "moved-to-trash"; move: BridgeMoveResult }> => {
+    async ({ data }): Promise<{ ok: true; kind: "moved-to-trash"; move: BridgeMoveResult }> => {
       const r = await bridgeCall(
         data.mailSessionToken,
         "/api/delete",
@@ -284,8 +278,7 @@ export const bridgeSearch = createServerFn({ method: "POST" })
       },
       data.password,
     );
-    if (!r.ok)
-      return { ok: false as const, error: r.error, messages: [] as MailMessage[] };
+    if (!r.ok) return { ok: false as const, error: r.error, messages: [] as MailMessage[] };
     return { ok: true as const, messages: (r.json.messages ?? []) as MailMessage[] };
   });
 
