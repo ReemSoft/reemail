@@ -632,7 +632,7 @@ app.post("/api/sync/incremental", requireKey, imapGate("background"), async (req
   }
 });
 
-app.post("/api/sync/reconcile", requireKey, async (req, res) => {
+app.post("/api/sync/reconcile", requireKey, imapGate("background"), async (req, res) => {
   try {
     const p = ReconcileSyncSchema.parse(req.body);
     const result = await runReconcileSync(p.account as MailAccount, p.password, {
