@@ -547,6 +547,7 @@ function useMailData(session: MailSession | null) {
           });
           if (loadReqIdRef.current !== reqId) return;
           if (res.ok && res.indexed) {
+            reconcilePendingMovesForRead(res.messages, folder, startedAt);
             setMessages(applyPending(res.messages));
             setHasMore(res.hasMore);
             setIndexCursor(res.nextCursor);
