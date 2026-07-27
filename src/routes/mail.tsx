@@ -793,11 +793,9 @@ function useMailData(session: MailSession | null) {
         setIndexCursor(null);
       } catch (err: any) {
         if (loadReqIdRef.current !== reqId) return;
-        setBridgeError(err?.message || "فشل جلب الرسائل");
-        setMessages(applyPending(getMockMessages(folder)));
+        setBridgeError(err?.message || "تعذّر الاتصال بخادم البريد");
         setHasMore(false);
-        setUseMock(true);
-        setSource("mock");
+        setUseMock(false);
         setIndexCursor(null);
       }
     },
@@ -2469,8 +2467,13 @@ function MailApp() {
       {bridgeError && (
         <div className="flex items-center justify-center gap-2 bg-warning px-3 py-2 text-xs font-medium text-warning-foreground">
           <AlertOctagon className="h-4 w-4" />
-          <span>{bridgeError}</span>
-          {useMock && <span className="opacity-80">(يتم عرض بيانات تجريبية مؤقتًا)</span>}
+          <span>تعذّر الاتصال بخادم البريد. سنعيد المحاولة تلقائياً.</span>
+          <button
+            onClick={() => rawRefresh()}
+            className="underline underline-offset-2 hover:opacity-80"
+          >
+            إعادة المحاولة الآن
+          </button>
         </div>
       )}
 
