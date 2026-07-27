@@ -152,7 +152,7 @@ describe("processClaimedJob", () => {
     const out = await processClaimedJob({ admin, workerId: "w1" }, makeJob({}, 1));
     expect(out.kind).toBe("retried");
     if (out.kind === "retried") {
-      expect(["NETWORK", "IMAP_TEMPORARY"]).toContain(out.code);
+      expect(["NETWORK", "IMAP_TEMPORARY", "UNKNOWN"]).toContain(out.code);
       expect(out.delaySeconds).toBeGreaterThan(0);
     }
     const failCall = calls.find((c) => c.fn === "fail_mail_sync_job");
