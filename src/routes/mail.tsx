@@ -852,6 +852,7 @@ function MailApp() {
     beginStarMutation,
     endStarMutation,
 
+    applyPending,
     applyPendingOne,
   } = useMailData(session || null);
 
