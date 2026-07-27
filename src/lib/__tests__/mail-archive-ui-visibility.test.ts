@@ -3,8 +3,7 @@
 //
 // The test environment is `node`, so we assert the exact predicates and
 // origin-tracker call sequence that mail.tsx uses, rather than mounting
-// the React component. These tests fail if the visibility rules or the
-// counts→UIDVALIDITY→purge pipeline regress.
+// the React component.
 
 import { describe, it, expect } from "vitest";
 import {
@@ -13,7 +12,7 @@ import {
   purgeStaleTrashUidValidity,
   type OriginStorage,
 } from "@/lib/mail-origin-tracker";
-import type { MailFolder } from "@/lib/mail-mock";
+import type { MailFolder } from "@/lib/mail-types";
 
 function makeStorage(): OriginStorage & { store: Map<string, string> } {
   const store = new Map<string, string>();
@@ -26,8 +25,6 @@ function makeStorage(): OriginStorage & { store: Map<string, string> } {
 }
 
 // Mirror the exact predicates used inside MessageView in src/routes/mail.tsx.
-// Kept as pure functions so any drift in the route file is caught by these
-// tests.
 const canArchive = (folder: MailFolder) => folder !== "archive" && folder !== "trash";
 const canRestore = (folder: MailFolder) => folder === "trash" || folder === "archive";
 
@@ -60,8 +57,6 @@ describe("MessageView — Archive/Restore visibility", () => {
 });
 
 // Simulate the counts→UIDVALIDITY→purge wiring inside refreshFolderCounts.
-// The block under test in mail.tsx does exactly this for both trash and
-// archive kinds, once per counts response.
 type CountRow = { folder: MailFolder; uidvalidity?: number | null };
 function applyCountsUV(
   storage: OriginStorage,
@@ -106,21 +101,28 @@ describe("refreshFolderCounts — Archive UIDVALIDITY wiring", () => {
 
   it("Archive UIDVALIDITY change purges only the archive namespace", () => {
     const s = makeStorage();
-    // Seed FINAL origins in both namespaces under UV=200.
-    rememberFinalOrigin(s, A, "archive", 200, 55, {
-      folder: "sent",
-      messageId: "m-arch-1",
-    });
-    rememberFinalOrigin(s, A, "trash", 100, 77, {
-      folder: "inbox",
-      messageId: "m-trash-1",
-    });
+    rememberFinalOrigin(
+      s,
+      { accountId: A, trashUidValidity: 200, trashUid: 55 },
+      { originalCanonical: "sent", messageId: "m-arch-1" },
+      "archive",
+    );
+    rememberFinalOrigin(
+      s,
+      { accountId: A, trashUidValidity: 100, trashUid: 77 },
+      { originalCanonical: "inbox", messageId: "m-trash-1" },
+      "trash",
+    );
 
-    // Sanity: both origins are readable at their current UVs.
-    expect(getOrigin(s, A, "archive", 200, 55)?.folder).toBe("sent");
-    expect(getOrigin(s, A, "trash", 100, 77)?.folder).toBe("inbox");
+    expect(
+      getOrigin(s, { accountId: A, trashUidValidity: 200, trashUid: 55 }, "archive")
+        ?.originalCanonical,
+    ).toBe("sent");
+    expect(
+      getOrigin(s, { accountId: A, trashUidValidity: 100, trashUid: 77 }, "trash")
+        ?.originalCanonical,
+    ).toBe("inbox");
 
-    // UIDVALIDITY reset for Archive only (200 → 201).
     const refs = { trash: 100 as number | null, archive: 200 as number | null };
     applyCountsUV(
       s,
@@ -132,43 +134,51 @@ describe("refreshFolderCounts — Archive UIDVALIDITY wiring", () => {
       refs,
     );
 
-    // Archive origin under old UV=200 is purged; Trash origin untouched.
-    expect(getOrigin(s, A, "archive", 200, 55)).toBeNull();
-    expect(getOrigin(s, A, "trash", 100, 77)?.folder).toBe("inbox");
+    expect(getOrigin(s, { accountId: A, trashUidValidity: 200, trashUid: 55 }, "archive")).toBeNull();
+    expect(
+      getOrigin(s, { accountId: A, trashUidValidity: 100, trashUid: 77 }, "trash")
+        ?.originalCanonical,
+    ).toBe("inbox");
     expect(refs.archive).toBe(201);
     expect(refs.trash).toBe(100);
   });
 
   it("Restore from Archive returns the tracked origin folder, not Inbox", () => {
     const s = makeStorage();
-    // User archived a message from "sent". Origin recorded at UV=200, UID=55.
-    rememberFinalOrigin(s, A, "archive", 200, 55, {
-      folder: "sent",
-      messageId: "m-sent-arch",
-    });
-    // Ref matches counts.
+    rememberFinalOrigin(
+      s,
+      { accountId: A, trashUidValidity: 200, trashUid: 55 },
+      { originalCanonical: "sent", messageId: "m-sent-arch" },
+      "archive",
+    );
     const refs = { trash: null as number | null, archive: null as number | null };
     applyCountsUV(s, A, [{ folder: "archive", uidvalidity: 200 }], refs);
 
-    const origin = getOrigin(s, A, "archive", refs.archive!, 55);
-    expect(origin?.folder).toBe("sent");
+    const origin = getOrigin(
+      s,
+      { accountId: A, trashUidValidity: refs.archive!, trashUid: 55 },
+      "archive",
+    );
+    expect(origin?.originalCanonical).toBe("sent");
   });
 
   it("Missing/untracked origin falls back to null (caller uses Inbox default)", () => {
     const s = makeStorage();
     const refs = { trash: null as number | null, archive: null as number | null };
     applyCountsUV(s, A, [{ folder: "archive", uidvalidity: 200 }], refs);
-    // No origin was recorded for UID=999 — restore path must not surface
-    // a stale/guessed origin.
-    expect(getOrigin(s, A, "archive", refs.archive!, 999)).toBeNull();
+    expect(
+      getOrigin(s, { accountId: A, trashUidValidity: refs.archive!, trashUid: 999 }, "archive"),
+    ).toBeNull();
   });
 
   it("Trash Restore path is unaffected by the new Archive wiring", () => {
     const s = makeStorage();
-    rememberFinalOrigin(s, A, "trash", 100, 42, {
-      folder: "sent",
-      messageId: "m-trash-sent",
-    });
+    rememberFinalOrigin(
+      s,
+      { accountId: A, trashUidValidity: 100, trashUid: 42 },
+      { originalCanonical: "sent", messageId: "m-trash-sent" },
+      "trash",
+    );
     const refs = { trash: null as number | null, archive: null as number | null };
     applyCountsUV(
       s,
@@ -179,6 +189,9 @@ describe("refreshFolderCounts — Archive UIDVALIDITY wiring", () => {
       ],
       refs,
     );
-    expect(getOrigin(s, A, "trash", refs.trash!, 42)?.folder).toBe("sent");
+    expect(
+      getOrigin(s, { accountId: A, trashUidValidity: refs.trash!, trashUid: 42 }, "trash")
+        ?.originalCanonical,
+    ).toBe("sent");
   });
 });
