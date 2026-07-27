@@ -1177,6 +1177,8 @@ function MailApp() {
   }, [rawRefresh]);
 
   const getOne = useServerFn(bridgeGetMessage);
+  const cleanupGhost = useServerFn(tombstoneGhostMessage);
+
   const markRead = useServerFn(bridgeMarkRead);
   const star = useServerFn(bridgeStar);
   const updateFlag = useServerFn(indexUpdateFlag);
