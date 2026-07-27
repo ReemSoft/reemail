@@ -583,10 +583,11 @@ describe("BLOCKER_4 + BLOCKER_7 — applyMoveWriteThrough end-to-end", () => {
     const dst = s.folders.find((f) => f.id === "dst")!;
     expect(src.total).toBe(5);
     expect(dst.total).toBe(5);
-    // Unread parity: 3 unread of 5 originals were moved (odd uids), so
-    // src.unread -3 = 2, dst.unread +3 = 3.
-    expect(src.unread).toBe(2);
-    expect(dst.unread).toBe(3);
+    // Unread parity: uids 100/102/104 seen (per seededMessage(u, u%2===0)),
+    // so 2 unread messages moved (101, 103). src.unread 5-2=3, dst 0+2=2.
+    expect(src.unread).toBe(3);
+    expect(dst.unread).toBe(2);
+
     // Exactly 10 RPC calls (5 source + 5 destination).
     expect(s.rpcCalls.filter((c) => c.name === "adjust_mail_folder_counts_atomic")).toHaveLength(10);
   });
