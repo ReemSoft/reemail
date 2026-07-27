@@ -4406,7 +4406,10 @@ function Composer({
           </div>
         </div>
       )}
+        </div>
+      </div>
     </div>
+
   );
 }
 
