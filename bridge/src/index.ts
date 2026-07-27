@@ -4,12 +4,8 @@ import cors from "cors";
 import multer from "multer";
 import { uploadStorage, cleanupFiles, startupCleanup } from "./uploads.js";
 import { createSendGates } from "./concurrency.js";
-import {
-  createImapGates,
-  loadImapGatesConfigFromEnv,
-  ImapBusyError,
-  type ImapPriority,
-} from "./imap-gates.js";
+import { createImapGates, loadImapGatesConfigFromEnv, type ImapPriority } from "./imap-gates.js";
+import { createImapGateMiddleware } from "./imap-gate-middleware.js";
 
 import { z } from "zod";
 import {
