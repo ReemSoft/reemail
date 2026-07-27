@@ -236,7 +236,7 @@ app.post("/api/messages", requireKey, imapGate("interactive"), async (req, res) 
   }
 });
 
-app.post("/api/message", requireKey, async (req, res) => {
+app.post("/api/message", requireKey, imapGate("interactive"), async (req, res) => {
   try {
     const payload = MessagePayloadSchema.parse(req.body);
     const message = await getMessageBody(
