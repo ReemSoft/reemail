@@ -684,6 +684,12 @@ export type Database = {
         Args: { p_msg_id: number; p_worker_id: string }
         Returns: boolean
       }
+      enqueue_due_mail_sync_jobs: {
+        Args: never
+        Returns: {
+          enqueued: number
+        }[]
+      }
       enqueue_mail_sync_job: {
         Args: {
           p_account_id: string
@@ -698,6 +704,10 @@ export type Database = {
           inserted: boolean
           msg_id: number
         }[]
+      }
+      ensure_default_mail_sync_schedule: {
+        Args: { p_account_id: string; p_company_id: string }
+        Returns: boolean
       }
       fail_mail_sync_job: {
         Args: {
