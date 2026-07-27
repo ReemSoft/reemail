@@ -130,8 +130,10 @@ test("fairness: interactive preferred but background admitted after 3 in a row",
 
   r0();
   await all;
-  // First 3 interactive win, then background (fairness), then last interactive.
-  assert.deepEqual(order, ["i1", "i2", "i3", "bg", "i4"]);
+  // Streak was 1 from the priming r0 (interactive fast-path). Two more
+  // interactive admissions push the streak to 3, then fairness yields to
+  // the background waiter, then the final interactive drains.
+  assert.deepEqual(order, ["i1", "i2", "bg", "i3", "i4"]);
 });
 
 test("overflow: wait queue full rejects with IMAP_BUSY", async () => {
