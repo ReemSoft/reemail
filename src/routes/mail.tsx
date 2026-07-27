@@ -754,6 +754,10 @@ function useMailData(session: MailSession | null) {
     // list writers inside useMailData already patch through applyPending.
     pendingOverridesRef,
     setPendingFlagOverride: (id: string, patch: { starred?: boolean; read?: boolean }) => {
+      // Batch A / Fix #1: any user-visible mutation invalidates in-flight
+      // counts loaders — bump the monotonic generation so a stale response
+      // returning after this call cannot overwrite optimistic counters.
+      bumpCountsGen();
       setFlagOverride(pendingOverridesRef.current, id, patch);
     },
     clearPendingFlagOverride: (id: string, field?: "starred" | "read") => {
@@ -771,6 +775,9 @@ function useMailData(session: MailSession | null) {
       if (!currentAccountId) return;
       const parsed = parseMessageId(id);
       if (!parsed) return;
+      // Batch A / Fix #1: bump BEFORE the mutation network call starts so
+      // any counts request already in-flight is invalidated.
+      bumpCountsGen();
       beginPendingMoveEntry(pendingMovesRef.current, {
         accountId: currentAccountId,
         sourceFolder: parsed.folder,
@@ -784,6 +791,8 @@ function useMailData(session: MailSession | null) {
       if (!currentAccountId) return;
       const parsed = parseMessageId(id);
       if (!parsed) return;
+      // Confirmation writes new optimistic counters; invalidate racers.
+      bumpCountsGen();
       confirmPendingMoveEntry(pendingMovesRef.current, {
         accountId: currentAccountId,
         sourceFolder: parsed.folder,
@@ -795,6 +804,8 @@ function useMailData(session: MailSession | null) {
       if (!currentAccountId) return;
       const parsed = parseMessageId(id);
       if (!parsed) return;
+      // Rollback restores previous counters; invalidate racers too.
+      bumpCountsGen();
       rollbackPendingMoveEntry(pendingMovesRef.current, {
         accountId: currentAccountId,
         sourceFolder: parsed.folder,
@@ -810,6 +821,7 @@ function useMailData(session: MailSession | null) {
     // V4: star-mutation lifecycle hooks used by toggleStar to hold the
     // Starred count against racing loaders.
     beginStarMutation: () => {
+      bumpCountsGen();
       pendingStarMutRef.current.active++;
     },
     endStarMutation: () => {
@@ -817,6 +829,8 @@ function useMailData(session: MailSession | null) {
       if (s.active > 0) s.active--;
       s.settledAt = Date.now();
     },
+
+
 
     applyPending,
     applyPendingOne,
