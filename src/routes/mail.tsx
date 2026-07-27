@@ -1773,6 +1773,7 @@ function MailApp() {
             sourceCanonical: parsed.folder,
             sourceUid: parsed.uid,
             messageId: original?.threadId ?? null,
+            fingerprint: original ? fingerprintFromMessage(original) : null,
             moveResult,
           });
         }
