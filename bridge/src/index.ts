@@ -536,7 +536,7 @@ const AttachmentPayloadSchema = MessagePayloadSchema.extend({
   part: z.string().min(1).max(50),
 });
 
-app.post("/api/attachment", requireKey, async (req, res) => {
+app.post("/api/attachment", requireKey, imapGate("interactive"), async (req, res) => {
   try {
     const payload = AttachmentPayloadSchema.parse(req.body);
     const result = await downloadAttachment(
