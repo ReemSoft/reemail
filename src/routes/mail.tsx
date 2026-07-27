@@ -117,13 +117,7 @@ import { runManualRefresh } from "@/lib/mail-refresh-orchestration";
 import { createSingleFlight } from "@/lib/single-flight";
 import { reviveAt } from "@/lib/mail-rollback";
 
-import {
-  formatDate,
-  formatSize,
-  getFolderCounts as getMockFolderCounts,
-  getMessages as getMockMessages,
-  getMessage as getMockMessage,
-} from "@/lib/mail-mock";
+import { formatDate, formatSize } from "@/lib/mail-mock";
 import type { MailFolder, MailMessage } from "@/lib/mail-types";
 import { clearMailSession, getMailSession, type MailSession } from "@/lib/mail-session";
 import {
