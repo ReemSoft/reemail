@@ -110,6 +110,7 @@ import {
   beginPendingMove as beginPendingMoveEntry,
   clearPendingMovesForAccount,
   confirmPendingMove as confirmPendingMoveEntry,
+  isMessageSuppressed,
   loadPendingMovesFromSession,
   normalizePhysicalFolder,
   reconcilePendingMovesAfterSourceRead,
@@ -118,6 +119,7 @@ import {
   type PendingMoveOperation,
   type PendingMovesMap,
 } from "@/lib/mail-pending-moves";
+
 import {
   rememberOrigin as trackerRememberOrigin,
   getOrigin as trackerGetOrigin,
