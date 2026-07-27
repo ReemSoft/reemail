@@ -111,6 +111,8 @@ export type Database = {
           company_id: string
           created_at: string
           credentials_ciphertext: string | null
+          credentials_key_version: number | null
+          credentials_updated_at: string | null
           display_name: string | null
           email_address: string
           id: string
@@ -131,6 +133,8 @@ export type Database = {
           company_id: string
           created_at?: string
           credentials_ciphertext?: string | null
+          credentials_key_version?: number | null
+          credentials_updated_at?: string | null
           display_name?: string | null
           email_address: string
           id?: string
@@ -151,6 +155,8 @@ export type Database = {
           company_id?: string
           created_at?: string
           credentials_ciphertext?: string | null
+          credentials_key_version?: number | null
+          credentials_updated_at?: string | null
           display_name?: string | null
           email_address?: string
           id?: string
@@ -703,6 +709,10 @@ export type Database = {
           p_worker_id: string
         }
         Returns: boolean
+      }
+      get_mail_credentials_master_key: {
+        Args: { p_version: number }
+        Returns: string
       }
       get_mail_sync_queue_metrics: {
         Args: never
