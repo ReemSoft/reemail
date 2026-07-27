@@ -106,11 +106,15 @@ function pendingEntryKey(
   return `${sourceCanonical}:${sourceUid}:${sourceUidValidity ?? "?"}`;
 }
 
-// -------- Low-level I/O --------
+// -------- Low-level I/O (kind-scoped) --------
 
-function loadFinal(storage: OriginStorage, accountId: string): Record<string, FinalOriginEntry> {
+function loadFinal(
+  storage: OriginStorage,
+  accountId: string,
+  kind: OriginKind,
+): Record<string, FinalOriginEntry> {
   try {
-    const raw = storage.getItem(finalStorageKey(accountId));
+    const raw = storage.getItem(finalStorageKey(accountId, kind));
     if (!raw) return {};
     const parsed = JSON.parse(raw) as unknown;
     if (!parsed || typeof parsed !== "object") return {};
@@ -122,10 +126,11 @@ function loadFinal(storage: OriginStorage, accountId: string): Record<string, Fi
 function saveFinal(
   storage: OriginStorage,
   accountId: string,
+  kind: OriginKind,
   map: Record<string, FinalOriginEntry>,
 ): void {
   try {
-    storage.setItem(finalStorageKey(accountId), JSON.stringify(map));
+    storage.setItem(finalStorageKey(accountId, kind), JSON.stringify(map));
   } catch {
     /* quota — ignore */
   }
@@ -133,9 +138,10 @@ function saveFinal(
 function loadPending(
   storage: OriginStorage,
   accountId: string,
+  kind: OriginKind,
 ): Record<string, PendingOriginEntry> {
   try {
-    const raw = storage.getItem(pendingStorageKey(accountId));
+    const raw = storage.getItem(pendingStorageKey(accountId, kind));
     if (!raw) return {};
     const parsed = JSON.parse(raw) as unknown;
     if (!parsed || typeof parsed !== "object") return {};
@@ -147,10 +153,11 @@ function loadPending(
 function savePending(
   storage: OriginStorage,
   accountId: string,
+  kind: OriginKind,
   map: Record<string, PendingOriginEntry>,
 ): void {
   try {
-    storage.setItem(pendingStorageKey(accountId), JSON.stringify(map));
+    storage.setItem(pendingStorageKey(accountId, kind), JSON.stringify(map));
   } catch {
     /* quota — ignore */
   }
