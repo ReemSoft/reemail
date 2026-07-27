@@ -72,9 +72,17 @@ export type RunMailSyncCoreResult =
       oldestSyncedUid: number | null;
       hasMore: boolean;
       flagsSync: "condstore" | "reconcile-required" | "not-requested";
+      /**
+       * Only set for `mode:"reconcile"` with `fromUid === toUid`. Derived
+       * from the Bridge's IMAP `states` array (source of truth), NOT from
+       * the Local Index — the row may have been Tombstoned prior to the
+       * call and would falsely read "absent".
+       */
+      singleUidPresence?: { uid: number; present: boolean };
     }
   | { ok: true; busy: true; reason: "LOCKED" }
   | { ok: false; error: string; code: string };
+
 
 const BRIDGE_TTL_SECONDS = 60;
 
