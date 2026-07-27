@@ -105,6 +105,19 @@ import {
 } from "@/lib/mail-mock";
 import type { MailFolder, MailMessage } from "@/lib/mail-types";
 import { clearMailSession, getMailSession, type MailSession } from "@/lib/mail-session";
+import {
+  applyPendingMoveOverlay,
+  beginPendingMove as beginPendingMoveEntry,
+  clearPendingMovesForAccount,
+  confirmPendingMove as confirmPendingMoveEntry,
+  loadPendingMovesFromSession,
+  normalizePhysicalFolder,
+  reconcilePendingMovesAfterSourceRead,
+  rollbackPendingMove as rollbackPendingMoveEntry,
+  savePendingMovesToSession,
+  type PendingMoveOperation,
+  type PendingMovesMap,
+} from "@/lib/mail-pending-moves";
 
 export const Route = createFileRoute("/mail")({
   ssr: false,
@@ -277,6 +290,15 @@ function useMailData(session: MailSession | null) {
   // Optimistic hide set — rows removed by the user (unstar in the "starred"
   // folder) that must NOT be resurrected by a racing sync response.
   const pendingHiddenRef = useRef<HiddenIdsSet>(new Map());
+  // BLOCKER_3_PENDING_MOVE_OVERLAY — internal overlay preventing stale rows
+  // from resurrecting a moved/deleted/restored source-folder row. Never
+  // rendered as a badge/indicator. Cleared ONLY by an actual source-folder
+  // read whose request started AFTER `confirmedAt` and where the raw IMAP
+  // result no longer contains the source UID. See mail-pending-moves.ts.
+  const pendingMovesRef = useRef<PendingMovesMap>(loadPendingMovesFromSession());
+  const persistPendingMoves = useCallback(() => {
+    savePendingMovesToSession(pendingMovesRef.current);
+  }, []);
   // V4: Starred-count race guard. `active` = in-flight star mutations;
   // `settledAt` = timestamp of the most recent resolution. While either
   // is "hot" (active > 0 OR within 2s of settledAt), counts loaders must
@@ -292,18 +314,58 @@ function useMailData(session: MailSession | null) {
     return s.active > 0 || Date.now() - s.settledAt < STAR_COUNT_HOT_MS;
   }, []);
 
-  /** Apply overrides + hidden filter to `list`, GC confirmed entries. */
-  const applyPending = useCallback((list: MailMessage[]): MailMessage[] => {
-    reconcileFlagOverrides(list, pendingOverridesRef.current);
-    const patched = applyFlagOverrides(list, pendingOverridesRef.current);
-    return applyHiddenIds(patched, pendingHiddenRef.current);
-  }, []);
+  const currentAccountId = session?.account.id ?? null;
+
+  /** Apply overrides + hidden filter + pending-move overlay, GC confirmed entries. */
+  const applyPending = useCallback(
+    (list: MailMessage[]): MailMessage[] => {
+      reconcileFlagOverrides(list, pendingOverridesRef.current);
+      const patched = applyFlagOverrides(list, pendingOverridesRef.current);
+      const hidden = applyHiddenIds(patched, pendingHiddenRef.current);
+      return applyPendingMoveOverlay(hidden, pendingMovesRef.current, currentAccountId);
+    },
+    [currentAccountId],
+  );
 
   /** Wrap a single incoming message the same way (used by messageCache). */
   const applyPendingOne = useCallback(
     (m: MailMessage): MailMessage => applyFlagOverrideToOne(m, pendingOverridesRef.current),
     [],
   );
+
+  /**
+   * Reconcile pending-move entries whose source folder was just read. MUST
+   * be called with the RAW (pre-overlay) server list so presence checks are
+   * accurate. Only touches (accountId + physical source folder) matching
+   * the read scope — a Trash read never GC's an Inbox overlay entry.
+   */
+  const reconcilePendingMovesForRead = useCallback(
+    (rawList: MailMessage[], canonical: MailFolder, startedAt: number) => {
+      if (!currentAccountId || pendingMovesRef.current.size === 0) return;
+      const removed = reconcilePendingMovesAfterSourceRead(pendingMovesRef.current, {
+        accountId: currentAccountId,
+        physicalSourceFolder: normalizePhysicalFolder(canonical),
+        requestStartedAt: startedAt,
+        rawList,
+      });
+      if (removed > 0) persistPendingMoves();
+    },
+    [currentAccountId, persistPendingMoves],
+  );
+
+  // Session/account boundary: if the account identity changes (login, sign-out,
+  // account switch), clear its pending-move entries so a stale entry from a
+  // previous account can never suppress a new account's rows.
+  const lastAccountIdRef = useRef<string | null>(currentAccountId);
+  useEffect(() => {
+    const prev = lastAccountIdRef.current;
+    lastAccountIdRef.current = currentAccountId;
+    if (prev && prev !== currentAccountId) {
+      clearPendingMovesForAccount(pendingMovesRef.current, prev);
+      persistPendingMoves();
+    }
+  }, [currentAccountId, persistPendingMoves]);
+
 
 
 
@@ -427,6 +489,7 @@ function useMailData(session: MailSession | null) {
   const loadFromBridge = useCallback(
     async (reqId: number) => {
       if (!session) return;
+      const bridgeStartedAt = Date.now();
       try {
         const result = await getMessages({
           data: {
@@ -440,6 +503,9 @@ function useMailData(session: MailSession | null) {
         });
         if (loadReqIdRef.current !== reqId) return;
         if (!result.ok) throw new Error(result.error);
+        // BLOCKER_3: reconcile BEFORE applying overlay so the raw list
+        // drives presence checks.
+        reconcilePendingMovesForRead(result.messages, folder, bridgeStartedAt);
         setMessages(applyPending(result.messages));
         setHasMore(result.messages.length >= PAGE);
         setBridgeError(null);
@@ -456,8 +522,9 @@ function useMailData(session: MailSession | null) {
         setIndexCursor(null);
       }
     },
-    [session, folder, sort, getMessages, applyPending],
+    [session, folder, sort, getMessages, applyPending, reconcilePendingMovesForRead],
   );
+
 
   const loadMessages = useCallback(async () => {
     if (!session) return;
@@ -480,6 +547,7 @@ function useMailData(session: MailSession | null) {
           });
           if (loadReqIdRef.current !== reqId) return;
           if (res.ok && res.indexed) {
+            reconcilePendingMovesForRead(res.messages, folder, startedAt);
             setMessages(applyPending(res.messages));
             setHasMore(res.hasMore);
             setIndexCursor(res.nextCursor);
@@ -675,6 +743,49 @@ function useMailData(session: MailSession | null) {
     unhideRow: (id: string) => unhideId(pendingHiddenRef.current, id),
     confirmHideRow: (id: string, at: number = Date.now()) =>
       confirmHide(pendingHiddenRef.current, id, at),
+    // BLOCKER_3: pending-move overlay lifecycle. Wrappers parse the
+    // MailMessage id and forward to the pure overlay module. Persisted to
+    // sessionStorage after every mutation so a refresh can't lose them.
+    beginPendingMove: (id: string, operation: PendingMoveOperation) => {
+      if (!currentAccountId) return;
+      const parsed = parseMessageId(id);
+      if (!parsed) return;
+      beginPendingMoveEntry(pendingMovesRef.current, {
+        accountId: currentAccountId,
+        sourceFolder: parsed.folder,
+        sourceUid: parsed.uid,
+        messageId: id,
+        operation,
+      });
+      persistPendingMoves();
+    },
+    confirmPendingMove: (id: string) => {
+      if (!currentAccountId) return;
+      const parsed = parseMessageId(id);
+      if (!parsed) return;
+      confirmPendingMoveEntry(pendingMovesRef.current, {
+        accountId: currentAccountId,
+        sourceFolder: parsed.folder,
+        sourceUid: parsed.uid,
+      });
+      persistPendingMoves();
+    },
+    rollbackPendingMove: (id: string) => {
+      if (!currentAccountId) return;
+      const parsed = parseMessageId(id);
+      if (!parsed) return;
+      rollbackPendingMoveEntry(pendingMovesRef.current, {
+        accountId: currentAccountId,
+        sourceFolder: parsed.folder,
+        sourceUid: parsed.uid,
+      });
+      persistPendingMoves();
+    },
+    clearAllPendingMoves: () => {
+      if (!currentAccountId) return;
+      const removed = clearPendingMovesForAccount(pendingMovesRef.current, currentAccountId);
+      if (removed > 0) persistPendingMoves();
+    },
     // V4: star-mutation lifecycle hooks used by toggleStar to hold the
     // Starred count against racing loaders.
     beginStarMutation: () => {
@@ -686,6 +797,7 @@ function useMailData(session: MailSession | null) {
       s.settledAt = Date.now();
     },
 
+    applyPending,
     applyPendingOne,
   };
 }
@@ -733,9 +845,14 @@ function MailApp() {
     hideRow,
     unhideRow,
     confirmHideRow,
+    beginPendingMove,
+    confirmPendingMove,
+    rollbackPendingMove,
+    clearAllPendingMoves,
     beginStarMutation,
     endStarMutation,
 
+    applyPending,
     applyPendingOne,
   } = useMailData(session || null);
 
@@ -1008,7 +1125,7 @@ function MailApp() {
           },
         });
         if (cancelled) return;
-        if (res.ok) setDeepResults(res.messages.map(applyPendingOne));
+        if (res.ok) setDeepResults(applyPending(res.messages));
         else {
           setDeepResults([]);
           setDeepError(res.error || "فشل البحث على السيرفر");
@@ -1285,6 +1402,7 @@ function MailApp() {
       setSelectedMessage(null);
       messageCache.current.delete(id);
       hideRow(id);
+      beginPendingMove(id, toFolder === "trash" ? "trash" : toFolder === "archive" ? "archive" : "move");
       applyMoveCountsDelta(parsed.folder, toFolder, wasUnread);
       try {
         await mutateMoveOrDelete({
@@ -1295,9 +1413,11 @@ function MailApp() {
         if (toFolder === "trash") rememberOrigin(msg?.threadId, parsed.folder);
         else forgetOrigin(msg?.threadId);
         confirmHideRow(id);
+        confirmPendingMove(id);
         toast.success("تم نقل الرسالة");
       } catch (err: any) {
         unhideRow(id);
+        rollbackPendingMove(id);
         applyMoveCountsDelta(toFolder, parsed.folder, wasUnread); // revert
         setMessages(snapshot);
         setSelectedId(prevSelectedId);
@@ -1341,6 +1461,7 @@ function MailApp() {
       setSelectedMessage(null);
       messageCache.current.delete(id);
       hideRow(id);
+      beginPendingMove(id, isTrash ? "permanent-delete" : "trash");
       applyMoveCountsDelta(parsed.folder, destForCounts, wasUnread);
       try {
         if (isTrash) {
@@ -1355,9 +1476,11 @@ function MailApp() {
           rememberOrigin(msg?.threadId, parsed.folder);
         }
         confirmHideRow(id);
+        confirmPendingMove(id);
         toast.success(isTrash ? "تم حذف الرسالة نهائياً" : "تم نقل الرسالة إلى المهملات");
       } catch (err: any) {
         unhideRow(id);
+        rollbackPendingMove(id);
         applyMoveCountsDelta(destForCounts ?? parsed.folder, parsed.folder, wasUnread); // revert
         // Re-insert with a duplicate guard so we never clobber a concurrent
         // mutation that already re-added the row.
@@ -1387,6 +1510,7 @@ function MailApp() {
       setSelectedMessage(null);
       messageCache.current.delete(id);
       hideRow(id);
+      beginPendingMove(id, "restore");
       applyMoveCountsDelta(parsed.folder, target, wasUnread);
       try {
         await mutateMoveOrDelete({
@@ -1396,10 +1520,12 @@ function MailApp() {
         });
         forgetOrigin(msg?.threadId);
         confirmHideRow(id);
+        confirmPendingMove(id);
         const label = FOLDER_META[target]?.label || target;
         toast.success(`تم استعادة الرسالة إلى ${label}`);
       } catch (err: any) {
         unhideRow(id);
+        rollbackPendingMove(id);
         applyMoveCountsDelta(target, parsed.folder, wasUnread); // revert
         setMessages(snapshot);
         setSelectedId(prevSelectedId);
@@ -1500,9 +1626,12 @@ function MailApp() {
       setSelectedId(null);
       setSelectedMessage(null);
     }
+    const bulkOp: PendingMoveOperation =
+      toFolder === "trash" ? "trash" : toFolder === "archive" ? "archive" : "move";
     ids.forEach((id) => {
       messageCache.current.delete(id);
       hideRow(id);
+      beginPendingMove(id, bulkOp);
     });
     // Optimistic counter deltas per id (source folder inferred from id).
     for (const id of ids) {
@@ -1525,6 +1654,7 @@ function MailApp() {
         if (toFolder === "trash") rememberOrigin(meta.get(id)?.threadId, parsed.folder);
         else forgetOrigin(meta.get(id)?.threadId);
         confirmHideRow(id);
+        confirmPendingMove(id);
       } catch (err) {
         failedIds.push(id);
         throw err;
@@ -1536,6 +1666,7 @@ function MailApp() {
       const failedSet = new Set(failedIds);
       for (const id of failedIds) {
         unhideRow(id);
+        rollbackPendingMove(id);
         const parsed = parseMessageId(id);
         if (parsed) {
           const info = meta.get(id);
@@ -1593,9 +1724,11 @@ function MailApp() {
       setSelectedId(null);
       setSelectedMessage(null);
     }
+    const bulkDeleteOp: PendingMoveOperation = isTrash ? "permanent-delete" : "trash";
     ids.forEach((id) => {
       messageCache.current.delete(id);
       hideRow(id);
+      beginPendingMove(id, bulkDeleteOp);
     });
     const destForCounts: MailFolder | null = isTrash ? null : "trash";
     for (const id of ids) {
@@ -1622,6 +1755,7 @@ function MailApp() {
           rememberOrigin(meta.get(id)?.threadId, parsed.folder);
         }
         confirmHideRow(id);
+        confirmPendingMove(id);
       } catch (err) {
         failedIds.push(id);
         throw err;
@@ -1632,6 +1766,7 @@ function MailApp() {
       const failedSet = new Set(failedIds);
       for (const id of failedIds) {
         unhideRow(id);
+        rollbackPendingMove(id);
         const parsed = parseMessageId(id);
         if (parsed) {
           const info = meta.get(id);
@@ -1688,6 +1823,7 @@ function MailApp() {
     ids.forEach((id) => {
       messageCache.current.delete(id);
       hideRow(id);
+      beginPendingMove(id, "restore");
     });
     // Precompute targets from origin map for both delta application and rollback.
     const idToTarget = new Map<string, MailFolder>();
@@ -1712,6 +1848,7 @@ function MailApp() {
         });
         forgetOrigin(meta.get(id)?.threadId);
         confirmHideRow(id);
+        confirmPendingMove(id);
       } catch (err) {
         failedIds.push(id);
         throw err;
@@ -1722,6 +1859,7 @@ function MailApp() {
       const failedSet = new Set(failedIds);
       for (const id of failedIds) {
         unhideRow(id);
+        rollbackPendingMove(id);
         const parsed = parseMessageId(id);
         if (parsed) {
           const target = idToTarget.get(id);
@@ -1773,6 +1911,9 @@ function MailApp() {
   }
 
   function handleSignOut() {
+    // Wipe pending-move overlay for this account so a subsequent sign-in
+    // cannot inherit stale suppressions from the previous session.
+    clearAllPendingMoves();
     clearMailSession();
     navigate({ to: "/login" });
   }
