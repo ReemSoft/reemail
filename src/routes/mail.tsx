@@ -3087,7 +3087,7 @@ function MessageView({
     const cc =
       message.cc && message.cc.length > 0 ? esc(message.cc.map((c) => c.email).join(", ")) : "";
     const date = esc(new Date(message.date).toLocaleString("ar"));
-    const body = message.body || esc(message.preview);
+    const body = message.body ? sanitizeEmailHtml(message.body) : esc(message.preview);
     win.document
       .write(`<!doctype html><html dir="rtl" lang="ar"><head><meta charset="utf-8"><title>${subject}</title>
 <style>
@@ -3365,7 +3365,9 @@ function MessageView({
 
             <article
               className="prose prose-sm mt-6 max-w-none break-words text-foreground prose-a:text-brand-accent prose-img:rounded-lg"
-              dangerouslySetInnerHTML={{ __html: message.body || message.preview }}
+              dangerouslySetInnerHTML={{
+                __html: sanitizeEmailHtml(message.body || message.preview || ""),
+              }}
             />
 
             {message.attachments && message.attachments.length > 0 && (
