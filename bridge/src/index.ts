@@ -336,7 +336,7 @@ const SearchPayloadSchema = FolderPayloadSchema.extend({
   limit: z.number().int().positive().max(200).optional().default(100),
 });
 
-app.post("/api/search", requireKey, async (req, res) => {
+app.post("/api/search", requireKey, imapGate("interactive"), async (req, res) => {
   try {
     const payload = SearchPayloadSchema.parse(req.body);
     const messages = await searchMessages(
