@@ -591,7 +591,7 @@ app.post("/api/attachment", requireKey, imapGate("interactive"), async (req, res
 
 // ---- Sync endpoints (metadata-only, no DB writes) ----
 
-app.post("/api/sync/initial", requireKey, async (req, res) => {
+app.post("/api/sync/initial", requireKey, imapGate("background"), async (req, res) => {
   try {
     const p = InitialSyncSchema.parse(req.body);
     const result = await runInitialSync(p.account as MailAccount, p.password, {
