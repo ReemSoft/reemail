@@ -448,9 +448,13 @@ function buildForward(message: MailMessage): ComposeInitial {
 
 type SortOption = "date-desc" | "date-asc" | "unread-first" | "starred-first";
 
-type SourceKind = "index" | "bridge" | "mock";
+type SourceKind = "index" | "bridge";
 
-function useMailData(session: MailSession | null) {
+function isInvalidTokenCode(code: unknown): boolean {
+  return code === "INVALID_TOKEN";
+}
+
+function useMailData(session: MailSession | null, onSessionExpired?: () => void) {
   const getCounts = useServerFn(bridgeGetFolderCounts);
   const getMessages = useServerFn(bridgeGetMessages);
   const listIndex = useServerFn(indexListMessages);
