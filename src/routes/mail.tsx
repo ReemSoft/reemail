@@ -1570,7 +1570,7 @@ function MailApp() {
     } catch (err: any) {
       if (!cached) {
         toast.error(err?.message || "فشل فتح الرسالة");
-        setSelectedMessage(getMockMessage(id) ?? null);
+        setSelectedMessage(null);
       }
     } finally {
       setReading(false);
