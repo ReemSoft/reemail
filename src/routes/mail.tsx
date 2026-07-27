@@ -3798,7 +3798,7 @@ function RecipientField({
                 commit(p);
               }
             }}
-            placeholder={value.length === 0 ? "أدخل عنوان بريد..." : ""}
+            placeholder=""
             className="min-w-[140px] flex-1 bg-transparent px-1 py-1 text-sm outline-none"
           />
         </div>
@@ -4136,7 +4136,28 @@ function Composer({
 
   const savedLabel = savedAt
     ? `تم الحفظ ${new Date(savedAt).toLocaleTimeString("ar", { hour: "2-digit", minute: "2-digit" })}`
-    : "مسودّة جديدة";
+    : "";
+
+  function saveDraftNow() {
+    if (typeof window === "undefined") return;
+    try {
+      const html = editorRef.current?.innerHTML ?? "";
+      const isEmpty =
+        to.length === 0 && cc.length === 0 && bcc.length === 0 && !subject && !html.trim();
+      if (isEmpty) {
+        toast.info("لا يوجد محتوى للحفظ");
+        return;
+      }
+      window.localStorage.setItem(
+        draftKey,
+        JSON.stringify({ to, cc, bcc, subject, html, showCc, showBcc }),
+      );
+      setSavedAt(Date.now());
+      toast.success("تم حفظ المسودّة");
+    } catch {
+      toast.error("تعذّر حفظ المسودّة");
+    }
+  }
 
 
   return (
@@ -4172,7 +4193,7 @@ function Composer({
               {subject || "رسالة جديدة"}
             </p>
             <p className="truncate text-[11px] text-muted-foreground">
-              من: {session.account.email_address}
+              المرسل: {session.account.email_address}
             </p>
           </div>
         </div>
@@ -4194,7 +4215,7 @@ function Composer({
         <div className="mx-auto flex w-full max-w-none flex-col gap-4 px-6 py-5">
           {/* Recipients */}
           <RecipientField
-            label="إلى"
+            label="المرسل له"
             value={to}
             onChange={setTo}
             autoFocus
@@ -4206,7 +4227,7 @@ function Composer({
                     onClick={() => setShowCc(true)}
                     className="rounded-md px-2 py-1 text-muted-foreground transition hover:bg-muted hover:text-foreground"
                   >
-                    Cc
+                    نسخة إلى
                   </button>
                 )}
                 {!showBcc && (
@@ -4215,14 +4236,14 @@ function Composer({
                     onClick={() => setShowBcc(true)}
                     className="rounded-md px-2 py-1 text-muted-foreground transition hover:bg-muted hover:text-foreground"
                   >
-                    Bcc
+                    نسخة مخفية إلى
                   </button>
                 )}
               </div>
             }
           />
-          {showCc && <RecipientField label="Cc" value={cc} onChange={setCc} />}
-          {showBcc && <RecipientField label="Bcc" value={bcc} onChange={setBcc} />}
+          {showCc && <RecipientField label="نسخة إلى" value={cc} onChange={setCc} />}
+          {showBcc && <RecipientField label="نسخة مخفية إلى" value={bcc} onChange={setBcc} />}
 
           {/* Subject */}
           <div className="flex flex-col gap-1.5">
@@ -4398,12 +4419,23 @@ function Composer({
             type="button"
             onClick={() => fileInputRef.current?.click()}
             disabled={sending || files.length >= COMPOSE_MAX_FILES}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-input bg-background px-3 py-2 text-xs text-muted-foreground transition hover:border-primary hover:text-foreground disabled:opacity-40"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-input bg-background px-3 py-2 text-xs text-muted-foreground transition hover:bg-muted hover:text-foreground disabled:opacity-40"
             aria-label="إرفاق ملف"
             title="إرفاق ملف"
           >
             <Paperclip className="h-4 w-4" />
             <span className="hidden sm:inline">إرفاق</span>
+          </button>
+          <button
+            type="button"
+            onClick={saveDraftNow}
+            disabled={sending}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-input bg-background px-3 py-2 text-xs text-muted-foreground transition hover:bg-muted hover:text-foreground disabled:opacity-40"
+            aria-label="حفظ كمسودة"
+            title="حفظ كمسودة"
+          >
+            <FileText className="h-4 w-4" />
+            <span className="hidden sm:inline">حفظ كمسودة</span>
           </button>
         </div>
         <div className="flex items-center gap-3 text-[11px] text-muted-foreground">
