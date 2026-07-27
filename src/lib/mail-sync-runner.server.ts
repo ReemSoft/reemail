@@ -450,7 +450,9 @@ export async function runMailSyncCore(
       oldestSyncedUid: finalCursor?.oldest_synced_uid ?? null,
       hasMore,
       flagsSync,
+      ...(singleUidPresence ? { singleUidPresence } : {}),
     };
+
   } catch (err) {
     releaseStatus = "error";
     const raw = err instanceof Error ? err.message : String(err ?? "");
