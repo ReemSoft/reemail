@@ -105,6 +105,19 @@ import {
 } from "@/lib/mail-mock";
 import type { MailFolder, MailMessage } from "@/lib/mail-types";
 import { clearMailSession, getMailSession, type MailSession } from "@/lib/mail-session";
+import {
+  applyPendingMoveOverlay,
+  beginPendingMove as beginPendingMoveEntry,
+  clearPendingMovesForAccount,
+  confirmPendingMove as confirmPendingMoveEntry,
+  loadPendingMovesFromSession,
+  normalizePhysicalFolder,
+  reconcilePendingMovesAfterSourceRead,
+  rollbackPendingMove as rollbackPendingMoveEntry,
+  savePendingMovesToSession,
+  type PendingMoveOperation,
+  type PendingMovesMap,
+} from "@/lib/mail-pending-moves";
 
 export const Route = createFileRoute("/mail")({
   ssr: false,
