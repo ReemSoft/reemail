@@ -392,7 +392,6 @@ function promotePendingOriginsForDestList(
   }
 }
 
-
 type ComposeInitial = {
   to?: string;
   cc?: string;
@@ -711,9 +710,26 @@ function useMailData(session: MailSession | null) {
             trashUidValidityRef.current !== nextTrashUV &&
             currentAccountId
           ) {
-            purgeStaleTrashUidValidity(safeOriginStorage(), currentAccountId, nextTrashUV);
+            purgeStaleTrashUidValidity(safeOriginStorage(), currentAccountId, nextTrashUV, "trash");
           }
           trashUidValidityRef.current = nextTrashUV;
+          // Mirror for Archive: capture current Archive UIDVALIDITY so restore
+          // from Archive can validate final-origin entries the same way Trash does.
+          const archiveCount = res.counts.find((c) => c.folder === "archive");
+          const nextArchiveUV = archiveCount?.uidvalidity ?? null;
+          if (
+            nextArchiveUV != null &&
+            archiveUidValidityRef.current !== nextArchiveUV &&
+            currentAccountId
+          ) {
+            purgeStaleTrashUidValidity(
+              safeOriginStorage(),
+              currentAccountId,
+              nextArchiveUV,
+              "archive",
+            );
+          }
+          archiveUidValidityRef.current = nextArchiveUV;
           return;
         }
       } catch {
@@ -764,9 +780,7 @@ function useMailData(session: MailSession | null) {
           promotePendingOriginsForDestList(
             promoteKind,
             currentAccountId,
-            promoteKind === "trash"
-              ? trashUidValidityRef.current
-              : archiveUidValidityRef.current,
+            promoteKind === "trash" ? trashUidValidityRef.current : archiveUidValidityRef.current,
             result.messages,
           );
         }
@@ -1095,7 +1109,6 @@ function useMailData(session: MailSession | null) {
   };
 }
 
-
 function MailApp() {
   const navigate = useNavigate();
   const { confirm } = useConfirm();
@@ -1153,7 +1166,6 @@ function MailApp() {
     archiveUidValidityRef,
     bumpCountsGen,
   } = useMailData(session || null);
-
 
   // BLOCKER_6 — account identity for origin-tracker calls in this scope.
   const currentAccountId = session?.account.id ?? null;
@@ -1404,7 +1416,6 @@ function MailApp() {
     },
     [session, getOne, applyPendingOne, currentAccountId, cleanupGhost],
   );
-
 
   const prefetchMessage = useCallback(
     (id: string) => {
@@ -1961,7 +1972,6 @@ function MailApp() {
     });
   }
 
-
   async function handleMarkUnread(id: string) {
     const parsed = parseMessageId(id);
     if (!parsed || !session) return;
@@ -2373,7 +2383,6 @@ function MailApp() {
         forgetOriginForDestUid(restoreKind, currentAccountId, parsed.uid, destUidValidity);
         confirmHideRow(id);
         confirmPendingMove(id);
-
       } catch (err) {
         failedIds.push(id);
         throw err;
@@ -3199,6 +3208,7 @@ function MessageView({
   });
   const isTrash = message.folder === "trash";
   const canRestore = message.folder === "trash" || message.folder === "archive";
+  const canArchive = message.folder !== "archive" && message.folder !== "trash";
 
   const isSecure = !!message.security && !/غير/.test(message.security);
 
@@ -3289,9 +3299,11 @@ function MessageView({
             </button>
           )}
 
-          <button onClick={onArchive} className="rounded-lg p-2 hover:bg-muted" title="أرشفة">
-            <Archive className="h-4 w-4" />
-          </button>
+          {canArchive && (
+            <button onClick={onArchive} className="rounded-lg p-2 hover:bg-muted" title="أرشفة">
+              <Archive className="h-4 w-4" />
+            </button>
+          )}
           <button onClick={onSpam} className="rounded-lg p-2 hover:bg-muted" title="مزعج">
             <AlertOctagon className="h-4 w-4" />
           </button>
@@ -3359,9 +3371,11 @@ function MessageView({
               </DropdownMenuItem>
             )}
 
-            <DropdownMenuItem onClick={onArchive} className="md:hidden">
-              <Archive className="h-4 w-4" /> أرشفة
-            </DropdownMenuItem>
+            {canArchive && (
+              <DropdownMenuItem onClick={onArchive} className="md:hidden">
+                <Archive className="h-4 w-4" /> أرشفة
+              </DropdownMenuItem>
+            )}
             <DropdownMenuItem onClick={onSpam} className="md:hidden">
               <AlertOctagon className="h-4 w-4" /> مزعج
             </DropdownMenuItem>
