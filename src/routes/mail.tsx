@@ -3362,9 +3362,11 @@ function MessageView({
               </DropdownMenuItem>
             )}
 
-            <DropdownMenuItem onClick={onArchive} className="md:hidden">
-              <Archive className="h-4 w-4" /> أرشفة
-            </DropdownMenuItem>
+            {canArchive && (
+              <DropdownMenuItem onClick={onArchive} className="md:hidden">
+                <Archive className="h-4 w-4" /> أرشفة
+              </DropdownMenuItem>
+            )}
             <DropdownMenuItem onClick={onSpam} className="md:hidden">
               <AlertOctagon className="h-4 w-4" /> مزعج
             </DropdownMenuItem>
