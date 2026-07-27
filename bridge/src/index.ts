@@ -255,7 +255,7 @@ app.post("/api/message", requireKey, imapGate("interactive"), async (req, res) =
   }
 });
 
-app.post("/api/mark-read", requireKey, async (req, res) => {
+app.post("/api/mark-read", requireKey, imapGate("interactive"), async (req, res) => {
   try {
     const payload = MarkReadPayloadSchema.parse(req.body);
     await markRead(
