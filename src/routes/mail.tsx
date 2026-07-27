@@ -1125,7 +1125,7 @@ function MailApp() {
           },
         });
         if (cancelled) return;
-        if (res.ok) setDeepResults(res.messages.map(applyPendingOne));
+        if (res.ok) setDeepResults(applyPending(res.messages));
         else {
           setDeepResults([]);
           setDeepError(res.error || "فشل البحث على السيرفر");
