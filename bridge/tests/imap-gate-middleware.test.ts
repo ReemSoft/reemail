@@ -12,6 +12,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import express from "express";
+import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { createImapGates } from "../src/imap-gates.js";
 import { createImapGateMiddleware } from "../src/imap-gate-middleware.js";
