@@ -2037,14 +2037,25 @@ function MailApp() {
       try {
         if (isTrash) {
           await mutateMoveOrDelete({ sourceCanonical: parsed.folder, uid: parsed.uid });
-          forgetOrigin(currentAccountId, meta.get(id)?.threadId);
+          forgetOriginForTrashUid(
+            currentAccountId,
+            parsed.uid,
+            trashUidValidityRef.current,
+            meta.get(id)?.threadId ?? null,
+          );
         } else {
-          await mutateMoveOrDelete({
+          const moveResult = await mutateMoveOrDelete({
             sourceCanonical: parsed.folder,
             uid: parsed.uid,
             toFolder: "trash",
           });
-          rememberOrigin(currentAccountId, meta.get(id)?.threadId, parsed.folder);
+          writeOriginOnTrash({
+            accountId: currentAccountId,
+            sourceCanonical: parsed.folder,
+            sourceUid: parsed.uid,
+            messageId: meta.get(id)?.threadId ?? null,
+            moveResult,
+          });
         }
         confirmHideRow(id);
         confirmPendingMove(id);
