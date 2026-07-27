@@ -4132,7 +4132,7 @@ function Composer({
 
   // Inline mode: composer fills the message-viewer pane on the same
   // light bg-surface used elsewhere, wrapped in an elegant card.
-  const containerClass = "flex h-full w-full flex-col bg-surface";
+  const containerClass = "relative flex h-full w-full flex-col bg-surface";
 
   const savedLabel = savedAt
     ? `تم الحفظ ${new Date(savedAt).toLocaleTimeString("ar", { hour: "2-digit", minute: "2-digit" })}`
