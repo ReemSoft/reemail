@@ -73,49 +73,58 @@ async function bootApp() {
 test("client abort while waiting for permit: waiter drained, cancelled++, next() never called", async () => {
   const { port, gates, stop, releaseHolder, downstream } = await bootApp();
   try {
-    const body = JSON.stringify({
+    const bodyStr = JSON.stringify({
       account: { imap_host: "h", company_id: "c", email_address: "a@x" },
     });
-    // 1) Saturate the single global slot.
-    const holderPromise = fetch(`http://127.0.0.1:${port}/hold`, {
+    const postOpts = {
+      hostname: "127.0.0.1",
+      port,
       method: "POST",
-      headers: { "content-type": "application/json" },
-      body,
+      headers: {
+        "content-type": "application/json",
+        "content-length": Buffer.byteLength(bodyStr).toString(),
+      },
+    };
+
+    // 1) Saturate the single global slot.
+    const holderReq = http.request({ ...postOpts, path: "/hold" });
+    const holderDone = new Promise<void>((resolve) => {
+      holderReq.on("response", (r) => r.on("data", () => {}).on("end", () => resolve()));
+      holderReq.on("error", () => resolve());
     });
-    // Give the holder time to acquire the permit.
-    for (let i = 0; i < 50; i++) {
+    holderReq.end(bodyStr);
+    for (let i = 0; i < 100; i++) {
       if (gates.stats().activeGlobal === 1) break;
       await sleep(10);
     }
-    assert.equal(gates.stats().activeGlobal, 1);
+    assert.equal(gates.stats().activeGlobal, 1, "holder acquired permit");
 
     // 2) Second request must queue.
-    const ac = new AbortController();
-    const waiterErr = fetch(`http://127.0.0.1:${port}/wait`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body,
-      signal: ac.signal,
-    }).catch((e) => e);
-    for (let i = 0; i < 50; i++) {
+    const waiterReq = http.request({ ...postOpts, path: "/wait" });
+    const waiterDone = new Promise<void>((resolve) => {
+      waiterReq.on("response", (r) => r.on("data", () => {}).on("end", () => resolve()));
+      waiterReq.on("error", () => resolve());
+      waiterReq.on("close", () => resolve());
+    });
+    waiterReq.end(bodyStr);
+    for (let i = 0; i < 100; i++) {
       if (gates.stats().waitingInteractive === 1) break;
       await sleep(10);
     }
-    assert.equal(gates.stats().waitingInteractive, 1);
+    assert.equal(gates.stats().waitingInteractive, 1, "second request queued");
 
-    // 3) Client aborts mid-wait.
-    ac.abort();
-    const err = await waiterErr;
-    assert.ok(err instanceof Error, "aborted fetch rejects");
+    // 3) Client aborts mid-wait — destroy the underlying socket.
+    waiterReq.destroy();
+    await waiterDone;
 
-    // Give the server event loop a tick to process the socket close.
-    for (let i = 0; i < 50; i++) {
+    // Give the server event loop time to process req.close → abort → drain.
+    for (let i = 0; i < 100; i++) {
       if (gates.stats().waitingInteractive === 0 && gates.stats().cancelled >= 1) break;
       await sleep(10);
     }
 
     const s = gates.stats();
-    assert.equal(s.waitingInteractive, 0, "waiter drained");
+    assert.equal(s.waitingInteractive, 0, "waiter drained after client abort");
     assert.equal(s.cancelled, 1, "cancelled counter incremented by exactly 1");
     assert.equal(s.activeGlobal, 1, "no permit leak — only the holder is still in-flight");
     // Only the holder handler ran. The aborted /wait must NOT have called next().
@@ -123,8 +132,8 @@ test("client abort while waiting for permit: waiter drained, cancelled++, next()
 
     // 4) Release the holder, everything should return to zero cleanly.
     releaseHolder();
-    await holderPromise.catch(() => {});
-    for (let i = 0; i < 50; i++) {
+    await holderDone;
+    for (let i = 0; i < 100; i++) {
       if (gates.stats().activeGlobal === 0) break;
       await sleep(10);
     }
