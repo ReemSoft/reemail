@@ -392,7 +392,6 @@ function promotePendingOriginsForDestList(
   }
 }
 
-
 type ComposeInitial = {
   to?: string;
   cc?: string;
@@ -781,9 +780,7 @@ function useMailData(session: MailSession | null) {
           promotePendingOriginsForDestList(
             promoteKind,
             currentAccountId,
-            promoteKind === "trash"
-              ? trashUidValidityRef.current
-              : archiveUidValidityRef.current,
+            promoteKind === "trash" ? trashUidValidityRef.current : archiveUidValidityRef.current,
             result.messages,
           );
         }
@@ -1112,7 +1109,6 @@ function useMailData(session: MailSession | null) {
   };
 }
 
-
 function MailApp() {
   const navigate = useNavigate();
   const { confirm } = useConfirm();
@@ -1170,7 +1166,6 @@ function MailApp() {
     archiveUidValidityRef,
     bumpCountsGen,
   } = useMailData(session || null);
-
 
   // BLOCKER_6 — account identity for origin-tracker calls in this scope.
   const currentAccountId = session?.account.id ?? null;
@@ -1421,7 +1416,6 @@ function MailApp() {
     },
     [session, getOne, applyPendingOne, currentAccountId, cleanupGhost],
   );
-
 
   const prefetchMessage = useCallback(
     (id: string) => {
@@ -1978,7 +1972,6 @@ function MailApp() {
     });
   }
 
-
   async function handleMarkUnread(id: string) {
     const parsed = parseMessageId(id);
     if (!parsed || !session) return;
@@ -2390,7 +2383,6 @@ function MailApp() {
         forgetOriginForDestUid(restoreKind, currentAccountId, parsed.uid, destUidValidity);
         confirmHideRow(id);
         confirmPendingMove(id);
-
       } catch (err) {
         failedIds.push(id);
         throw err;

@@ -134,7 +134,9 @@ describe("refreshFolderCounts — Archive UIDVALIDITY wiring", () => {
       refs,
     );
 
-    expect(getOrigin(s, { accountId: A, trashUidValidity: 200, trashUid: 55 }, "archive")).toBeNull();
+    expect(
+      getOrigin(s, { accountId: A, trashUidValidity: 200, trashUid: 55 }, "archive"),
+    ).toBeNull();
     expect(
       getOrigin(s, { accountId: A, trashUidValidity: 100, trashUid: 77 }, "trash")
         ?.originalCanonical,
