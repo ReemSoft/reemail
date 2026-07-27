@@ -254,6 +254,30 @@ export const clientLogin = createServerFn({ method: "POST" })
       return { ok: false as const, message: "تعذر إصدار جلسة البريد الآمنة. حاول لاحقاً." };
     }
 
+    // Encrypt & persist the mail password now that IMAP verification has
+    // succeeded and the permanent identity is resolved. This unlocks
+    // background sync (Worker R2) for this account. Persistence failure MUST
+    // NOT block the interactive login — the browser session still works,
+    // and the next successful login will retry the persistence.
+    try {
+      const { persistCredentialsAfterSuccessfulVerify } = await import(
+        "@/lib/mail-credentials.server"
+      );
+      await persistCredentialsAfterSuccessfulVerify(
+        supabaseAdmin,
+        identity.id,
+        identity.companyId,
+        data.password,
+      );
+    } catch (persistErr) {
+      // Never surface the plaintext or ciphertext. Only the coded error.
+      const code =
+        persistErr && typeof persistErr === "object" && "code" in persistErr
+          ? String((persistErr as { code: unknown }).code)
+          : "UNKNOWN";
+      console.error("[clientLogin] credential persistence failed (login still succeeds)", { code });
+    }
+
     // Return the permanent UUID as the browser-visible account.id.
     const persistentAccount = { ...configuredAccount, id: identity.id };
 
@@ -265,3 +289,4 @@ export const clientLogin = createServerFn({ method: "POST" })
       mailSessionTokenExpiresAt: tokenInfo.expiresAt,
     };
   });
+
