@@ -47,6 +47,7 @@ import {
   ArrowLeft,
   RefreshCw,
   MoreVertical,
+  MoreHorizontal,
   LogOut,
   Mail as MailIcon,
   Loader2,
