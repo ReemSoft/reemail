@@ -342,6 +342,123 @@ export type Database = {
           },
         ]
       }
+      mail_sync_dedupe: {
+        Row: {
+          account_id: string
+          attempt: number
+          claimed_at: string | null
+          company_id: string
+          created_at: string
+          dedupe_key: string
+          folder_id: string
+          kind: string
+          msg_id: number
+          priority: number
+          updated_at: string
+          worker_id: string | null
+        }
+        Insert: {
+          account_id: string
+          attempt?: number
+          claimed_at?: string | null
+          company_id: string
+          created_at?: string
+          dedupe_key: string
+          folder_id: string
+          kind: string
+          msg_id?: number
+          priority?: number
+          updated_at?: string
+          worker_id?: string | null
+        }
+        Update: {
+          account_id?: string
+          attempt?: number
+          claimed_at?: string | null
+          company_id?: string
+          created_at?: string
+          dedupe_key?: string
+          folder_id?: string
+          kind?: string
+          msg_id?: number
+          priority?: number
+          updated_at?: string
+          worker_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "mail_sync_dedupe_account_company_fk"
+            columns: ["account_id", "company_id"]
+            isOneToOne: false
+            referencedRelation: "mail_accounts"
+            referencedColumns: ["id", "company_id"]
+          },
+          {
+            foreignKeyName: "mail_sync_dedupe_folder_company_fk"
+            columns: ["folder_id", "company_id"]
+            isOneToOne: false
+            referencedRelation: "mail_folders"
+            referencedColumns: ["id", "company_id"]
+          },
+        ]
+      }
+      mail_sync_schedule: {
+        Row: {
+          account_id: string
+          cadence_seconds: number
+          company_id: string
+          created_at: string
+          enabled: boolean
+          folder_id: string
+          kind: string
+          last_enqueued_at: string | null
+          next_run_at: string
+          priority: number
+          updated_at: string
+        }
+        Insert: {
+          account_id: string
+          cadence_seconds?: number
+          company_id: string
+          created_at?: string
+          enabled?: boolean
+          folder_id: string
+          kind: string
+          last_enqueued_at?: string | null
+          next_run_at?: string
+          priority?: number
+          updated_at?: string
+        }
+        Update: {
+          account_id?: string
+          cadence_seconds?: number
+          company_id?: string
+          created_at?: string
+          enabled?: boolean
+          folder_id?: string
+          kind?: string
+          last_enqueued_at?: string | null
+          next_run_at?: string
+          priority?: number
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "mail_sync_schedule_account_company_fk"
+            columns: ["account_id", "company_id"]
+            isOneToOne: false
+            referencedRelation: "mail_accounts"
+            referencedColumns: ["id", "company_id"]
+          },
+          {
+            foreignKeyName: "mail_sync_schedule_folder_company_fk"
+            columns: ["folder_id", "company_id"]
+            isOneToOne: false
+            referencedRelation: "mail_folders"
+            referencedColumns: ["id", "company_id"]
+          },
+        ]
+      }
       mail_sync_state: {
         Row: {
           account_id: string
@@ -520,6 +637,23 @@ export type Database = {
           unread: number
         }[]
       }
+      claim_mail_sync_jobs: {
+        Args: {
+          p_batch_size?: number
+          p_global_concurrency?: number
+          p_lease_seconds?: number
+          p_per_account_concurrency?: number
+          p_per_company_concurrency?: number
+          p_worker_id: string
+        }
+        Returns: {
+          enqueued_at: string
+          message: Json
+          msg_id: number
+          read_ct: number
+          vt: string
+        }[]
+      }
       claim_mail_sync_lock: {
         Args: {
           p_account_id: string
@@ -529,6 +663,57 @@ export type Database = {
           p_ttl_seconds: number
         }
         Returns: boolean
+      }
+      cleanup_mail_sync_jobs: {
+        Args: {
+          p_completed_retention_days?: number
+          p_dead_retention_days?: number
+        }
+        Returns: {
+          completed_purged: number
+          dead_purged: number
+        }[]
+      }
+      complete_mail_sync_job: {
+        Args: { p_msg_id: number; p_worker_id: string }
+        Returns: boolean
+      }
+      enqueue_mail_sync_job: {
+        Args: {
+          p_account_id: string
+          p_company_id: string
+          p_delay_seconds?: number
+          p_folder_id: string
+          p_kind: string
+          p_priority?: number
+        }
+        Returns: {
+          dedupe_key: string
+          inserted: boolean
+          msg_id: number
+        }[]
+      }
+      fail_mail_sync_job: {
+        Args: {
+          p_action: string
+          p_delay_seconds: number
+          p_error_code: string
+          p_error_message: string
+          p_msg_id: number
+          p_worker_id: string
+        }
+        Returns: boolean
+      }
+      get_mail_sync_queue_metrics: {
+        Args: never
+        Returns: {
+          archived_last_hour: number
+          dead: number
+          dedupe_active: number
+          oldest_queued_seconds: number
+          queued: number
+          running: number
+        }[]
       }
       release_mail_sync_lock: {
         Args: {
@@ -540,6 +725,10 @@ export type Database = {
           p_locked_by: string
           p_status: string
         }
+        Returns: boolean
+      }
+      verify_mail_sync_tick_token: {
+        Args: { p_token: string }
         Returns: boolean
       }
     }
