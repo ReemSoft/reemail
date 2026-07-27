@@ -56,7 +56,9 @@ export const Route = createFileRoute("/api/public/hooks/mail-sync-tick")({
         // Step 1: enqueue any due scheduled jobs. Runs before claim so this
         // tick can immediately pick them up.
         try {
-          await (supabaseAdmin.rpc as (fn: string) => Promise<unknown>)("enqueue_due_mail_sync_jobs");
+          await (supabaseAdmin as unknown as { rpc: (fn: string) => Promise<unknown> }).rpc(
+            "enqueue_due_mail_sync_jobs",
+          );
         } catch (err) {
           console.error("[mail-sync-tick] enqueue_due failed", {
             msg: (err as Error)?.message?.slice(0, 120),
