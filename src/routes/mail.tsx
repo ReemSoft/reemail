@@ -151,7 +151,6 @@ import {
   clearAccountOrigins,
   buildOriginFingerprint,
   promoteUniquePendingOriginForTrashMessage,
-  promoteUniquePendingOriginForTrashMessage,
   type OriginKind,
 } from "@/lib/mail-origin-tracker";
 import type { IndexMoveResult } from "@/lib/mail-move.functions";
