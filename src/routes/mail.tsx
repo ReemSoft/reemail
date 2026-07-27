@@ -2989,10 +2989,17 @@ function MailApp() {
         {/* Message viewer */}
         <div
           className={`flex-1 overflow-hidden bg-surface ${
-            selectedMessage || (selectedId && reading) ? "flex" : "hidden md:flex"
+            compose || selectedMessage || (selectedId && reading) ? "flex" : "hidden md:flex"
           } flex-col`}
         >
-          {selectedMessage ? (
+          {compose ? (
+            <Composer
+              session={session}
+              initial={compose}
+              onClose={() => setCompose(null)}
+              onSent={onAfterSend}
+            />
+          ) : selectedMessage ? (
             <MessageView
               message={selectedMessage}
               loading={reading}
@@ -3029,18 +3036,10 @@ function MailApp() {
           )}
         </div>
       </div>
-
-      {compose && (
-        <Composer
-          session={session}
-          initial={compose}
-          onClose={() => setCompose(null)}
-          onSent={onAfterSend}
-        />
-      )}
     </div>
   );
 }
+
 
 function MessageRow({
   message,
