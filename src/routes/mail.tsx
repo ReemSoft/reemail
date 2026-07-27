@@ -881,7 +881,10 @@ function MailApp() {
 
     applyPending,
     applyPendingOne,
+    pendingMovesRef,
+    bumpCountsGen,
   } = useMailData(session || null);
+
   // BLOCKER_6 — account identity for origin-tracker calls in this scope.
   const currentAccountId = session?.account.id ?? null;
 
