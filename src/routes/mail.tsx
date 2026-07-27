@@ -820,8 +820,14 @@ function useMailData(session: MailSession | null) {
 
     applyPending,
     applyPendingOne,
+    // Batch A: expose the pending-move overlay ref and the monotonic count
+    // generation bumper so MailApp (fetchMessage / mutation handlers) can
+    // consult and advance them without duplicating state.
+    pendingMovesRef,
+    bumpCountsGen,
   };
 }
+
 
 function MailApp() {
   const navigate = useNavigate();
