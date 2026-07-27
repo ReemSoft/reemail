@@ -1911,6 +1911,10 @@ function MailApp() {
     // Wipe pending-move overlay for this account so a subsequent sign-in
     // cannot inherit stale suppressions from the previous session.
     clearAllPendingMoves();
+    // BLOCKER_6 — drop this account's origin map so a fresh sign-in on the
+    // same device doesn't inherit stale restore targets.
+    clearAccountOrigins(safeOriginStorage(), currentAccountId);
+
     clearMailSession();
     navigate({ to: "/login" });
   }
