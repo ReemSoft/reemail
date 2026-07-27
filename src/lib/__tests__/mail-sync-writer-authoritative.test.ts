@@ -1,4 +1,6 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 // Authoritative Counts contract tests (refreshFolderCounts).
+
 //
 // Guarantees:
 //   * When the sync runner passes `authoritativeTotal` (IMAP EXISTS), the
