@@ -2137,6 +2137,10 @@ function MailApp() {
             sourceCanonical: parsed.folder,
             sourceUid: parsed.uid,
             messageId: meta.get(id)?.threadId ?? null,
+            fingerprint: (() => {
+              const o = meta.get(id)?.original;
+              return o ? fingerprintFromMessage(o) : null;
+            })(),
             moveResult,
           });
         }
