@@ -3173,6 +3173,8 @@ function MessageView({
     timeStyle: "short",
   });
   const isTrash = message.folder === "trash";
+  const canRestore = message.folder === "trash" || message.folder === "archive";
+
   const isSecure = !!message.security && !/غير/.test(message.security);
 
   async function copyEmail() {
