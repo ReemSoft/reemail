@@ -123,9 +123,75 @@ function requireKey(req: express.Request, res: express.Response, next: express.N
   next();
 }
 
+// --- IMAP concurrency limiter (MAILMAESTRO_IMAP_LIMITER_R3) ---
+//
+// One slot per real IMAP connection. `interactive` is user-facing; `background`
+// is Worker sync. Waiters that overflow / time out / are cancelled fail fast
+// with HTTP 503 + `IMAP_BUSY`, which the queue backoff classifier already
+// treats as a transient retry (via the "busy" string match).
+const imapGatesConfig = loadImapGatesConfigFromEnv();
+const imapGates = createImapGates(imapGatesConfig);
+if (imapGatesConfig.enabled) {
+  console.log(
+    `[bridge] IMAP gates enabled — global=${imapGatesConfig.globalMax} host=${imapGatesConfig.perHostMax} company=${imapGatesConfig.perCompanyMax} account=${imapGatesConfig.perAccountMax}`,
+  );
+}
+
+function imapGate(priority: ImapPriority): express.RequestHandler {
+  return async (req, res, next) => {
+    // Pull gate keys from raw body — zod schemas strip company_id on parse.
+    const acct = (req.body ?? {}).account ?? {};
+    const meta = {
+      host: String(acct.imap_host ?? "unknown"),
+      company: String(acct.company_id ?? acct.companyId ?? ""),
+      account: String(acct.email_address ?? "unknown"),
+      priority,
+    };
+    const ac = new AbortController();
+    const onEarlyClose = () => { try { ac.abort(); } catch { /* noop */ } };
+    res.once("close", onEarlyClose);
+
+    let release: (() => void) | null = null;
+    try {
+      release = await imapGates.acquire({ ...meta, signal: ac.signal });
+    } catch (err) {
+      res.off("close", onEarlyClose);
+      if (res.writableEnded || res.destroyed) return;
+      if (err instanceof ImapBusyError) {
+        res.setHeader("Retry-After", String(err.retryAfterSeconds));
+        return res.status(503).json({
+          ok: false,
+          error: "IMAP_BUSY",
+          message: "الخادم مشغول، حاول بعد قليل",
+        });
+      }
+      return next(err);
+    }
+
+    // Release exactly once — whichever event fires first: response finished
+    // (success/error) or the socket dropped after we admitted the caller.
+    let released = false;
+    const doRelease = () => {
+      if (released) return;
+      released = true;
+      res.off("close", onEarlyClose);
+      release!();
+    };
+    res.once("finish", doRelease);
+    res.once("close", doRelease);
+    next();
+  };
+}
+
 // --- Routes ---
 app.get("/health", (_req, res) => {
   res.json({ status: "ok", timestamp: new Date().toISOString() });
+});
+
+// Bounded, side-effect-free limiter metrics. No PII (no emails, no company ids
+// beyond aggregated in-flight counts by host). Auth-gated to keep it internal.
+app.get("/api/metrics/imap-gates", requireKey, (_req, res) => {
+  res.json({ ok: true, gates: imapGates.stats() });
 });
 
 app.post("/api/verify", requireKey, async (req, res) => {
