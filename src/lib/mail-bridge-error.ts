@@ -31,9 +31,7 @@ export interface BridgeCallFailure {
  * turned into NOT_FOUND — that would let a transient hiccup silently
  * tombstone a real row.
  */
-export function classifyBridgeMessageFailure(
-  failure: BridgeCallFailure,
-): BridgeMessageErrorCode {
+export function classifyBridgeMessageFailure(failure: BridgeCallFailure): BridgeMessageErrorCode {
   if (failure.unavailable) return "UNAVAILABLE";
   if (failure.status === 404) return "NOT_FOUND";
   if (failure.status === 401 || failure.status === 403) return "UNAUTHORIZED";

@@ -24,9 +24,7 @@ describe("classifyBridgeMessageFailure — bridge /api/message error mapping", (
   it("bridge unavailable flag -> UNAVAILABLE (never tombstoned)", () => {
     expect(classifyBridgeMessageFailure({ unavailable: true })).toBe("UNAVAILABLE");
     // unavailable outranks other status hints — never downgrade to NOT_FOUND.
-    expect(classifyBridgeMessageFailure({ unavailable: true, status: 404 })).toBe(
-      "UNAVAILABLE",
-    );
+    expect(classifyBridgeMessageFailure({ unavailable: true, status: 404 })).toBe("UNAVAILABLE");
   });
 
   it("missing status (fetch threw / abort) -> NETWORK, never NOT_FOUND", () => {

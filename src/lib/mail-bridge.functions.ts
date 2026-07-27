@@ -16,7 +16,6 @@ import {
   type BridgeMessageErrorCode as SharedBridgeMessageErrorCode,
 } from "@/lib/mail-bridge-error";
 
-
 const FolderSchema = z.enum([
   "inbox",
   "starred",
@@ -76,8 +75,7 @@ async function bridgeCall(
   extraBody: Record<string, unknown>,
   password: string,
 ): Promise<
-  | { ok: true; json: any }
-  | { ok: false; error: string; status?: number; unavailable?: boolean }
+  { ok: true; json: any } | { ok: false; error: string; status?: number; unavailable?: boolean }
 > {
   const { resolveBridgeAuth } = await import("@/lib/mail-bridge-auth.server");
   const auth = await resolveBridgeAuth(mailSessionToken);
@@ -123,8 +121,7 @@ export const bridgeGetFolderCounts = createServerFn({ method: "POST" })
   .inputValidator((v: z.input<typeof AuthSchema>) => AuthSchema.parse(v))
   .handler(async ({ data }) => {
     const r = await bridgeCall(data.mailSessionToken, "/api/folders", {}, data.password);
-    if (!r.ok)
-      return { ok: false as const, error: r.error, counts: [] as FolderCount[] };
+    if (!r.ok) return { ok: false as const, error: r.error, counts: [] as FolderCount[] };
     return { ok: true as const, counts: (r.json.counts ?? []) as FolderCount[] };
   });
 
@@ -139,8 +136,7 @@ export const bridgeGetMessages = createServerFn({ method: "POST" })
       { folder: data.folder, limit: data.limit, offset: data.offset, sort: data.sort },
       data.password,
     );
-    if (!r.ok)
-      return { ok: false as const, error: r.error, messages: [] as MailMessage[] };
+    if (!r.ok) return { ok: false as const, error: r.error, messages: [] as MailMessage[] };
     return { ok: true as const, messages: (r.json.messages ?? []) as MailMessage[] };
   });
 
@@ -152,7 +148,6 @@ export const bridgeGetMessages = createServerFn({ method: "POST" })
  * verbatim so the UI never invents a ghost cleanup.
  */
 export type BridgeMessageErrorCode = SharedBridgeMessageErrorCode;
-
 
 export const bridgeGetMessage = createServerFn({ method: "POST" })
   .inputValidator((v: z.input<typeof MessagePayloadSchema>) => MessagePayloadSchema.parse(v))
@@ -252,9 +247,7 @@ export const bridgeMove = createServerFn({ method: "POST" })
 export const bridgeDelete = createServerFn({ method: "POST" })
   .inputValidator((v: z.input<typeof MessagePayloadSchema>) => MessagePayloadSchema.parse(v))
   .handler(
-    async ({
-      data,
-    }): Promise<{ ok: true; kind: "moved-to-trash"; move: BridgeMoveResult }> => {
+    async ({ data }): Promise<{ ok: true; kind: "moved-to-trash"; move: BridgeMoveResult }> => {
       const r = await bridgeCall(
         data.mailSessionToken,
         "/api/delete",
@@ -285,8 +278,7 @@ export const bridgeSearch = createServerFn({ method: "POST" })
       },
       data.password,
     );
-    if (!r.ok)
-      return { ok: false as const, error: r.error, messages: [] as MailMessage[] };
+    if (!r.ok) return { ok: false as const, error: r.error, messages: [] as MailMessage[] };
     return { ok: true as const, messages: (r.json.messages ?? []) as MailMessage[] };
   });
 

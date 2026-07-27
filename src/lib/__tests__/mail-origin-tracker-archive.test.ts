@@ -83,9 +83,7 @@ describe("mail-origin-tracker — kind='archive' namespace isolation", () => {
       { originalCanonical: "inbox" },
       "archive",
     );
-    expect(
-      getOrigin(s, { accountId: A, trashUidValidity: 200, trashUid: 9 }, "trash"),
-    ).toBeNull();
+    expect(getOrigin(s, { accountId: A, trashUidValidity: 200, trashUid: 9 }, "trash")).toBeNull();
     expect(
       getOrigin(s, { accountId: A, trashUidValidity: 200, trashUid: 9 }, "archive")
         ?.originalCanonical,
@@ -151,9 +149,7 @@ describe("mail-origin-tracker — kind='archive' namespace isolation", () => {
     expect(
       getOrigin(s, { accountId: A, trashUidValidity: 1, trashUid: 1 }, "trash"),
     ).not.toBeNull();
-    expect(
-      getOrigin(s, { accountId: A, trashUidValidity: 2, trashUid: 2 }, "archive"),
-    ).toBeNull();
+    expect(getOrigin(s, { accountId: A, trashUidValidity: 2, trashUid: 2 }, "archive")).toBeNull();
   });
 
   it("forgetFinalOrigin in one kind leaves the other kind intact", () => {
@@ -170,9 +166,7 @@ describe("mail-origin-tracker — kind='archive' namespace isolation", () => {
       "archive",
     );
     forgetFinalOrigin(s, { accountId: A, trashUidValidity: 50, trashUid: 3 }, "trash");
-    expect(
-      getOrigin(s, { accountId: A, trashUidValidity: 50, trashUid: 3 }, "trash"),
-    ).toBeNull();
+    expect(getOrigin(s, { accountId: A, trashUidValidity: 50, trashUid: 3 }, "trash")).toBeNull();
     expect(
       getOrigin(s, { accountId: A, trashUidValidity: 50, trashUid: 3 }, "archive")
         ?.originalCanonical,
