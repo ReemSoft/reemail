@@ -1821,6 +1821,7 @@ function MailApp() {
     ids.forEach((id) => {
       messageCache.current.delete(id);
       hideRow(id);
+      beginPendingMove(id, "restore");
     });
     // Precompute targets from origin map for both delta application and rollback.
     const idToTarget = new Map<string, MailFolder>();
@@ -1845,6 +1846,7 @@ function MailApp() {
         });
         forgetOrigin(meta.get(id)?.threadId);
         confirmHideRow(id);
+        confirmPendingMove(id);
       } catch (err) {
         failedIds.push(id);
         throw err;
@@ -1855,6 +1857,7 @@ function MailApp() {
       const failedSet = new Set(failedIds);
       for (const id of failedIds) {
         unhideRow(id);
+        rollbackPendingMove(id);
         const parsed = parseMessageId(id);
         if (parsed) {
           const target = idToTarget.get(id);
