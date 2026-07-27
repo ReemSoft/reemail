@@ -4161,208 +4161,227 @@ function Composer({
         setDragging(false);
       }}
     >
-      <div className="mx-auto flex h-full w-full max-w-3xl flex-col overflow-hidden p-3 sm:p-5">
-        <div className="relative flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-border bg-card shadow-soft">
-          {/* Header */}
-          <div className="flex items-center justify-between border-b border-border px-4 py-2.5">
-            <p className="truncate text-sm font-semibold">{subject || "رسالة جديدة"}</p>
-            <button
-              onClick={onClose}
-              className="rounded-md p-1.5 text-muted-foreground hover:bg-muted"
-              title="إغلاق (Esc)"
-              aria-label="إغلاق"
-            >
-              <X className="h-4 w-4" />
-            </button>
+      {/* Header — flush with the pane, on the same surface */}
+      <div className="flex shrink-0 items-center justify-between gap-3 border-b border-border/70 bg-surface/80 px-6 py-3 backdrop-blur">
+        <div className="flex min-w-0 items-center gap-3">
+          <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-brand-gradient text-white shadow-brand">
+            <Send className="h-4 w-4" />
+          </span>
+          <div className="min-w-0">
+            <p className="truncate text-sm font-semibold text-foreground">
+              {subject || "رسالة جديدة"}
+            </p>
+            <p className="truncate text-[11px] text-muted-foreground">
+              من: {session.account.email_address}
+            </p>
           </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-3">
+          <span className="hidden text-[11px] text-muted-foreground sm:inline">{savedLabel}</span>
+          <button
+            onClick={onClose}
+            className="rounded-lg p-2 text-muted-foreground transition hover:bg-muted hover:text-foreground"
+            title="إغلاق (Esc)"
+            aria-label="إغلاق"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      </div>
 
-
-      {/* Recipients + subject */}
-      <div className="flex-1 overflow-y-auto px-4 pb-2 pt-1">
-        <RecipientField
-          label="إلى"
-          value={to}
-          onChange={setTo}
-          autoFocus
-          rightSlot={
-            <div className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
-              {!showCc && (
-                <button
-                  type="button"
-                  onClick={() => setShowCc(true)}
-                  className="hover:text-foreground"
-                >
-                  Cc
-                </button>
-              )}
-              {!showBcc && (
-                <button
-                  type="button"
-                  onClick={() => setShowBcc(true)}
-                  className="hover:text-foreground"
-                >
-                  Bcc
-                </button>
-              )}
-            </div>
-          }
-        />
-        {showCc && <RecipientField label="Cc" value={cc} onChange={setCc} />}
-        {showBcc && <RecipientField label="Bcc" value={bcc} onChange={setBcc} />}
-
-        <input
-          value={subject}
-          onChange={(e) => setSubject(e.target.value)}
-          placeholder="الموضوع"
-          className="w-full border-b border-border bg-transparent px-1 py-2 text-sm outline-none"
-        />
-
-        {/* Formatting toolbar */}
-        {!plainMode && (
-          <div className="mt-2 flex flex-wrap items-center gap-0.5 border-b border-border pb-1.5">
-            <ToolbarButton title="عريض (Ctrl+B)" onMouseDown={() => exec("bold")}>
-              <Bold className="h-3.5 w-3.5" />
-            </ToolbarButton>
-            <ToolbarButton title="مائل (Ctrl+I)" onMouseDown={() => exec("italic")}>
-              <Italic className="h-3.5 w-3.5" />
-            </ToolbarButton>
-            <ToolbarButton title="تسطير (Ctrl+U)" onMouseDown={() => exec("underline")}>
-              <Underline className="h-3.5 w-3.5" />
-            </ToolbarButton>
-            <span className="mx-1 h-4 w-px bg-border" />
-            <ToolbarButton
-              title="قائمة نقطية"
-              onMouseDown={() => exec("insertUnorderedList")}
-            >
-              <List className="h-3.5 w-3.5" />
-            </ToolbarButton>
-            <ToolbarButton
-              title="قائمة مرقمة"
-              onMouseDown={() => exec("insertOrderedList")}
-            >
-              <ListOrdered className="h-3.5 w-3.5" />
-            </ToolbarButton>
-            <ToolbarButton title="اقتباس" onMouseDown={() => exec("formatBlock", "blockquote")}>
-              <Quote className="h-3.5 w-3.5" />
-            </ToolbarButton>
-            <span className="mx-1 h-4 w-px bg-border" />
-            <ToolbarButton title="إدراج رابط" onMouseDown={promptLink}>
-              <Link2 className="h-3.5 w-3.5" />
-            </ToolbarButton>
-            <ToolbarButton title="إزالة التنسيق" onMouseDown={() => exec("removeFormat")}>
-              <Eraser className="h-3.5 w-3.5" />
-            </ToolbarButton>
-            <span className="mx-1 h-4 w-px bg-border" />
-            {extensions.map((ext) => (
-              <button
-                key={ext.id}
-                type="button"
-                title={ext.title || ext.label}
-                onMouseDown={(e) => {
-                  e.preventDefault();
-                  try {
-                    ext.onClick(extensionContext);
-                  } catch (err) {
-                    console.error(`[composer-ext:${ext.id}]`, err);
-                  }
-                }}
-                className="inline-flex h-7 items-center gap-1 rounded-md px-2 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
-              >
-                {ext.icon && <span aria-hidden>{ext.icon}</span>}
-                <span>{ext.label}</span>
-              </button>
-            ))}
-            <div className="mx-auto" />
-            <button
-              type="button"
-              title={plainMode ? "الوضع المنسّق" : "الوضع النصّي"}
-              onClick={() => setPlainMode((v) => !v)}
-              className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
-            >
-              <Type className="h-3.5 w-3.5" />
-            </button>
-          </div>
-        )}
-
-        {/* Editor */}
-        {plainMode ? (
-          <textarea
-            defaultValue={stripHtml(editorRef.current?.innerHTML ?? initialHtml)}
-            onChange={(e) => {
-              if (editorRef.current) {
-                editorRef.current.innerHTML = plainToHtml(e.target.value);
-              }
-            }}
-            rows={14}
-            placeholder="اكتب رسالتك هنا..."
-            className="mt-2 w-full resize-none bg-transparent px-1 py-2 text-sm outline-none"
-          />
-        ) : (
-          <div
-            ref={editorRef}
-            contentEditable
-            suppressContentEditableWarning
-            role="textbox"
-            aria-multiline="true"
-            aria-label="نص الرسالة"
-            data-placeholder="اكتب رسالتك هنا..."
-            className="composer-editor mt-2 min-h-[240px] w-full whitespace-pre-wrap break-words rounded-md px-1 py-2 text-sm outline-none"
-          />
-        )}
-
-        {/* Attachments */}
-        {files.length > 0 && (
-          <div className="mt-3 flex flex-wrap gap-2 border-t border-border pt-3">
-            {files.map((f, i) => {
-              const { Icon, tint } = getAttachmentIcon(f.type, f.name);
-              return (
-                <div
-                  key={`${f.name}-${i}`}
-                  className="group inline-flex items-center gap-2 rounded-lg border border-border bg-muted/40 px-2.5 py-1.5 text-xs"
-                >
-                  <span
-                    className={`inline-flex h-6 w-6 items-center justify-center rounded-md ${tint}`}
-                  >
-                    <Icon className="h-3.5 w-3.5" />
-                  </span>
-                  <div className="flex flex-col leading-tight">
-                    <span className="max-w-[160px] truncate font-medium">{f.name}</span>
-                    <span className="text-[10px] text-muted-foreground">{formatBytes(f.size)}</span>
-                  </div>
+      {/* Body — full width, scrollable */}
+      <div className="flex-1 overflow-y-auto">
+        <div className="mx-auto flex w-full max-w-none flex-col gap-4 px-6 py-5">
+          {/* Recipients */}
+          <RecipientField
+            label="إلى"
+            value={to}
+            onChange={setTo}
+            autoFocus
+            rightSlot={
+              <div className="flex shrink-0 items-center gap-2 pl-2 text-xs">
+                {!showCc && (
                   <button
-                    onClick={() => removeFile(i)}
-                    disabled={sending}
-                    className="rounded p-0.5 opacity-60 hover:bg-background hover:opacity-100"
-                    aria-label="حذف المرفق"
+                    type="button"
+                    onClick={() => setShowCc(true)}
+                    className="rounded-md px-2 py-1 text-muted-foreground transition hover:bg-muted hover:text-foreground"
                   >
-                    <X className="h-3.5 w-3.5" />
+                    Cc
                   </button>
-                </div>
-              );
-            })}
-            <span className="self-center text-[11px] text-muted-foreground">
-              {formatBytes(totalBytes)} / 25 MB
-            </span>
-          </div>
-        )}
+                )}
+                {!showBcc && (
+                  <button
+                    type="button"
+                    onClick={() => setShowBcc(true)}
+                    className="rounded-md px-2 py-1 text-muted-foreground transition hover:bg-muted hover:text-foreground"
+                  >
+                    Bcc
+                  </button>
+                )}
+              </div>
+            }
+          />
+          {showCc && <RecipientField label="Cc" value={cc} onChange={setCc} />}
+          {showBcc && <RecipientField label="Bcc" value={bcc} onChange={setBcc} />}
 
-        {sending && progress > 0 && (
-          <div className="mt-3 h-1 overflow-hidden rounded-full bg-muted">
-            <div
-              className="h-full bg-brand-gradient transition-all"
-              style={{ width: `${progress}%` }}
+          {/* Subject */}
+          <div className="flex flex-col gap-1.5">
+            <label className="text-xs font-medium text-muted-foreground">الموضوع</label>
+            <input
+              value={subject}
+              onChange={(e) => setSubject(e.target.value)}
+              placeholder="اكتب موضوع الرسالة"
+              className="w-full rounded-lg border border-input bg-background px-4 py-2.5 text-sm outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20"
             />
           </div>
-        )}
+
+          {/* Editor */}
+          <div className="flex flex-col gap-1.5">
+            <label className="text-xs font-medium text-muted-foreground">نص الرسالة</label>
+            <div className="overflow-hidden rounded-lg border border-input bg-background transition focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/20">
+              {!plainMode && (
+                <div className="flex flex-wrap items-center gap-0.5 border-b border-border/70 bg-muted/30 px-2 py-1.5">
+                  <ToolbarButton title="عريض (Ctrl+B)" onMouseDown={() => exec("bold")}>
+                    <Bold className="h-3.5 w-3.5" />
+                  </ToolbarButton>
+                  <ToolbarButton title="مائل (Ctrl+I)" onMouseDown={() => exec("italic")}>
+                    <Italic className="h-3.5 w-3.5" />
+                  </ToolbarButton>
+                  <ToolbarButton title="تسطير (Ctrl+U)" onMouseDown={() => exec("underline")}>
+                    <Underline className="h-3.5 w-3.5" />
+                  </ToolbarButton>
+                  <span className="mx-1 h-4 w-px bg-border" />
+                  <ToolbarButton title="قائمة نقطية" onMouseDown={() => exec("insertUnorderedList")}>
+                    <List className="h-3.5 w-3.5" />
+                  </ToolbarButton>
+                  <ToolbarButton title="قائمة مرقمة" onMouseDown={() => exec("insertOrderedList")}>
+                    <ListOrdered className="h-3.5 w-3.5" />
+                  </ToolbarButton>
+                  <ToolbarButton title="اقتباس" onMouseDown={() => exec("formatBlock", "blockquote")}>
+                    <Quote className="h-3.5 w-3.5" />
+                  </ToolbarButton>
+                  <span className="mx-1 h-4 w-px bg-border" />
+                  <ToolbarButton title="إدراج رابط" onMouseDown={promptLink}>
+                    <Link2 className="h-3.5 w-3.5" />
+                  </ToolbarButton>
+                  <ToolbarButton title="إزالة التنسيق" onMouseDown={() => exec("removeFormat")}>
+                    <Eraser className="h-3.5 w-3.5" />
+                  </ToolbarButton>
+                  {extensions.length > 0 && <span className="mx-1 h-4 w-px bg-border" />}
+                  {extensions.map((ext) => (
+                    <button
+                      key={ext.id}
+                      type="button"
+                      title={ext.title || ext.label}
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        try {
+                          ext.onClick(extensionContext);
+                        } catch (err) {
+                          console.error(`[composer-ext:${ext.id}]`, err);
+                        }
+                      }}
+                      className="inline-flex h-7 items-center gap-1 rounded-md px-2 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
+                    >
+                      {ext.icon && <span aria-hidden>{ext.icon}</span>}
+                      <span>{ext.label}</span>
+                    </button>
+                  ))}
+                  <div className="mx-auto" />
+                  <button
+                    type="button"
+                    title={plainMode ? "الوضع المنسّق" : "الوضع النصّي"}
+                    onClick={() => setPlainMode((v) => !v)}
+                    className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+                  >
+                    <Type className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              )}
+
+              {plainMode ? (
+                <textarea
+                  defaultValue={stripHtml(editorRef.current?.innerHTML ?? initialHtml)}
+                  onChange={(e) => {
+                    if (editorRef.current) {
+                      editorRef.current.innerHTML = plainToHtml(e.target.value);
+                    }
+                  }}
+                  rows={16}
+                  placeholder="اكتب رسالتك هنا..."
+                  className="min-h-[320px] w-full resize-none bg-transparent px-4 py-3 text-sm outline-none"
+                />
+              ) : (
+                <div
+                  ref={editorRef}
+                  contentEditable
+                  suppressContentEditableWarning
+                  role="textbox"
+                  aria-multiline="true"
+                  aria-label="نص الرسالة"
+                  data-placeholder="اكتب رسالتك هنا..."
+                  className="composer-editor min-h-[320px] w-full whitespace-pre-wrap break-words px-4 py-3 text-sm outline-none"
+                />
+              )}
+            </div>
+          </div>
+
+          {/* Attachments */}
+          {files.length > 0 && (
+            <div className="flex flex-col gap-1.5">
+              <label className="text-xs font-medium text-muted-foreground">
+                المرفقات · {formatBytes(totalBytes)} / 25 MB
+              </label>
+              <div className="flex flex-wrap gap-2 rounded-lg border border-dashed border-border bg-background/50 p-3">
+                {files.map((f, i) => {
+                  const { Icon, tint } = getAttachmentIcon(f.type, f.name);
+                  return (
+                    <div
+                      key={`${f.name}-${i}`}
+                      className="group inline-flex items-center gap-2 rounded-lg border border-border bg-card px-2.5 py-1.5 text-xs shadow-soft"
+                    >
+                      <span
+                        className={`inline-flex h-6 w-6 items-center justify-center rounded-md ${tint}`}
+                      >
+                        <Icon className="h-3.5 w-3.5" />
+                      </span>
+                      <div className="flex flex-col leading-tight">
+                        <span className="max-w-[180px] truncate font-medium">{f.name}</span>
+                        <span className="text-[10px] text-muted-foreground">{formatBytes(f.size)}</span>
+                      </div>
+                      <button
+                        onClick={() => removeFile(i)}
+                        disabled={sending}
+                        className="rounded p-0.5 opacity-60 hover:bg-muted hover:opacity-100"
+                        aria-label="حذف المرفق"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {sending && progress > 0 && (
+            <div className="h-1 overflow-hidden rounded-full bg-muted">
+              <div
+                className="h-full bg-brand-gradient transition-all"
+                style={{ width: `${progress}%` }}
+              />
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Footer */}
-      <div className="flex items-center justify-between gap-3 border-t border-border px-4 py-2.5">
-        <div className="flex items-center gap-1.5">
+      <div className="flex shrink-0 items-center justify-between gap-3 border-t border-border/70 bg-surface/80 px-6 py-3 backdrop-blur">
+        <div className="flex items-center gap-2">
           <button
             onClick={handleSend}
             disabled={sending || to.length === 0}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-brand-gradient px-4 py-2 text-sm font-semibold text-white shadow-soft disabled:opacity-60"
+            className="inline-flex items-center gap-2 rounded-lg bg-brand-gradient px-5 py-2.5 text-sm font-semibold text-white shadow-brand transition hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-60"
             title="إرسال (Ctrl+Enter)"
           >
             {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
@@ -4379,36 +4398,39 @@ function Composer({
             type="button"
             onClick={() => fileInputRef.current?.click()}
             disabled={sending || files.length >= COMPOSE_MAX_FILES}
-            className="rounded-md p-2 text-muted-foreground hover:bg-muted disabled:opacity-40"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-input bg-background px-3 py-2 text-xs text-muted-foreground transition hover:border-primary hover:text-foreground disabled:opacity-40"
             aria-label="إرفاق ملف"
             title="إرفاق ملف"
           >
             <Paperclip className="h-4 w-4" />
+            <span className="hidden sm:inline">إرفاق</span>
           </button>
         </div>
         <div className="flex items-center gap-3 text-[11px] text-muted-foreground">
-          <span>{savedLabel}</span>
+          <span className="sm:hidden">{savedLabel}</span>
           {(to.length > 0 || cc.length > 0 || bcc.length > 0) && (
-            <span>
-              {to.length + cc.length + bcc.length} مستلم
-            </span>
+            <span>{to.length + cc.length + bcc.length} مستلم</span>
           )}
+          <button
+            onClick={onClose}
+            className="rounded-lg border border-input bg-background px-3 py-2 text-xs text-muted-foreground transition hover:border-primary hover:text-foreground"
+          >
+            إلغاء
+          </button>
         </div>
       </div>
 
       {dragging && (
-        <div className="pointer-events-none absolute inset-0 flex items-center justify-center rounded-2xl border-2 border-dashed border-primary/60 bg-primary/5 backdrop-blur-sm">
-          <div className="rounded-lg bg-card px-4 py-2 text-sm font-medium shadow-soft">
+        <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-primary/5 backdrop-blur-sm">
+          <div className="rounded-lg border-2 border-dashed border-primary/60 bg-card px-6 py-3 text-sm font-medium shadow-float">
             أفلت الملفات هنا لإرفاقها
           </div>
         </div>
       )}
-        </div>
-      </div>
     </div>
-
   );
 }
+
 
 
 // ---- Attachment card with download + inline preview ----
