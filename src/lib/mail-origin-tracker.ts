@@ -360,6 +360,94 @@ export function clearAccountOrigins(
   storage.removeItem(pendingStorageKey(accountId));
 }
 
+// -------- Fingerprint --------
+
+/**
+ * Build a conservative fingerprint from immutable fields that survive a
+ * move to Trash. `messageId` participates but is NEVER the sole key — the
+ * fingerprint must also incorporate other fields so two rows that happen
+ * to share a Message-ID stay distinguishable.
+ *
+ * Returns an empty string when no meaningful signal is available; callers
+ * MUST treat an empty fingerprint as "cannot match".
+ */
+export function buildOriginFingerprint(input: {
+  messageId?: string | null;
+  fromEmail?: string | null;
+  subject?: string | null;
+  date?: string | null;
+  sizeBytes?: number | null;
+}): string {
+  const norm = (v: string | null | undefined) =>
+    (v ?? "").toString().trim().toLowerCase();
+  const parts = [
+    norm(input.messageId),
+    norm(input.fromEmail),
+    norm(input.subject),
+    norm(input.date),
+    input.sizeBytes != null && Number.isFinite(input.sizeBytes)
+      ? String(input.sizeBytes)
+      : "",
+  ];
+  // Require at least two non-empty components to avoid single-field collisions.
+  const nonEmpty = parts.filter((p) => p.length > 0).length;
+  if (nonEmpty < 2) return "";
+  return parts.join("\u0001");
+}
+
+/**
+ * Promote a pending origin to final when EXACTLY ONE pending entry for
+ * this account matches the trashed message's fingerprint. Ambiguous
+ * matches (0 or >1) are left alone — we never guess.
+ *
+ * Returns the promoted FinalOriginEntry, or `null` when no unique match.
+ */
+export function promoteUniquePendingOriginForTrashMessage(
+  storage: OriginStorage,
+  input: {
+    accountId: string;
+    trashUidValidity: number;
+    trashUid: number;
+    fingerprint: string;
+  },
+): FinalOriginEntry | null {
+  if (
+    !input.accountId ||
+    !Number.isFinite(input.trashUidValidity) ||
+    input.trashUidValidity <= 0 ||
+    !Number.isFinite(input.trashUid) ||
+    input.trashUid <= 0 ||
+    !input.fingerprint
+  )
+    return null;
+  const pending = loadPending(storage, input.accountId);
+  // Skip if a final origin already exists for this trash identity — never
+  // overwrite a stronger identity-based entry with a fingerprint guess.
+  const finals = loadFinal(storage, input.accountId);
+  if (finals[finalEntryKey(input.trashUidValidity, input.trashUid)]) return null;
+  let matchKey: string | null = null;
+  let matches = 0;
+  for (const k of Object.keys(pending)) {
+    if ((pending[k].fingerprint ?? "") === input.fingerprint) {
+      matches++;
+      matchKey = k;
+      if (matches > 1) return null; // ambiguous
+    }
+  }
+  if (matches !== 1 || !matchKey) return null;
+  const entry = pending[matchKey];
+  const finalEntry: FinalOriginEntry = {
+    originalCanonical: entry.originalCanonical,
+    originalPath: entry.originalPath ?? null,
+    messageId: entry.messageId ?? null,
+  };
+  finals[finalEntryKey(input.trashUidValidity, input.trashUid)] = finalEntry;
+  saveFinal(storage, input.accountId, finals);
+  delete pending[matchKey];
+  savePending(storage, input.accountId, pending);
+  return finalEntry;
+}
+
 // -------- Test helpers --------
 
 export const __finalStorageKey = finalStorageKey;
