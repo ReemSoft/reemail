@@ -3736,76 +3736,78 @@ function RecipientField({
   );
 
   return (
-    <div
-      className="flex min-h-[38px] items-center gap-2 border-b border-border px-1 py-1.5"
-      onClick={() => inputRef.current?.focus()}
-    >
-      <span className="shrink-0 text-xs font-medium text-muted-foreground">{label}</span>
-      <div className="flex flex-1 flex-wrap items-center gap-1.5" dir="ltr">
-        {value.map((r, i) => (
-          <span
-            key={`${r.email}-${i}`}
-            className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs ${
-              r.valid
-                ? "bg-muted text-foreground"
-                : "bg-red-500/10 text-red-600 dark:text-red-400"
-            }`}
-            title={r.valid ? r.email : "بريد غير صالح"}
-          >
-            {!r.valid && <AlertTriangle className="h-3 w-3" />}
-            <span className="max-w-[220px] truncate">{r.name ? `${r.name} · ${r.email}` : r.email}</span>
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                onChange(value.filter((_, idx) => idx !== i));
-              }}
-              className="rounded-full p-0.5 hover:bg-background/60"
-              aria-label={`إزالة ${r.email}`}
+    <div className="flex flex-col gap-1.5">
+      <label className="text-xs font-medium text-muted-foreground">{label}</label>
+      <div
+        className="flex min-h-[42px] w-full items-center gap-2 rounded-lg border border-input bg-background px-3 py-1.5 transition focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/20"
+        onClick={() => inputRef.current?.focus()}
+      >
+        <div className="flex flex-1 flex-wrap items-center gap-1.5" dir="ltr">
+          {value.map((r, i) => (
+            <span
+              key={`${r.email}-${i}`}
+              className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs ${
+                r.valid
+                  ? "bg-muted text-foreground"
+                  : "bg-red-500/10 text-red-600 dark:text-red-400"
+              }`}
+              title={r.valid ? r.email : "بريد غير صالح"}
             >
-              <X className="h-3 w-3" />
-            </button>
-          </span>
-        ))}
-        <input
-          ref={inputRef}
-          value={text}
-          onChange={(e) => {
-            const v = e.target.value;
-            // Auto-commit on separator
-            if (/[,;]/.test(v)) {
-              commit(v);
-              return;
-            }
-            setText(v);
-          }}
-          onFocus={onFocus}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" || e.key === "Tab") {
-              if (text.trim()) {
-                e.preventDefault();
-                commit(text);
+              {!r.valid && <AlertTriangle className="h-3 w-3" />}
+              <span className="max-w-[220px] truncate">{r.name ? `${r.name} · ${r.email}` : r.email}</span>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onChange(value.filter((_, idx) => idx !== i));
+                }}
+                className="rounded-full p-0.5 hover:bg-background/60"
+                aria-label={`إزالة ${r.email}`}
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </span>
+          ))}
+          <input
+            ref={inputRef}
+            value={text}
+            onChange={(e) => {
+              const v = e.target.value;
+              if (/[,;]/.test(v)) {
+                commit(v);
+                return;
               }
-            } else if (e.key === "Backspace" && text === "" && value.length > 0) {
-              onChange(value.slice(0, -1));
-            }
-          }}
-          onBlur={() => commit(text)}
-          onPaste={(e) => {
-            const p = e.clipboardData.getData("text");
-            if (/[,;\n<>]/.test(p) || p.split(/\s+/).length > 1) {
-              e.preventDefault();
-              commit(p);
-            }
-          }}
-          placeholder={value.length === 0 ? "أدخل عنوان بريد..." : ""}
-          className="min-w-[140px] flex-1 bg-transparent px-1 py-0.5 text-sm outline-none"
-        />
+              setText(v);
+            }}
+            onFocus={onFocus}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === "Tab") {
+                if (text.trim()) {
+                  e.preventDefault();
+                  commit(text);
+                }
+              } else if (e.key === "Backspace" && text === "" && value.length > 0) {
+                onChange(value.slice(0, -1));
+              }
+            }}
+            onBlur={() => commit(text)}
+            onPaste={(e) => {
+              const p = e.clipboardData.getData("text");
+              if (/[,;\n<>]/.test(p) || p.split(/\s+/).length > 1) {
+                e.preventDefault();
+                commit(p);
+              }
+            }}
+            placeholder={value.length === 0 ? "أدخل عنوان بريد..." : ""}
+            className="min-w-[140px] flex-1 bg-transparent px-1 py-1 text-sm outline-none"
+          />
+        </div>
+        {rightSlot}
       </div>
-      {rightSlot}
     </div>
   );
 }
+
 
 // ------------ Rich-text editor toolbar ------------
 function ToolbarButton({
