@@ -44,6 +44,17 @@ export type SyncOutcome =
   | { ok: true; busy: true }
   | { ok: false; error: string; code: string };
 
+/**
+ * Result of a 1-UID reconcile against the physical source folder.
+ * `targetUidPresent` MUST be derived from the Bridge's IMAP response
+ * (never from Local Index, which is Tombstoned before this call).
+ */
+export type SourceReconcileOutcome =
+  | { ok: true; busy: false; targetUidPresent: boolean }
+  | { ok: true; busy: true }
+  | { ok: false; error: string; code: string };
+
+
 export interface SourceInfo {
   /** Physical source: `starred` collapses to INBOX. */
   folderId: string;
