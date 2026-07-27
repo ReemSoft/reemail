@@ -293,6 +293,17 @@ function useMailData(session: MailSession | null) {
   const persistPendingMoves = useCallback(() => {
     savePendingMovesToSession(pendingMovesRef.current);
   }, []);
+  // Batch A / Fix #1: Monotonic Count Generation Guard.
+  // Every optimistic mutation (move, delete, restore, permanent delete, star,
+  // read/unread, bulk) bumps `countsMutationGen`. Every counts loader
+  // captures the current gen at call start; if the gen has advanced by the
+  // time the request resolves, the loader MUST drop its result — a mutation
+  // fired mid-flight has already applied a better optimistic value.
+  const countsMutationGen = useRef(0);
+  const bumpCountsGen = useCallback(() => {
+    countsMutationGen.current += 1;
+  }, []);
+
   // V4: Starred-count race guard. `active` = in-flight star mutations;
   // `settledAt` = timestamp of the most recent resolution. While either
   // is "hot" (active > 0 OR within 2s of settledAt), counts loaders must
