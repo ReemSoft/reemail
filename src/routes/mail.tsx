@@ -743,6 +743,49 @@ function useMailData(session: MailSession | null) {
     unhideRow: (id: string) => unhideId(pendingHiddenRef.current, id),
     confirmHideRow: (id: string, at: number = Date.now()) =>
       confirmHide(pendingHiddenRef.current, id, at),
+    // BLOCKER_3: pending-move overlay lifecycle. Wrappers parse the
+    // MailMessage id and forward to the pure overlay module. Persisted to
+    // sessionStorage after every mutation so a refresh can't lose them.
+    beginPendingMove: (id: string, operation: PendingMoveOperation) => {
+      if (!currentAccountId) return;
+      const parsed = parseMessageId(id);
+      if (!parsed) return;
+      beginPendingMoveEntry(pendingMovesRef.current, {
+        accountId: currentAccountId,
+        sourceFolder: parsed.folder,
+        sourceUid: parsed.uid,
+        messageId: id,
+        operation,
+      });
+      persistPendingMoves();
+    },
+    confirmPendingMove: (id: string) => {
+      if (!currentAccountId) return;
+      const parsed = parseMessageId(id);
+      if (!parsed) return;
+      confirmPendingMoveEntry(pendingMovesRef.current, {
+        accountId: currentAccountId,
+        sourceFolder: parsed.folder,
+        sourceUid: parsed.uid,
+      });
+      persistPendingMoves();
+    },
+    rollbackPendingMove: (id: string) => {
+      if (!currentAccountId) return;
+      const parsed = parseMessageId(id);
+      if (!parsed) return;
+      rollbackPendingMoveEntry(pendingMovesRef.current, {
+        accountId: currentAccountId,
+        sourceFolder: parsed.folder,
+        sourceUid: parsed.uid,
+      });
+      persistPendingMoves();
+    },
+    clearAllPendingMoves: () => {
+      if (!currentAccountId) return;
+      const removed = clearPendingMovesForAccount(pendingMovesRef.current, currentAccountId);
+      if (removed > 0) persistPendingMoves();
+    },
     // V4: star-mutation lifecycle hooks used by toggleStar to hold the
     // Starred count against racing loaders.
     beginStarMutation: () => {
