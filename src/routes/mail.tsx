@@ -1909,6 +1909,9 @@ function MailApp() {
   }
 
   function handleSignOut() {
+    // Wipe pending-move overlay for this account so a subsequent sign-in
+    // cannot inherit stale suppressions from the previous session.
+    clearAllPendingMoves();
     clearMailSession();
     navigate({ to: "/login" });
   }
