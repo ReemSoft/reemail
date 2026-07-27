@@ -1,6 +1,23 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { Virtuoso } from "react-virtuoso";
+import DOMPurify from "dompurify";
+
+// Strict allow-list sanitizer for inbound email HTML. DOMPurify's defaults
+// already strip <script>, on*= handlers, and javascript: URLs; we harden a
+// bit further by forbidding tags that can execute or exfiltrate (iframe,
+// object, embed, form, link, meta, base, style) and by forcing external
+// links to open in a new tab without leaking the referrer.
+function sanitizeEmailHtml(html: string): string {
+  if (!html) return "";
+  const clean = DOMPurify.sanitize(html, {
+    FORBID_TAGS: ["script", "iframe", "object", "embed", "form", "link", "meta", "base", "style"],
+    FORBID_ATTR: ["style", "srcdoc", "formaction"],
+    ALLOW_DATA_ATTR: false,
+  });
+  // Best-effort target hardening — DOMPurify already blocks javascript: URLs.
+  return clean.replace(/<a\s/gi, '<a target="_blank" rel="noopener noreferrer nofollow" ');
+}
 
 import {
   Inbox,
