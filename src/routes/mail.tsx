@@ -202,15 +202,40 @@ function extractTrashIdentity(
   return null;
 }
 
+/** Build a fingerprint from a MailMessage-like row. */
+function fingerprintFromMessage(m: {
+  threadId?: string | null;
+  from?: { email?: string | null } | null;
+  subject?: string | null;
+  date?: string | null;
+}): string {
+  return buildOriginFingerprint({
+    messageId: m.threadId ?? null,
+    fromEmail: m.from?.email ?? null,
+    subject: m.subject ?? null,
+    date: m.date ?? null,
+  });
+}
+
 /** Write origin after a successful move to Trash (final or pending). */
 function writeOriginOnTrash(params: {
   accountId: string | null;
   sourceCanonical: MailFolder;
   sourceUid: number;
+  sourceUidValidity?: number;
   messageId?: string | null;
+  fingerprint?: string | null;
   moveResult: IndexMoveResult | null;
 }) {
-  const { accountId, sourceCanonical, sourceUid, messageId, moveResult } = params;
+  const {
+    accountId,
+    sourceCanonical,
+    sourceUid,
+    sourceUidValidity,
+    messageId,
+    fingerprint,
+    moveResult,
+  } = params;
   if (!accountId || sourceCanonical === "trash") return;
   const storage = safeOriginStorage();
   const trash = extractTrashIdentity(moveResult);
@@ -220,13 +245,24 @@ function writeOriginOnTrash(params: {
       { accountId, trashUidValidity: trash.trashUidValidity, trashUid: trash.trashUid },
       { originalCanonical: sourceCanonical, messageId: messageId ?? null },
     );
-    // Belt & braces: if a pending entry existed for this source, drop it.
-    if (messageId) forgetOriginsForMessageId(storage, accountId, messageId);
+    // Drop ONLY the exact pending entry for this source identity — never a
+    // broad messageId sweep (two rows may share a Message-ID legitimately).
+    forgetPendingOrigin(storage, {
+      accountId,
+      sourceCanonical,
+      sourceUid,
+      sourceUidValidity,
+    });
   } else {
     rememberPendingOrigin(
       storage,
-      { accountId, sourceCanonical, sourceUid },
-      { originalCanonical: sourceCanonical, messageId: messageId ?? null, createdAt: Date.now() },
+      { accountId, sourceCanonical, sourceUid, sourceUidValidity },
+      {
+        originalCanonical: sourceCanonical,
+        messageId: messageId ?? null,
+        fingerprint: fingerprint ?? null,
+        createdAt: Date.now(),
+      },
     );
   }
 }
@@ -246,20 +282,64 @@ function readOriginForTrashUid(
   return (hit?.originalCanonical as MailFolder) ?? "inbox";
 }
 
-/** Forget every origin entry that references this trash row / messageId. */
+/**
+ * Forget the FINAL origin entry for one physical Trash row. Never touches
+ * any other Trash entry (even one that shares the same Message-ID) and
+ * never touches Pending entries — a pending origin belongs to its own
+ * distinct source row.
+ */
 function forgetOriginForTrashUid(
   accountId: string | null,
   trashUid: number,
   trashUidValidity: number | null,
-  messageId?: string | null,
+) {
+  if (!accountId || trashUidValidity == null) return;
+  forgetFinalOrigin(safeOriginStorage(), { accountId, trashUidValidity, trashUid });
+}
+
+/** Drop the exact pending origin entry for an exact source identity. */
+function forgetExactPendingOrigin(
+  accountId: string | null,
+  sourceCanonical: MailFolder,
+  sourceUid: number,
+  sourceUidValidity?: number,
 ) {
   if (!accountId) return;
-  const storage = safeOriginStorage();
-  if (trashUidValidity != null) {
-    forgetFinalOrigin(storage, { accountId, trashUidValidity, trashUid });
-  }
-  if (messageId) forgetOriginsForMessageId(storage, accountId, messageId);
+  forgetPendingOrigin(safeOriginStorage(), {
+    accountId,
+    sourceCanonical,
+    sourceUid,
+    sourceUidValidity,
+  });
 }
+
+/**
+ * After a Trash list arrives (from Index or Bridge), promote any UNIQUE
+ * pending origin whose fingerprint matches a newly-visible trash row.
+ * Ambiguous matches are ignored — we never guess.
+ */
+function promotePendingOriginsForTrashList(
+  accountId: string | null,
+  trashUidValidity: number | null,
+  messages: ReadonlyArray<MailMessage>,
+) {
+  if (!accountId || trashUidValidity == null) return;
+  const storage = safeOriginStorage();
+  for (const m of messages) {
+    const parsed = parseMessageId(m.id);
+    if (!parsed || parsed.folder !== "trash") continue;
+    const fp = fingerprintFromMessage(m);
+    if (!fp) continue;
+    promoteUniquePendingOriginForTrashMessage(storage, {
+      accountId,
+      trashUidValidity,
+      trashUid: parsed.uid,
+      fingerprint: fp,
+    });
+  }
+}
+
+
 
 
 
