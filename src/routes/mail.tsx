@@ -4131,7 +4131,7 @@ function Composer({
     setSending(true);
     setProgress(0);
     try {
-      const bodyHtml = editorRef.current?.innerHTML ?? "";
+      const bodyHtml = sanitizeComposerHtml(editorRef.current?.innerHTML ?? "");
       const bodyText = stripHtml(bodyHtml);
 
       const payload = {
