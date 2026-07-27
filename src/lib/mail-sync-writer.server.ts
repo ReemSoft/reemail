@@ -356,16 +356,32 @@ export async function tombstoneMissingInRange(
 /** Recompute total/unread from live rows and write them to mail_folders. */
 export async function refreshFolderCounts(
   admin: Admin,
-  args: { accountId: string; folderId: string; uidValidity: string },
+  args: {
+    accountId: string;
+    folderId: string;
+    uidValidity: string;
+    /**
+     * Blocker 2 — Authoritative Counts.
+     *
+     * IMAP is the source of truth for a folder's message count. Local COUNT(*)
+     * of `mail_messages` returns only what we've synced (capped by the
+     * incremental page size, e.g. 300), which surfaces to users as a Sidebar
+     * total that undercounts real mailbox size.
+     *
+     * When the sync runner passes the freshly-observed IMAP `EXISTS` from
+     * the mailbox status, we persist THAT as the folder total. `null` /
+     * `undefined` / non-finite values fall back to the local COUNT for
+     * backward compatibility with older callers and for folders where
+     * EXISTS is genuinely unavailable.
+     *
+     * Unread stays local: mailbox status does not always return UNSEEN in
+     * the sync payload; the Sidebar polls STATUS separately (via
+     * `bridgeGetFolderCounts`) for the authoritative unread value.
+     */
+    authoritativeTotal?: number | null;
+  },
 ): Promise<{ total: number; unread: number }> {
   const uv = Number(args.uidValidity);
-  const totalQ = admin
-    .from("mail_messages")
-    .select("*", { count: "exact", head: true })
-    .eq("account_id", args.accountId)
-    .eq("folder_id", args.folderId)
-    .eq("uidvalidity", uv)
-    .is("deleted_at", null);
   const unreadQ = admin
     .from("mail_messages")
     .select("*", { count: "exact", head: true })
@@ -374,15 +390,37 @@ export async function refreshFolderCounts(
     .eq("uidvalidity", uv)
     .is("deleted_at", null)
     .eq("seen", false);
+  const hasAuthoritative =
+    args.authoritativeTotal != null &&
+    Number.isFinite(args.authoritativeTotal) &&
+    args.authoritativeTotal >= 0;
+  let total: number;
+  if (hasAuthoritative) {
+    total = Math.trunc(args.authoritativeTotal as number);
+    const u = await unreadQ;
+    if (u.error) throw u.error;
+    const unread = Math.min(u.count ?? 0, total);
+    const up = await admin.from("mail_folders").update({ total, unread }).eq("id", args.folderId);
+    if (up.error) throw up.error;
+    return { total, unread };
+  }
+  const totalQ = admin
+    .from("mail_messages")
+    .select("*", { count: "exact", head: true })
+    .eq("account_id", args.accountId)
+    .eq("folder_id", args.folderId)
+    .eq("uidvalidity", uv)
+    .is("deleted_at", null);
   const [t, u] = await Promise.all([totalQ, unreadQ]);
   if (t.error) throw t.error;
   if (u.error) throw u.error;
-  const total = t.count ?? 0;
+  total = t.count ?? 0;
   const unread = u.count ?? 0;
   const up = await admin.from("mail_folders").update({ total, unread }).eq("id", args.folderId);
   if (up.error) throw up.error;
   return { total, unread };
 }
+
 
 /** Persist the freshest mailbox-level state onto the folder row. */
 export async function writeFolderMailboxState(
