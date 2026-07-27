@@ -106,7 +106,7 @@ export interface MoveOrchestrationDeps {
     folderPath: string;
     canonical: string;
     uid: number;
-  }) => Promise<SyncOutcome>;
+  }) => Promise<SourceReconcileOutcome>;
   /** Safe server-side logger (no secrets). */
   logError?: (label: string, err: unknown) => void;
 }
@@ -117,8 +117,14 @@ export interface MoveOrchestrationInput {
   sourceUid: number;
 }
 
-export type SourceConfirmation = "confirmed-absent" | "tombstone-only" | "busy" | "failed";
+export type SourceConfirmation =
+  | "confirmed-absent"
+  | "still-present"
+  | "tombstone-only"
+  | "busy"
+  | "failed";
 export type DestinationSync = "not-needed" | "incremental" | "initial" | "busy" | "failed";
+
 export type IndexApplied = "full" | "source-only" | "no-source-folder" | "partial";
 
 export type MoveOrchestrationResult =
