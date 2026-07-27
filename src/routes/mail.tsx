@@ -151,44 +151,32 @@ function parseMessageId(id: string): { folder: MailFolder; uid: number } | null 
   return { folder: folder as MailFolder, uid };
 }
 
-// ---- Trash origin tracking (for restore-to-original-folder) ----
-const TRASH_ORIGIN_KEY = "mailmaestro:trash-origin";
-type OriginMap = Record<string, MailFolder>;
-function loadOriginMap(): OriginMap {
-  if (typeof localStorage === "undefined") return {};
-  try {
-    return JSON.parse(localStorage.getItem(TRASH_ORIGIN_KEY) || "{}") as OriginMap;
-  } catch {
-    return {};
+// ---- Trash origin tracking (moved to `mail-origin-tracker`) ----
+// The legacy unscoped helpers were replaced by account-scoped calls at
+// each call site (BLOCKER_6). Two accounts on the same device no longer
+// collide on a shared threadId.
+function safeOriginStorage() {
+  if (typeof localStorage === "undefined") {
+    // SSR / test fallback: a no-op storage keeps the code path defined
+    // without touching a nonexistent global.
+    return {
+      getItem: () => null,
+      setItem: () => {},
+      removeItem: () => {},
+    };
   }
+  return localStorage;
 }
-function saveOriginMap(map: OriginMap) {
-  if (typeof localStorage === "undefined") return;
-  try {
-    localStorage.setItem(TRASH_ORIGIN_KEY, JSON.stringify(map));
-  } catch {
-    /* ignore quota errors */
-  }
+function rememberOrigin(accountId: string | null, threadId: string | undefined, folder: MailFolder) {
+  trackerRememberOrigin(safeOriginStorage(), accountId, threadId, folder);
 }
-function rememberOrigin(threadId: string | undefined, folder: MailFolder) {
-  if (!threadId || folder === "trash") return;
-  const m = loadOriginMap();
-  m[threadId] = folder;
-  saveOriginMap(m);
+function getOrigin(accountId: string | null, threadId: string | undefined): MailFolder {
+  return trackerGetOrigin(safeOriginStorage(), accountId, threadId);
 }
-function getOrigin(threadId: string | undefined): MailFolder {
-  if (!threadId) return "inbox";
-  const m = loadOriginMap();
-  return m[threadId] || "inbox";
+function forgetOrigin(accountId: string | null, threadId: string | undefined) {
+  trackerForgetOrigin(safeOriginStorage(), accountId, threadId);
 }
-function forgetOrigin(threadId: string | undefined) {
-  if (!threadId) return;
-  const m = loadOriginMap();
-  if (threadId in m) {
-    delete m[threadId];
-    saveOriginMap(m);
-  }
-}
+
 
 type ComposeInitial = {
   to?: string;
