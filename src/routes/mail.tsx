@@ -1956,10 +1956,15 @@ function MailApp() {
     if (folder !== "trash") return;
     const ids = Array.from(selection);
     const meta = collectBulkMeta(ids);
-    const snapshot = messages;
     const prevSelectedId = selectedId;
     const prevSelected = selectedMessage;
+    const cachedBodies = new Map<string, MailMessage>();
+    for (const id of ids) {
+      const c = messageCache.current.get(id);
+      if (c) cachedBodies.set(id, c);
+    }
     setBulkBusy(true);
+
     setMessages((prev) => prev.filter((m) => !selection.has(m.id)));
     if (prevSelectedId && selection.has(prevSelectedId)) {
       setSelectedId(null);
