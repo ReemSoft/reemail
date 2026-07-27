@@ -1151,7 +1151,6 @@ function MailApp() {
     hasMore,
     loadMore,
     bridgeError,
-    useMock,
     loadCounts,
     refresh: rawRefresh,
     onAfterSend,
