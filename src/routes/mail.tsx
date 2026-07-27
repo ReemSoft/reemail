@@ -1375,13 +1375,15 @@ function MailApp() {
           // server-side tombstone (idempotent), then evict the local row
           // so the list and message view stop pointing at nothing.
           if (!result.ok && result.code === "NOT_FOUND") {
-            void cleanupGhost({
-              data: {
-                mailSessionToken: session.mailSessionToken ?? "",
-                canonical: parsed.folder,
-                uid: parsed.uid,
-              },
-            }).catch(() => {});
+            if (parsed.folder !== "all") {
+              void cleanupGhost({
+                data: {
+                  mailSessionToken: session.mailSessionToken ?? "",
+                  canonical: parsed.folder,
+                  uid: parsed.uid,
+                },
+              }).catch(() => {});
+            }
             messageCache.current.delete(id);
             setMessages((prev) => prev.filter((m) => m.id !== id));
             hideRow(id);
@@ -1390,6 +1392,7 @@ function MailApp() {
             toast.info("تم إزالة رسالة مفقودة من القائمة");
             return null;
           }
+
           return null;
         })
         .catch(() => null)
