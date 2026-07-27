@@ -123,11 +123,15 @@ import {
 } from "@/lib/mail-pending-moves";
 
 import {
-  rememberOrigin as trackerRememberOrigin,
+  rememberFinalOrigin,
+  rememberPendingOrigin,
   getOrigin as trackerGetOrigin,
-  forgetOrigin as trackerForgetOrigin,
+  forgetFinalOrigin,
+  forgetOriginsForMessageId,
+  purgeStaleTrashUidValidity,
   clearAccountOrigins,
 } from "@/lib/mail-origin-tracker";
+import type { IndexMoveResult } from "@/lib/mail-move.functions";
 
 export const Route = createFileRoute("/mail")({
   ssr: false,
@@ -155,31 +159,106 @@ function parseMessageId(id: string): { folder: MailFolder; uid: number } | null 
   return { folder: folder as MailFolder, uid };
 }
 
-// ---- Trash origin tracking (moved to `mail-origin-tracker`) ----
-// The legacy unscoped helpers were replaced by account-scoped calls at
-// each call site (BLOCKER_6). Two accounts on the same device no longer
-// collide on a shared threadId.
+// ---- Trash origin tracking (BLOCKER_C — trash identity v3) ----
+// Origin is keyed by the PHYSICAL trash identity `(accountId, trashUidValidity,
+// trashUid)`, never by threadId. On failure to obtain the trash identity from
+// Bridge UIDPLUS / Targeted Discovery, a pending origin is stored keyed by
+// the source identity and later promoted when the trash identity becomes
+// known via a background sync.
 function safeOriginStorage() {
   if (typeof localStorage === "undefined") {
-    // SSR / test fallback: a no-op storage keeps the code path defined
-    // without touching a nonexistent global.
-    return {
-      getItem: () => null,
-      setItem: () => {},
-      removeItem: () => {},
-    };
+    return { getItem: () => null, setItem: () => {}, removeItem: () => {} };
   }
   return localStorage;
 }
-function rememberOrigin(accountId: string | null, threadId: string | undefined, folder: MailFolder) {
-  trackerRememberOrigin(safeOriginStorage(), accountId, threadId, folder);
+
+/** Extract trash identity from a successful move result, if available. */
+function extractTrashIdentity(
+  result: IndexMoveResult | null,
+): { trashUidValidity: number; trashUid: number } | null {
+  if (!result || !result.ok) return null;
+  // Prefer Bridge UIDPLUS mapping.
+  if (
+    result.move.uidMappingAvailable &&
+    typeof result.move.destinationUid === "number" &&
+    result.move.destinationUidValidity
+  ) {
+    const uv = Number(result.move.destinationUidValidity);
+    if (Number.isFinite(uv) && uv > 0) {
+      return { trashUidValidity: uv, trashUid: result.move.destinationUid };
+    }
+  }
+  // Fall back to Targeted Destination Sync discovery.
+  if (typeof result.discoveredDestinationUid === "number") {
+    const uv = result.discoveredDestinationUidValidity
+      ? Number(result.discoveredDestinationUidValidity)
+      : NaN;
+    if (Number.isFinite(uv) && uv > 0) {
+      return { trashUidValidity: uv, trashUid: result.discoveredDestinationUid };
+    }
+  }
+  return null;
 }
-function getOrigin(accountId: string | null, threadId: string | undefined): MailFolder {
-  return trackerGetOrigin(safeOriginStorage(), accountId, threadId);
+
+/** Write origin after a successful move to Trash (final or pending). */
+function writeOriginOnTrash(params: {
+  accountId: string | null;
+  sourceCanonical: MailFolder;
+  sourceUid: number;
+  messageId?: string | null;
+  moveResult: IndexMoveResult | null;
+}) {
+  const { accountId, sourceCanonical, sourceUid, messageId, moveResult } = params;
+  if (!accountId || sourceCanonical === "trash") return;
+  const storage = safeOriginStorage();
+  const trash = extractTrashIdentity(moveResult);
+  if (trash) {
+    rememberFinalOrigin(
+      storage,
+      { accountId, trashUidValidity: trash.trashUidValidity, trashUid: trash.trashUid },
+      { originalCanonical: sourceCanonical, messageId: messageId ?? null },
+    );
+    // Belt & braces: if a pending entry existed for this source, drop it.
+    if (messageId) forgetOriginsForMessageId(storage, accountId, messageId);
+  } else {
+    rememberPendingOrigin(
+      storage,
+      { accountId, sourceCanonical, sourceUid },
+      { originalCanonical: sourceCanonical, messageId: messageId ?? null, createdAt: Date.now() },
+    );
+  }
 }
-function forgetOrigin(accountId: string | null, threadId: string | undefined) {
-  trackerForgetOrigin(safeOriginStorage(), accountId, threadId);
+
+/** Read the origin for a Trash uid, defaulting to "inbox" when unknown. */
+function readOriginForTrashUid(
+  accountId: string | null,
+  trashUid: number,
+  trashUidValidity: number | null,
+): MailFolder {
+  if (!accountId || trashUidValidity == null) return "inbox";
+  const hit = trackerGetOrigin(safeOriginStorage(), {
+    accountId,
+    trashUidValidity,
+    trashUid,
+  });
+  return (hit?.originalCanonical as MailFolder) ?? "inbox";
 }
+
+/** Forget every origin entry that references this trash row / messageId. */
+function forgetOriginForTrashUid(
+  accountId: string | null,
+  trashUid: number,
+  trashUidValidity: number | null,
+  messageId?: string | null,
+) {
+  if (!accountId) return;
+  const storage = safeOriginStorage();
+  if (trashUidValidity != null) {
+    forgetFinalOrigin(storage, { accountId, trashUidValidity, trashUid });
+  }
+  if (messageId) forgetOriginsForMessageId(storage, accountId, messageId);
+}
+
 
 
 type ComposeInitial = {
@@ -297,6 +376,10 @@ function useMailData(session: MailSession | null) {
   const persistPendingMoves = useCallback(() => {
     savePendingMovesToSession(pendingMovesRef.current);
   }, []);
+  // BLOCKER_C — current Trash UIDVALIDITY, refreshed from `loadCountsFast`.
+  // Used to (a) purge stale final-origin entries on IMAP UIDVALIDITY change
+  // and (b) look up the origin for a Restore action by physical trash id.
+  const trashUidValidityRef = useRef<number | null>(null);
   // Batch A / Fix #1: Monotonic Count Generation Guard.
   // Every optimistic mutation (move, delete, restore, permanent delete, star,
   // read/unread, bulk) bumps `countsMutationGen`. Every counts loader
@@ -484,6 +567,19 @@ function useMailData(session: MailSession | null) {
             return changed ? next : prev;
           });
           setBridgeError(null);
+          // BLOCKER_C — track current Trash UIDVALIDITY. When it changes
+          // (server-side UIDVALIDITY reset), purge stale final origins so
+          // an unrelated future Trash UID cannot inherit a stale origin.
+          const trashCount = res.counts.find((c) => c.folder === "trash");
+          const nextTrashUV = trashCount?.uidvalidity ?? null;
+          if (
+            nextTrashUV != null &&
+            trashUidValidityRef.current !== nextTrashUV &&
+            currentAccountId
+          ) {
+            purgeStaleTrashUidValidity(safeOriginStorage(), currentAccountId, nextTrashUV);
+          }
+          trashUidValidityRef.current = nextTrashUV;
           return;
         }
       } catch {
@@ -840,6 +936,7 @@ function useMailData(session: MailSession | null) {
     // generation bumper so MailApp (fetchMessage / mutation handlers) can
     // consult and advance them without duplicating state.
     pendingMovesRef,
+    trashUidValidityRef,
     bumpCountsGen,
   };
 }
@@ -898,6 +995,7 @@ function MailApp() {
     applyPending,
     applyPendingOne,
     pendingMovesRef,
+    trashUidValidityRef,
     bumpCountsGen,
   } = useMailData(session || null);
 
@@ -992,12 +1090,10 @@ function MailApp() {
       uid: number;
       /** Omit → permanent delete (only valid when sourceCanonical === "trash"). */
       toFolder?: MailFolder;
-    }) => {
+    }): Promise<IndexMoveResult | null> => {
       if (!session) throw new Error("لا توجد جلسة بريد");
       const dest = params.toFolder;
       // Permanent-delete branch — MUST use indexDeleteMessage (Blocker 1).
-      // Never delegates to moveIndex; the Bridge decider on "trash" would
-      // otherwise take an unrelated code path.
       if (dest === undefined) {
         if (params.sourceCanonical !== "trash") {
           throw new Error("الحذف النهائي مسموح فقط من مجلد المهملات");
@@ -1012,9 +1108,8 @@ function MailApp() {
             },
           });
           if (!res.ok) throw new Error(res.error);
-          return;
+          return null;
         }
-        // Legacy fallback (no JWT): bridge /api/delete decides on trash → permanent.
         await deleteFn({
           data: {
             account: session.account,
@@ -1023,7 +1118,7 @@ function MailApp() {
             uid: params.uid,
           },
         });
-        return;
+        return null;
       }
       // Move branch — IMAP MOVE + local write-through in one round.
       if (session.mailSessionToken) {
@@ -1037,7 +1132,12 @@ function MailApp() {
           },
         });
         if (!res.ok) throw new Error(res.error);
-        return;
+        // BLOCKER_C — return the orchestration result so the caller can
+        // extract Trash identity (UIDPLUS + discovered UID) for the origin
+        // tracker. IMAP is the source of truth; discovery may be absent
+        // when the destination sync was busy/failed, and the caller falls
+        // back to a pending origin in that case.
+        return res;
       }
       await move({
         data: {
@@ -1048,9 +1148,11 @@ function MailApp() {
           toFolder: dest,
         },
       });
+      return null;
     },
     [session, moveIndex, deleteIndex, deleteFn, move],
   );
+
 
   // Per-id single-flight guard against double-click on Move/Delete/Restore.
   // Same id in flight → returns the same promise instead of firing IMAP twice.
@@ -1492,13 +1594,27 @@ function MailApp() {
       beginPendingMove(id, toFolder === "trash" ? "trash" : toFolder === "archive" ? "archive" : "move");
       applyMoveCountsDelta(parsed.folder, toFolder, wasUnread);
       try {
-        await mutateMoveOrDelete({
+        const moveResult = await mutateMoveOrDelete({
           sourceCanonical: parsed.folder,
           uid: parsed.uid,
           toFolder,
         });
-        if (toFolder === "trash") rememberOrigin(currentAccountId, original?.threadId, parsed.folder);
-        else forgetOrigin(currentAccountId, original?.threadId);
+        if (toFolder === "trash") {
+          writeOriginOnTrash({
+            accountId: currentAccountId,
+            sourceCanonical: parsed.folder,
+            sourceUid: parsed.uid,
+            messageId: original?.threadId ?? null,
+            moveResult,
+          });
+        } else if (parsed.folder === "trash") {
+          forgetOriginForTrashUid(
+            currentAccountId,
+            parsed.uid,
+            trashUidValidityRef.current,
+            original?.threadId ?? null,
+          );
+        }
         confirmHideRow(id);
         confirmPendingMove(id);
         toast.success("تم نقل الرسالة");
@@ -1559,14 +1675,25 @@ function MailApp() {
       try {
         if (isTrash) {
           await mutateMoveOrDelete({ sourceCanonical: parsed.folder, uid: parsed.uid });
-          forgetOrigin(currentAccountId, original?.threadId);
+          forgetOriginForTrashUid(
+            currentAccountId,
+            parsed.uid,
+            trashUidValidityRef.current,
+            original?.threadId ?? null,
+          );
         } else {
-          await mutateMoveOrDelete({
+          const moveResult = await mutateMoveOrDelete({
             sourceCanonical: parsed.folder,
             uid: parsed.uid,
             toFolder: "trash",
           });
-          rememberOrigin(currentAccountId, original?.threadId, parsed.folder);
+          writeOriginOnTrash({
+            accountId: currentAccountId,
+            sourceCanonical: parsed.folder,
+            sourceUid: parsed.uid,
+            messageId: original?.threadId ?? null,
+            moveResult,
+          });
         }
         confirmHideRow(id);
         confirmPendingMove(id);
@@ -1596,7 +1723,11 @@ function MailApp() {
       const originalIndex = messages.findIndex((m) => m.id === id);
       const original = originalIndex >= 0 ? messages[originalIndex] : null;
       const wasUnread = original ? !original.read : false;
-      const target = getOrigin(currentAccountId, original?.threadId);
+      const target = readOriginForTrashUid(
+        currentAccountId,
+        parsed.uid,
+        trashUidValidityRef.current,
+      );
       const wasSelected = selectedId === id;
       const prevSelected = wasSelected ? selectedMessage : null;
       const cachedBody = messageCache.current.get(id);
@@ -1615,10 +1746,15 @@ function MailApp() {
           uid: parsed.uid,
           toFolder: target,
         });
-        forgetOrigin(currentAccountId, original?.threadId);
+        forgetOriginForTrashUid(
+          currentAccountId,
+          parsed.uid,
+          trashUidValidityRef.current,
+          original?.threadId ?? null,
+        );
         confirmHideRow(id);
         confirmPendingMove(id);
-        const label = FOLDER_META[target]?.label || target;
+        const label = FOLDER_META[target as MailFolder]?.label || target;
         toast.success(`تم استعادة الرسالة إلى ${label}`);
       } catch (err: any) {
         unhideRow(id);

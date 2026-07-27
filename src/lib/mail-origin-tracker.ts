@@ -1,23 +1,32 @@
-// BLOCKER_6 — Account-scoped restore-origin tracker.
+// BLOCKER_C — Trash Origin Identity tracker (v3).
 //
-// The origin map remembers "when this thread went to Trash, it came from
-// <folder>", so Restore returns it there. It MUST be scoped by account:
-// two accounts can independently trash a thread whose id/Message-ID happens
-// to collide, and each restore must pick the origin recorded FOR THAT
-// ACCOUNT — not whichever was written last.
+// Restore reads its target from an entry keyed by the PHYSICAL identity of
+// the message inside the Trash folder — not by threadId, not by Message-ID.
+// A single account can safely trash two messages that share a threadId or
+// Message-ID, each with its own origin, because the key is:
 //
-// Pure module: no React, no side effects at import time. Callers pass their
-// storage getter/setter and the active `accountId`. Legacy unscoped entries
-// under the historical single-key storage are ignored (never returned).
+//   (accountId, trashUidValidity, trashUid)
 //
-// Persistence key layout:
-//   mailmaestro:trash-origin:v2:<accountId> -> { [threadId]: MailFolder }
-// A single call to `clearAccountOrigins(accountId)` wipes just that
-// account's map on sign-out.
+// When we move a message to Trash and IMAP succeeds we capture the trash
+// identity from either:
+//   1. Bridge UIDPLUS (`move.destinationUid` + `destinationUidValidity`), or
+//   2. Targeted Destination Sync (`discoveredDestinationUid` + validity).
+// Only then a FINAL origin is written.
+//
+// If IMAP succeeded but neither identity is available yet, a PENDING origin
+// is written keyed by the physical SOURCE identity, and later promoted to a
+// FINAL origin by `promotePendingOriginToFinal` when the trash identity
+// becomes known. Pending entries are NEVER expired on a timer.
+//
+// Two independent per-account storage keys:
+//   mailmaestro:trash-origin:v3:<accountId>          -> final map
+//   mailmaestro:trash-pending-origin:v3:<accountId>  -> pending map
+//
+// The module is pure (no React, no globals, storage is injected) so it can
+// be unit-tested and reused. Legacy v1/v2 unscoped entries are never read.
 
 import type { MailFolder } from "@/lib/mail-types";
 export type { MailFolder };
-
 
 export interface OriginStorage {
   getItem: (k: string) => string | null;
@@ -25,75 +34,335 @@ export interface OriginStorage {
   removeItem: (k: string) => void;
 }
 
-const KEY_PREFIX = "mailmaestro:trash-origin:v2:";
-const DEFAULT_ORIGIN: MailFolder = "inbox";
+const FINAL_PREFIX = "mailmaestro:trash-origin:v3:";
+const PENDING_PREFIX = "mailmaestro:trash-pending-origin:v3:";
 
-function key(accountId: string): string {
-  return `${KEY_PREFIX}${accountId}`;
+// -------- Types --------
+
+export interface FinalOriginKey {
+  accountId: string;
+  trashUidValidity: number;
+  trashUid: number;
 }
 
-function load(storage: OriginStorage, accountId: string): Record<string, MailFolder> {
+export interface FinalOriginEntry {
+  originalCanonical: MailFolder;
+  originalPath?: string | null;
+  messageId?: string | null;
+}
+
+export interface PendingSourceKey {
+  accountId: string;
+  /** Physical source folder (e.g. `inbox`, `archive`) — caller normalizes. */
+  sourceCanonical: string;
+  sourceUid: number;
+  sourceUidValidity?: number;
+}
+
+export interface PendingOriginEntry {
+  sourceCanonical: string;
+  sourceUid: number;
+  sourceUidValidity?: number;
+  originalCanonical: MailFolder;
+  originalPath?: string | null;
+  messageId?: string | null;
+  fingerprint?: string | null;
+  createdAt: number;
+}
+
+// -------- Key builders --------
+
+function finalStorageKey(accountId: string): string {
+  return `${FINAL_PREFIX}${accountId}`;
+}
+function pendingStorageKey(accountId: string): string {
+  return `${PENDING_PREFIX}${accountId}`;
+}
+function finalEntryKey(uv: number, uid: number): string {
+  return `${uv}:${uid}`;
+}
+function pendingEntryKey(
+  sourceCanonical: string,
+  sourceUid: number,
+  sourceUidValidity?: number,
+): string {
+  return `${sourceCanonical}:${sourceUid}:${sourceUidValidity ?? "?"}`;
+}
+
+// -------- Low-level I/O --------
+
+function loadFinal(
+  storage: OriginStorage,
+  accountId: string,
+): Record<string, FinalOriginEntry> {
   try {
-    const raw = storage.getItem(key(accountId));
+    const raw = storage.getItem(finalStorageKey(accountId));
     if (!raw) return {};
     const parsed = JSON.parse(raw) as unknown;
     if (!parsed || typeof parsed !== "object") return {};
-    return parsed as Record<string, MailFolder>;
+    return parsed as Record<string, FinalOriginEntry>;
   } catch {
     return {};
   }
 }
-
-function save(storage: OriginStorage, accountId: string, map: Record<string, MailFolder>): void {
+function saveFinal(
+  storage: OriginStorage,
+  accountId: string,
+  map: Record<string, FinalOriginEntry>,
+): void {
   try {
-    storage.setItem(key(accountId), JSON.stringify(map));
+    storage.setItem(finalStorageKey(accountId), JSON.stringify(map));
+  } catch {
+    /* quota — ignore */
+  }
+}
+function loadPending(
+  storage: OriginStorage,
+  accountId: string,
+): Record<string, PendingOriginEntry> {
+  try {
+    const raw = storage.getItem(pendingStorageKey(accountId));
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object") return {};
+    return parsed as Record<string, PendingOriginEntry>;
+  } catch {
+    return {};
+  }
+}
+function savePending(
+  storage: OriginStorage,
+  accountId: string,
+  map: Record<string, PendingOriginEntry>,
+): void {
+  try {
+    storage.setItem(pendingStorageKey(accountId), JSON.stringify(map));
   } catch {
     /* quota — ignore */
   }
 }
 
-export function rememberOrigin(
+// -------- Public API --------
+
+/**
+ * Write a FINAL origin. The `originalCanonical` MUST NOT be `"trash"` (that
+ * would mean "restore back to trash" — nonsensical).
+ */
+export function rememberFinalOrigin(
   storage: OriginStorage,
-  accountId: string | null,
-  threadId: string | undefined,
-  folder: MailFolder,
+  key: FinalOriginKey,
+  entry: FinalOriginEntry,
 ): void {
-  if (!accountId || !threadId || folder === "trash") return;
-  const m = load(storage, accountId);
-  if (m[threadId] === folder) return; // no-op write
-  m[threadId] = folder;
-  save(storage, accountId, m);
+  if (
+    !key.accountId ||
+    !Number.isFinite(key.trashUidValidity) ||
+    key.trashUidValidity <= 0 ||
+    !Number.isFinite(key.trashUid) ||
+    key.trashUid <= 0
+  )
+    return;
+  if (entry.originalCanonical === "trash") return;
+  const map = loadFinal(storage, key.accountId);
+  const k = finalEntryKey(key.trashUidValidity, key.trashUid);
+  const prev = map[k];
+  if (
+    prev &&
+    prev.originalCanonical === entry.originalCanonical &&
+    (prev.originalPath ?? null) === (entry.originalPath ?? null) &&
+    (prev.messageId ?? null) === (entry.messageId ?? null)
+  ) {
+    return; // no-op write
+  }
+  map[k] = {
+    originalCanonical: entry.originalCanonical,
+    originalPath: entry.originalPath ?? null,
+    messageId: entry.messageId ?? null,
+  };
+  saveFinal(storage, key.accountId, map);
 }
 
+export function rememberPendingOrigin(
+  storage: OriginStorage,
+  key: PendingSourceKey,
+  entry: Omit<PendingOriginEntry, "sourceCanonical" | "sourceUid" | "sourceUidValidity">,
+): void {
+  if (
+    !key.accountId ||
+    !key.sourceCanonical ||
+    !Number.isFinite(key.sourceUid) ||
+    key.sourceUid <= 0
+  )
+    return;
+  if (entry.originalCanonical === "trash") return;
+  const map = loadPending(storage, key.accountId);
+  const k = pendingEntryKey(key.sourceCanonical, key.sourceUid, key.sourceUidValidity);
+  map[k] = {
+    sourceCanonical: key.sourceCanonical,
+    sourceUid: key.sourceUid,
+    sourceUidValidity: key.sourceUidValidity,
+    originalCanonical: entry.originalCanonical,
+    originalPath: entry.originalPath ?? null,
+    messageId: entry.messageId ?? null,
+    fingerprint: entry.fingerprint ?? null,
+    createdAt: entry.createdAt || Date.now(),
+  };
+  savePending(storage, key.accountId, map);
+}
+
+/**
+ * Promote a pending origin (source-keyed) to a final origin (trash-keyed).
+ * Returns the pending entry that was promoted, or `null` when no matching
+ * pending entry exists. Deletes the pending entry on success.
+ */
+export function promotePendingOriginToFinal(
+  storage: OriginStorage,
+  source: PendingSourceKey,
+  trash: { trashUidValidity: number; trashUid: number },
+): FinalOriginEntry | null {
+  if (
+    !source.accountId ||
+    !Number.isFinite(trash.trashUidValidity) ||
+    trash.trashUidValidity <= 0 ||
+    !Number.isFinite(trash.trashUid) ||
+    trash.trashUid <= 0
+  )
+    return null;
+  const pending = loadPending(storage, source.accountId);
+  const pk = pendingEntryKey(source.sourceCanonical, source.sourceUid, source.sourceUidValidity);
+  const entry = pending[pk];
+  if (!entry) return null;
+  const finalEntry: FinalOriginEntry = {
+    originalCanonical: entry.originalCanonical,
+    originalPath: entry.originalPath ?? null,
+    messageId: entry.messageId ?? null,
+  };
+  rememberFinalOrigin(
+    storage,
+    {
+      accountId: source.accountId,
+      trashUidValidity: trash.trashUidValidity,
+      trashUid: trash.trashUid,
+    },
+    finalEntry,
+  );
+  delete pending[pk];
+  savePending(storage, source.accountId, pending);
+  return finalEntry;
+}
+
+/** Look up the final origin for a Trash identity. Returns `null` when missing. */
 export function getOrigin(
   storage: OriginStorage,
-  accountId: string | null,
-  threadId: string | undefined,
-): MailFolder {
-  if (!accountId || !threadId) return DEFAULT_ORIGIN;
-  const m = load(storage, accountId);
-  return m[threadId] ?? DEFAULT_ORIGIN;
+  key: FinalOriginKey,
+): FinalOriginEntry | null {
+  if (
+    !key.accountId ||
+    !Number.isFinite(key.trashUidValidity) ||
+    key.trashUidValidity <= 0 ||
+    !Number.isFinite(key.trashUid) ||
+    key.trashUid <= 0
+  )
+    return null;
+  const map = loadFinal(storage, key.accountId);
+  return map[finalEntryKey(key.trashUidValidity, key.trashUid)] ?? null;
 }
 
-export function forgetOrigin(
+export function forgetFinalOrigin(storage: OriginStorage, key: FinalOriginKey): void {
+  if (!key.accountId) return;
+  const map = loadFinal(storage, key.accountId);
+  const k = finalEntryKey(key.trashUidValidity, key.trashUid);
+  if (!(k in map)) return;
+  delete map[k];
+  saveFinal(storage, key.accountId, map);
+}
+
+export function forgetPendingOrigin(storage: OriginStorage, key: PendingSourceKey): void {
+  if (!key.accountId) return;
+  const map = loadPending(storage, key.accountId);
+  const k = pendingEntryKey(key.sourceCanonical, key.sourceUid, key.sourceUidValidity);
+  if (!(k in map)) return;
+  delete map[k];
+  savePending(storage, key.accountId, map);
+}
+
+/**
+ * Drop every final + pending origin that references `messageId`. Used on
+ * successful Restore / Permanent Delete when the trash identity may or may
+ * not be available on the caller (e.g. restore success after promotion).
+ */
+export function forgetOriginsForMessageId(
   storage: OriginStorage,
   accountId: string | null,
-  threadId: string | undefined,
-): void {
-  if (!accountId || !threadId) return;
-  const m = load(storage, accountId);
-  if (!(threadId in m)) return;
-  delete m[threadId];
-  save(storage, accountId, m);
+  messageId: string | null | undefined,
+): number {
+  if (!accountId || !messageId) return 0;
+  let removed = 0;
+  const finals = loadFinal(storage, accountId);
+  let finalDirty = false;
+  for (const k of Object.keys(finals)) {
+    if ((finals[k].messageId ?? null) === messageId) {
+      delete finals[k];
+      removed++;
+      finalDirty = true;
+    }
+  }
+  if (finalDirty) saveFinal(storage, accountId, finals);
+  const pendings = loadPending(storage, accountId);
+  let pendingDirty = false;
+  for (const k of Object.keys(pendings)) {
+    if ((pendings[k].messageId ?? null) === messageId) {
+      delete pendings[k];
+      removed++;
+      pendingDirty = true;
+    }
+  }
+  if (pendingDirty) savePending(storage, accountId, pendings);
+  return removed;
 }
 
+/**
+ * Drop every FINAL entry whose `trashUidValidity` no longer matches the
+ * server's current Trash UIDVALIDITY. Pending entries are NOT touched
+ * (they hold a SOURCE identity, not a trash identity).
+ */
+export function purgeStaleTrashUidValidity(
+  storage: OriginStorage,
+  accountId: string | null,
+  currentTrashUidValidity: number,
+): number {
+  if (!accountId || !Number.isFinite(currentTrashUidValidity) || currentTrashUidValidity <= 0) {
+    return 0;
+  }
+  const map = loadFinal(storage, accountId);
+  let removed = 0;
+  let dirty = false;
+  for (const k of Object.keys(map)) {
+    const colon = k.indexOf(":");
+    if (colon <= 0) continue;
+    const uv = Number(k.slice(0, colon));
+    if (!Number.isFinite(uv) || uv !== currentTrashUidValidity) {
+      delete map[k];
+      removed++;
+      dirty = true;
+    }
+  }
+  if (dirty) saveFinal(storage, accountId, map);
+  return removed;
+}
+
+/** Wipe every v3 origin (final + pending) for `accountId`. */
 export function clearAccountOrigins(
   storage: OriginStorage,
   accountId: string | null,
 ): void {
   if (!accountId) return;
-  storage.removeItem(key(accountId));
+  storage.removeItem(finalStorageKey(accountId));
+  storage.removeItem(pendingStorageKey(accountId));
 }
 
-// Exported for tests that need to seed cross-account fixtures.
-export const __originKey = key;
+// -------- Test helpers --------
+
+export const __finalStorageKey = finalStorageKey;
+export const __pendingStorageKey = pendingStorageKey;
+export const __finalEntryKey = finalEntryKey;
+export const __pendingEntryKey = pendingEntryKey;

@@ -23,6 +23,8 @@ export interface IndexFolderCount {
   total: number;
   unread: number;
   path: string | null;
+  /** Server-resolved UIDVALIDITY for the folder, `null` when never synced. */
+  uidvalidity: number | null;
   /** Whether the folder row has a resolved uidvalidity (i.e. was ever synced). */
   hasUidvalidity: boolean;
 }
@@ -62,6 +64,7 @@ export const indexListFolderCounts = createServerFn({ method: "POST" })
         total: r.total ?? 0,
         unread: r.unread ?? 0,
         path: r.path ?? null,
+        uidvalidity: r.uidvalidity ?? null,
         hasUidvalidity: r.uidvalidity != null,
       }));
 
