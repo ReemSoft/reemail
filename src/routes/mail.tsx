@@ -689,7 +689,7 @@ function useMailData(session: MailSession | null) {
       try {
         const result = await getMessages({
           data: {
-            account: session.account,
+            mailSessionToken: session.mailSessionToken ?? "",
             password: session.password,
             folder,
             limit: PAGE,
@@ -815,7 +815,7 @@ function useMailData(session: MailSession | null) {
       const offset = messages.length;
       const result = await getMessages({
         data: {
-          account: session.account,
+          mailSessionToken: session.mailSessionToken ?? "",
           password: session.password,
           folder,
           limit: PAGE,
@@ -1140,7 +1140,7 @@ function MailApp() {
       if (kind === "seen") {
         await markRead({
           data: {
-            account: session.account,
+            mailSessionToken: session.mailSessionToken ?? "",
             password: session.password,
             folder: canonical,
             uid,
@@ -1150,7 +1150,7 @@ function MailApp() {
       } else {
         await star({
           data: {
-            account: session.account,
+            mailSessionToken: session.mailSessionToken ?? "",
             password: session.password,
             folder: canonical,
             uid,
@@ -1196,7 +1196,7 @@ function MailApp() {
         }
         await deleteFn({
           data: {
-            account: session.account,
+            mailSessionToken: session.mailSessionToken ?? "",
             password: session.password,
             folder: params.sourceCanonical,
             uid: params.uid,
@@ -1225,7 +1225,7 @@ function MailApp() {
       }
       await move({
         data: {
-          account: session.account,
+          mailSessionToken: session.mailSessionToken ?? "",
           password: session.password,
           folder: params.sourceCanonical,
           uid: params.uid,
@@ -1277,7 +1277,7 @@ function MailApp() {
       if (!parsed) return Promise.resolve(null);
       const p = getOne({
         data: {
-          account: session.account,
+          mailSessionToken: session.mailSessionToken ?? "",
           password: session.password,
           folder: parsed.folder,
           uid: parsed.uid,
@@ -1370,7 +1370,7 @@ function MailApp() {
       try {
         const res = await searchFn({
           data: {
-            account: session.account,
+            mailSessionToken: session.mailSessionToken ?? "",
             password: session.password,
             folder,
             query: q,
@@ -3489,7 +3489,7 @@ function Composer({
           .map((email) => ({ name: "", email }));
 
       const payload = {
-        account: session.account,
+        mailSessionToken: session.mailSessionToken ?? "",
         password: session.password,
         to: parseAddresses(to),
         cc: parseAddresses(cc),
@@ -3748,7 +3748,7 @@ function AttachmentCard({
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        account: session.account,
+        mailSessionToken: session.mailSessionToken ?? "",
         password: session.password,
         folder: parsed.folder,
         uid: parsed.uid,
