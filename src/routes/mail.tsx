@@ -53,6 +53,19 @@ import {
   MinusSquare,
   ArchiveRestore,
   Zap,
+  Bold,
+  Italic,
+  Underline,
+  List,
+  ListOrdered,
+  Link2,
+  Quote,
+  Minimize2,
+  Maximize2,
+  Minus,
+  Type,
+  Eraser,
+  AlertTriangle,
   Globe,
   Check,
   ArrowUpDown,
@@ -3602,11 +3615,230 @@ function LoadingViewer({ onBack }: { onBack: () => void }) {
 
 const COMPOSE_MAX_TOTAL_BYTES = 25 * 1024 * 1024;
 const COMPOSE_MAX_FILES = 10;
+const DRAFT_STORAGE_PREFIX = "mailmaestro:draft:v2:";
 
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+function isValidEmail(v: string): boolean {
+  return EMAIL_RE.test(v.trim());
+}
+
+type Recipient = { email: string; name?: string; valid: boolean };
+
+function parseRecipientText(raw: string): Recipient[] {
+  return raw
+    .split(/[,;\n]+/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((token) => {
+      // Support "Name <email@x.com>"
+      const m = token.match(/^\s*(.*?)\s*<([^>]+)>\s*$/);
+      const email = (m ? m[2] : token).trim();
+      const name = m ? m[1].replace(/^["']|["']$/g, "").trim() || undefined : undefined;
+      return { email, name, valid: isValidEmail(email) };
+    });
+}
+
+function recipientsToRaw(list: Recipient[]): string {
+  return list.map((r) => (r.name ? `${r.name} <${r.email}>` : r.email)).join(", ");
+}
+
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function plainToHtml(text: string): string {
+  return escapeHtml(text).replace(/\n/g, "<br>");
+}
+
+/**
+ * Public extension slot for the composer toolbar. Third-party integrations
+ * (AI assistants, templates, scheduling, signatures) can register buttons
+ * without touching this file:
+ *
+ *   window.mailmaestroComposerExtensions ??= [];
+ *   window.mailmaestroComposerExtensions.push({
+ *     id: "ai-assist",
+ *     label: "AI",
+ *     icon: "✨",
+ *     onClick: (ctx) => ctx.insertHtml("<p>...</p>"),
+ *   });
+ */
+export type ComposerExtension = {
+  id: string;
+  label: string;
+  icon?: string;
+  title?: string;
+  onClick: (ctx: {
+    getHtml: () => string;
+    setHtml: (html: string) => void;
+    insertHtml: (html: string) => void;
+    getSubject: () => string;
+    setSubject: (s: string) => void;
+    getRecipients: () => { to: string[]; cc: string[]; bcc: string[] };
+  }) => void;
+};
+
+declare global {
+  interface Window {
+    mailmaestroComposerExtensions?: ComposerExtension[];
+  }
+}
+
+// ------------ Recipient chip input (To / Cc / Bcc) ------------
+function RecipientField({
+  label,
+  value,
+  onChange,
+  onFocus,
+  autoFocus,
+  rightSlot,
+}: {
+  label: string;
+  value: Recipient[];
+  onChange: (next: Recipient[]) => void;
+  onFocus?: () => void;
+  autoFocus?: boolean;
+  rightSlot?: React.ReactNode;
+}) {
+  const [text, setText] = useState("");
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    if (autoFocus) inputRef.current?.focus();
+  }, [autoFocus]);
+
+  const commit = useCallback(
+    (raw: string) => {
+      const trimmed = raw.trim();
+      if (!trimmed) return;
+      const next = parseRecipientText(trimmed);
+      if (next.length === 0) return;
+      // De-dupe by email
+      const seen = new Set(value.map((r) => r.email.toLowerCase()));
+      const merged = [...value];
+      for (const r of next) {
+        const k = r.email.toLowerCase();
+        if (!seen.has(k)) {
+          seen.add(k);
+          merged.push(r);
+        }
+      }
+      onChange(merged);
+      setText("");
+    },
+    [value, onChange],
+  );
+
+  return (
+    <div
+      className="flex min-h-[38px] items-center gap-2 border-b border-border px-1 py-1.5"
+      onClick={() => inputRef.current?.focus()}
+    >
+      <span className="shrink-0 text-xs font-medium text-muted-foreground">{label}</span>
+      <div className="flex flex-1 flex-wrap items-center gap-1.5" dir="ltr">
+        {value.map((r, i) => (
+          <span
+            key={`${r.email}-${i}`}
+            className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs ${
+              r.valid
+                ? "bg-muted text-foreground"
+                : "bg-red-500/10 text-red-600 dark:text-red-400"
+            }`}
+            title={r.valid ? r.email : "بريد غير صالح"}
+          >
+            {!r.valid && <AlertTriangle className="h-3 w-3" />}
+            <span className="max-w-[220px] truncate">{r.name ? `${r.name} · ${r.email}` : r.email}</span>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onChange(value.filter((_, idx) => idx !== i));
+              }}
+              className="rounded-full p-0.5 hover:bg-background/60"
+              aria-label={`إزالة ${r.email}`}
+            >
+              <X className="h-3 w-3" />
+            </button>
+          </span>
+        ))}
+        <input
+          ref={inputRef}
+          value={text}
+          onChange={(e) => {
+            const v = e.target.value;
+            // Auto-commit on separator
+            if (/[,;]/.test(v)) {
+              commit(v);
+              return;
+            }
+            setText(v);
+          }}
+          onFocus={onFocus}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === "Tab") {
+              if (text.trim()) {
+                e.preventDefault();
+                commit(text);
+              }
+            } else if (e.key === "Backspace" && text === "" && value.length > 0) {
+              onChange(value.slice(0, -1));
+            }
+          }}
+          onBlur={() => commit(text)}
+          onPaste={(e) => {
+            const p = e.clipboardData.getData("text");
+            if (/[,;\n<>]/.test(p) || p.split(/\s+/).length > 1) {
+              e.preventDefault();
+              commit(p);
+            }
+          }}
+          placeholder={value.length === 0 ? "أدخل عنوان بريد..." : ""}
+          className="min-w-[140px] flex-1 bg-transparent px-1 py-0.5 text-sm outline-none"
+        />
+      </div>
+      {rightSlot}
+    </div>
+  );
+}
+
+// ------------ Rich-text editor toolbar ------------
+function ToolbarButton({
+  onMouseDown,
+  title,
+  children,
+  active,
+}: {
+  onMouseDown: () => void;
+  title: string;
+  children: React.ReactNode;
+  active?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      title={title}
+      aria-label={title}
+      onMouseDown={(e) => {
+        e.preventDefault(); // keep selection in editor
+        onMouseDown();
+      }}
+      className={`inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground ${
+        active ? "bg-muted text-foreground" : ""
+      }`}
+    >
+      {children}
+    </button>
+  );
 }
 
 function Composer({
@@ -3620,20 +3852,111 @@ function Composer({
   onClose: () => void;
   onSent: () => void;
 }) {
-  const [to, setTo] = useState(initial?.to ?? "");
-  const [cc, setCc] = useState(initial?.cc ?? "");
-  const [subject, setSubject] = useState(initial?.subject ?? "");
-  const [body, setBody] = useState(initial?.body ?? "");
+  const draftKey = `${DRAFT_STORAGE_PREFIX}${session.account.email_address}`;
+
+  // ----- Restore draft (if no initial provided) -----
+  const restored = useMemo(() => {
+    if (initial && (initial.to || initial.cc || initial.subject || initial.body)) return null;
+    if (typeof window === "undefined") return null;
+    try {
+      const raw = window.localStorage.getItem(draftKey);
+      if (!raw) return null;
+      return JSON.parse(raw) as {
+        to: Recipient[];
+        cc: Recipient[];
+        bcc: Recipient[];
+        subject: string;
+        html: string;
+        showCc?: boolean;
+        showBcc?: boolean;
+      };
+    } catch {
+      return null;
+    }
+  }, [initial, draftKey]);
+
+  const [to, setTo] = useState<Recipient[]>(
+    () => restored?.to ?? parseRecipientText(initial?.to ?? ""),
+  );
+  const [cc, setCc] = useState<Recipient[]>(
+    () => restored?.cc ?? parseRecipientText(initial?.cc ?? ""),
+  );
+  const [bcc, setBcc] = useState<Recipient[]>(() => restored?.bcc ?? []);
+  const [showCc, setShowCc] = useState<boolean>(
+    () => restored?.showCc ?? (parseRecipientText(initial?.cc ?? "").length > 0),
+  );
+  const [showBcc, setShowBcc] = useState<boolean>(() => restored?.showBcc ?? false);
+  const [subject, setSubject] = useState<string>(() => restored?.subject ?? initial?.subject ?? "");
+  const initialHtml = useMemo(() => {
+    if (restored?.html) return restored.html;
+    if (initial?.body) return plainToHtml(initial.body);
+    return "";
+  }, [restored, initial]);
+
   const [files, setFiles] = useState<File[]>([]);
   const [sending, setSending] = useState(false);
   const [progress, setProgress] = useState(0);
+  const [windowState, setWindowState] = useState<"normal" | "minimized" | "fullscreen">("normal");
+  const [dragging, setDragging] = useState(false);
+  const [savedAt, setSavedAt] = useState<number | null>(null);
+  const [plainMode, setPlainMode] = useState(false);
+  const [extensions, setExtensions] = useState<ComposerExtension[]>(
+    () => (typeof window !== "undefined" ? window.mailmaestroComposerExtensions ?? [] : []),
+  );
+
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const editorRef = useRef<HTMLDivElement | null>(null);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+
+  // Set initial editor HTML once
+  useEffect(() => {
+    if (editorRef.current && initialHtml && editorRef.current.innerHTML === "") {
+      editorRef.current.innerHTML = initialHtml;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Poll extension registry occasionally (cheap, only while composer open)
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const id = window.setInterval(() => {
+      const cur = window.mailmaestroComposerExtensions ?? [];
+      setExtensions((prev) => (prev.length === cur.length ? prev : [...cur]));
+    }, 2000);
+    return () => window.clearInterval(id);
+  }, []);
 
   const totalBytes = files.reduce((acc, f) => acc + f.size, 0);
 
-  function handlePickFiles(list: FileList | null) {
-    if (!list || list.length === 0) return;
+  // ----- Draft autosave (debounced) -----
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const html = editorRef.current?.innerHTML ?? "";
+    const isEmpty =
+      to.length === 0 && cc.length === 0 && bcc.length === 0 && !subject && !html.trim();
+    const t = window.setTimeout(() => {
+      try {
+        if (isEmpty) {
+          window.localStorage.removeItem(draftKey);
+          setSavedAt(null);
+        } else {
+          window.localStorage.setItem(
+            draftKey,
+            JSON.stringify({ to, cc, bcc, subject, html, showCc, showBcc }),
+          );
+          setSavedAt(Date.now());
+        }
+      } catch {
+        /* quota: ignore */
+      }
+    }, 800);
+    return () => window.clearTimeout(t);
+  }, [to, cc, bcc, subject, showCc, showBcc, draftKey, sending]);
+
+  function addFiles(list: FileList | File[] | null) {
+    if (!list) return;
     const incoming = Array.from(list);
+    if (incoming.length === 0) return;
     const merged: File[] = [...files];
     let runningTotal = totalBytes;
     for (const f of incoming) {
@@ -3656,27 +3979,71 @@ function Composer({
     setFiles((prev) => prev.filter((_, i) => i !== index));
   }
 
-  async function handleSend() {
-    if (!to || !subject) return;
+  function exec(command: string, value?: string) {
+    if (typeof document === "undefined") return;
+    editorRef.current?.focus();
+    try {
+      document.execCommand(command, false, value);
+    } catch {
+      /* noop */
+    }
+  }
+
+  function promptLink() {
+    const url = window.prompt("رابط URL (يبدأ بـ https://):", "https://");
+    if (!url) return;
+    try {
+      const u = new URL(url);
+      if (!/^https?:$/.test(u.protocol)) {
+        toast.error("رابط غير مدعوم");
+        return;
+      }
+      exec("createLink", u.toString());
+    } catch {
+      toast.error("رابط غير صالح");
+    }
+  }
+
+  function insertHtmlAtCursor(html: string) {
+    editorRef.current?.focus();
+    try {
+      document.execCommand("insertHTML", false, html);
+    } catch {
+      /* noop */
+    }
+  }
+
+  const extensionContext = {
+    getHtml: () => editorRef.current?.innerHTML ?? "",
+    setHtml: (h: string) => {
+      if (editorRef.current) editorRef.current.innerHTML = h;
+    },
+    insertHtml: insertHtmlAtCursor,
+    getSubject: () => subject,
+    setSubject,
+    getRecipients: () => ({
+      to: to.map((r) => r.email),
+      cc: cc.map((r) => r.email),
+      bcc: bcc.map((r) => r.email),
+    }),
+  };
+
+  async function performSend() {
     setSending(true);
     setProgress(0);
     try {
-      const parseAddresses = (raw: string) =>
-        raw
-          .split(",")
-          .map((s) => s.trim())
-          .filter(Boolean)
-          .map((email) => ({ name: "", email }));
+      const bodyHtml = editorRef.current?.innerHTML ?? "";
+      const bodyText = stripHtml(bodyHtml);
 
       const payload = {
         mailSessionToken: session.mailSessionToken ?? "",
         password: session.password,
-        to: parseAddresses(to),
-        cc: parseAddresses(cc),
-        bcc: [],
+        to: to.filter((r) => r.valid).map((r) => ({ name: r.name ?? "", email: r.email })),
+        cc: cc.filter((r) => r.valid).map((r) => ({ name: r.name ?? "", email: r.email })),
+        bcc: bcc.filter((r) => r.valid).map((r) => ({ name: r.name ?? "", email: r.email })),
         subject,
-        bodyHtml: body,
-        bodyText: body,
+        bodyHtml,
+        bodyText,
       };
 
       const form = new FormData();
@@ -3706,6 +4073,12 @@ function Composer({
         toast.error(result.error || "فشل إرسال الرسالة");
         return;
       }
+      // Clear draft on successful send
+      try {
+        window.localStorage.removeItem(draftKey);
+      } catch {
+        /* noop */
+      }
       toast.success("تم إرسال الرسالة");
       onClose();
       onSent();
@@ -3717,45 +4090,271 @@ function Composer({
     }
   }
 
-  return (
-    <div className="fixed inset-x-0 bottom-0 z-40 mx-auto max-w-2xl rounded-t-2xl border border-border bg-card shadow-float sm:inset-x-auto sm:bottom-4 sm:right-4 sm:w-[560px]">
-      <div className="flex items-center justify-between border-b border-border px-4 py-2.5">
-        <p className="text-sm font-semibold">رسالة جديدة</p>
-        <button onClick={onClose} className="rounded-md p-1 hover:bg-muted">
-          <X className="h-4 w-4" />
+  async function handleSend() {
+    if (to.length === 0) {
+      toast.error("أضف مستلماً واحداً على الأقل");
+      return;
+    }
+    const invalid = [...to, ...cc, ...bcc].filter((r) => !r.valid);
+    if (invalid.length > 0) {
+      toast.error(`عنوان بريد غير صالح: ${invalid[0].email}`);
+      return;
+    }
+    if (!subject.trim()) {
+      const ok = window.confirm("لا يوجد موضوع. هل ترغب في الإرسال على أي حال؟");
+      if (!ok) return;
+    }
+    // Attachment-mention detector
+    const html = editorRef.current?.innerHTML ?? "";
+    const text = stripHtml(html).toLowerCase();
+    const mentionsAttach = /(attach|attached|attachment|مرفق|مرفقات|المرفق)/.test(text);
+    if (mentionsAttach && files.length === 0) {
+      const ok = window.confirm("ذكرت مرفقاً لكن لم تُضِف أي ملف. هل تريد الإرسال دون مرفق؟");
+      if (!ok) return;
+    }
+    await performSend();
+  }
+
+  // Keyboard shortcuts (Ctrl/Cmd+Enter to send, Esc to minimize)
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+        e.preventDefault();
+        handleSend();
+      } else if (e.key === "Escape" && windowState !== "minimized") {
+        e.preventDefault();
+        setWindowState("minimized");
+      }
+    }
+    const el = containerRef.current;
+    el?.addEventListener("keydown", onKey);
+    return () => el?.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [to, cc, bcc, subject, files, windowState]);
+
+  // Minimized view
+  if (windowState === "minimized") {
+    return (
+      <div className="fixed bottom-0 right-4 z-40 w-72 rounded-t-xl border border-border bg-card shadow-float">
+        <button
+          onClick={() => setWindowState("normal")}
+          className="flex w-full items-center justify-between px-4 py-2.5 text-right"
+        >
+          <span className="truncate text-sm font-medium">{subject || "رسالة جديدة"}</span>
+          <div className="flex items-center gap-1 text-muted-foreground">
+            <Maximize2 className="h-3.5 w-3.5" />
+          </div>
         </button>
       </div>
-      <div className="p-4">
-        <input
+    );
+  }
+
+  const containerClass =
+    windowState === "fullscreen"
+      ? "fixed inset-4 z-40 flex flex-col rounded-xl border border-border bg-card shadow-float sm:inset-8"
+      : "fixed inset-x-0 bottom-0 z-40 mx-auto flex max-h-[92vh] max-w-2xl flex-col rounded-t-2xl border border-border bg-card shadow-float sm:inset-x-auto sm:bottom-4 sm:right-4 sm:w-[600px]";
+
+  const savedLabel = savedAt
+    ? `تم الحفظ ${new Date(savedAt).toLocaleTimeString("ar", { hour: "2-digit", minute: "2-digit" })}`
+    : "مسودّة جديدة";
+
+  return (
+    <div
+      ref={containerRef}
+      className={containerClass}
+      role="dialog"
+      aria-label="إنشاء رسالة"
+      tabIndex={-1}
+      onDragOver={(e) => {
+        if (e.dataTransfer.types.includes("Files")) {
+          e.preventDefault();
+          setDragging(true);
+        }
+      }}
+      onDragLeave={() => setDragging(false)}
+      onDrop={(e) => {
+        if (e.dataTransfer.files.length > 0) {
+          e.preventDefault();
+          addFiles(e.dataTransfer.files);
+        }
+        setDragging(false);
+      }}
+    >
+      {/* Header */}
+      <div className="flex items-center justify-between border-b border-border px-4 py-2">
+        <p className="truncate text-sm font-semibold">{subject || "رسالة جديدة"}</p>
+        <div className="flex items-center gap-0.5 text-muted-foreground">
+          <button
+            onClick={() => setWindowState("minimized")}
+            className="rounded-md p-1.5 hover:bg-muted"
+            title="تصغير (Esc)"
+            aria-label="تصغير"
+          >
+            <Minus className="h-4 w-4" />
+          </button>
+          <button
+            onClick={() =>
+              setWindowState((s) => (s === "fullscreen" ? "normal" : "fullscreen"))
+            }
+            className="rounded-md p-1.5 hover:bg-muted"
+            title={windowState === "fullscreen" ? "استعادة" : "ملء الشاشة"}
+            aria-label="تكبير"
+          >
+            {windowState === "fullscreen" ? (
+              <Minimize2 className="h-4 w-4" />
+            ) : (
+              <Maximize2 className="h-4 w-4" />
+            )}
+          </button>
+          <button
+            onClick={onClose}
+            className="rounded-md p-1.5 hover:bg-muted"
+            title="إغلاق"
+            aria-label="إغلاق"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      </div>
+
+      {/* Recipients + subject */}
+      <div className="flex-1 overflow-y-auto px-4 pb-2 pt-1">
+        <RecipientField
+          label="إلى"
           value={to}
-          onChange={(e) => setTo(e.target.value)}
-          placeholder="إلى"
-          dir="ltr"
-          className="w-full border-b border-border bg-transparent px-1 py-2 text-sm outline-none"
+          onChange={setTo}
+          autoFocus
+          rightSlot={
+            <div className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
+              {!showCc && (
+                <button
+                  type="button"
+                  onClick={() => setShowCc(true)}
+                  className="hover:text-foreground"
+                >
+                  Cc
+                </button>
+              )}
+              {!showBcc && (
+                <button
+                  type="button"
+                  onClick={() => setShowBcc(true)}
+                  className="hover:text-foreground"
+                >
+                  Bcc
+                </button>
+              )}
+            </div>
+          }
         />
-        <input
-          value={cc}
-          onChange={(e) => setCc(e.target.value)}
-          placeholder="Cc"
-          dir="ltr"
-          className="w-full border-b border-border bg-transparent px-1 py-2 text-sm outline-none"
-        />
+        {showCc && <RecipientField label="Cc" value={cc} onChange={setCc} />}
+        {showBcc && <RecipientField label="Bcc" value={bcc} onChange={setBcc} />}
+
         <input
           value={subject}
           onChange={(e) => setSubject(e.target.value)}
           placeholder="الموضوع"
           className="w-full border-b border-border bg-transparent px-1 py-2 text-sm outline-none"
         />
-        <textarea
-          value={body}
-          onChange={(e) => setBody(e.target.value)}
-          rows={8}
-          placeholder="اكتب رسالتك هنا..."
-          className="w-full resize-none bg-transparent px-1 py-2 text-sm outline-none"
-        />
 
+        {/* Formatting toolbar */}
+        {!plainMode && (
+          <div className="mt-2 flex flex-wrap items-center gap-0.5 border-b border-border pb-1.5">
+            <ToolbarButton title="عريض (Ctrl+B)" onMouseDown={() => exec("bold")}>
+              <Bold className="h-3.5 w-3.5" />
+            </ToolbarButton>
+            <ToolbarButton title="مائل (Ctrl+I)" onMouseDown={() => exec("italic")}>
+              <Italic className="h-3.5 w-3.5" />
+            </ToolbarButton>
+            <ToolbarButton title="تسطير (Ctrl+U)" onMouseDown={() => exec("underline")}>
+              <Underline className="h-3.5 w-3.5" />
+            </ToolbarButton>
+            <span className="mx-1 h-4 w-px bg-border" />
+            <ToolbarButton
+              title="قائمة نقطية"
+              onMouseDown={() => exec("insertUnorderedList")}
+            >
+              <List className="h-3.5 w-3.5" />
+            </ToolbarButton>
+            <ToolbarButton
+              title="قائمة مرقمة"
+              onMouseDown={() => exec("insertOrderedList")}
+            >
+              <ListOrdered className="h-3.5 w-3.5" />
+            </ToolbarButton>
+            <ToolbarButton title="اقتباس" onMouseDown={() => exec("formatBlock", "blockquote")}>
+              <Quote className="h-3.5 w-3.5" />
+            </ToolbarButton>
+            <span className="mx-1 h-4 w-px bg-border" />
+            <ToolbarButton title="إدراج رابط" onMouseDown={promptLink}>
+              <Link2 className="h-3.5 w-3.5" />
+            </ToolbarButton>
+            <ToolbarButton title="إزالة التنسيق" onMouseDown={() => exec("removeFormat")}>
+              <Eraser className="h-3.5 w-3.5" />
+            </ToolbarButton>
+            <span className="mx-1 h-4 w-px bg-border" />
+            {extensions.map((ext) => (
+              <button
+                key={ext.id}
+                type="button"
+                title={ext.title || ext.label}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  try {
+                    ext.onClick(extensionContext);
+                  } catch (err) {
+                    console.error(`[composer-ext:${ext.id}]`, err);
+                  }
+                }}
+                className="inline-flex h-7 items-center gap-1 rounded-md px-2 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
+              >
+                {ext.icon && <span aria-hidden>{ext.icon}</span>}
+                <span>{ext.label}</span>
+              </button>
+            ))}
+            <div className="mx-auto" />
+            <button
+              type="button"
+              title={plainMode ? "الوضع المنسّق" : "الوضع النصّي"}
+              onClick={() => setPlainMode((v) => !v)}
+              className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+            >
+              <Type className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        )}
+
+        {/* Editor */}
+        {plainMode ? (
+          <textarea
+            defaultValue={stripHtml(editorRef.current?.innerHTML ?? initialHtml)}
+            onChange={(e) => {
+              if (editorRef.current) {
+                editorRef.current.innerHTML = plainToHtml(e.target.value);
+              }
+            }}
+            rows={windowState === "fullscreen" ? 20 : 10}
+            placeholder="اكتب رسالتك هنا..."
+            className="mt-2 w-full resize-none bg-transparent px-1 py-2 text-sm outline-none"
+          />
+        ) : (
+          <div
+            ref={editorRef}
+            contentEditable
+            suppressContentEditableWarning
+            role="textbox"
+            aria-multiline="true"
+            aria-label="نص الرسالة"
+            data-placeholder="اكتب رسالتك هنا..."
+            className={`composer-editor mt-2 min-h-[180px] w-full whitespace-pre-wrap break-words rounded-md px-1 py-2 text-sm outline-none ${
+              windowState === "fullscreen" ? "min-h-[320px]" : ""
+            }`}
+          />
+        )}
+
+        {/* Attachments */}
         {files.length > 0 && (
-          <div className="mt-2 flex flex-wrap gap-2 border-t border-border pt-3">
+          <div className="mt-3 flex flex-wrap gap-2 border-t border-border pt-3">
             {files.map((f, i) => {
               const { Icon, tint } = getAttachmentIcon(f.type, f.name);
               return (
@@ -3798,36 +4397,58 @@ function Composer({
           </div>
         )}
       </div>
-      <div className="flex items-center justify-between border-t border-border px-4 py-2.5">
-        <button
-          onClick={handleSend}
-          disabled={sending || !to || !subject}
-          className="inline-flex items-center gap-1.5 rounded-lg bg-brand-gradient px-4 py-2 text-sm font-semibold text-white shadow-soft disabled:opacity-60"
-        >
-          {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-          {sending ? (progress > 0 ? `جاري الإرسال ${progress}%` : "جاري الإرسال") : "إرسال"}
-        </button>
-        <input
-          ref={fileInputRef}
-          type="file"
-          multiple
-          className="hidden"
-          onChange={(e) => handlePickFiles(e.target.files)}
-        />
-        <button
-          type="button"
-          onClick={() => fileInputRef.current?.click()}
-          disabled={sending || files.length >= COMPOSE_MAX_FILES}
-          className="rounded-md p-2 hover:bg-muted disabled:opacity-40"
-          aria-label="إرفاق ملف"
-          title="إرفاق ملف"
-        >
-          <Paperclip className="h-4 w-4" />
-        </button>
+
+      {/* Footer */}
+      <div className="flex items-center justify-between gap-3 border-t border-border px-4 py-2.5">
+        <div className="flex items-center gap-1.5">
+          <button
+            onClick={handleSend}
+            disabled={sending || to.length === 0}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-brand-gradient px-4 py-2 text-sm font-semibold text-white shadow-soft disabled:opacity-60"
+            title="إرسال (Ctrl+Enter)"
+          >
+            {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+            {sending ? (progress > 0 ? `${progress}%` : "جاري الإرسال") : "إرسال"}
+          </button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            className="hidden"
+            onChange={(e) => addFiles(e.target.files)}
+          />
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={sending || files.length >= COMPOSE_MAX_FILES}
+            className="rounded-md p-2 text-muted-foreground hover:bg-muted disabled:opacity-40"
+            aria-label="إرفاق ملف"
+            title="إرفاق ملف"
+          >
+            <Paperclip className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="flex items-center gap-3 text-[11px] text-muted-foreground">
+          <span>{savedLabel}</span>
+          {(to.length > 0 || cc.length > 0 || bcc.length > 0) && (
+            <span>
+              {to.length + cc.length + bcc.length} مستلم
+            </span>
+          )}
+        </div>
       </div>
+
+      {dragging && (
+        <div className="pointer-events-none absolute inset-0 flex items-center justify-center rounded-2xl border-2 border-dashed border-primary/60 bg-primary/5 backdrop-blur-sm">
+          <div className="rounded-lg bg-card px-4 py-2 text-sm font-medium shadow-soft">
+            أفلت الملفات هنا لإرفاقها
+          </div>
+        </div>
+      )}
     </div>
   );
 }
+
 
 // ---- Attachment card with download + inline preview ----
 const INLINE_PREVIEW_MIME = new Set<string>([
