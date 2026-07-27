@@ -15,14 +15,9 @@
 // A single call to `clearAccountOrigins(accountId)` wipes just that
 // account's map on sign-out.
 
-export type MailFolder =
-  | "inbox"
-  | "starred"
-  | "sent"
-  | "drafts"
-  | "spam"
-  | "archive"
-  | "trash";
+import type { MailFolder } from "@/lib/mail-types";
+export type { MailFolder };
+
 
 export interface OriginStorage {
   getItem: (k: string) => string | null;
