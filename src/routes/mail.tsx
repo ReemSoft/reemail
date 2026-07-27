@@ -1694,7 +1694,6 @@ function MailApp() {
             currentAccountId,
             parsed.uid,
             trashUidValidityRef.current,
-            original?.threadId ?? null,
           );
         }
         confirmHideRow(id);
@@ -1761,7 +1760,6 @@ function MailApp() {
             currentAccountId,
             parsed.uid,
             trashUidValidityRef.current,
-            original?.threadId ?? null,
           );
         } else {
           const moveResult = await mutateMoveOrDelete({
@@ -1829,11 +1827,10 @@ function MailApp() {
           toFolder: target,
         });
         forgetOriginForTrashUid(
-          currentAccountId,
+            currentAccountId,
           parsed.uid,
           trashUidValidityRef.current,
-          original?.threadId ?? null,
-        );
+          );
         confirmHideRow(id);
         confirmPendingMove(id);
         const label = FOLDER_META[target as MailFolder]?.label || target;
