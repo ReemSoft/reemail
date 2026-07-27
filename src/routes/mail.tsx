@@ -3895,7 +3895,7 @@ function Composer({
   const [files, setFiles] = useState<File[]>([]);
   const [sending, setSending] = useState(false);
   const [progress, setProgress] = useState(0);
-  const [windowState, setWindowState] = useState<"normal" | "minimized" | "fullscreen">("normal");
+  // Composer runs inline inside the message-viewer pane (Superhuman-style).
   const [dragging, setDragging] = useState(false);
   const [savedAt, setSavedAt] = useState<number | null>(null);
   const [plainMode, setPlainMode] = useState(false);
