@@ -2213,15 +2213,21 @@ function MailApp() {
       try {
         if (isTrash) {
           await mutateMoveOrDelete({ sourceCanonical: parsed.folder, uid: parsed.uid });
-          forgetOriginForTrashUid(currentAccountId, parsed.uid, trashUidValidityRef.current);
+          forgetOriginForDestUid(
+            "trash",
+            currentAccountId,
+            parsed.uid,
+            trashUidValidityRef.current,
+          );
         } else {
           const moveResult = await mutateMoveOrDelete({
             sourceCanonical: parsed.folder,
             uid: parsed.uid,
             toFolder: "trash",
           });
-          writeOriginOnTrash({
+          writeOriginOnDestination({
             accountId: currentAccountId,
+            destKind: "trash",
             sourceCanonical: parsed.folder,
             sourceUid: parsed.uid,
             messageId: meta.get(id)?.threadId ?? null,
@@ -2231,7 +2237,16 @@ function MailApp() {
             })(),
             moveResult,
           });
+          if (parsed.folder === "archive") {
+            forgetOriginForDestUid(
+              "archive",
+              currentAccountId,
+              parsed.uid,
+              archiveUidValidityRef.current,
+            );
+          }
         }
+
         confirmHideRow(id);
         confirmPendingMove(id);
       } catch (err) {
