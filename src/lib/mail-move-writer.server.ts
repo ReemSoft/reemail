@@ -495,8 +495,9 @@ export async function applyMoveWriteThrough(
       input.destCanonical,
     );
     if (!dst && input.destinationPath) {
-      dst = await resolveFolderByPath(supabase, input.accountId, input.destinationPath);
+      dst = await resolveFolderByPath(supabase, input.accountId, input.destinationPath, input.companyId);
     }
+
     // Only attempt destination insert when this caller actually won the
     // source-tombstone race. If a sibling won, they handled the destination
     // side too — inserting again would double-count.
