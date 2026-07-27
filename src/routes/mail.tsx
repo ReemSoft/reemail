@@ -127,9 +127,11 @@ import {
   rememberPendingOrigin,
   getOrigin as trackerGetOrigin,
   forgetFinalOrigin,
-  forgetOriginsForMessageId,
+  forgetPendingOrigin,
   purgeStaleTrashUidValidity,
   clearAccountOrigins,
+  buildOriginFingerprint,
+  promoteUniquePendingOriginForTrashMessage,
 } from "@/lib/mail-origin-tracker";
 import type { IndexMoveResult } from "@/lib/mail-move.functions";
 
