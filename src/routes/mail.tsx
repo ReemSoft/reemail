@@ -290,6 +290,15 @@ function useMailData(session: MailSession | null) {
   // Optimistic hide set — rows removed by the user (unstar in the "starred"
   // folder) that must NOT be resurrected by a racing sync response.
   const pendingHiddenRef = useRef<HiddenIdsSet>(new Map());
+  // BLOCKER_3_PENDING_MOVE_OVERLAY — internal overlay preventing stale rows
+  // from resurrecting a moved/deleted/restored source-folder row. Never
+  // rendered as a badge/indicator. Cleared ONLY by an actual source-folder
+  // read whose request started AFTER `confirmedAt` and where the raw IMAP
+  // result no longer contains the source UID. See mail-pending-moves.ts.
+  const pendingMovesRef = useRef<PendingMovesMap>(loadPendingMovesFromSession());
+  const persistPendingMoves = useCallback(() => {
+    savePendingMovesToSession(pendingMovesRef.current);
+  }, []);
   // V4: Starred-count race guard. `active` = in-flight star mutations;
   // `settledAt` = timestamp of the most recent resolution. While either
   // is "hot" (active > 0 OR within 2s of settledAt), counts loaders must
@@ -305,18 +314,58 @@ function useMailData(session: MailSession | null) {
     return s.active > 0 || Date.now() - s.settledAt < STAR_COUNT_HOT_MS;
   }, []);
 
-  /** Apply overrides + hidden filter to `list`, GC confirmed entries. */
-  const applyPending = useCallback((list: MailMessage[]): MailMessage[] => {
-    reconcileFlagOverrides(list, pendingOverridesRef.current);
-    const patched = applyFlagOverrides(list, pendingOverridesRef.current);
-    return applyHiddenIds(patched, pendingHiddenRef.current);
-  }, []);
+  const currentAccountId = session?.account.id ?? null;
+
+  /** Apply overrides + hidden filter + pending-move overlay, GC confirmed entries. */
+  const applyPending = useCallback(
+    (list: MailMessage[]): MailMessage[] => {
+      reconcileFlagOverrides(list, pendingOverridesRef.current);
+      const patched = applyFlagOverrides(list, pendingOverridesRef.current);
+      const hidden = applyHiddenIds(patched, pendingHiddenRef.current);
+      return applyPendingMoveOverlay(hidden, pendingMovesRef.current, currentAccountId);
+    },
+    [currentAccountId],
+  );
 
   /** Wrap a single incoming message the same way (used by messageCache). */
   const applyPendingOne = useCallback(
     (m: MailMessage): MailMessage => applyFlagOverrideToOne(m, pendingOverridesRef.current),
     [],
   );
+
+  /**
+   * Reconcile pending-move entries whose source folder was just read. MUST
+   * be called with the RAW (pre-overlay) server list so presence checks are
+   * accurate. Only touches (accountId + physical source folder) matching
+   * the read scope — a Trash read never GC's an Inbox overlay entry.
+   */
+  const reconcilePendingMovesForRead = useCallback(
+    (rawList: MailMessage[], canonical: MailFolder, startedAt: number) => {
+      if (!currentAccountId || pendingMovesRef.current.size === 0) return;
+      const removed = reconcilePendingMovesAfterSourceRead(pendingMovesRef.current, {
+        accountId: currentAccountId,
+        physicalSourceFolder: normalizePhysicalFolder(canonical),
+        requestStartedAt: startedAt,
+        rawList,
+      });
+      if (removed > 0) persistPendingMoves();
+    },
+    [currentAccountId, persistPendingMoves],
+  );
+
+  // Session/account boundary: if the account identity changes (login, sign-out,
+  // account switch), clear its pending-move entries so a stale entry from a
+  // previous account can never suppress a new account's rows.
+  const lastAccountIdRef = useRef<string | null>(currentAccountId);
+  useEffect(() => {
+    const prev = lastAccountIdRef.current;
+    lastAccountIdRef.current = currentAccountId;
+    if (prev && prev !== currentAccountId) {
+      clearPendingMovesForAccount(pendingMovesRef.current, prev);
+      persistPendingMoves();
+    }
+  }, [currentAccountId, persistPendingMoves]);
+
 
 
 
