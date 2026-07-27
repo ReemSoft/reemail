@@ -67,33 +67,6 @@ export type RunMailSyncResult =
   | { ok: true; busy: true; reason: "LOCKED" }
   | { ok: false; error: string; code: string };
 
-const BRIDGE_TTL_SECONDS = 60;
-
-async function bridgePost(path: string, payload: unknown) {
-  const url = process.env.MAIL_BRIDGE_URL;
-  const key = process.env.MAIL_BRIDGE_SECRET;
-  if (!url || !key) throw new Error("BRIDGE_NOT_CONFIGURED");
-  const res = await fetch(`${url.replace(/\/$/, "")}${path}`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Bridge-Key": key,
-    },
-    body: JSON.stringify(payload),
-  });
-  const text = await res.text();
-  let json: Record<string, unknown> = {};
-  try {
-    json = JSON.parse(text) as Record<string, unknown>;
-  } catch {
-    /* not json */
-  }
-  if (!res.ok) {
-    const errCode = (json.error as string) || `BRIDGE_HTTP_${res.status}`;
-    throw new Error(errCode);
-  }
-  return json;
-}
 
 export const runMailSync = createServerFn({ method: "POST" })
   .inputValidator((input: RunMailSyncInput) => InputSchema.parse(input))
