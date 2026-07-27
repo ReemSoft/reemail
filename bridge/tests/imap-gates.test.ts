@@ -225,30 +225,146 @@ test("release is idempotent (safe to call multiple times)", async () => {
   assert.equal(g.stats().activeGlobal, 0);
 });
 
-test("stats exposes bounded shape with active-by-host counts", async () => {
+test("stats exposes bounded shape and NEVER leaks host / account / company identifiers", async () => {
   const g = makeGates();
   const r1 = await g.acquire({
     host: "imap.example.com",
-    company: "c",
-    account: "a",
+    company: "acme-corp",
+    account: "ceo@example.com",
     priority: "interactive",
   });
   const r2 = await g.acquire({
-    host: "imap.example.com",
-    company: "c",
-    account: "b",
+    host: "IMAP.other.com",
+    company: "acme-corp",
+    account: "cto@example.com",
     priority: "interactive",
   });
   const s = g.stats();
   assert.equal(s.enabled, true);
   assert.equal(s.activeGlobal, 2);
-  assert.equal(s.activeByHost["imap.example.com"], 2);
+  assert.equal(s.activeHostCount, 2);
   assert.equal(s.limits.globalMax, baseCfg.globalMax);
   assert.ok(s.waitMsP50 >= 0);
   assert.ok(s.waitMsP95 >= 0);
+  // Contract: stats must be a bounded numeric surface. No secrets, hostnames,
+  // email addresses, or company identifiers may appear anywhere in the blob.
+  const serialized = JSON.stringify(s);
+  assert.equal(serialized.includes("example.com"), false);
+  assert.equal(serialized.includes("acme"), false);
+  assert.equal(serialized.includes("ceo"), false);
+  assert.equal(serialized.includes("cto"), false);
   r1();
   r2();
 });
+
+test("host normalization: mixed-case and whitespace count as one host key", async () => {
+  const g = makeGates({
+    globalMax: 10,
+    perHostMax: 1,
+    perCompanyMax: 10,
+    perAccountMax: 10,
+  });
+  const r1 = await g.acquire({
+    host: "IMAP.Example.COM",
+    company: "c",
+    account: "a",
+    priority: "interactive",
+  });
+  let resolved = false;
+  const p2 = g
+    .acquire({
+      host: "  imap.example.com  ",
+      company: "c",
+      account: "b",
+      priority: "interactive",
+    })
+    .then((r) => {
+      resolved = true;
+      return r;
+    });
+  await sleep(20);
+  // Per-host cap = 1; second acquire must block until first releases,
+  // proving both host strings hashed to the same normalized key.
+  assert.equal(resolved, false);
+  assert.equal(g.stats().activeHostCount, 1);
+  r1();
+  const r2 = await p2;
+  r2();
+});
+
+test("release is always called on the success path (activeGlobal returns to 0)", async () => {
+  const g = makeGates();
+  const r = await g.acquire({ host: "h", company: "c", account: "a", priority: "interactive" });
+  assert.equal(g.stats().activeGlobal, 1);
+  r();
+  assert.equal(g.stats().activeGlobal, 0);
+});
+
+test("timeout path never leaves counters or waiters leaked", async () => {
+  const g = makeGates({ globalMax: 1, perAccountMax: 1, interactiveWaitTimeoutMs: 20 });
+  const r1 = await g.acquire({ host: "h", company: "c", account: "a", priority: "interactive" });
+  await g
+    .acquire({ host: "h", company: "c", account: "b", priority: "interactive" })
+    .catch(() => {});
+  const s = g.stats();
+  assert.equal(s.waitingInteractive, 0);
+  assert.equal(s.waitingBackground, 0);
+  assert.equal(s.activeGlobal, 1); // only the first is still held
+  r1();
+  assert.equal(g.stats().activeGlobal, 0);
+});
+
+test("cancellation path never leaves counters or waiters leaked", async () => {
+  const g = makeGates({ globalMax: 1, perAccountMax: 1, interactiveWaitTimeoutMs: 5000 });
+  const r1 = await g.acquire({ host: "h", company: "c", account: "a", priority: "interactive" });
+  const ac = new AbortController();
+  const p = g
+    .acquire({
+      host: "h",
+      company: "c",
+      account: "b",
+      priority: "interactive",
+      signal: ac.signal,
+    })
+    .catch(() => {});
+  setTimeout(() => ac.abort(), 5);
+  await p;
+  const s = g.stats();
+  assert.equal(s.waitingInteractive, 0);
+  assert.equal(s.activeGlobal, 1);
+  r1();
+});
+
+test("feature flag OFF: acquire never blocks, never rejects, never emits IMAP_BUSY", async () => {
+  const g = createImapGates({
+    ...baseCfg,
+    enabled: false,
+    globalMax: 1,
+    perAccountMax: 1,
+    waitQueueMax: 1,
+    interactiveWaitTimeoutMs: 1,
+  });
+  // Hammer well past every cap. Legacy unlimited path must resolve them all
+  // synchronously with no-op releases.
+  const N = 50;
+  const rs = await Promise.all(
+    Array.from({ length: N }, (_, i) =>
+      g.acquire({
+        host: "h",
+        company: "c",
+        account: `a${i % 3}`,
+        priority: i % 2 ? "background" : "interactive",
+      }),
+    ),
+  );
+  assert.equal(rs.length, N);
+  const s = g.stats();
+  assert.equal(s.enabled, false);
+  assert.equal(s.admitted, 0); // no accounting when disabled
+  assert.equal(s.activeGlobal, 0);
+  rs.forEach((r) => r());
+});
+
 
 test("env loader defaults enabled=false with documented caps", () => {
   const c = loadImapGatesConfigFromEnv({});
