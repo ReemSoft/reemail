@@ -272,7 +272,7 @@ app.post("/api/mark-read", requireKey, imapGate("interactive"), async (req, res)
   }
 });
 
-app.post("/api/star", requireKey, async (req, res) => {
+app.post("/api/star", requireKey, imapGate("interactive"), async (req, res) => {
   try {
     const payload = StarPayloadSchema.parse(req.body);
     await starMessage(
