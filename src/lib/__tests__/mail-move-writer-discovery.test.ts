@@ -105,8 +105,11 @@ function row(over: Partial<FakeRow> = {}): FakeRow {
     from_addr: { email: "a@x" },
     deleted_at: null,
     ...over,
+    // Scope columns must match the query filters.
+    ...({ account_id: "acc", folder_id: "f" } as Partial<FakeRow>),
   };
 }
+
 
 describe("discoverDestinationUid — Message-ID branch", () => {
   it("unique Message-ID above cutoff → returns that row", async () => {
