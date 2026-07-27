@@ -2294,7 +2294,10 @@ function MailApp() {
 
   async function bulkRestore() {
     if (!session || selection.size === 0 || bulkBusy) return;
-    if (folder !== "trash") return;
+    const restoreKind = originKindForRestore(folder);
+    if (!restoreKind) return;
+    const destUidValidity =
+      restoreKind === "trash" ? trashUidValidityRef.current : archiveUidValidityRef.current;
     const ids = Array.from(selection);
     const meta = collectBulkMeta(ids);
     const prevSelectedId = selectedId;
@@ -2321,10 +2324,11 @@ function MailApp() {
     for (const id of ids) {
       const parsed = parseMessageId(id);
       if (!parsed) continue;
-      const target = readOriginForTrashUid(
+      const target = readOriginForDestUid(
+        restoreKind,
         currentAccountId,
         parsed.uid,
-        trashUidValidityRef.current,
+        destUidValidity,
       );
       idToTarget.set(id, target);
       applyMoveCountsDelta(parsed.folder, target, meta.get(id)?.wasUnread ?? false);
@@ -2341,9 +2345,10 @@ function MailApp() {
           uid: parsed.uid,
           toFolder: target,
         });
-        forgetOriginForTrashUid(currentAccountId, parsed.uid, trashUidValidityRef.current);
+        forgetOriginForDestUid(restoreKind, currentAccountId, parsed.uid, destUidValidity);
         confirmHideRow(id);
         confirmPendingMove(id);
+
       } catch (err) {
         failedIds.push(id);
         throw err;
