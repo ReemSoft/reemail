@@ -4,12 +4,8 @@ import cors from "cors";
 import multer from "multer";
 import { uploadStorage, cleanupFiles, startupCleanup } from "./uploads.js";
 import { createSendGates } from "./concurrency.js";
-import {
-  createImapGates,
-  loadImapGatesConfigFromEnv,
-  ImapBusyError,
-  type ImapPriority,
-} from "./imap-gates.js";
+import { createImapGates, loadImapGatesConfigFromEnv, type ImapPriority } from "./imap-gates.js";
+import { createImapGateMiddleware } from "./imap-gate-middleware.js";
 
 import { z } from "zod";
 import {
@@ -138,55 +134,7 @@ if (imapGatesConfig.enabled) {
 }
 
 function imapGate(priority: ImapPriority): express.RequestHandler {
-  return async (req, res, next) => {
-    // Pull gate keys from raw body — zod schemas strip company_id on parse.
-    const acct = (req.body ?? {}).account ?? {};
-    const meta = {
-      host: String(acct.imap_host ?? "unknown"),
-      company: String(acct.company_id ?? acct.companyId ?? ""),
-      account: String(acct.email_address ?? "unknown"),
-      priority,
-    };
-    const ac = new AbortController();
-    const onEarlyClose = () => {
-      try {
-        ac.abort();
-      } catch {
-        /* noop */
-      }
-    };
-    res.once("close", onEarlyClose);
-
-    let release: (() => void) | null = null;
-    try {
-      release = await imapGates.acquire({ ...meta, signal: ac.signal });
-    } catch (err) {
-      res.off("close", onEarlyClose);
-      if (res.writableEnded || res.destroyed) return;
-      if (err instanceof ImapBusyError) {
-        res.setHeader("Retry-After", String(err.retryAfterSeconds));
-        return res.status(503).json({
-          ok: false,
-          error: "IMAP_BUSY",
-          message: "الخادم مشغول، حاول بعد قليل",
-        });
-      }
-      return next(err);
-    }
-
-    // Release exactly once — whichever event fires first: response finished
-    // (success/error) or the socket dropped after we admitted the caller.
-    let released = false;
-    const doRelease = () => {
-      if (released) return;
-      released = true;
-      res.off("close", onEarlyClose);
-      release!();
-    };
-    res.once("finish", doRelease);
-    res.once("close", doRelease);
-    next();
-  };
+  return createImapGateMiddleware(imapGates, priority);
 }
 
 // --- Routes ---
