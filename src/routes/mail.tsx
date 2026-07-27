@@ -59,6 +59,7 @@ import {
   List,
   ListOrdered,
   Link2,
+  Type,
   Quote,
   Eraser,
   AlertTriangle,
