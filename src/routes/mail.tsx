@@ -1459,6 +1459,7 @@ function MailApp() {
       setSelectedMessage(null);
       messageCache.current.delete(id);
       hideRow(id);
+      beginPendingMove(id, isTrash ? "permanent-delete" : "trash");
       applyMoveCountsDelta(parsed.folder, destForCounts, wasUnread);
       try {
         if (isTrash) {
@@ -1473,9 +1474,11 @@ function MailApp() {
           rememberOrigin(msg?.threadId, parsed.folder);
         }
         confirmHideRow(id);
+        confirmPendingMove(id);
         toast.success(isTrash ? "تم حذف الرسالة نهائياً" : "تم نقل الرسالة إلى المهملات");
       } catch (err: any) {
         unhideRow(id);
+        rollbackPendingMove(id);
         applyMoveCountsDelta(destForCounts ?? parsed.folder, parsed.folder, wasUnread); // revert
         // Re-insert with a duplicate guard so we never clobber a concurrent
         // mutation that already re-added the row.
