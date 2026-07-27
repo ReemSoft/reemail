@@ -1722,9 +1722,11 @@ function MailApp() {
       setSelectedId(null);
       setSelectedMessage(null);
     }
+    const bulkDeleteOp: PendingMoveOperation = isTrash ? "permanent-delete" : "trash";
     ids.forEach((id) => {
       messageCache.current.delete(id);
       hideRow(id);
+      beginPendingMove(id, bulkDeleteOp);
     });
     const destForCounts: MailFolder | null = isTrash ? null : "trash";
     for (const id of ids) {
@@ -1751,6 +1753,7 @@ function MailApp() {
           rememberOrigin(meta.get(id)?.threadId, parsed.folder);
         }
         confirmHideRow(id);
+        confirmPendingMove(id);
       } catch (err) {
         failedIds.push(id);
         throw err;
@@ -1761,6 +1764,7 @@ function MailApp() {
       const failedSet = new Set(failedIds);
       for (const id of failedIds) {
         unhideRow(id);
+        rollbackPendingMove(id);
         const parsed = parseMessageId(id);
         if (parsed) {
           const info = meta.get(id);
