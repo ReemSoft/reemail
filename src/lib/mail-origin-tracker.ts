@@ -91,10 +91,7 @@ function pendingEntryKey(
 
 // -------- Low-level I/O --------
 
-function loadFinal(
-  storage: OriginStorage,
-  accountId: string,
-): Record<string, FinalOriginEntry> {
+function loadFinal(storage: OriginStorage, accountId: string): Record<string, FinalOriginEntry> {
   try {
     const raw = storage.getItem(finalStorageKey(accountId));
     if (!raw) return {};
@@ -251,10 +248,7 @@ export function promotePendingOriginToFinal(
 }
 
 /** Look up the final origin for a Trash identity. Returns `null` when missing. */
-export function getOrigin(
-  storage: OriginStorage,
-  key: FinalOriginKey,
-): FinalOriginEntry | null {
+export function getOrigin(storage: OriginStorage, key: FinalOriginKey): FinalOriginEntry | null {
   if (
     !key.accountId ||
     !Number.isFinite(key.trashUidValidity) ||
@@ -351,10 +345,7 @@ export function purgeStaleTrashUidValidity(
 }
 
 /** Wipe every v3 origin (final + pending) for `accountId`. */
-export function clearAccountOrigins(
-  storage: OriginStorage,
-  accountId: string | null,
-): void {
+export function clearAccountOrigins(storage: OriginStorage, accountId: string | null): void {
   if (!accountId) return;
   storage.removeItem(finalStorageKey(accountId));
   storage.removeItem(pendingStorageKey(accountId));
@@ -378,16 +369,13 @@ export function buildOriginFingerprint(input: {
   date?: string | null;
   sizeBytes?: number | null;
 }): string {
-  const norm = (v: string | null | undefined) =>
-    (v ?? "").toString().trim().toLowerCase();
+  const norm = (v: string | null | undefined) => (v ?? "").toString().trim().toLowerCase();
   const parts = [
     norm(input.messageId),
     norm(input.fromEmail),
     norm(input.subject),
     norm(input.date),
-    input.sizeBytes != null && Number.isFinite(input.sizeBytes)
-      ? String(input.sizeBytes)
-      : "",
+    input.sizeBytes != null && Number.isFinite(input.sizeBytes) ? String(input.sizeBytes) : "",
   ];
   // Require at least two non-empty components to avoid single-field collisions.
   const nonEmpty = parts.filter((p) => p.length > 0).length;

@@ -72,8 +72,12 @@ describe("mail-origin-tracker v3 — trash identity", () => {
       { accountId: B, trashUidValidity: 10, trashUid: 5 },
       { originalCanonical: "spam" },
     );
-    expect(getOrigin(s, { accountId: A, trashUidValidity: 10, trashUid: 5 })?.originalCanonical).toBe("archive");
-    expect(getOrigin(s, { accountId: B, trashUidValidity: 10, trashUid: 5 })?.originalCanonical).toBe("spam");
+    expect(
+      getOrigin(s, { accountId: A, trashUidValidity: 10, trashUid: 5 })?.originalCanonical,
+    ).toBe("archive");
+    expect(
+      getOrigin(s, { accountId: B, trashUidValidity: 10, trashUid: 5 })?.originalCanonical,
+    ).toBe("spam");
   });
 
   it("two Trash entries in one account, same messageId, different UIDs, keep separate origins", () => {
@@ -87,8 +91,12 @@ describe("mail-origin-tracker v3 — trash identity", () => {
       { accountId: A, trashUidValidity: 100, trashUid: 2 },
       { originalCanonical: "archive", messageId: "<same@id>" },
     );
-    expect(getOrigin(s, { accountId: A, trashUidValidity: 100, trashUid: 1 })?.originalCanonical).toBe("inbox");
-    expect(getOrigin(s, { accountId: A, trashUidValidity: 100, trashUid: 2 })?.originalCanonical).toBe("archive");
+    expect(
+      getOrigin(s, { accountId: A, trashUidValidity: 100, trashUid: 1 })?.originalCanonical,
+    ).toBe("inbox");
+    expect(
+      getOrigin(s, { accountId: A, trashUidValidity: 100, trashUid: 2 })?.originalCanonical,
+    ).toBe("archive");
   });
 
   it("missing messageId still works", () => {
@@ -108,9 +116,7 @@ describe("mail-origin-tracker v3 — trash identity", () => {
       { accountId: A, trashUidValidity: 100, trashUid: 42 },
       { originalCanonical: "archive" },
     );
-    expect(
-      getOrigin(s, { accountId: A, trashUidValidity: 200, trashUid: 42 }),
-    ).toBeNull();
+    expect(getOrigin(s, { accountId: A, trashUidValidity: 200, trashUid: 42 })).toBeNull();
   });
 
   it("purgeStaleTrashUidValidity drops entries whose UV != current", () => {
@@ -127,9 +133,9 @@ describe("mail-origin-tracker v3 — trash identity", () => {
     const removed = purgeStaleTrashUidValidity(s, A, 200);
     expect(removed).toBe(1);
     expect(getOrigin(s, { accountId: A, trashUidValidity: 100, trashUid: 1 })).toBeNull();
-    expect(getOrigin(s, { accountId: A, trashUidValidity: 200, trashUid: 2 })?.originalCanonical).toBe(
-      "archive",
-    );
+    expect(
+      getOrigin(s, { accountId: A, trashUidValidity: 200, trashUid: 2 })?.originalCanonical,
+    ).toBe("archive");
   });
 
   it("forget only touches the given (account, trashUV, trashUid)", () => {
@@ -145,9 +151,9 @@ describe("mail-origin-tracker v3 — trash identity", () => {
     );
     forgetFinalOrigin(s, { accountId: A, trashUidValidity: 1, trashUid: 1 });
     expect(getOrigin(s, { accountId: A, trashUidValidity: 1, trashUid: 1 })).toBeNull();
-    expect(getOrigin(s, { accountId: B, trashUidValidity: 1, trashUid: 1 })?.originalCanonical).toBe(
-      "spam",
-    );
+    expect(
+      getOrigin(s, { accountId: B, trashUidValidity: 1, trashUid: 1 })?.originalCanonical,
+    ).toBe("spam");
   });
 
   it("clearAccountOrigins wipes both final + pending for that account only", () => {
@@ -186,9 +192,9 @@ describe("mail-origin-tracker v3 — trash identity", () => {
       { accountId: A, trashUidValidity: 1, trashUid: 1 },
       { originalCanonical: "archive" },
     );
-    expect(getOrigin(s, { accountId: A, trashUidValidity: 1, trashUid: 1 })?.originalCanonical).toBe(
-      "archive",
-    );
+    expect(
+      getOrigin(s, { accountId: A, trashUidValidity: 1, trashUid: 1 })?.originalCanonical,
+    ).toBe("archive");
   });
 
   it("ignores calls with no accountId", () => {
@@ -258,9 +264,9 @@ describe("mail-origin-tracker v3 — pending origins", () => {
     const removed = forgetOriginsForMessageId(s, A, "<mid>");
     expect(removed).toBe(2);
     expect(getOrigin(s, { accountId: A, trashUidValidity: 10, trashUid: 1 })).toBeNull();
-    expect(getOrigin(s, { accountId: A, trashUidValidity: 10, trashUid: 2 })?.originalCanonical).toBe(
-      "spam",
-    );
+    expect(
+      getOrigin(s, { accountId: A, trashUidValidity: 10, trashUid: 2 })?.originalCanonical,
+    ).toBe("spam");
   });
 
   it("forgetPendingOrigin does not touch final", () => {
@@ -445,4 +451,3 @@ describe("mail-origin-tracker v3 — fingerprint + unique promotion", () => {
     ).toBe("archive");
   });
 });
-
