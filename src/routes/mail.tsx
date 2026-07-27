@@ -797,6 +797,7 @@ function useMailData(session: MailSession | null) {
       s.settledAt = Date.now();
     },
 
+    applyPending,
     applyPendingOne,
   };
 }
