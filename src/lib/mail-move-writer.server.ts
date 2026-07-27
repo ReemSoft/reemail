@@ -67,21 +67,27 @@ export async function resolveFolderByPath(
   supabase: SupabaseClient,
   accountId: string,
   path: string,
+  companyId?: string,
 ): Promise<FolderRef | null> {
-  const q = await supabase
+  let q = supabase
     .from("mail_folders")
     .select("id, uidvalidity, path")
     .eq("account_id", accountId)
-    .eq("path", path)
-    .maybeSingle();
-  if (q.error) throw q.error;
-  if (!q.data?.id) return null;
+    .eq("path", path);
+  // Batch A / Fix #3: when the caller knows the company, scope the lookup to
+  // it so a stray row on another tenant can never be returned. Legacy callers
+  // that omit companyId keep working (single-tenant accounts).
+  if (companyId) q = q.eq("company_id", companyId);
+  const res = await q.maybeSingle();
+  if (res.error) throw res.error;
+  if (!res.data?.id) return null;
   return {
-    id: q.data.id,
-    uidvalidity: q.data.uidvalidity == null ? null : Number(q.data.uidvalidity),
-    path: q.data.path ?? null,
+    id: res.data.id,
+    uidvalidity: res.data.uidvalidity == null ? null : Number(res.data.uidvalidity),
+    path: res.data.path ?? null,
   };
 }
+
 
 // ============================================================================
 // Fingerprint capture + destination UID discovery (Blocker 2: targeted sync)
