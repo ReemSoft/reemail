@@ -146,7 +146,7 @@ export async function processClaimedJob(
     } else {
       // ok:false path
       const errCode = (runResult as { code?: string }).code ?? "UNKNOWN";
-      const classified = classifyMailQueueError(errCode);
+      const classified = classifyBridgeError({ code: errCode });
       outcome = decideRetryOrDead(classified, job.read_ct);
     }
   } catch (err) {
@@ -155,7 +155,7 @@ export async function processClaimedJob(
     } else if (err instanceof MailConfigIncompleteError) {
       outcome = { kind: "dead", code: "INVALID_CONFIG" };
     } else {
-      const classified = classifyMailQueueError((err as Error)?.message ?? "");
+      const classified = classifyBridgeError({ message: (err as Error)?.message ?? "" });
       outcome = decideRetryOrDead(classified, job.read_ct);
     }
   }
@@ -165,15 +165,14 @@ export async function processClaimedJob(
 }
 
 function decideRetryOrDead(code: MailQueueErrorCode, readCt: number): WorkerJobOutcome {
-  if (isRetryableCode(code) && readCt < MAX_ATTEMPTS) {
-    return {
-      kind: "retried",
-      code,
-      delaySeconds: computeBackoffDelaySeconds(readCt),
-    };
+  // read_ct is 1 after the first claim, so treat it as the attempt count.
+  const decision = decideFailureAction({ code, attempt: Math.max(1, readCt) });
+  if (decision.action === "retry") {
+    return { kind: "retried", code, delaySeconds: decision.delaySeconds };
   }
   return { kind: "dead", code };
 }
+
 
 async function commitOutcome(
   admin: SupabaseClient,
