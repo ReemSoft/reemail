@@ -1735,14 +1735,22 @@ function MailApp() {
 
   // Bulk helper: capture per-id metadata BEFORE we clear the selection or
   // filter the list, so a per-id rollback can rebuild counters correctly.
+  // Bulk helper: capture per-id metadata BEFORE we clear the selection or
+  // filter the list, so a per-id rollback can rebuild counters and re-insert
+  // failed rows at their original indices.
   function collectBulkMeta(ids: string[]) {
     const set = new Set(ids);
-    const meta = new Map<string, { threadId?: string; wasUnread: boolean }>();
-    for (const m of messages) {
-      if (set.has(m.id)) meta.set(m.id, { threadId: m.threadId, wasUnread: !m.read });
-    }
+    const meta = new Map<
+      string,
+      { threadId?: string; wasUnread: boolean; original: MailMessage; originalIndex: number }
+    >();
+    messages.forEach((m, idx) => {
+      if (set.has(m.id))
+        meta.set(m.id, { threadId: m.threadId, wasUnread: !m.read, original: m, originalIndex: idx });
+    });
     return meta;
   }
+
 
   async function bulkMove(toFolder: MailFolder) {
     if (!session || selection.size === 0 || bulkBusy) return;
