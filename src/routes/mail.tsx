@@ -3290,9 +3290,11 @@ function MessageView({
             </button>
           )}
 
-          <button onClick={onArchive} className="rounded-lg p-2 hover:bg-muted" title="أرشفة">
-            <Archive className="h-4 w-4" />
-          </button>
+          {canArchive && (
+            <button onClick={onArchive} className="rounded-lg p-2 hover:bg-muted" title="أرشفة">
+              <Archive className="h-4 w-4" />
+            </button>
+          )}
           <button onClick={onSpam} className="rounded-lg p-2 hover:bg-muted" title="مزعج">
             <AlertOctagon className="h-4 w-4" />
           </button>
