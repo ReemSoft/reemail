@@ -37,15 +37,21 @@ export interface ImapGatesConfig {
 }
 
 export function normalizeHost(host: string): string {
-  return String(host || "").trim().toLowerCase();
+  return String(host || "")
+    .trim()
+    .toLowerCase();
 }
 
 export function normalizeAccount(email: string): string {
-  return String(email || "").trim().toLowerCase();
+  return String(email || "")
+    .trim()
+    .toLowerCase();
 }
 
 export function normalizeCompany(id: string | undefined | null): string {
-  const v = String(id ?? "").trim().toLowerCase();
+  const v = String(id ?? "")
+    .trim()
+    .toLowerCase();
   return v.length > 0 ? v : "__default__";
 }
 
@@ -248,7 +254,11 @@ export function createImapGates(cfg: ImapGatesConfig): ImapGates {
       waiter.timer = null;
     }
     if (waiter.onAbort && waiter.signal) {
-      try { waiter.signal.removeEventListener("abort", waiter.onAbort); } catch { /* noop */ }
+      try {
+        waiter.signal.removeEventListener("abort", waiter.onAbort);
+      } catch {
+        /* noop */
+      }
       waiter.onAbort = null;
     }
     removeFromQueue(waiter);
@@ -272,7 +282,9 @@ export function createImapGates(cfg: ImapGatesConfig): ImapGates {
   function acquire(opts: AcquireOptions): Promise<ImapGateRelease> {
     if (!cfg.enabled) {
       // Feature flag off: preserve legacy unlimited path exactly.
-      return Promise.resolve(() => { /* noop */ });
+      return Promise.resolve(() => {
+        /* noop */
+      });
     }
 
     const key = {
@@ -314,8 +326,9 @@ export function createImapGates(cfg: ImapGatesConfig): ImapGates {
       return Promise.reject(new ImapBusyError("queue-full", 5));
     }
 
-    const timeoutMs = opts.waitTimeoutMs
-      ?? (opts.priority === "interactive"
+    const timeoutMs =
+      opts.waitTimeoutMs ??
+      (opts.priority === "interactive"
         ? cfg.interactiveWaitTimeoutMs
         : cfg.backgroundWaitTimeoutMs);
 

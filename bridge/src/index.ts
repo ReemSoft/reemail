@@ -148,7 +148,13 @@ function imapGate(priority: ImapPriority): express.RequestHandler {
       priority,
     };
     const ac = new AbortController();
-    const onEarlyClose = () => { try { ac.abort(); } catch { /* noop */ } };
+    const onEarlyClose = () => {
+      try {
+        ac.abort();
+      } catch {
+        /* noop */
+      }
+    };
     res.once("close", onEarlyClose);
 
     let release: (() => void) | null = null;

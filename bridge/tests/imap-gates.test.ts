@@ -50,7 +50,10 @@ test("per-account cap queues a second acquire until first releases", async () =>
   let resolved = false;
   const p2 = g
     .acquire({ host: "h", company: "c", account: "a", priority: "interactive" })
-    .then((r) => { resolved = true; return r; });
+    .then((r) => {
+      resolved = true;
+      return r;
+    });
   await sleep(20);
   assert.equal(resolved, false);
   r1();
@@ -66,22 +69,34 @@ test("per-host cap blocks even with distinct accounts", async () => {
   let resolved = false;
   const p3 = g
     .acquire({ host: "h", company: "c", account: "d", priority: "interactive" })
-    .then((r) => { resolved = true; return r; });
+    .then((r) => {
+      resolved = true;
+      return r;
+    });
   await sleep(20);
   assert.equal(resolved, false);
   r1();
   const r3 = await p3;
   assert.equal(resolved, true);
-  r2(); r3();
+  r2();
+  r3();
 });
 
 test("per-company cap blocks across hosts", async () => {
   const g = makeGates({ perCompanyMax: 1, perAccountMax: 5, perHostMax: 10, globalMax: 10 });
-  const r1 = await g.acquire({ host: "a.com", company: "co", account: "x@a", priority: "interactive" });
+  const r1 = await g.acquire({
+    host: "a.com",
+    company: "co",
+    account: "x@a",
+    priority: "interactive",
+  });
   let resolved = false;
   const p2 = g
     .acquire({ host: "b.com", company: "co", account: "y@b", priority: "interactive" })
-    .then((r) => { resolved = true; return r; });
+    .then((r) => {
+      resolved = true;
+      return r;
+    });
   await sleep(20);
   assert.equal(resolved, false);
   r1();
@@ -97,19 +112,27 @@ test("global cap blocks across everything", async () => {
   let resolved = false;
   const p3 = g
     .acquire({ host: "c", company: "3", account: "c", priority: "interactive" })
-    .then((r) => { resolved = true; return r; });
+    .then((r) => {
+      resolved = true;
+      return r;
+    });
   await sleep(20);
   assert.equal(resolved, false);
   r1();
   const r3 = await p3;
   assert.equal(resolved, true);
-  r2(); r3();
+  r2();
+  r3();
 });
 
 test("fairness: interactive preferred but background admitted after 3 in a row", async () => {
   const g = makeGates({
-    globalMax: 1, perHostMax: 1, perCompanyMax: 1, perAccountMax: 1,
-    interactiveWaitTimeoutMs: 5000, backgroundWaitTimeoutMs: 5000,
+    globalMax: 1,
+    perHostMax: 1,
+    perCompanyMax: 1,
+    perAccountMax: 1,
+    interactiveWaitTimeoutMs: 5000,
+    backgroundWaitTimeoutMs: 5000,
   });
   const r0 = await g.acquire({ host: "h", company: "c", account: "a0", priority: "interactive" });
 
@@ -117,8 +140,10 @@ test("fairness: interactive preferred but background admitted after 3 in a row",
   // captures the admission order without deadlocking on await order.
   const order: string[] = [];
   const track = (label: string, priority: "interactive" | "background") =>
-    g.acquire({ host: "h", company: "c", account: label, priority })
-      .then((rel) => { order.push(label); rel(); });
+    g.acquire({ host: "h", company: "c", account: label, priority }).then((rel) => {
+      order.push(label);
+      rel();
+    });
 
   const all = Promise.all([
     track("bg", "background"),
@@ -137,13 +162,20 @@ test("fairness: interactive preferred but background admitted after 3 in a row",
 });
 
 test("overflow: wait queue full rejects with IMAP_BUSY", async () => {
-  const g = makeGates({ globalMax: 1, perAccountMax: 1, perCompanyMax: 10, perHostMax: 10, waitQueueMax: 2 });
+  const g = makeGates({
+    globalMax: 1,
+    perAccountMax: 1,
+    perCompanyMax: 10,
+    perHostMax: 10,
+    waitQueueMax: 2,
+  });
   const r1 = await g.acquire({ host: "h", company: "c", account: "a", priority: "interactive" });
   const p1 = g.acquire({ host: "h", company: "c", account: "b", priority: "interactive" });
   const p2 = g.acquire({ host: "h", company: "c", account: "c", priority: "interactive" });
   await assert.rejects(
     g.acquire({ host: "h", company: "c", account: "d", priority: "interactive" }),
-    (err: unknown) => err instanceof ImapBusyError && (err as ImapBusyError).reason === "queue-full",
+    (err: unknown) =>
+      err instanceof ImapBusyError && (err as ImapBusyError).reason === "queue-full",
   );
   assert.equal(g.stats().rejected, 1);
   r1();
@@ -167,9 +199,15 @@ test("cancellation: AbortSignal aborts a waiting acquire", async () => {
   const g = makeGates({ globalMax: 1, perAccountMax: 1, interactiveWaitTimeoutMs: 2000 });
   const r1 = await g.acquire({ host: "h", company: "c", account: "a", priority: "interactive" });
   const ac = new AbortController();
-  const p = g.acquire({
-    host: "h", company: "c", account: "b", priority: "interactive", signal: ac.signal,
-  }).catch((e) => e);
+  const p = g
+    .acquire({
+      host: "h",
+      company: "c",
+      account: "b",
+      priority: "interactive",
+      signal: ac.signal,
+    })
+    .catch((e) => e);
   setTimeout(() => ac.abort(), 10);
   const err = await p;
   assert.ok(err instanceof ImapBusyError);
@@ -181,14 +219,26 @@ test("cancellation: AbortSignal aborts a waiting acquire", async () => {
 test("release is idempotent (safe to call multiple times)", async () => {
   const g = makeGates();
   const r = await g.acquire({ host: "h", company: "c", account: "a", priority: "interactive" });
-  r(); r(); r();
+  r();
+  r();
+  r();
   assert.equal(g.stats().activeGlobal, 0);
 });
 
 test("stats exposes bounded shape with active-by-host counts", async () => {
   const g = makeGates();
-  const r1 = await g.acquire({ host: "imap.example.com", company: "c", account: "a", priority: "interactive" });
-  const r2 = await g.acquire({ host: "imap.example.com", company: "c", account: "b", priority: "interactive" });
+  const r1 = await g.acquire({
+    host: "imap.example.com",
+    company: "c",
+    account: "a",
+    priority: "interactive",
+  });
+  const r2 = await g.acquire({
+    host: "imap.example.com",
+    company: "c",
+    account: "b",
+    priority: "interactive",
+  });
   const s = g.stats();
   assert.equal(s.enabled, true);
   assert.equal(s.activeGlobal, 2);
@@ -196,7 +246,8 @@ test("stats exposes bounded shape with active-by-host counts", async () => {
   assert.equal(s.limits.globalMax, baseCfg.globalMax);
   assert.ok(s.waitMsP50 >= 0);
   assert.ok(s.waitMsP95 >= 0);
-  r1(); r2();
+  r1();
+  r2();
 });
 
 test("env loader defaults enabled=false with documented caps", () => {
