@@ -2090,9 +2090,11 @@ function MailApp() {
           uid: parsed.uid,
           toFolder,
         });
-        if (toFolder === "trash") {
-          writeOriginOnTrash({
+        const destKind = originKindForDestination(toFolder);
+        if (destKind) {
+          writeOriginOnDestination({
             accountId: currentAccountId,
+            destKind,
             sourceCanonical: parsed.folder,
             sourceUid: parsed.uid,
             messageId: meta.get(id)?.threadId ?? null,
@@ -2102,9 +2104,17 @@ function MailApp() {
             })(),
             moveResult,
           });
-        } else if (parsed.folder === "trash") {
-          forgetOriginForTrashUid(currentAccountId, parsed.uid, trashUidValidityRef.current);
         }
+        const srcKind = originKindForRestore(parsed.folder);
+        if (srcKind) {
+          forgetOriginForDestUid(
+            srcKind,
+            currentAccountId,
+            parsed.uid,
+            srcKind === "trash" ? trashUidValidityRef.current : archiveUidValidityRef.current,
+          );
+        }
+
         confirmHideRow(id);
         confirmPendingMove(id);
       } catch (err) {
