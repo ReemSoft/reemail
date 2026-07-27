@@ -479,13 +479,20 @@ function useMailData(session: MailSession | null, onSessionExpired?: () => void)
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(false);
   const [bridgeError, setBridgeError] = useState<string | null>(null);
-  const [useMock, setUseMock] = useState(false);
   const [source, setSource] = useState<SourceKind>("bridge");
   const [indexCursor, setIndexCursor] = useState<string | null>(null);
   // Per-folder "index ready" flag, used to drive the sync hook.
   const [indexReady, setIndexReady] = useState<Partial<Record<MailFolder, boolean>>>({});
   // Race guard: only accept a load result whose id matches the latest request.
   const loadReqIdRef = useRef(0);
+  // Fire onSessionExpired exactly once per hook lifetime; subsequent calls
+  // are no-ops so a burst of stale requests can't spam navigation/toasts.
+  const sessionExpiredFiredRef = useRef(false);
+  const notifySessionExpired = useCallback(() => {
+    if (sessionExpiredFiredRef.current) return;
+    sessionExpiredFiredRef.current = true;
+    onSessionExpired?.();
+  }, [onSessionExpired]);
   const PAGE = 50;
 
   // Pending Flag Overrides — persist optimistic star/read across any
