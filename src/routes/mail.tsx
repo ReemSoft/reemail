@@ -1535,22 +1535,42 @@ function MailApp() {
   async function handleMarkUnread(id: string) {
     const parsed = parseMessageId(id);
     if (!parsed || !session) return;
+    // BLOCKER_5 — complete rollback for handleMarkUnread on failure so a
+    // failed IMAP flag write can't leave the UI (list row, counter, cache,
+    // selection) permanently pretending the message is unread.
+    const msg = messages.find((m) => m.id === id);
+    if (!msg || !msg.read) return; // no-op if already unread
+    const prevSelectedId = selectedId;
+    const prevSelected = selectedMessage;
+    const prevCache = messageCache.current.get(id);
     setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, read: false } : m)));
     setCounts((prev) => {
       const cur = prev[parsed.folder];
       if (!cur) return prev;
       return { ...prev, [parsed.folder]: { ...cur, unread: cur.unread + 1 } };
     });
-    const c = messageCache.current.get(id);
-    if (c) messageCache.current.set(id, { ...c, read: false });
+    if (prevCache) messageCache.current.set(id, { ...prevCache, read: false });
     setSelectedId(null);
     setSelectedMessage(null);
     try {
       await mutateFlag(parsed.folder, parsed.uid, "seen", false);
     } catch (err: any) {
+      // Full revert — row, counter, cache, selection.
+      setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, read: true } : m)));
+      setCounts((prev) => {
+        const cur = prev[parsed.folder];
+        if (!cur) return prev;
+        return { ...prev, [parsed.folder]: { ...cur, unread: Math.max(0, cur.unread - 1) } };
+      });
+      if (prevCache) messageCache.current.set(id, prevCache);
+      if (prevSelectedId === id) {
+        setSelectedId(prevSelectedId);
+        setSelectedMessage(prevSelected);
+      }
       toast.error(err?.message || "فشل التعليم كغير مقروءة");
     }
   }
+
 
   function toggleSelect(id: string) {
     setSelection((prev) => {
