@@ -609,7 +609,7 @@ app.post("/api/sync/initial", requireKey, imapGate("background"), async (req, re
   }
 });
 
-app.post("/api/sync/incremental", requireKey, async (req, res) => {
+app.post("/api/sync/incremental", requireKey, imapGate("background"), async (req, res) => {
   try {
     const p = IncrementalSyncSchema.parse(req.body);
     const result = await runIncrementalSync(p.account as MailAccount, p.password, {
