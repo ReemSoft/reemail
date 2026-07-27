@@ -3869,6 +3869,48 @@ function ToolbarButton({
   );
 }
 
+function ToolbarSelect({
+  title,
+  ariaLabel,
+  placeholder,
+  options,
+  onChange,
+  className,
+}: {
+  title: string;
+  ariaLabel: string;
+  placeholder: string;
+  options: { value: string; label: string }[];
+  onChange: (value: string) => void;
+  className?: string;
+}) {
+  return (
+    <div className={`relative inline-flex h-7 items-center ${className ?? ""}`}>
+      <select
+        title={title}
+        aria-label={ariaLabel}
+        defaultValue=""
+        onChange={(e) => {
+          const v = e.target.value;
+          e.target.value = "";
+          if (v) onChange(v);
+        }}
+        className="peer h-7 w-full cursor-pointer appearance-none rounded-md border border-input bg-background ps-2 pe-6 text-xs text-foreground outline-none hover:bg-muted focus:ring-2 focus:ring-ring/40"
+      >
+        <option value="" disabled>
+          {placeholder}
+        </option>
+        {options.map((o) => (
+          <option key={o.value} value={o.value}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+      <ChevronDown className="pointer-events-none absolute end-1.5 h-3 w-3 text-muted-foreground" />
+    </div>
+  );
+}
+
 function Composer({
   session,
   initial,
