@@ -3737,7 +3737,7 @@ function RecipientField({
 
   return (
     <div className="flex flex-col gap-1.5">
-      <label className="text-xs font-medium text-muted-foreground">{label}</label>
+      <label className="text-sm font-medium text-foreground">{label}</label>
       <div
         className="flex min-h-[42px] w-full items-center gap-2 rounded-lg border border-input bg-background px-3 py-1.5 transition focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/20"
         onClick={() => inputRef.current?.focus()}
@@ -4247,7 +4247,7 @@ function Composer({
 
           {/* Subject */}
           <div className="flex flex-col gap-1.5">
-            <label className="text-xs font-medium text-muted-foreground">الموضوع</label>
+            <label className="text-sm font-medium text-foreground">الموضوع</label>
             <input
               value={subject}
               onChange={(e) => setSubject(e.target.value)}
@@ -4258,7 +4258,7 @@ function Composer({
 
           {/* Editor */}
           <div className="flex flex-col gap-1.5">
-            <label className="text-xs font-medium text-muted-foreground">نص الرسالة</label>
+            <label className="text-sm font-medium text-foreground">نص الرسالة</label>
             <div className="overflow-hidden rounded-lg border border-input bg-background transition focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/20">
               {!plainMode && (
                 <div className="flex flex-wrap items-center gap-0.5 border-b border-border/70 bg-muted/30 px-2 py-1.5">
@@ -4350,7 +4350,7 @@ function Composer({
           {/* Attachments */}
           {files.length > 0 && (
             <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-medium text-muted-foreground">
+              <label className="text-sm font-medium text-foreground">
                 المرفقات · {formatBytes(totalBytes)} / 25 MB
               </label>
               <div className="flex flex-wrap gap-2 rounded-lg border border-dashed border-border bg-background/50 p-3">
