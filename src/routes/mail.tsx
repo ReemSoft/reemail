@@ -1624,9 +1624,12 @@ function MailApp() {
       setSelectedId(null);
       setSelectedMessage(null);
     }
+    const bulkOp: PendingMoveOperation =
+      toFolder === "trash" ? "trash" : toFolder === "archive" ? "archive" : "move";
     ids.forEach((id) => {
       messageCache.current.delete(id);
       hideRow(id);
+      beginPendingMove(id, bulkOp);
     });
     // Optimistic counter deltas per id (source folder inferred from id).
     for (const id of ids) {
@@ -1649,6 +1652,7 @@ function MailApp() {
         if (toFolder === "trash") rememberOrigin(meta.get(id)?.threadId, parsed.folder);
         else forgetOrigin(meta.get(id)?.threadId);
         confirmHideRow(id);
+        confirmPendingMove(id);
       } catch (err) {
         failedIds.push(id);
         throw err;
@@ -1660,6 +1664,7 @@ function MailApp() {
       const failedSet = new Set(failedIds);
       for (const id of failedIds) {
         unhideRow(id);
+        rollbackPendingMove(id);
         const parsed = parseMessageId(id);
         if (parsed) {
           const info = meta.get(id);
