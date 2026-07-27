@@ -1172,7 +1172,16 @@ function MailApp() {
     trashUidValidityRef,
     archiveUidValidityRef,
     bumpCountsGen,
-  } = useMailData(session || null);
+  } = useMailData(
+    session || null,
+    useCallback(() => {
+      // Session expired or invalid — clean up locally and route to /login
+      // silently. No fake data is ever shown to the customer.
+      clearMailSession();
+      toast.info("انتهت الجلسة، يرجى تسجيل الدخول مجدداً");
+      navigate({ to: "/login", replace: true });
+    }, [navigate]),
+  );
 
   // BLOCKER_6 — account identity for origin-tracker calls in this scope.
   const currentAccountId = session?.account.id ?? null;
