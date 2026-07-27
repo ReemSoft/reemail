@@ -4162,42 +4162,21 @@ function Composer({
         setDragging(false);
       }}
     >
-      {/* Header */}
-      <div className="flex items-center justify-between border-b border-border px-4 py-2">
-        <p className="truncate text-sm font-semibold">{subject || "رسالة جديدة"}</p>
-        <div className="flex items-center gap-0.5 text-muted-foreground">
-          <button
-            onClick={() => setWindowState("minimized")}
-            className="rounded-md p-1.5 hover:bg-muted"
-            title="تصغير (Esc)"
-            aria-label="تصغير"
-          >
-            <Minus className="h-4 w-4" />
-          </button>
-          <button
-            onClick={() =>
-              setWindowState((s) => (s === "fullscreen" ? "normal" : "fullscreen"))
-            }
-            className="rounded-md p-1.5 hover:bg-muted"
-            title={windowState === "fullscreen" ? "استعادة" : "ملء الشاشة"}
-            aria-label="تكبير"
-          >
-            {windowState === "fullscreen" ? (
-              <Minimize2 className="h-4 w-4" />
-            ) : (
-              <Maximize2 className="h-4 w-4" />
-            )}
-          </button>
-          <button
-            onClick={onClose}
-            className="rounded-md p-1.5 hover:bg-muted"
-            title="إغلاق"
-            aria-label="إغلاق"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-      </div>
+      <div className="mx-auto flex h-full w-full max-w-3xl flex-col overflow-hidden p-3 sm:p-5">
+        <div className="relative flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-border bg-card shadow-soft">
+          {/* Header */}
+          <div className="flex items-center justify-between border-b border-border px-4 py-2.5">
+            <p className="truncate text-sm font-semibold">{subject || "رسالة جديدة"}</p>
+            <button
+              onClick={onClose}
+              className="rounded-md p-1.5 text-muted-foreground hover:bg-muted"
+              title="إغلاق (Esc)"
+              aria-label="إغلاق"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+
 
       {/* Recipients + subject */}
       <div className="flex-1 overflow-y-auto px-4 pb-2 pt-1">
