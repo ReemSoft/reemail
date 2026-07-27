@@ -4242,7 +4242,7 @@ function Composer({
   function saveDraftNow() {
     if (typeof window === "undefined") return;
     try {
-      const html = editorRef.current?.innerHTML ?? "";
+      const html = sanitizeComposerHtml(editorRef.current?.innerHTML ?? "");
       const isEmpty =
         to.length === 0 && cc.length === 0 && bcc.length === 0 && !subject && !html.trim();
       if (isEmpty) {
