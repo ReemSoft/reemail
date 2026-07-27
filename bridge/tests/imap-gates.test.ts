@@ -107,32 +107,31 @@ test("global cap blocks across everything", async () => {
 });
 
 test("fairness: interactive preferred but background admitted after 3 in a row", async () => {
-  const g = makeGates({ globalMax: 1, perHostMax: 1, perCompanyMax: 1, perAccountMax: 1 });
+  const g = makeGates({
+    globalMax: 1, perHostMax: 1, perCompanyMax: 1, perAccountMax: 1,
+    interactiveWaitTimeoutMs: 5000, backgroundWaitTimeoutMs: 5000,
+  });
   const r0 = await g.acquire({ host: "h", company: "c", account: "a0", priority: "interactive" });
 
+  // Every waiter auto-releases on admission so the next slot opens. This
+  // captures the admission order without deadlocking on await order.
   const order: string[] = [];
-  const bg = g
-    .acquire({ host: "h", company: "c", account: "bg", priority: "background" })
-    .then((r) => { order.push("bg"); return r; });
-  const mkI = (id: string) =>
-    g.acquire({ host: "h", company: "c", account: id, priority: "interactive" })
-      .then((r) => { order.push(id); return r; });
-  const i1 = mkI("i1");
-  const i2 = mkI("i2");
-  const i3 = mkI("i3");
-  const i4 = mkI("i4");
+  const track = (label: string, priority: "interactive" | "background") =>
+    g.acquire({ host: "h", company: "c", account: label, priority })
+      .then((rel) => { order.push(label); rel(); });
+
+  const all = Promise.all([
+    track("bg", "background"),
+    track("i1", "interactive"),
+    track("i2", "interactive"),
+    track("i3", "interactive"),
+    track("i4", "interactive"),
+  ]);
 
   r0();
-  const releases = [];
-  for (const p of [bg, i1, i2, i3, i4]) {
-    const rel = await p;
-    releases.push(rel);
-    rel();
-  }
-  // First 3 interactive win, then background wins the 4th slot (fairness),
-  // then the last interactive drains.
+  await all;
+  // First 3 interactive win, then background (fairness), then last interactive.
   assert.deepEqual(order, ["i1", "i2", "i3", "bg", "i4"]);
-  releases.forEach((r) => r());
 });
 
 test("overflow: wait queue full rejects with IMAP_BUSY", async () => {
