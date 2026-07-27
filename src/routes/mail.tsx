@@ -1920,28 +1920,21 @@ function MailApp() {
         unhideRow(id);
         rollbackPendingMove(id);
         const parsed = parseMessageId(id);
-        if (parsed) {
-          const info = meta.get(id);
-          applyMoveCountsDelta(destForCounts ?? parsed.folder, parsed.folder, info?.wasUnread ?? false); // revert
+        const info = meta.get(id);
+        if (parsed && info) {
+          applyMoveCountsDelta(destForCounts ?? parsed.folder, parsed.folder, info.wasUnread); // revert
         }
         // Restore cached body for failed id only.
         const c = cachedBodies.get(id);
         if (c) messageCache.current.set(id, c);
+        // Per-item revive into list + deep results (with duplicate guard).
+        if (info) reviveMessageAt(info.original, info.originalIndex);
+        if (isTrash) {
+          const d = deepMeta.get(id);
+          if (d) reviveDeepResultAt(d.original, d.originalIndex);
+        }
       }
-      setMessages((prev) => {
-        const seen = new Set(prev.map((m) => m.id));
-        const revived = snapshot.filter((m) => failedSet.has(m.id) && !seen.has(m.id));
-        return revived.length ? [...revived, ...prev] : prev;
-      });
-      if (isTrash && deepSnapshot) {
-        // Restore only the failed items back into deep-search results.
-        setDeepResults((prev) => {
-          if (!prev) return deepSnapshot;
-          const seen = new Set(prev.map((m) => m.id));
-          const revived = deepSnapshot.filter((m) => failedSet.has(m.id) && !seen.has(m.id));
-          return revived.length ? [...revived, ...prev] : prev;
-        });
-      }
+
       if (prevSelectedId && failedSet.has(prevSelectedId)) {
         setSelectedId(prevSelectedId);
         setSelectedMessage(prevSelected);
