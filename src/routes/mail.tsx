@@ -18,7 +18,6 @@ function sanitizeEmailHtml(html: string): string {
   // Best-effort target hardening — DOMPurify already blocks javascript: URLs.
   return clean.replace(/<a\s/gi, '<a target="_blank" rel="noopener noreferrer nofollow" ');
 }
-  Type,
 
 import {
   Inbox,
