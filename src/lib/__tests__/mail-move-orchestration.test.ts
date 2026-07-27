@@ -130,8 +130,9 @@ function makeDeps(
     runSourceReconcile: async (args) => {
       calls.sourceReconcile += 1;
       reconcileArgs.push(args);
-      return opts.sourceReconcile ?? { ok: true, busy: false, hasMore: false };
+      return opts.sourceReconcile ?? { ok: true, busy: false, targetUidPresent: false };
     },
+
     logError: () => {},
   };
   return { deps, calls, destSyncArgs, reconcileArgs };
