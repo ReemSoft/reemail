@@ -439,11 +439,18 @@ function useMailData(session: MailSession | null) {
    */
   const loadCountsFast = useCallback(async () => {
     if (!session) return;
+    // Batch A / Fix #1: monotonic guard also applies to the fast (Local
+    // Index) path. If a mutation runs between the request and response,
+    // the fast result is stale — drop it and DO NOT even fall back to
+    // loadCounts (that would race the same way).
+    const gen = countsMutationGen.current;
     if (MAIL_INDEX_ENABLED && session.mailSessionToken) {
       try {
         const res = await listIndexCounts({
           data: { mailSessionToken: session.mailSessionToken },
         });
+        if (countsMutationGen.current !== gen) return;
+
         if (res.ok && res.counts.length > 0) {
           setCounts((prev) => {
             const next = { ...prev };
