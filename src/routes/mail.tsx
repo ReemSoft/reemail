@@ -546,7 +546,7 @@ function useMailData(session: MailSession | null) {
     const gen = countsMutationGen.current;
     try {
       const result = await getCounts({
-        data: { account: session.account, password: session.password },
+        data: { mailSessionToken: session.mailSessionToken ?? "", password: session.password },
       });
       if (countsMutationGen.current !== gen) return;
       const map: Record<MailFolder, { total: number; unread: number; supported: boolean }> = {
