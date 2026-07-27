@@ -236,9 +236,31 @@ function fingerprintFromMessage(m: {
   });
 }
 
-/** Write origin after a successful move to Trash (final or pending). */
-function writeOriginOnTrash(params: {
+/**
+ * Return the OriginKind we track when the destination is `dest`, or null
+ * for destinations that have no restore semantics (inbox/sent/drafts/spam/all).
+ */
+function originKindForDestination(dest: MailFolder): OriginKind | null {
+  if (dest === "trash") return "trash";
+  if (dest === "archive") return "archive";
+  return null;
+}
+
+/** Return the OriginKind for a source folder that CAN be restored. */
+function originKindForRestore(source: MailFolder): OriginKind | null {
+  if (source === "trash") return "trash";
+  if (source === "archive") return "archive";
+  return null;
+}
+
+/**
+ * Write origin after a successful move to Trash OR Archive (final or pending).
+ * `destKind` scopes the namespace so Trash and Archive origins can never
+ * collide even when both destinations expose the same (UID, UIDVALIDITY).
+ */
+function writeOriginOnDestination(params: {
   accountId: string | null;
+  destKind: OriginKind;
   sourceCanonical: MailFolder;
   sourceUid: number;
   sourceUidValidity?: number;
@@ -248,6 +270,7 @@ function writeOriginOnTrash(params: {
 }) {
   const {
     accountId,
+    destKind,
     sourceCanonical,
     sourceUid,
     sourceUidValidity,
@@ -255,23 +278,23 @@ function writeOriginOnTrash(params: {
     fingerprint,
     moveResult,
   } = params;
-  if (!accountId || sourceCanonical === "trash") return;
+  // Guard: never remember an origin whose "source" equals the destination
+  // kind itself (would encode "restore back to trash/archive" — nonsense).
+  if (!accountId || sourceCanonical === destKind) return;
   const storage = safeOriginStorage();
-  const trash = extractTrashIdentity(moveResult);
-  if (trash) {
+  const dest = extractTrashIdentity(moveResult);
+  if (dest) {
     rememberFinalOrigin(
       storage,
-      { accountId, trashUidValidity: trash.trashUidValidity, trashUid: trash.trashUid },
+      { accountId, trashUidValidity: dest.trashUidValidity, trashUid: dest.trashUid },
       { originalCanonical: sourceCanonical, messageId: messageId ?? null },
+      destKind,
     );
-    // Drop ONLY the exact pending entry for this source identity — never a
-    // broad messageId sweep (two rows may share a Message-ID legitimately).
-    forgetPendingOrigin(storage, {
-      accountId,
-      sourceCanonical,
-      sourceUid,
-      sourceUidValidity,
-    });
+    forgetPendingOrigin(
+      storage,
+      { accountId, sourceCanonical, sourceUid, sourceUidValidity },
+      destKind,
+    );
   } else {
     rememberPendingOrigin(
       storage,
@@ -282,81 +305,92 @@ function writeOriginOnTrash(params: {
         fingerprint: fingerprint ?? null,
         createdAt: Date.now(),
       },
+      destKind,
     );
   }
 }
 
-/** Read the origin for a Trash uid, defaulting to "inbox" when unknown. */
-function readOriginForTrashUid(
+/** Read the origin for a destination uid (Trash or Archive). Defaults to "inbox". */
+function readOriginForDestUid(
+  kind: OriginKind,
   accountId: string | null,
-  trashUid: number,
-  trashUidValidity: number | null,
+  destUid: number,
+  destUidValidity: number | null,
 ): MailFolder {
-  if (!accountId || trashUidValidity == null) return "inbox";
-  const hit = trackerGetOrigin(safeOriginStorage(), {
-    accountId,
-    trashUidValidity,
-    trashUid,
-  });
+  if (!accountId || destUidValidity == null) return "inbox";
+  const hit = trackerGetOrigin(
+    safeOriginStorage(),
+    { accountId, trashUidValidity: destUidValidity, trashUid: destUid },
+    kind,
+  );
   return (hit?.originalCanonical as MailFolder) ?? "inbox";
 }
 
 /**
- * Forget the FINAL origin entry for one physical Trash row. Never touches
- * any other Trash entry (even one that shares the same Message-ID) and
- * never touches Pending entries — a pending origin belongs to its own
- * distinct source row.
+ * Forget the FINAL origin entry for one physical destination row (Trash or
+ * Archive). Never touches other entries and never touches Pending entries.
  */
-function forgetOriginForTrashUid(
+function forgetOriginForDestUid(
+  kind: OriginKind,
   accountId: string | null,
-  trashUid: number,
-  trashUidValidity: number | null,
+  destUid: number,
+  destUidValidity: number | null,
 ) {
-  if (!accountId || trashUidValidity == null) return;
-  forgetFinalOrigin(safeOriginStorage(), { accountId, trashUidValidity, trashUid });
+  if (!accountId || destUidValidity == null) return;
+  forgetFinalOrigin(
+    safeOriginStorage(),
+    { accountId, trashUidValidity: destUidValidity, trashUid: destUid },
+    kind,
+  );
 }
 
 /** Drop the exact pending origin entry for an exact source identity. */
 function forgetExactPendingOrigin(
   accountId: string | null,
+  kind: OriginKind,
   sourceCanonical: MailFolder,
   sourceUid: number,
   sourceUidValidity?: number,
 ) {
   if (!accountId) return;
-  forgetPendingOrigin(safeOriginStorage(), {
-    accountId,
-    sourceCanonical,
-    sourceUid,
-    sourceUidValidity,
-  });
+  forgetPendingOrigin(
+    safeOriginStorage(),
+    { accountId, sourceCanonical, sourceUid, sourceUidValidity },
+    kind,
+  );
 }
 
 /**
- * After a Trash list arrives (from Index or Bridge), promote any UNIQUE
- * pending origin whose fingerprint matches a newly-visible trash row.
- * Ambiguous matches are ignored — we never guess.
+ * After a destination list arrives (from Index or Bridge), promote any
+ * UNIQUE pending origin whose fingerprint matches a newly-visible row in
+ * that destination. Ambiguous matches are ignored.
  */
-function promotePendingOriginsForTrashList(
+function promotePendingOriginsForDestList(
+  kind: OriginKind,
   accountId: string | null,
-  trashUidValidity: number | null,
+  destUidValidity: number | null,
   messages: ReadonlyArray<MailMessage>,
 ) {
-  if (!accountId || trashUidValidity == null) return;
+  if (!accountId || destUidValidity == null) return;
   const storage = safeOriginStorage();
   for (const m of messages) {
     const parsed = parseMessageId(m.id);
-    if (!parsed || parsed.folder !== "trash") continue;
+    if (!parsed || parsed.folder !== kind) continue;
     const fp = fingerprintFromMessage(m);
     if (!fp) continue;
-    promoteUniquePendingOriginForTrashMessage(storage, {
-      accountId,
-      trashUidValidity,
-      trashUid: parsed.uid,
-      fingerprint: fp,
-    });
+    promoteUniquePendingOriginForTrashMessage(
+      storage,
+      {
+        accountId,
+        trashUidValidity: destUidValidity,
+        trashUid: parsed.uid,
+        fingerprint: fp,
+      },
+      kind,
+    );
   }
 }
+
 
 type ComposeInitial = {
   to?: string;
