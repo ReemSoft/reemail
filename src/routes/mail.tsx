@@ -1404,8 +1404,8 @@ function MailApp() {
           uid: parsed.uid,
           toFolder,
         });
-        if (toFolder === "trash") rememberOrigin(msg?.threadId, parsed.folder);
-        else forgetOrigin(msg?.threadId);
+        if (toFolder === "trash") rememberOrigin(currentAccountId, msg?.threadId, parsed.folder);
+        else forgetOrigin(currentAccountId, msg?.threadId);
         confirmHideRow(id);
         confirmPendingMove(id);
         toast.success("تم نقل الرسالة");
@@ -1460,14 +1460,14 @@ function MailApp() {
       try {
         if (isTrash) {
           await mutateMoveOrDelete({ sourceCanonical: parsed.folder, uid: parsed.uid });
-          forgetOrigin(msg?.threadId);
+          forgetOrigin(currentAccountId, msg?.threadId);
         } else {
           await mutateMoveOrDelete({
             sourceCanonical: parsed.folder,
             uid: parsed.uid,
             toFolder: "trash",
           });
-          rememberOrigin(msg?.threadId, parsed.folder);
+          rememberOrigin(currentAccountId, msg?.threadId, parsed.folder);
         }
         confirmHideRow(id);
         confirmPendingMove(id);
@@ -1495,7 +1495,7 @@ function MailApp() {
     return runMoveFlight(id, async () => {
       const msg = messages.find((m) => m.id === id);
       const wasUnread = msg ? !msg.read : false;
-      const target = getOrigin(msg?.threadId);
+      const target = getOrigin(currentAccountId, msg?.threadId);
       const snapshot = messages;
       const prevSelectedId = selectedId;
       const prevSelected = selectedMessage;
@@ -1512,7 +1512,7 @@ function MailApp() {
           uid: parsed.uid,
           toFolder: target,
         });
-        forgetOrigin(msg?.threadId);
+        forgetOrigin(currentAccountId, msg?.threadId);
         confirmHideRow(id);
         confirmPendingMove(id);
         const label = FOLDER_META[target]?.label || target;
@@ -1645,8 +1645,8 @@ function MailApp() {
           uid: parsed.uid,
           toFolder,
         });
-        if (toFolder === "trash") rememberOrigin(meta.get(id)?.threadId, parsed.folder);
-        else forgetOrigin(meta.get(id)?.threadId);
+        if (toFolder === "trash") rememberOrigin(currentAccountId, meta.get(id)?.threadId, parsed.folder);
+        else forgetOrigin(currentAccountId, meta.get(id)?.threadId);
         confirmHideRow(id);
         confirmPendingMove(id);
       } catch (err) {
@@ -1739,14 +1739,14 @@ function MailApp() {
       try {
         if (isTrash) {
           await mutateMoveOrDelete({ sourceCanonical: parsed.folder, uid: parsed.uid });
-          forgetOrigin(meta.get(id)?.threadId);
+          forgetOrigin(currentAccountId, meta.get(id)?.threadId);
         } else {
           await mutateMoveOrDelete({
             sourceCanonical: parsed.folder,
             uid: parsed.uid,
             toFolder: "trash",
           });
-          rememberOrigin(meta.get(id)?.threadId, parsed.folder);
+          rememberOrigin(currentAccountId, meta.get(id)?.threadId, parsed.folder);
         }
         confirmHideRow(id);
         confirmPendingMove(id);
@@ -1824,7 +1824,7 @@ function MailApp() {
     for (const id of ids) {
       const parsed = parseMessageId(id);
       if (!parsed) continue;
-      const target = getOrigin(meta.get(id)?.threadId);
+      const target = getOrigin(currentAccountId, meta.get(id)?.threadId);
       idToTarget.set(id, target);
       applyMoveCountsDelta(parsed.folder, target, meta.get(id)?.wasUnread ?? false);
     }
@@ -1840,7 +1840,7 @@ function MailApp() {
           uid: parsed.uid,
           toFolder: target,
         });
-        forgetOrigin(meta.get(id)?.threadId);
+        forgetOrigin(currentAccountId, meta.get(id)?.threadId);
         confirmHideRow(id);
         confirmPendingMove(id);
       } catch (err) {
