@@ -60,8 +60,6 @@ import {
   ListOrdered,
   Link2,
   Quote,
-  Type,
-  Type,
   Eraser,
   AlertTriangle,
   Globe,
