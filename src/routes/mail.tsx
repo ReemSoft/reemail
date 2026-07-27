@@ -776,7 +776,13 @@ function useMailData(session: MailSession | null, onSessionExpired?: () => void)
           },
         });
         if (loadReqIdRef.current !== reqId) return;
-        if (!result.ok) throw new Error(result.error);
+        if (!result.ok) {
+          if (isInvalidTokenCode((result as { code?: string }).code)) {
+            notifySessionExpired();
+            return;
+          }
+          throw new Error(result.error);
+        }
         // BLOCKER_3: reconcile BEFORE applying overlay so the raw list
         // drives presence checks.
         reconcilePendingMovesForRead(result.messages, folder, bridgeStartedAt);
@@ -793,20 +799,19 @@ function useMailData(session: MailSession | null, onSessionExpired?: () => void)
         setMessages(applyPending(result.messages));
         setHasMore(result.messages.length >= PAGE);
         setBridgeError(null);
-        setUseMock(false);
         setSource("bridge");
         setIndexCursor(null);
       } catch (err: any) {
         if (loadReqIdRef.current !== reqId) return;
-        setBridgeError(err?.message || "فشل جلب الرسائل");
-        setMessages(applyPending(getMockMessages(folder)));
+        // Never inject fake data on failure. Keep the list empty and surface
+        // a professional error message; the polling loop will retry silently.
+        setBridgeError(err?.message || "تعذّر جلب الرسائل. سيتم إعادة المحاولة تلقائياً.");
+        setMessages([]);
         setHasMore(false);
-        setUseMock(true);
-        setSource("mock");
         setIndexCursor(null);
       }
     },
-    [session, folder, sort, getMessages, applyPending, reconcilePendingMovesForRead],
+    [session, folder, sort, getMessages, applyPending, reconcilePendingMovesForRead, notifySessionExpired],
   );
 
   const loadMessages = useCallback(async () => {
