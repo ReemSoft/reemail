@@ -1848,8 +1848,15 @@ function MailApp() {
     });
     if (!confirmed) return;
     const meta = collectBulkMeta(ids);
-    const snapshot = messages;
-    const deepSnapshot = deepResults;
+    // Per-id deep-result snapshot: capture index + row before the optimistic
+    // filter so failed items can be re-inserted where they were.
+    const deepMeta = new Map<string, { original: MailMessage; originalIndex: number }>();
+    if (deepResults) {
+      deepResults.forEach((m, idx) => {
+        if (idSet.has(m.id)) deepMeta.set(m.id, { original: m, originalIndex: idx });
+      });
+    }
+
     const idSet = new Set(ids);
     const prevSelectedId = selectedId;
     const prevSelected = selectedMessage;
