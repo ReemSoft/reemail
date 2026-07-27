@@ -812,13 +812,18 @@ function useMailData(session: MailSession | null) {
           if (loadReqIdRef.current !== reqId) return;
           if (res.ok && res.indexed) {
             reconcilePendingMovesForRead(res.messages, folder, startedAt);
-            if (folder === "trash") {
-              promotePendingOriginsForTrashList(
+            const promoteKind = originKindForRestore(folder);
+            if (promoteKind) {
+              promotePendingOriginsForDestList(
+                promoteKind,
                 currentAccountId,
-                trashUidValidityRef.current,
+                promoteKind === "trash"
+                  ? trashUidValidityRef.current
+                  : archiveUidValidityRef.current,
                 res.messages,
               );
             }
+
             setMessages(applyPending(res.messages));
             setHasMore(res.hasMore);
             setIndexCursor(res.nextCursor);
