@@ -394,12 +394,8 @@ export async function runMailSyncCore(
         // 1-UID reconcile: derive presence from the Bridge/IMAP response
         // directly. This is the ONLY authoritative signal for the Move
         // source-confirmation contract (Local Index is already Tombstoned).
-        if (fromUid === toUid) {
-          singleUidPresence = {
-            uid: fromUid,
-            present: states.some((s) => s.uid === fromUid),
-          };
-        }
+        singleUidPresence = derivePresenceForSingleUidReconcile(fromUid, toUid, states);
+
         await updateSyncCursor(admin, {
           accountId: input.accountId,
           folderId,
