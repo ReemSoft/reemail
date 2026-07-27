@@ -18,6 +18,7 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as ApiMailSendRouteImport } from './routes/api/mail-send'
 import { Route as ApiMailAttachmentRouteImport } from './routes/api/mail-attachment'
 import { Route as AuthenticatedDashboardRouteImport } from './routes/_authenticated/dashboard'
+import { Route as ApiPublicHooksMailSyncTickRouteImport } from './routes/api/public/hooks/mail-sync-tick'
 
 const SitemapDotxmlRoute = SitemapDotxmlRouteImport.update({
   id: '/sitemap.xml',
@@ -63,6 +64,12 @@ const AuthenticatedDashboardRoute = AuthenticatedDashboardRouteImport.update({
   path: '/dashboard',
   getParentRoute: () => AuthenticatedRouteRoute,
 } as any)
+const ApiPublicHooksMailSyncTickRoute =
+  ApiPublicHooksMailSyncTickRouteImport.update({
+    id: '/api/public/hooks/mail-sync-tick',
+    path: '/api/public/hooks/mail-sync-tick',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -73,6 +80,7 @@ export interface FileRoutesByFullPath {
   '/dashboard': typeof AuthenticatedDashboardRoute
   '/api/mail-attachment': typeof ApiMailAttachmentRoute
   '/api/mail-send': typeof ApiMailSendRoute
+  '/api/public/hooks/mail-sync-tick': typeof ApiPublicHooksMailSyncTickRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -83,6 +91,7 @@ export interface FileRoutesByTo {
   '/dashboard': typeof AuthenticatedDashboardRoute
   '/api/mail-attachment': typeof ApiMailAttachmentRoute
   '/api/mail-send': typeof ApiMailSendRoute
+  '/api/public/hooks/mail-sync-tick': typeof ApiPublicHooksMailSyncTickRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -95,6 +104,7 @@ export interface FileRoutesById {
   '/_authenticated/dashboard': typeof AuthenticatedDashboardRoute
   '/api/mail-attachment': typeof ApiMailAttachmentRoute
   '/api/mail-send': typeof ApiMailSendRoute
+  '/api/public/hooks/mail-sync-tick': typeof ApiPublicHooksMailSyncTickRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -107,6 +117,7 @@ export interface FileRouteTypes {
     | '/dashboard'
     | '/api/mail-attachment'
     | '/api/mail-send'
+    | '/api/public/hooks/mail-sync-tick'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -117,6 +128,7 @@ export interface FileRouteTypes {
     | '/dashboard'
     | '/api/mail-attachment'
     | '/api/mail-send'
+    | '/api/public/hooks/mail-sync-tick'
   id:
     | '__root__'
     | '/'
@@ -128,6 +140,7 @@ export interface FileRouteTypes {
     | '/_authenticated/dashboard'
     | '/api/mail-attachment'
     | '/api/mail-send'
+    | '/api/public/hooks/mail-sync-tick'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -139,6 +152,7 @@ export interface RootRouteChildren {
   SitemapDotxmlRoute: typeof SitemapDotxmlRoute
   ApiMailAttachmentRoute: typeof ApiMailAttachmentRoute
   ApiMailSendRoute: typeof ApiMailSendRoute
+  ApiPublicHooksMailSyncTickRoute: typeof ApiPublicHooksMailSyncTickRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -206,6 +220,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedDashboardRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
+    '/api/public/hooks/mail-sync-tick': {
+      id: '/api/public/hooks/mail-sync-tick'
+      path: '/api/public/hooks/mail-sync-tick'
+      fullPath: '/api/public/hooks/mail-sync-tick'
+      preLoaderRoute: typeof ApiPublicHooksMailSyncTickRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -229,6 +250,7 @@ const rootRouteChildren: RootRouteChildren = {
   SitemapDotxmlRoute: SitemapDotxmlRoute,
   ApiMailAttachmentRoute: ApiMailAttachmentRoute,
   ApiMailSendRoute: ApiMailSendRoute,
+  ApiPublicHooksMailSyncTickRoute: ApiPublicHooksMailSyncTickRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
