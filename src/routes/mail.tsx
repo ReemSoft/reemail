@@ -2131,7 +2131,11 @@ function MailApp() {
     for (const id of ids) {
       const parsed = parseMessageId(id);
       if (!parsed) continue;
-      const target = getOrigin(currentAccountId, meta.get(id)?.threadId);
+      const target = readOriginForTrashUid(
+        currentAccountId,
+        parsed.uid,
+        trashUidValidityRef.current,
+      );
       idToTarget.set(id, target);
       applyMoveCountsDelta(parsed.folder, target, meta.get(id)?.wasUnread ?? false);
     }
@@ -2147,7 +2151,12 @@ function MailApp() {
           uid: parsed.uid,
           toFolder: target,
         });
-        forgetOrigin(currentAccountId, meta.get(id)?.threadId);
+        forgetOriginForTrashUid(
+          currentAccountId,
+          parsed.uid,
+          trashUidValidityRef.current,
+          meta.get(id)?.threadId ?? null,
+        );
         confirmHideRow(id);
         confirmPendingMove(id);
       } catch (err) {
