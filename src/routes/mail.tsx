@@ -1400,6 +1400,7 @@ function MailApp() {
       setSelectedMessage(null);
       messageCache.current.delete(id);
       hideRow(id);
+      beginPendingMove(id, toFolder === "trash" ? "trash" : toFolder === "archive" ? "archive" : "move");
       applyMoveCountsDelta(parsed.folder, toFolder, wasUnread);
       try {
         await mutateMoveOrDelete({
@@ -1410,9 +1411,11 @@ function MailApp() {
         if (toFolder === "trash") rememberOrigin(msg?.threadId, parsed.folder);
         else forgetOrigin(msg?.threadId);
         confirmHideRow(id);
+        confirmPendingMove(id);
         toast.success("تم نقل الرسالة");
       } catch (err: any) {
         unhideRow(id);
+        rollbackPendingMove(id);
         applyMoveCountsDelta(toFolder, parsed.folder, wasUnread); // revert
         setMessages(snapshot);
         setSelectedId(prevSelectedId);
