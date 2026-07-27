@@ -207,7 +207,7 @@ app.post("/api/verify", requireKey, imapGate("interactive"), async (req, res) =>
   }
 });
 
-app.post("/api/folders", requireKey, async (req, res) => {
+app.post("/api/folders", requireKey, imapGate("interactive"), async (req, res) => {
   try {
     const payload = AuthPayloadSchema.parse(req.body);
     const counts = await getFolderCounts(payload.account as any, payload.password);
