@@ -57,18 +57,20 @@ function makeSupabase(rows: FakeRow[]): SupabaseClient {
       },
       then: (onFulfilled) => {
         const filtered = rows.filter((r) => {
+          const rec = r as unknown as Record<string, unknown>;
           for (const [k, v] of Object.entries(filters)) {
-            if ((r as Record<string, unknown>)[k] !== v) return false;
+            if (rec[k] !== v) return false;
           }
           if (gtCol && gtVal !== null) {
-            const rv = Number((r as Record<string, unknown>)[gtCol]);
+            const rv = Number(rec[gtCol]);
             if (!(rv > gtVal)) return false;
           }
-          if (isNullCol && (r as Record<string, unknown>)[isNullCol] != null) return false;
+          if (isNullCol && rec[isNullCol] != null) return false;
           return true;
         });
         return Promise.resolve(onFulfilled({ data: filtered, error: null }));
       },
+
     };
     return b;
   };
