@@ -1508,6 +1508,7 @@ function MailApp() {
       setSelectedMessage(null);
       messageCache.current.delete(id);
       hideRow(id);
+      beginPendingMove(id, "restore");
       applyMoveCountsDelta(parsed.folder, target, wasUnread);
       try {
         await mutateMoveOrDelete({
@@ -1517,10 +1518,12 @@ function MailApp() {
         });
         forgetOrigin(msg?.threadId);
         confirmHideRow(id);
+        confirmPendingMove(id);
         const label = FOLDER_META[target]?.label || target;
         toast.success(`تم استعادة الرسالة إلى ${label}`);
       } catch (err: any) {
         unhideRow(id);
+        rollbackPendingMove(id);
         applyMoveCountsDelta(target, parsed.folder, wasUnread); // revert
         setMessages(snapshot);
         setSelectedId(prevSelectedId);
