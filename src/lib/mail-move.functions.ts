@@ -275,8 +275,16 @@ export const indexMoveMessage = createServerFn({ method: "POST" })
         });
         if (!res.ok) return { ok: false, error: res.error, code: res.code };
         if (res.busy) return { ok: true, busy: true };
-        return { ok: true, busy: false, hasMore: false };
+        // 1-UID reconcile MUST produce a presence signal derived from IMAP
+        // (Bridge). If the runner returned no signal for any reason, treat
+        // it as "still-present" — the orchestrator will downgrade the
+        // result to `partial` rather than falsely claim absence.
+        const targetUidPresent = res.singleUidPresence
+          ? res.singleUidPresence.present
+          : true;
+        return { ok: true, busy: false, targetUidPresent };
       },
+
       logError: (label, err) => {
         // Safe: never logs password or secrets.
         console.error(label, err instanceof Error ? err.message : String(err));
