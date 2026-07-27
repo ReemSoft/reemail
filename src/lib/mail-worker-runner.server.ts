@@ -11,11 +11,11 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { MAIL_QUEUE_CONFIG } from "./mail-queue-config";
 import {
-  classifyMailQueueError,
-  computeBackoffDelaySeconds,
-  isRetryableCode,
+  classifyBridgeError,
+  decideFailureAction,
   type MailQueueErrorCode,
 } from "./mail-queue-backoff";
+
 import { runMailSyncCore, type BridgePost } from "./mail-sync-runner.server";
 import { resolveMailConfigForAccount, MailConfigIncompleteError } from "./mail-config.server";
 import {
