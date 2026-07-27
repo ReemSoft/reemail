@@ -2724,7 +2724,7 @@ function MailApp() {
                   </DropdownMenuTrigger>
 
                   <DropdownMenuContent align="start" className="w-56">
-                    {folder === "trash" && (
+                    {(folder === "trash" || folder === "archive") && (
                       <>
                         <DropdownMenuItem
                           onClick={bulkRestore}
