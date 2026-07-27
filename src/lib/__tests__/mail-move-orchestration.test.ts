@@ -71,10 +71,11 @@ function makeDeps(
     bridge?: BridgeMoveOutcome;
     writeThrough?: WriteThroughOutcome;
     destSync?: SyncOutcome | SyncOutcome[];
-    sourceReconcile?: SyncOutcome;
+    sourceReconcile?: SourceReconcileOutcome;
     discoverPlan?: Array<{ uid: number; uidvalidity: number } | null>;
   } = {},
 ): Harness {
+
   const calls = {
     bridgeMove: 0,
     writeThrough: 0,
