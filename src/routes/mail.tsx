@@ -4220,12 +4220,12 @@ function Composer({
             onChange={setTo}
             autoFocus
             rightSlot={
-              <div className="flex shrink-0 items-center gap-2 pl-2 text-xs">
+              <div className="flex shrink-0 items-center gap-1 border-r border-border/60 pr-2 mr-2">
                 {!showCc && (
                   <button
                     type="button"
                     onClick={() => setShowCc(true)}
-                    className="rounded-md px-2 py-1 text-muted-foreground transition hover:bg-muted hover:text-foreground"
+                    className="inline-flex h-7 items-center justify-center rounded-md px-2.5 text-[12px] font-medium text-muted-foreground transition hover:bg-muted/70 hover:text-primary"
                   >
                     نسخة إلى
                   </button>
@@ -4234,7 +4234,7 @@ function Composer({
                   <button
                     type="button"
                     onClick={() => setShowBcc(true)}
-                    className="rounded-md px-2 py-1 text-muted-foreground transition hover:bg-muted hover:text-foreground"
+                    className="inline-flex h-7 items-center justify-center rounded-md px-2.5 text-[12px] font-medium text-muted-foreground transition hover:bg-muted/70 hover:text-primary"
                   >
                     نسخة مخفية إلى
                   </button>
