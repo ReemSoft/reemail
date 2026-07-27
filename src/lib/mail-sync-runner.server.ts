@@ -86,6 +86,22 @@ export type RunMailSyncCoreResult =
 
 const BRIDGE_TTL_SECONDS = 60;
 
+/**
+ * Pure helper — extracted so we can unit-test the reconcile presence
+ * derivation without wiring a full Bridge + DB fake. Returns `undefined`
+ * when the range is not a 1-UID reconcile (contract: only 1-UID reconcile
+ * yields a `singleUidPresence`).
+ */
+export function derivePresenceForSingleUidReconcile(
+  fromUid: number,
+  toUid: number,
+  states: ReadonlyArray<{ uid: number }>,
+): { uid: number; present: boolean } | undefined {
+  if (fromUid !== toUid) return undefined;
+  return { uid: fromUid, present: states.some((s) => s.uid === fromUid) };
+}
+
+
 export type BridgePost = (path: string, payload: unknown) => Promise<Record<string, unknown>>;
 
 async function defaultBridgePost(path: string, payload: unknown): Promise<Record<string, unknown>> {
