@@ -489,6 +489,7 @@ function useMailData(session: MailSession | null) {
   const loadFromBridge = useCallback(
     async (reqId: number) => {
       if (!session) return;
+      const bridgeStartedAt = Date.now();
       try {
         const result = await getMessages({
           data: {
@@ -502,6 +503,9 @@ function useMailData(session: MailSession | null) {
         });
         if (loadReqIdRef.current !== reqId) return;
         if (!result.ok) throw new Error(result.error);
+        // BLOCKER_3: reconcile BEFORE applying overlay so the raw list
+        // drives presence checks.
+        reconcilePendingMovesForRead(result.messages, folder, bridgeStartedAt);
         setMessages(applyPending(result.messages));
         setHasMore(result.messages.length >= PAGE);
         setBridgeError(null);
@@ -518,8 +522,9 @@ function useMailData(session: MailSession | null) {
         setIndexCursor(null);
       }
     },
-    [session, folder, sort, getMessages, applyPending],
+    [session, folder, sort, getMessages, applyPending, reconcilePendingMovesForRead],
   );
+
 
   const loadMessages = useCallback(async () => {
     if (!session) return;
