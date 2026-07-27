@@ -4039,6 +4039,79 @@ function Composer({
     }
   }
 
+  function applyFontFamily(family: string) {
+    if (!family) return;
+    exec("fontName", family);
+  }
+  function applyFontSize(px: string) {
+    if (!px || !editorRef.current) return;
+    editorRef.current.focus();
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0 || sel.isCollapsed) {
+      // No selection: apply to next typed via a span
+      insertHtmlAtCursor(`<span style="font-size:${px}">\u200B</span>`);
+      return;
+    }
+    const range = sel.getRangeAt(0);
+    const span = document.createElement("span");
+    span.style.fontSize = px;
+    try {
+      span.appendChild(range.extractContents());
+      range.insertNode(span);
+      // Restore selection over the new span
+      const newRange = document.createRange();
+      newRange.selectNodeContents(span);
+      sel.removeAllRanges();
+      sel.addRange(newRange);
+    } catch {
+      /* noop */
+    }
+  }
+  function applyForeColor(color: string) {
+    exec("foreColor", color);
+  }
+  function applyBackColor(color: string) {
+    // hiliteColor works in Firefox/Chrome; backColor as fallback
+    editorRef.current?.focus();
+    try {
+      if (!document.execCommand("hiliteColor", false, color)) {
+        document.execCommand("backColor", false, color);
+      }
+    } catch {
+      /* noop */
+    }
+  }
+  function setEditorDirection(dir: "rtl" | "ltr") {
+    if (!editorRef.current) return;
+    editorRef.current.dir = dir;
+    editorRef.current.style.textAlign = dir === "rtl" ? "right" : "left";
+    editorRef.current.focus();
+  }
+  function toggleEditorDirection() {
+    if (!editorRef.current) return;
+    const cur = editorRef.current.dir || "rtl";
+    setEditorDirection(cur === "rtl" ? "ltr" : "rtl");
+  }
+  function insertHR() {
+    exec("insertHorizontalRule");
+  }
+  function promptImage() {
+    const url = window.prompt("رابط الصورة (https://):", "https://");
+    if (!url) return;
+    try {
+      const u = new URL(url);
+      if (!/^https?:$/.test(u.protocol)) {
+        toast.error("رابط صورة غير مدعوم");
+        return;
+      }
+      insertHtmlAtCursor(
+        `<img src="${u.toString()}" alt="" style="max-width:100%;height:auto" />`,
+      );
+    } catch {
+      toast.error("رابط غير صالح");
+    }
+  }
+
   const extensionContext = {
     getHtml: () => editorRef.current?.innerHTML ?? "",
     setHtml: (h: string) => {
