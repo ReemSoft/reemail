@@ -1,61 +1,55 @@
 import { createFileRoute } from "@tanstack/react-router";
 
 /**
- * Streams an email attachment from the Bridge to the browser.
+ * Streams an email attachment from the private Bridge to the browser.
  *
- * Auth model: password stays in the client's sessionStorage and is POSTed
- * here (never persisted server-side, never in the URL). This route forwards
- * to the bridge over the private MAIL_BRIDGE_URL and streams the response
- * body straight back — O(chunk) memory on the Worker, no buffering.
+ * Security model (closes bridge_passthrough_open):
+ *   * Requires a signed Mail Session JWT — accountId/companyId come from
+ *     verified claims, not the request body.
+ *   * IMAP host/port/security are loaded from the database; the browser
+ *     cannot influence which host is contacted.
  */
 export const Route = createFileRoute("/api/mail-attachment")({
   server: {
     handlers: {
       POST: async ({ request }) => {
-        const bridgeUrl = process.env.MAIL_BRIDGE_URL;
-        const bridgeKey = process.env.MAIL_BRIDGE_SECRET;
-        if (!bridgeUrl || !bridgeKey) {
-          return new Response(JSON.stringify({ error: "Bridge not configured" }), {
-            status: 503,
-            headers: { "Content-Type": "application/json" },
-          });
-        }
-        let body: string;
+        let body: any;
         try {
-          const json = await request.json();
-          // Minimal shape guard — full validation happens on the bridge.
-          if (
-            !json ||
-            typeof json !== "object" ||
-            !json.account ||
-            typeof json.password !== "string" ||
-            typeof json.folder !== "string" ||
-            typeof json.uid !== "number" ||
-            typeof json.part !== "string"
-          ) {
-            return new Response(JSON.stringify({ error: "Invalid payload" }), {
-              status: 400,
-              headers: { "Content-Type": "application/json" },
-            });
-          }
-          body = JSON.stringify(json);
+          body = await request.json();
         } catch {
-          return new Response(JSON.stringify({ error: "Invalid JSON" }), {
-            status: 400,
-            headers: { "Content-Type": "application/json" },
-          });
+          return json({ error: "Invalid JSON" }, 400);
+        }
+        if (
+          !body ||
+          typeof body !== "object" ||
+          typeof body.mailSessionToken !== "string" ||
+          typeof body.password !== "string" ||
+          typeof body.folder !== "string" ||
+          typeof body.uid !== "number" ||
+          typeof body.part !== "string"
+        ) {
+          return json({ error: "Invalid payload" }, 400);
         }
 
-        const upstream = await fetch(`${bridgeUrl.replace(/\/$/, "")}/api/attachment`, {
+        const { resolveBridgeAuth } = await import("@/lib/mail-bridge-auth.server");
+        const auth = await resolveBridgeAuth(body.mailSessionToken);
+        if (!auth.ok) return json({ error: auth.error }, auth.status);
+
+        const upstream = await fetch(`${auth.bridgeUrl}/api/attachment`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            "X-Bridge-Key": bridgeKey,
+            "X-Bridge-Key": auth.bridgeKey,
           },
-          body,
+          body: JSON.stringify({
+            account: auth.bridgeAccount,
+            password: body.password,
+            folder: body.folder,
+            uid: body.uid,
+            part: body.part,
+          }),
         });
 
-        // Passthrough safe headers only (never forward Set-Cookie, Server, etc.).
         const outHeaders = new Headers();
         const ct = upstream.headers.get("Content-Type");
         const cd = upstream.headers.get("Content-Disposition");
@@ -75,3 +69,10 @@ export const Route = createFileRoute("/api/mail-attachment")({
     },
   },
 });
+
+function json(body: unknown, status: number) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
+}
