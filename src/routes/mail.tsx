@@ -378,10 +378,15 @@ function useMailData(session: MailSession | null) {
 
   const loadCounts = useCallback(async () => {
     if (!session) return;
+    // Batch A / Fix #1: capture the mutation generation BEFORE the network
+    // round-trip. Any mutation between now and the response makes this
+    // result stale — drop it rather than overwrite optimistic counters.
+    const gen = countsMutationGen.current;
     try {
       const result = await getCounts({
         data: { account: session.account, password: session.password },
       });
+      if (countsMutationGen.current !== gen) return;
       const map: Record<MailFolder, { total: number; unread: number; supported: boolean }> = {
         inbox: { total: 0, unread: 0, supported: true },
         starred: { total: 0, unread: 0, supported: true },
@@ -410,6 +415,7 @@ function useMailData(session: MailSession | null) {
       setFolderPaths(paths);
       setBridgeError(null);
     } catch (err: any) {
+      if (countsMutationGen.current !== gen) return;
       setBridgeError(err?.message || "فشل الاتصال بخادم البريد");
       setCounts(
         Object.fromEntries(
@@ -421,6 +427,7 @@ function useMailData(session: MailSession | null) {
       );
     }
   }, [session, getCounts, isStarCountHot]);
+
 
 
   /**
