@@ -308,7 +308,7 @@ app.post("/api/move", requireKey, imapGate("interactive"), async (req, res) => {
   }
 });
 
-app.post("/api/delete", requireKey, async (req, res) => {
+app.post("/api/delete", requireKey, imapGate("interactive"), async (req, res) => {
   try {
     const payload = MessagePayloadSchema.parse(req.body);
     const result = await deleteMessage(
