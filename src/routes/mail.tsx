@@ -5552,7 +5552,7 @@ function Composer({
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}
-            disabled={sending || files.length >= COMPOSE_MAX_FILES}
+            disabled={sending || totalCount >= COMPOSE_MAX_FILES}
             className="inline-flex items-center gap-1.5 rounded-lg border border-input bg-background px-2.5 py-2 text-xs text-muted-foreground transition hover:bg-muted hover:text-foreground disabled:opacity-40 sm:px-3"
             aria-label="إرفاق ملف"
             title="إرفاق ملف"
