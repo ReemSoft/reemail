@@ -139,11 +139,13 @@ export type DraftErrorCode =
   | "NO_DRAFTS_FOLDER"
   | "APPEND_FAILED"
   | "IMAP_ERROR"
-  | "UIDPLUS_UNSUPPORTED";
+  | "UIDPLUS_UNSUPPORTED"
+  | "SAFE_DRAFT_REPLACE_UNSUPPORTED";
 export interface DraftErr {
   ok: false;
   error: DraftErrorCode;
 }
+
 
 // --- Injectable IO surface (mirrors smtp.ts style) --------------------------
 
