@@ -4277,6 +4277,25 @@ function Composer({
   const [dragging, setDragging] = useState(false);
   const [savedAt, setSavedAt] = useState<number | null>(() => initialDoc?.updatedAt ?? null);
 
+  // ----- Dirty tracking + guarded close -----
+  // bodyRev bumps on every editor `input` event so the autosave effect can
+  // observe body edits (contentEditable does NOT trigger React re-renders).
+  const [bodyRev, setBodyRev] = useState(0);
+  // lastEdit vs lastSave: dirty = we typed after the last successful save.
+  const lastEditAtRef = useRef<number>(0);
+  const lastSavedAtRef = useRef<number>(initialDoc?.updatedAt ?? 0);
+  const isDirtyRef = useRef<boolean>(false);
+  const recomputeDirty = () => {
+    isDirtyRef.current = lastEditAtRef.current > lastSavedAtRef.current;
+  };
+  const markEdited = () => {
+    lastEditAtRef.current = Date.now();
+    recomputeDirty();
+  };
+  const [closePrompt, setClosePrompt] = useState<{
+    resolve: (choice: "save" | "discard" | "cancel") => void;
+  } | null>(null);
+
   // ----- Server-side draft saver (bridge APPEND) + pending-delete queue -----
   const bridgeSaveDraftFn = useServerFn(bridgeSaveDraft);
   const bridgeDeleteDraftFn = useServerFn(bridgeDeleteDraft);
