@@ -5287,14 +5287,15 @@ function Composer({
       const html = sanitizeComposerHtml(editorRef.current?.innerHTML ?? "");
       // Unified emptiness contract with autosave: a draft that carries
       // attachments (new OR kept legacy) is NOT empty even without text.
-      const isEmpty =
-        to.length === 0 &&
-        cc.length === 0 &&
-        bcc.length === 0 &&
-        !subject &&
-        !html.trim() &&
-        existingKeptRef.current.length === 0 &&
-        filesRef.current.length === 0;
+      const isEmpty = isDraftEmpty({
+        toCount: to.length,
+        ccCount: cc.length,
+        bccCount: bcc.length,
+        subject,
+        htmlTrimmed: html.trim(),
+        existingKeptCount: existingKeptRef.current.length,
+        filesCount: filesRef.current.length,
+      });
       if (isEmpty) {
         toast.info("لا يوجد محتوى للحفظ");
         return "empty";
