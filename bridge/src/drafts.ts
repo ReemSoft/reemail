@@ -456,6 +456,48 @@ function defaultDeps(): DraftDeps {
   };
 }
 
+// --- Keyed mutex (Concurrency Guard) ----------------------------------------
+//
+// Guarantees only ONE save-or-delete pipeline for a given
+// (account_identity + drafts_mailbox + draftId) runs at a time inside this
+// bridge process. Rules (locked by tests):
+//
+//   * This is a Concurrency Guard, NOT an idempotency source. The IMAP
+//     `X-MailMaestro-Draft-ID` header remains the source of truth.
+//   * The key never carries the password, MIME, or subject. Only the
+//     account email + draftId (both already present in the IMAP wire
+//     traffic) plus the constant "drafts" mailbox tag.
+//   * The map entry is removed as soon as the last waiter releases, so a
+//     million unique drafts cannot leak memory.
+//   * We never log the key.
+const draftMutex = new Map<string, Promise<unknown>>();
+
+export function draftMutexKey(accountEmail: string, draftId: string): string {
+  // "drafts" segment reflects the drafts-mailbox scope required by the spec.
+  return `${accountEmail}::drafts::${draftId}`;
+}
+
+/** Exposed for tests only — verifies the map is fully drained. */
+export function draftMutexInflight(): number {
+  return draftMutex.size;
+}
+
+async function withDraftMutex<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  const prev = draftMutex.get(key);
+  const run = (prev ? prev.catch(() => {}) : Promise.resolve()).then(fn);
+  // Store a chain that resolves ONLY after `run` settles (success or fail),
+  // so the next waiter observes the full pipeline result.
+  const chain: Promise<unknown> = run.catch(() => {});
+  draftMutex.set(key, chain);
+  try {
+    return await run;
+  } finally {
+    // Only delete if we're still the tail — otherwise a later caller has
+    // taken over ownership and will clean up when it settles.
+    if (draftMutex.get(key) === chain) draftMutex.delete(key);
+  }
+}
+
 // --- High-level entry points (used by HTTP layer) ---------------------------
 
 export async function saveDraft(
@@ -464,12 +506,15 @@ export async function saveDraft(
   payload: DraftSavePayload,
   deps: DraftDeps = defaultDeps(),
 ): Promise<DraftSaveOk | DraftErr> {
-  const client = deps.createImapDraftClient(account, password);
-  try {
-    return await executeDraftSave(client, payload, deps.now);
-  } catch {
-    return { ok: false, error: "IMAP_ERROR" };
-  }
+  const key = draftMutexKey(account.email_address, payload.draftId);
+  return withDraftMutex(key, async () => {
+    const client = deps.createImapDraftClient(account, password);
+    try {
+      return await executeDraftSave(client, payload, deps.now);
+    } catch {
+      return { ok: false, error: "IMAP_ERROR" };
+    }
+  });
 }
 
 export async function deleteDraft(
@@ -478,10 +523,13 @@ export async function deleteDraft(
   payload: DraftDeletePayload,
   deps: DraftDeps = defaultDeps(),
 ): Promise<DraftDeleteOk | DraftErr> {
-  const client = deps.createImapDraftClient(account, password);
-  try {
-    return await executeDraftDelete(client, payload);
-  } catch {
-    return { ok: false, error: "IMAP_ERROR" };
-  }
+  const key = draftMutexKey(account.email_address, payload.draftId);
+  return withDraftMutex(key, async () => {
+    const client = deps.createImapDraftClient(account, password);
+    try {
+      return await executeDraftDelete(client, payload);
+    } catch {
+      return { ok: false, error: "IMAP_ERROR" };
+    }
+  });
 }
