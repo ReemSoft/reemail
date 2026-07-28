@@ -4671,14 +4671,15 @@ function Composer({
         const s = snapshotInputsRef.current;
         if (s.sending) return;
         const html = editorRef.current?.innerHTML ?? "";
-        const isEmpty =
-          s.to.length === 0 &&
-          s.cc.length === 0 &&
-          s.bcc.length === 0 &&
-          !s.subject &&
-          !html.trim() &&
-          s.existingKeptLen === 0 &&
-          s.filesLen === 0;
+        const isEmpty = isDraftEmpty({
+          toCount: s.to.length,
+          ccCount: s.cc.length,
+          bccCount: s.bcc.length,
+          subject: s.subject,
+          htmlTrimmed: html.trim(),
+          existingKeptCount: s.existingKeptLen,
+          filesCount: s.filesLen,
+        });
         if (isEmpty) {
           clearDraftDoc(window.localStorage, s.accountEmail);
           setSavedAt(null);
