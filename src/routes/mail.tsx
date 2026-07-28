@@ -4788,28 +4788,57 @@ function Composer({
   // light bg-surface used elsewhere, wrapped in an elegant card.
   const containerClass = "relative flex h-full w-full flex-col bg-surface";
 
-  const savedLabel = savedAt
-    ? `تم الحفظ ${new Date(savedAt).toLocaleTimeString("ar", { hour: "2-digit", minute: "2-digit" })}`
-    : "";
+  const savedLabel = (() => {
+    const t = savedAt
+      ? new Date(savedAt).toLocaleTimeString("ar", { hour: "2-digit", minute: "2-digit" })
+      : "";
+    switch (saveStatus) {
+      case "saving":
+        return "جارٍ الحفظ…";
+      case "saved":
+        return t ? `تم الحفظ ${t}` : "تم الحفظ";
+      case "saved-local":
+        return t ? `محفوظة محلياً ${t}` : "محفوظة محلياً";
+      case "failed":
+        return "تعذّر الحفظ";
+      default:
+        return "";
+    }
+  })();
 
-  function saveDraftNow() {
+  async function saveDraftNow() {
     if (typeof window === "undefined") return;
-    try {
-      const html = sanitizeComposerHtml(editorRef.current?.innerHTML ?? "");
-      const isEmpty =
-        to.length === 0 && cc.length === 0 && bcc.length === 0 && !subject && !html.trim();
-      if (isEmpty) {
-        toast.info("لا يوجد محتوى للحفظ");
-        return;
-      }
-      window.localStorage.setItem(
-        draftKey,
-        JSON.stringify({ to, cc, bcc, subject, html, showCc, showBcc }),
-      );
-      setSavedAt(Date.now());
-      toast.success("تم حفظ المسودّة");
-    } catch {
+    const html = sanitizeComposerHtml(editorRef.current?.innerHTML ?? "");
+    const isEmpty =
+      to.length === 0 && cc.length === 0 && bcc.length === 0 && !subject && !html.trim();
+    if (isEmpty) {
+      toast.info("لا يوجد محتوى للحفظ");
+      return;
+    }
+    const snapshot: DraftSnapshot = { to, cc, bcc, subject, html, showCc, showBcc };
+    const persisted = writeDraftDoc(window.localStorage, accountEmail, {
+      version: 3,
+      draftId,
+      snapshot,
+      serverRef: serverRefRef.current,
+      updatedAt: Date.now(),
+    });
+    if (!persisted) {
+      setSaveStatus("failed");
       toast.error("تعذّر حفظ المسودّة");
+      return;
+    }
+    setSavedAt(Date.now());
+    try {
+      await saverRef.current?.requestSave(snapshot, serverRefRef.current);
+      // Status is set by the saver (saved | saved-local); toast reflects it.
+      if (saverRef.current?.getStatus() === "saved") {
+        toast.success("تم حفظ المسودّة");
+      } else {
+        toast.success("تم حفظ المسودّة محلياً");
+      }
+    } catch {
+      toast.success("تم حفظ المسودّة محلياً");
     }
   }
 
