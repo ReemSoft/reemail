@@ -140,6 +140,7 @@ import {
 import {
   readDraftDoc,
   writeDraftDoc,
+  updateDraftDocServerRef,
   clearDraftDoc,
   createDraftSaver,
   createPendingDeleteQueue,
@@ -819,6 +820,7 @@ function useMailData(session: MailSession | null) {
               if (!c.hasUidvalidity) continue;
               // V4 count race guard: skip starred.total while a mutation is
               // hot; keep the optimistic value the toggle already applied.
+              if (c.folder === "drafts") continue;
               if (c.folder === "starred" && isStarCountHot() && prev.starred) {
                 const cur = next.starred ?? { total: 0, unread: 0, supported: true };
                 next.starred = {
@@ -875,6 +877,32 @@ function useMailData(session: MailSession | null) {
             );
           }
           archiveUidValidityRef.current = nextArchiveUV;
+          try {
+            const authoritative = await getCounts({
+              data: { mailSessionToken: session.mailSessionToken ?? "", password: session.password },
+            });
+            if (countsMutationGen.current !== gen) return;
+            if (authoritative.ok) {
+              const draftsCount = authoritative.counts.find((c) => c.folder === "drafts");
+              if (draftsCount) {
+                setCounts((prev) => ({
+                  ...prev,
+                  drafts: {
+                    total: draftsCount.total,
+                    unread: draftsCount.unread,
+                    supported: draftsCount.supported !== false,
+                  },
+                }));
+                if (draftsCount.path) {
+                  setFolderPaths((prev) =>
+                    prev.drafts === draftsCount.path ? prev : { ...prev, drafts: draftsCount.path },
+                  );
+                }
+              }
+            }
+          } catch {
+            /* keep previous Drafts count until bridge is reachable */
+          }
           return;
         }
       } catch {
@@ -896,7 +924,11 @@ function useMailData(session: MailSession | null) {
       // Index has no distinct row for it, so serving it from the index
       // would either return zero rows or (worse) return every inbox row
       // regardless of the \Flagged flag. Always fall through to the Bridge.
-      f !== "starred",
+      f !== "starred" &&
+      // Drafts are mutated by high-frequency Bridge APPEND/delete cycles;
+      // serving them from the async Local Index can show expunged UIDs,
+      // duplicate rows, or stale counters. Bridge/IMAP remains authoritative.
+      f !== "drafts",
     [session, folderPaths],
   );
 
@@ -1107,7 +1139,9 @@ function useMailData(session: MailSession | null) {
       // uniqueness of mail_folders, so a starred sync round would just
       // overwrite the inbox folder row with duplicate work and never serve
       // starred correctly. Bridge listing owns starred; do not sync it here.
-      folder !== "starred",
+      folder !== "starred" &&
+      // Drafts are Bridge-authoritative to avoid ghosts during APPEND+delete.
+      folder !== "drafts",
     onSynced: () => {
       // Background rounds only: refresh the current folder from the index
       // when the sync actually changed something (the hook already gates on
@@ -1160,6 +1194,10 @@ function useMailData(session: MailSession | null) {
       } else {
         await loadCountsFast();
       }
+    },
+    onAfterDraftSaved: async () => {
+      await loadCounts();
+      if (folder === "drafts") await loadMessages();
     },
     // Pending Flag Overrides — exposed so MailApp toggleStar/toggleRead can
     // record the expected value BEFORE the mutation resolves. All server-
@@ -1305,6 +1343,7 @@ function MailApp() {
     loadCounts,
     refresh: rawRefresh,
     onAfterSend,
+    onAfterDraftSaved,
     setPendingFlagOverride,
     clearPendingFlagOverride,
     hideRow,
@@ -3166,6 +3205,7 @@ function MailApp() {
               initial={compose}
               onClose={() => setCompose(null)}
               onSent={onAfterSend}
+              onDraftSaved={onAfterDraftSaved}
             />
           ) : selectedMessage ? (
             <MessageView
@@ -4180,11 +4220,13 @@ function Composer({
   initial,
   onClose,
   onSent,
+  onDraftSaved,
 }: {
   session: MailSession;
   initial?: ComposeInitial | null;
   onClose: () => void;
   onSent: () => void;
+  onDraftSaved: () => void;
 }) {
   // Draft storage keying is owned by mail-draft-lifecycle (v3 + auto-migration).
 
@@ -4363,6 +4405,25 @@ function Composer({
   const resolveExistingAsFilesRef = useRef<() => Promise<File[] | null>>(async () => []);
 
   const saverRef = useRef<DraftSaver | null>(null);
+  const draftRefreshTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (draftRefreshTimerRef.current !== null) {
+        window.clearTimeout(draftRefreshTimerRef.current);
+        draftRefreshTimerRef.current = null;
+      }
+    };
+  }, []);
+
+  const scheduleDraftRefresh = useCallback(() => {
+    if (typeof window === "undefined") return;
+    if (draftRefreshTimerRef.current !== null) window.clearTimeout(draftRefreshTimerRef.current);
+    draftRefreshTimerRef.current = window.setTimeout(() => {
+      draftRefreshTimerRef.current = null;
+      void onDraftSaved();
+    }, 650);
+  }, [onDraftSaved]);
 
   if (!saverRef.current) {
     saverRef.current = createDraftSaver(draftId, {
@@ -4425,7 +4486,7 @@ function Composer({
       },
       onStatus: setSaveStatus,
       onServerRef: (r) => setServerRef(r),
-      onCompleted: ({ completedGeneration, status, code }) => {
+      onCompleted: ({ completedGeneration, status, serverRef, code }) => {
         // Advance the clean marker ONLY when a save actually persisted
         // (remote success, or local-fallback on NETWORK). A hard failure
         // (SESSION_REQUIRED, APPEND_FAILED, etc.) MUST leave the composer
@@ -4438,6 +4499,11 @@ function Composer({
           lastSavedAtRef.current = Date.now();
           setSavedAt(lastSavedAtRef.current);
           lastFailCodeRef.current = null;
+          if (status === "saved" && serverRef && typeof window !== "undefined") {
+            serverRefRef.current = serverRef;
+            updateDraftDocServerRef(window.localStorage, accountEmail, draftId, serverRef);
+            scheduleDraftRefresh();
+          }
         } else if (status === "failed") {
           // Diagnostic: capture the coarse code so the UI can surface it
           // (helps distinguish APPEND_FAILED / SAFE_DRAFT_REPLACE_UNSUPPORTED
