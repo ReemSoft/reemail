@@ -4673,11 +4673,36 @@ function Composer({
         toast.error(result.error || "فشل إرسال الرسالة");
         return;
       }
-      // Clear draft on successful send
+      // Clear draft on successful send: local wipe + best-effort server delete,
+      // with any failure re-queued so the next composer mount can retry it.
       try {
-        window.localStorage.removeItem(draftKey);
+        clearDraftDoc(window.localStorage, accountEmail);
       } catch {
         /* noop */
+      }
+      const refAtSend = serverRefRef.current;
+      const hadServerCopy = !!refAtSend || saveStatus !== "idle";
+      if (hadServerCopy) {
+        const token = session.mailSessionToken ?? "";
+        let deleteOk = false;
+        try {
+          const del = await bridgeDeleteDraftFn({
+            data: {
+              mailSessionToken: token,
+              draftId,
+              previousRef: refAtSend ?? undefined,
+            },
+          });
+          deleteOk = !!del?.ok;
+        } catch {
+          deleteOk = false;
+        }
+        if (!deleteOk) {
+          pendingQueueRef.current?.enqueue(accountEmail, {
+            draftId,
+            previousRef: refAtSend,
+          });
+        }
       }
       // Address book: record recipients AFTER a successful SMTP send only.
       // Never let this failure poison the send outcome.
