@@ -202,15 +202,16 @@ test("save: APPEND failure returns APPEND_FAILED and NEVER deletes old copies", 
   const { client, rec } = mkClient({
     mailboxes: [box("Drafts")],
     appendFail: true,
-    // stage a search that WOULD find an old copy — we must never call it.
-    searchResults: [[42]],
+    // Pre-APPEND probe returns [] so we DO reach APPEND (which then fails).
+    // No second search should happen after that failure.
+    searchResults: [[]],
   });
   const r = await executeDraftSave(client, BASE_INPUT);
   assert.equal(r.ok, false);
   if (r.ok) return;
   assert.equal(r.error, "APPEND_FAILED");
   assert.equal(rec.deletes.length, 0);
-  assert.equal(rec.searches.length, 0, "search must not run after APPEND failure");
+  assert.equal(rec.searches.length, 1, "only the pre-APPEND probe runs; no post search on failure");
   assert.equal(rec.logouts, 1);
 });
 
@@ -218,7 +219,9 @@ test("save: ordering — APPEND happens BEFORE any delete of the old copy", asyn
   const events: string[] = [];
   const { client } = mkClient({
     mailboxes: [box("Drafts")],
-    searchResults: [[42, 100]], // 42 = old, 100 = the new one we just appended
+    // 1st probe: [42] triggers replace mode; 2nd search: [42, 100] with 100
+    // being the freshly appended UID.
+    searchResults: [[42], [42, 100]],
   });
   const origAppend = client.append.bind(client);
   const origDelete = client.deleteByUid.bind(client);
@@ -236,22 +239,23 @@ test("save: ordering — APPEND happens BEFORE any delete of the old copy", asyn
 });
 
 test("save: idempotent retry with same draftId does not create duplicates", async () => {
-  // First call: no prior copies. Search returns [newUid=100] after append.
+  // First call: no prior copies (probe:[]), post-APPEND search sees only the
+  // new UID 100.
   const { client: c1, rec: r1 } = mkClient({
     mailboxes: [box("Drafts")],
     appendUid: 100,
-    searchResults: [[100]],
+    searchResults: [[], [100]],
   });
   await executeDraftSave(c1, BASE_INPUT);
   assert.equal(r1.appends.length, 1);
   assert.equal(r1.deletes.length, 0);
 
-  // Second call (retry): prior copy = 100. Fresh APPEND lands at 101. Search
-  // returns both. deleteByUid MUST be called with [100] only.
+  // Second call (retry): prior copy = 100 (probe). Fresh APPEND lands at 101.
+  // Post-search returns both. deleteByUid MUST be called with [100] only.
   const { client: c2, rec: r2 } = mkClient({
     mailboxes: [box("Drafts")],
     appendUid: 101,
-    searchResults: [[100, 101]],
+    searchResults: [[100], [100, 101]],
   });
   const r = await executeDraftSave(c2, BASE_INPUT);
   assert.equal(r.ok, true);
@@ -259,6 +263,7 @@ test("save: idempotent retry with same draftId does not create duplicates", asyn
   assert.equal(r2.deletes.length, 1);
   assert.deepEqual(r2.deletes[0], [100]);
 });
+
 
 test("save: without UIDPLUS, first save (no prior copy) still succeeds", async () => {
   // Fresh draftId: pre-APPEND search returns []. Server lacks UIDPLUS, but
