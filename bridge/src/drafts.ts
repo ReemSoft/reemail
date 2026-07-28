@@ -32,7 +32,12 @@
 import { z } from "zod";
 import type { ListResponse } from "imapflow";
 import { makeImapClient, listMailboxes } from "./imap.js";
-import { buildMime, resolveDraftsPath, type SendMessagePayload } from "./smtp.js";
+import {
+  buildMime,
+  resolveDraftsPath,
+  type SendMessagePayload,
+  type SendAttachment,
+} from "./smtp.js";
 import type { MailAccount } from "./types.js";
 
 export const DRAFT_ID_HEADER = "X-MailMaestro-Draft-ID";
@@ -44,10 +49,10 @@ export const RecipientSchema = z.object({
   email: z.string().email(),
 });
 
-// Body caps mirror the send flow's spirit (25MB overall for MIME with
-// attachments) but the draft endpoint is text-only in M1; attachments land in
-// M3/M4. These caps exist so an oversize payload is refused at contract level
-// long before it reaches IMAP.
+// Body caps mirror the send flow's spirit. Attachments themselves are streamed
+// from disk by multer (see uploads.ts) and share the send flow's global
+// SEND_MAX_TOTAL_BYTES / SEND_MAX_FILES limits — enforced at the HTTP layer,
+// NOT re-declared here so we never diverge from the send contract.
 export const DRAFT_MAX_TEXT_BYTES = 5 * 1024 * 1024; // 5 MiB per body
 export const DRAFT_MAX_TOTAL_BYTES = 10 * 1024 * 1024; // 10 MiB combined text
 
@@ -92,15 +97,16 @@ export const DraftSavePayloadSchema = z
     }
   });
 
-export type DraftSavePayload = z.infer<typeof DraftSavePayloadSchema>;
+export type DraftSavePayload = z.infer<typeof DraftSavePayloadSchema> & {
+  /**
+   * Attachments are supplied out-of-band by multer (streamed to disk) — they
+   * are NOT part of the JSON payload contract and MUST NOT be JSON/base64.
+   * The HTTP layer merges them in after Zod validation using the exact same
+   * SendAttachment shape / limits as the send-multipart flow.
+   */
+  attachments?: SendAttachment[];
+};
 
-export const DraftDeletePayloadSchema = z.object({
-  account: AccountSchema,
-  password: z.string().min(1),
-  draftId: z.string().uuid(),
-  previousRef: PreviousRefSchema.optional(),
-});
-export type DraftDeletePayload = z.infer<typeof DraftDeletePayloadSchema>;
 
 // --- Result types ------------------------------------------------------------
 
