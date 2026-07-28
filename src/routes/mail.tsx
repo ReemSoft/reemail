@@ -5741,6 +5741,58 @@ function Composer({
           </div>
         </div>
       )}
+
+      <AlertDialog
+        open={!!closePrompt}
+        onOpenChange={(o) => {
+          if (!o && closePrompt) {
+            closePrompt.resolve("cancel");
+            setClosePrompt(null);
+          }
+        }}
+      >
+        <AlertDialogContent className="sm:max-w-md">
+          <AlertDialogHeader className="text-center sm:text-right">
+            <AlertDialogTitle>لديك تغييرات غير محفوظة</AlertDialogTitle>
+            <AlertDialogDescription>
+              هل تريد حفظ الرسالة كمسودّة قبل المغادرة؟
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="gap-2 sm:justify-start">
+            <button
+              type="button"
+              onClick={() => {
+                closePrompt?.resolve("save");
+                setClosePrompt(null);
+              }}
+              className="inline-flex h-10 items-center justify-center rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground transition hover:bg-primary/90"
+            >
+              حفظ كمسودّة
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                closePrompt?.resolve("discard");
+                setClosePrompt(null);
+              }}
+              className="inline-flex h-10 items-center justify-center rounded-md border border-destructive/40 bg-background px-4 text-sm font-medium text-destructive transition hover:bg-destructive/10"
+            >
+              بدون حفظ
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                closePrompt?.resolve("cancel");
+                setClosePrompt(null);
+              }}
+              className="inline-flex h-10 items-center justify-center rounded-md border border-input bg-background px-4 text-sm font-medium text-muted-foreground transition hover:bg-muted"
+            >
+              إلغاء
+            </button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
     </div>
   );
 }
