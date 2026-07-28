@@ -75,7 +75,7 @@ async function bridgeCall(
   extraBody: Record<string, unknown>,
   password: string,
 ): Promise<
-  { ok: true; json: any } | { ok: false; error: string; status?: number; unavailable?: boolean }
+  { ok: true; json: Record<string, unknown> } | { ok: false; error: string; status?: number; unavailable?: boolean }
 > {
   const { resolveBridgeAuth } = await import("@/lib/mail-bridge-auth.server");
   const auth = await resolveBridgeAuth(mailSessionToken);
@@ -104,8 +104,8 @@ async function bridgeCall(
       };
     }
     return { ok: true, json };
-  } catch (err: any) {
-    return { ok: false, error: err?.message || "تعذر الاتصال بخادم البريد" };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : ""; return { ok: false, error: msg || "تعذر الاتصال بخادم البريد" };
   }
 }
 
@@ -496,7 +496,7 @@ export const bridgeSaveDraft = createServerFn({ method: "POST" })
     } catch {
       return { ok: false, code: "NETWORK" };
     }
-    let json: any = null;
+    let json: Record<string, unknown> | null = null;
     try {
       json = await upstream.json();
     } catch {
@@ -568,7 +568,7 @@ export const bridgeDeleteDraft = createServerFn({ method: "POST" })
     } catch {
       return { ok: false, code: "NETWORK" };
     }
-    let json: any = null;
+    let json: Record<string, unknown> | null = null;
     try {
       json = await upstream.json();
     } catch {
