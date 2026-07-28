@@ -2831,7 +2831,8 @@ function MailApp() {
         >
           <div className="p-4">
             <button
-              onClick={() => {
+              onClick={async () => {
+                if (!(await guardComposerNav())) return;
                 setCompose({});
                 setSidebarOpen(false);
               }}
