@@ -520,20 +520,19 @@ function defaultDeps(): DraftDeps {
   return {
     createImapDraftClient(account, password) {
       const client = makeImapClient(account, password);
-      // imapflow exposes `capabilities` as a Set<string> after connect.
-      const hasUidPlus = () => {
-        const caps =
-          (client as unknown as { capabilities?: Iterable<string> }).capabilities ??
-          new Set<string>();
-        for (const c of caps) {
-          if (String(c).toUpperCase() === "UIDPLUS") return true;
-        }
-        return false;
-      };
+      // ImapFlow exposes `capabilities` as `Map<string, boolean | number>`
+      // after connect. Read via `hasImapCapability` — iterating the Map
+      // directly yields `[key, value]` tuples and would misread as strings
+      // like "UIDPLUS,true", which was the SAFE_DRAFT_REPLACE_UNSUPPORTED
+      // root cause on UIDPLUS-capable servers.
+      const getCaps = () =>
+        (client as unknown as { capabilities?: Map<string, boolean | number> })
+          .capabilities;
       return {
         connect: () => client.connect(),
         list: () => listMailboxes(client),
-        hasUidPlus,
+        hasUidPlus: () => hasImapCapability(getCaps(), "UIDPLUS"),
+        hasMove: () => hasImapCapability(getCaps(), "MOVE"),
         async openWithLock(path) {
           const lock = await client.getMailboxLock(path);
           const mb = (client as unknown as { mailbox?: { uidValidity?: unknown } }).mailbox;
@@ -563,6 +562,18 @@ function defaultDeps(): DraftDeps {
           if (uids.length === 0) return true;
           const ok = await client.messageDelete({ uid: uids.join(",") } as never, { uid: true });
           return Boolean(ok);
+        },
+        async moveByUid(uids, destinationPath) {
+          if (uids.length === 0) return true;
+          // Guard-rail: never call messageMove without the MOVE capability;
+          // some IMAP client libs emulate MOVE via COPY+STORE+EXPUNGE, which
+          // would evict unrelated \Deleted messages. `executeDraftSave`
+          // already checks `hasMove()`, but we double-check here.
+          if (!hasImapCapability(getCaps(), "MOVE")) return false;
+          const res = (await client.messageMove(uids.join(","), destinationPath, {
+            uid: true,
+          })) as unknown;
+          return Boolean(res);
         },
         logout: () => client.logout().catch(() => {}) as unknown as Promise<void>,
       };
