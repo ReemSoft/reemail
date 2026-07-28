@@ -59,7 +59,6 @@ export interface MailMessage {
   uidValidity?: string;
 }
 
-
 export interface FolderCount {
   folder: MailFolder;
   total: number;
