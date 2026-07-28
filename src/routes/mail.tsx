@@ -116,6 +116,14 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { useServerFn } from "@tanstack/react-start";
 import { toast } from "sonner";
 import { useConfirm } from "@/components/ui/confirm-provider";
+import {
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { useCompanyTheme } from "@/hooks/use-company-theme";
 import {
   bridgeGetFolderCounts,
