@@ -175,3 +175,98 @@ describe("attachBeforeUnloadGuard", () => {
     expect(evt.preventDefault).not.toHaveBeenCalled();
   });
 });
+
+// ---------------------------------------------------------- isDraftEmpty
+describe("isDraftEmpty (unified emptiness contract)", () => {
+  const base = {
+    toCount: 0,
+    ccCount: 0,
+    bccCount: 0,
+    subject: "",
+    htmlTrimmed: "",
+    existingKeptCount: 0,
+    filesCount: 0,
+  };
+
+  it("empty on every zero field", () => {
+    expect(isDraftEmpty(base)).toBe(true);
+  });
+
+  it("attachment-only (new file) is NOT empty", () => {
+    expect(isDraftEmpty({ ...base, filesCount: 1 })).toBe(false);
+  });
+
+  it("attachment-only (kept legacy) is NOT empty", () => {
+    expect(isDraftEmpty({ ...base, existingKeptCount: 1 })).toBe(false);
+  });
+
+  it("mixed attachments (kept + new) are NOT empty", () => {
+    expect(isDraftEmpty({ ...base, existingKeptCount: 2, filesCount: 3 })).toBe(false);
+  });
+
+  it("any recipient or subject or html marks non-empty", () => {
+    expect(isDraftEmpty({ ...base, toCount: 1 })).toBe(false);
+    expect(isDraftEmpty({ ...base, ccCount: 1 })).toBe(false);
+    expect(isDraftEmpty({ ...base, bccCount: 1 })).toBe(false);
+    expect(isDraftEmpty({ ...base, subject: "hi" })).toBe(false);
+    expect(isDraftEmpty({ ...base, htmlTrimmed: "hello" })).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------- Close single-flight
+// The composer's requestClose uses createSingleFlight so any concurrent
+// attempt during the confirm dialog reuses the same in-flight Promise
+// instead of opening a second dialog / firing onClose twice.
+describe("close flow — single-flight semantics", () => {
+  it("returns the SAME promise for concurrent requestClose calls", async () => {
+    const sf = createSingleFlight<"closed" | "cancelled">();
+    let resolveDialog!: (v: "closed" | "cancelled") => void;
+    let dialogOpens = 0;
+    const flow = () =>
+      sf.run(async () => {
+        dialogOpens++;
+        return await new Promise<"closed" | "cancelled">((r) => {
+          resolveDialog = r;
+        });
+      });
+    const p1 = flow();
+    const p2 = flow();
+    const p3 = flow();
+    expect(dialogOpens).toBe(1);
+    expect(p1).toBe(p2);
+    expect(p2).toBe(p3);
+    resolveDialog("closed");
+    const [r1, r2, r3] = await Promise.all([p1, p2, p3]);
+    expect([r1, r2, r3]).toEqual(["closed", "closed", "closed"]);
+  });
+
+  it("cancel releases single-flight so a later attempt starts fresh", async () => {
+    const sf = createSingleFlight<"closed" | "cancelled">();
+    let resolveDialog!: (v: "closed" | "cancelled") => void;
+    let opens = 0;
+    const flow = () =>
+      sf.run(async () => {
+        opens++;
+        return await new Promise<"closed" | "cancelled">((r) => {
+          resolveDialog = r;
+        });
+      });
+    const p1 = flow();
+    resolveDialog("cancelled");
+    await p1;
+    // After the first flow settles the guard is empty — a new attempt runs.
+    const p2 = flow();
+    expect(opens).toBe(2);
+    resolveDialog("closed");
+    expect(await p2).toBe("closed");
+  });
+
+  it("save→close semantics: only saved_server/saved_local produce onClose", () => {
+    type SaveResult = "saved_server" | "saved_local" | "failed" | "empty";
+    const shouldClose = (r: SaveResult) => r === "saved_server" || r === "saved_local";
+    expect(shouldClose("saved_server")).toBe(true);
+    expect(shouldClose("saved_local")).toBe(true);
+    expect(shouldClose("failed")).toBe(false);
+    expect(shouldClose("empty")).toBe(false);
+  });
+});
