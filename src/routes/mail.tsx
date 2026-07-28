@@ -155,6 +155,7 @@ import {
   createAutosaveScheduler,
   attachInputListener,
   attachBeforeUnloadGuard,
+  isDraftEmpty,
 } from "@/lib/mail-composer-autosave";
 import { tombstoneGhostMessage } from "@/lib/mail-ghost-cleanup.functions";
 import { indexListMessages } from "@/lib/mail-index.functions";
