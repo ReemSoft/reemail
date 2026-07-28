@@ -3675,7 +3675,7 @@ function LoadingViewer({ onBack }: { onBack: () => void }) {
 
 const COMPOSE_MAX_TOTAL_BYTES = 25 * 1024 * 1024;
 const COMPOSE_MAX_FILES = 10;
-const DRAFT_STORAGE_PREFIX = "mailmaestro:draft:v2:";
+
 
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
