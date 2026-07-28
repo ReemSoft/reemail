@@ -4287,6 +4287,19 @@ function Composer({
       saveRemote: async ({ snapshot, previousRef }) => {
         const token = session.mailSessionToken;
         if (!token) return { ok: false, code: "SESSION_REQUIRED" };
+        // M4-C: every save must carry the CURRENT attachment set so the
+        // bridge's APPEND-then-delete cycle preserves both kept legacy
+        // attachments and newly added files. A failed download aborts the
+        // save rather than silently producing an attachment-less draft.
+        let keptFiles: File[] = [];
+        try {
+          const resolved = await resolveExistingAsFilesRef.current();
+          if (resolved === null) return { ok: false, code: "NETWORK" };
+          keptFiles = resolved;
+        } catch {
+          return { ok: false, code: "NETWORK" };
+        }
+        const currentFiles = filesRef.current;
         const form = new FormData();
         const payload = {
           mailSessionToken: token,
@@ -4306,6 +4319,8 @@ function Composer({
           previousRef: previousRef ?? undefined,
         };
         form.append("payload", JSON.stringify(payload));
+        for (const f of keptFiles) form.append("attachments", f, f.name);
+        for (const f of currentFiles) form.append("attachments", f, f.name);
         try {
           const res = await bridgeSaveDraftFn({ data: form });
           if (res?.ok) {
@@ -4330,6 +4345,7 @@ function Composer({
       onServerRef: (r) => setServerRef(r),
     });
   }
+
 
   const [plainMode, setPlainMode] = useState(false);
   const [fontFamily, setFontFamily] = useState<string>("IBM Plex Sans Arabic, sans-serif");
