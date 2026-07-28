@@ -8,11 +8,12 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { resolveDraftsPath } from "../src/smtp.js";
+import { resolveDraftsPath, resolveTrashPath } from "../src/smtp.js";
 import {
   executeDraftSave,
   executeDraftDelete,
   saveDraft,
+  hasImapCapability,
   DRAFT_ID_HEADER,
   DraftSavePayloadSchema,
   draftMutexInflight,
