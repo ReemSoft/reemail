@@ -4558,6 +4558,33 @@ function Composer({
       } catch {
         /* noop */
       }
+      // Address book: record recipients AFTER a successful SMTP send only.
+      // Never let this failure poison the send outcome.
+      try {
+        const own = (session.account.email_address ?? "").toLowerCase().trim();
+        const collected: Array<{ email: string; name: string | null }> = [];
+        const seen = new Set<string>();
+        for (const r of [...to, ...cc, ...bcc]) {
+          if (!r.valid) continue;
+          const e = r.email.toLowerCase();
+          if (!e || e === own || seen.has(e)) continue;
+          seen.add(e);
+          collected.push({ email: e, name: r.name ?? null });
+        }
+        if (collected.length > 0) {
+          void recordLocalSend(companyId, accountId, collected);
+          const token = session.mailSessionToken;
+          if (token) {
+            void recordSuggestions({
+              data: { mailSessionToken: token, recipients: collected },
+            }).catch(() => {
+              /* fire-and-forget */
+            });
+          }
+        }
+      } catch {
+        /* noop — never fail the send */
+      }
       toast.success("تم إرسال الرسالة");
       onClose();
       onSent();
