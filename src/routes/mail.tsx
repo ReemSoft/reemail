@@ -4812,20 +4812,19 @@ function Composer({
   useEffect(() => {
     (window as unknown as { __mailmaestroComposerGuard?: () => Promise<boolean> })
       .__mailmaestroComposerGuard = () => requestCloseRef.current();
-    const beforeUnload = (e: BeforeUnloadEvent) => {
-      if (isDirtyRef.current) {
-        e.preventDefault();
-        e.returnValue = "";
-      }
-    };
-    window.addEventListener("beforeunload", beforeUnload);
+    // Native beforeunload prompt — trapped ONLY while dirty. Disposable so
+    // the listener is removed exactly once on unmount.
+    const guard = attachBeforeUnloadGuard(window, () => isDirtyRef.current);
     return () => {
-      const w = window as unknown as { __mailmaestroComposerGuard?: (() => Promise<boolean>) | null };
+      const w = window as unknown as {
+        __mailmaestroComposerGuard?: (() => Promise<boolean>) | null;
+      };
       if (w.__mailmaestroComposerGuard) w.__mailmaestroComposerGuard = null;
-      window.removeEventListener("beforeunload", beforeUnload);
+      guard.dispose();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
 
   function addFiles(list: FileList | File[] | null) {
     if (!list) return;
