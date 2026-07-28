@@ -289,6 +289,7 @@ export function createDraftSaver(draftId: string, opts: CreateDraftSaverOptions)
   let pending: {
     snapshot: DraftSnapshot;
     previousRef: DraftServerRef | null;
+    generation: number;
     resolvers: Array<() => void>;
   } | null = null;
 
@@ -298,7 +299,11 @@ export function createDraftSaver(draftId: string, opts: CreateDraftSaverOptions)
     opts.onStatus?.(status);
   }
 
-  async function run(snapshot: DraftSnapshot, previousRef: DraftServerRef | null): Promise<void> {
+  async function run(
+    snapshot: DraftSnapshot,
+    previousRef: DraftServerRef | null,
+    generation: number,
+  ): Promise<void> {
     const mySeq = ++seq;
     latestIssuedSeq = mySeq;
     setStatus("saving");
@@ -309,19 +314,28 @@ export function createDraftSaver(draftId: string, opts: CreateDraftSaverOptions)
       result = { ok: false, code: "UNKNOWN" };
     }
     // Generation guard: only the latest issued sequence may mutate state.
+    // Stale responses never fire `onCompleted`, never touch `serverRef`,
+    // and therefore never mark newer content clean.
     if (mySeq !== latestIssuedSeq) return;
     if (result.ok) {
-      // A UIDPLUS-less server may APPEND successfully but return no UID —
-      // that is still a full remote save, just without a canonical ref.
       if (result.serverRef) opts.onServerRef?.(result.serverRef);
       setStatus("saved");
+      opts.onCompleted?.({
+        completedGeneration: generation,
+        status: "saved",
+        serverRef: result.serverRef,
+      });
     } else {
       // Local persistence is the caller's responsibility (writeDraftDoc)
-      // and happens synchronously before requestSave — a remote failure
+      // and happens synchronously before requestSave. A remote failure
       // therefore leaves the composer in "saved-local" as long as the
-      // local write succeeded. The caller can escalate to "failed" if
-      // writeDraftDoc returned false.
+      // local write succeeded — used only for recoverable network errors.
       setStatus("saved-local");
+      opts.onCompleted?.({
+        completedGeneration: generation,
+        status: "saved-local",
+        code: result.code,
+      });
     }
   }
 
@@ -332,7 +346,7 @@ export function createDraftSaver(draftId: string, opts: CreateDraftSaverOptions)
       pending = null;
       running = true;
       try {
-        await run(p.snapshot, p.previousRef);
+        await run(p.snapshot, p.previousRef, p.generation);
       } finally {
         running = false;
       }
@@ -342,15 +356,21 @@ export function createDraftSaver(draftId: string, opts: CreateDraftSaverOptions)
     }
   }
 
-  function requestSave(snapshot: DraftSnapshot, previousRef: DraftServerRef | null): Promise<void> {
+  function requestSave(
+    snapshot: DraftSnapshot,
+    previousRef: DraftServerRef | null,
+    generation?: number,
+  ): Promise<void> {
+    const gen = typeof generation === "number" ? generation : seq + 1;
     return new Promise<void>((resolve) => {
       if (pending) {
-        // Merge: newest snapshot wins, waiters accumulate.
+        // Merge: newest snapshot + newest generation win, waiters accumulate.
         pending.snapshot = snapshot;
         pending.previousRef = previousRef;
+        pending.generation = gen;
         pending.resolvers.push(resolve);
       } else {
-        pending = { snapshot, previousRef, resolvers: [resolve] };
+        pending = { snapshot, previousRef, generation: gen, resolvers: [resolve] };
       }
       if (inFlight) return;
       inFlight = loop().finally(() => {
