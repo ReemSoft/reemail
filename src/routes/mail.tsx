@@ -151,6 +151,11 @@ import {
   type DraftDocV3,
   type PendingDeleteQueue,
 } from "@/lib/mail-draft-lifecycle";
+import {
+  createAutosaveScheduler,
+  attachInputListener,
+  attachBeforeUnloadGuard,
+} from "@/lib/mail-composer-autosave";
 import { tombstoneGhostMessage } from "@/lib/mail-ghost-cleanup.functions";
 import { indexListMessages } from "@/lib/mail-index.functions";
 import { indexListFolderCounts } from "@/lib/mail-index-counts.functions";
