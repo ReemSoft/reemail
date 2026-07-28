@@ -4538,6 +4538,11 @@ function Composer({
     return out;
   }
 
+  // Publish the latest values to the persistent saveRemote closure refs.
+  filesRef.current = files;
+  resolveExistingAsFilesRef.current = resolveExistingAsFiles;
+
+
   // ----- Draft autosave (debounced): local write first, then remote APPEND -----
   useEffect(() => {
     if (typeof window === "undefined") return;
