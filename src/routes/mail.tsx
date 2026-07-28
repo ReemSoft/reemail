@@ -5216,7 +5216,7 @@ function Composer({
         <div className="flex shrink-0 items-center gap-2 sm:gap-3">
           <span className="hidden text-[11px] text-muted-foreground sm:inline">{savedLabel}</span>
           <button
-            onClick={onClose}
+            onClick={() => void requestClose()}
             className="rounded-lg p-2 text-muted-foreground transition hover:bg-muted hover:text-foreground"
             title="إغلاق (Esc)"
             aria-label="إغلاق"
