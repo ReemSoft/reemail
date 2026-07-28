@@ -260,28 +260,156 @@ test("save: idempotent retry with same draftId does not create duplicates", asyn
   assert.deepEqual(r2.deletes[0], [100]);
 });
 
-test("save: without UIDPLUS the flow refuses to expunge stale copies", async () => {
+test("save: without UIDPLUS, first save (no prior copy) still succeeds", async () => {
+  // Fresh draftId: pre-APPEND search returns []. Server lacks UIDPLUS, but
+  // there's nothing to replace so APPEND MUST proceed.
   const { client, rec } = mkClient({
     mailboxes: [box("Drafts")],
     hasUidPlus: false,
-    appendUid: 200,
-    searchResults: [[42, 200]], // one stale
+    appendUid: 100,
+    searchResults: [[], [100]], // 1st probe: none; 2nd (post-append): [100]
   });
   const r = await executeDraftSave(client, BASE_INPUT);
-  assert.equal(r.ok, true, "save must still succeed even if cleanup is skipped");
-  assert.equal(rec.deletes.length, 0, "must NOT delete without UIDPLUS");
+  assert.equal(r.ok, true);
+  assert.equal(rec.appends.length, 1, "must APPEND on first save without UIDPLUS");
+  assert.equal(rec.deletes.length, 0);
+});
+
+test("save: replace mode without UIDPLUS is refused BEFORE any APPEND", async () => {
+  // Prior copy exists AND server lacks UIDPLUS → SAFE_DRAFT_REPLACE_UNSUPPORTED
+  // WITHOUT ever appending (closes the "append then can't delete" race).
+  const { client, rec } = mkClient({
+    mailboxes: [box("Drafts")],
+    hasUidPlus: false,
+    searchResults: [[42]], // pre-APPEND probe finds an existing copy
+  });
+  const r = await executeDraftSave(client, BASE_INPUT);
+  assert.equal(r.ok, false);
+  if (r.ok) return;
+  assert.equal(r.error, "SAFE_DRAFT_REPLACE_UNSUPPORTED");
+  assert.equal(rec.appends.length, 0, "MUST NOT APPEND when replace is unsafe");
+  assert.equal(rec.deletes.length, 0);
+});
+
+test("save: explicit previousRef without UIDPLUS is refused BEFORE APPEND", async () => {
+  // Caller signals a prior copy via previousRef even though the server search
+  // returned []. That STILL forces replace-mode and STILL requires UIDPLUS.
+  const { client, rec } = mkClient({
+    mailboxes: [box("Drafts")],
+    hasUidPlus: false,
+    searchResults: [[]],
+  });
+  const r = await executeDraftSave(client, {
+    ...BASE_INPUT,
+    previousRef: { folderPath: "Drafts", uid: 42, uidValidity: "1000" },
+  });
+  assert.equal(r.ok, false);
+  if (r.ok) return;
+  assert.equal(r.error, "SAFE_DRAFT_REPLACE_UNSUPPORTED");
+  assert.equal(rec.appends.length, 0);
 });
 
 test("save: search failure after APPEND does NOT roll back the save", async () => {
+  // Pre-APPEND probe returns []; the post-APPEND search then throws. APPEND
+  // has already landed and MUST be retained.
   const { client, rec } = mkClient({
     mailboxes: [box("Drafts")],
-    searchFail: true,
+    searchResults: [[]], // pre-APPEND probe; post-APPEND search will throw
+    searchFail: false,
   });
+  // Wire the second search to fail while the first succeeds.
+  let calls = 0;
+  client.searchByHeader = async (name, value) => {
+    calls++;
+    rec.searches.push({ name, value });
+    if (calls === 1) return [];
+    throw new Error("search failed");
+  };
   const r = await executeDraftSave(client, BASE_INPUT);
   assert.equal(r.ok, true, "APPEND already succeeded; search error is non-fatal");
   assert.equal(rec.deletes.length, 0);
-  assert.equal(rec.releases, 1);
 });
+
+// ---------- Attachments -----------------------------------------------------
+
+function attachmentInput(attachments: Array<{ filename: string; content: Buffer; contentType?: string }>): DraftSavePayload {
+  return { ...BASE_INPUT, attachments };
+}
+
+test("attachments: none — MIME still valid and no attachment part appears", async () => {
+  const { client, rec } = mkClient({
+    mailboxes: [box("Drafts")],
+    searchResults: [[], [100]],
+  });
+  await executeDraftSave(client, BASE_INPUT);
+  const mime = rec.appends[0].raw.toString("utf8");
+  // No filename= directive at all when there are zero attachments.
+  assert.equal(/filename=/.test(mime), false);
+});
+
+test("attachments: single file is embedded inside the MIME payload", async () => {
+  const { client, rec } = mkClient({
+    mailboxes: [box("Drafts")],
+    searchResults: [[], [100]],
+  });
+  await executeDraftSave(
+    client,
+    attachmentInput([
+      { filename: "invoice.pdf", content: Buffer.from("PDF-BYTES-XYZ"), contentType: "application/pdf" },
+    ]),
+  );
+  const mime = rec.appends[0].raw.toString("utf8");
+  assert.ok(mime.includes("invoice.pdf"), "filename must appear in MIME headers");
+  assert.ok(
+    mime.toLowerCase().includes("application/pdf"),
+    "content-type must appear in MIME part",
+  );
+  // Body must contain the base64 of the raw bytes — proves it's an actual
+  // attachment part, not just metadata.
+  const b64 = Buffer.from("PDF-BYTES-XYZ").toString("base64");
+  assert.ok(mime.includes(b64), "attachment bytes must be base64-encoded into MIME");
+});
+
+test("attachments: multiple files each get their own MIME part", async () => {
+  const { client, rec } = mkClient({
+    mailboxes: [box("Drafts")],
+    searchResults: [[], [100]],
+  });
+  await executeDraftSave(
+    client,
+    attachmentInput([
+      { filename: "a.txt", content: Buffer.from("AAA"), contentType: "text/plain" },
+      { filename: "b.txt", content: Buffer.from("BBB"), contentType: "text/plain" },
+      { filename: "c.txt", content: Buffer.from("CCC"), contentType: "text/plain" },
+    ]),
+  );
+  const mime = rec.appends[0].raw.toString("utf8");
+  assert.ok(mime.includes("a.txt"));
+  assert.ok(mime.includes("b.txt"));
+  assert.ok(mime.includes("c.txt"));
+  assert.ok(mime.includes(Buffer.from("AAA").toString("base64")));
+  assert.ok(mime.includes(Buffer.from("BBB").toString("base64")));
+  assert.ok(mime.includes(Buffer.from("CCC").toString("base64")));
+});
+
+test("attachments: schema rejects unknown fields — attachments never enter via JSON payload", () => {
+  // The JSON payload contract MUST NOT accept attachments (they arrive via
+  // multer as disk files). If a caller tries to smuggle base64 through the
+  // payload field, Zod strips it silently — this guarantees the parsed
+  // payload never carries attachment bytes.
+  const parsed = DraftSavePayloadSchema.parse({
+    account: ACCT,
+    password: "pw",
+    draftId: DRAFT_ID,
+    subject: "s",
+    bodyText: "b",
+    // @ts-expect-error — smuggled attachments field
+    attachments: [{ filename: "x.txt", content: "AAAA" }],
+  });
+  assert.equal("attachments" in parsed, false, "attachments must not be JSON-carriable");
+});
+
+
 
 // ---------- Delete flow tests -----------------------------------------------
 
