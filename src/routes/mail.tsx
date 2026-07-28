@@ -4730,7 +4730,7 @@ function Composer({
             getSuggestions={suggestFor}
             onHideSuggestion={hideOne}
             rightSlot={
-              <div className="flex shrink-0 items-center gap-1 border-r border-border/60 pr-2 mr-2">
+              <div className="flex shrink-0 flex-wrap items-center gap-1 sm:border-r sm:border-border/60 sm:pr-2 sm:mr-2">
                 {!showCc && (
                   <button
                     type="button"
