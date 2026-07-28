@@ -2854,7 +2854,8 @@ function MailApp() {
                 return (
                   <button
                     key={f}
-                    onClick={() => {
+                    onClick={async () => {
+                      if (!(await guardComposerNav())) return;
                       setFolder(f);
                       setSelectedId(null);
                       setSelectedMessage(null);
