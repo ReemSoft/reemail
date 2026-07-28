@@ -281,8 +281,10 @@ export function createDraftSaver(
     }
     // Generation guard: only the latest issued sequence may mutate state.
     if (mySeq !== latestIssuedSeq) return;
-    if (result.ok && result.serverRef) {
-      opts.onServerRef?.(result.serverRef);
+    if (result.ok) {
+      // A UIDPLUS-less server may APPEND successfully but return no UID —
+      // that is still a full remote save, just without a canonical ref.
+      if (result.serverRef) opts.onServerRef?.(result.serverRef);
       setStatus("saved");
     } else {
       // Local persistence is the caller's responsibility (writeDraftDoc)
