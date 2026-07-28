@@ -4530,16 +4530,25 @@ function Composer({
             <div className="flex items-center justify-between gap-2">
               <label className="text-sm font-medium text-foreground">نص الرسالة</label>
               <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  title={plainMode ? "الوضع المنسّق" : "الوضع النصّي"}
+                  onClick={() => setPlainMode((v) => !v)}
+                  className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+                >
+                  <Type className="h-3.5 w-3.5" />
+                </button>
                 <Popover>
                   <PopoverTrigger asChild>
                     <button
                       type="button"
-                      title="المزيد من الخيارات"
-                      aria-label="المزيد من الخيارات"
+                      title="خيارات متقدمة"
+                      aria-label="خيارات متقدمة"
                       onMouseDown={(e) => e.preventDefault()}
-                      className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+                      className="inline-flex h-7 items-center gap-1 rounded-md px-1.5 text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
                     >
                       <MoreVertical className="h-3.5 w-3.5" />
+                      <span>متقدم</span>
                     </button>
                   </PopoverTrigger>
                   <PopoverContent align="end" className="w-auto p-2">
@@ -4580,14 +4589,6 @@ function Composer({
                     </div>
                   </PopoverContent>
                 </Popover>
-                <button
-                  type="button"
-                  title={plainMode ? "الوضع المنسّق" : "الوضع النصّي"}
-                  onClick={() => setPlainMode((v) => !v)}
-                  className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
-                >
-                  <Type className="h-3.5 w-3.5" />
-                </button>
               </div>
             </div>
             <div className="overflow-hidden rounded-lg border border-input bg-background transition focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/20">
@@ -4659,7 +4660,6 @@ function Composer({
                       { value: "pre", label: "كود" },
                     ]}
                   />
-                  <span className="mx-1 h-4 w-px bg-border" />
                   <ToolbarButton title="عريض (Ctrl+B)" active={fmtState.bold} onMouseDown={() => exec("bold")}>
                     <Bold className="h-3.5 w-3.5" />
                   </ToolbarButton>
@@ -4669,7 +4669,6 @@ function Composer({
                   <ToolbarButton title="تسطير (Ctrl+U)" active={fmtState.underline} onMouseDown={() => exec("underline")}>
                     <Underline className="h-3.5 w-3.5" />
                   </ToolbarButton>
-                  <span className="mx-1 h-4 w-px bg-border" />
                   {/* Colors */}
                   <label
                     title="لون النص"
@@ -4695,7 +4694,6 @@ function Composer({
                       className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
                     />
                   </label>
-                  <span className="mx-1 h-4 w-px bg-border" />
                   {/* Alignment */}
                   <ToolbarButton title="محاذاة يمين" active={fmtState.justifyRight} onMouseDown={() => exec("justifyRight")}>
                     <AlignRight className="h-3.5 w-3.5" />
@@ -4706,7 +4704,6 @@ function Composer({
                   <ToolbarButton title="محاذاة يسار" active={fmtState.justifyLeft} onMouseDown={() => exec("justifyLeft")}>
                     <AlignLeft className="h-3.5 w-3.5" />
                   </ToolbarButton>
-                  <span className="mx-1 h-4 w-px bg-border" />
                   {/* Lists */}
                   <ToolbarButton title="قائمة نقطية" active={fmtState.insertUnorderedList} onMouseDown={() => exec("insertUnorderedList")}>
                     <List className="h-3.5 w-3.5" />
@@ -4714,12 +4711,10 @@ function Composer({
                   <ToolbarButton title="قائمة مرقمة" active={fmtState.insertOrderedList} onMouseDown={() => exec("insertOrderedList")}>
                     <ListOrdered className="h-3.5 w-3.5" />
                   </ToolbarButton>
-                  <span className="mx-1 h-4 w-px bg-border" />
                   {/* Link */}
                   <ToolbarButton title="إدراج رابط" onMouseDown={promptLink}>
                     <Link2 className="h-3.5 w-3.5" />
                   </ToolbarButton>
-                  <span className="mx-1 h-4 w-px bg-border" />
                   {/* Undo / Redo */}
                   <ToolbarButton title="تراجع (Ctrl+Z)" onMouseDown={() => exec("undo")}>
                     <Undo2 className="h-3.5 w-3.5" />
@@ -4727,7 +4722,6 @@ function Composer({
                   <ToolbarButton title="إعادة (Ctrl+Y)" onMouseDown={() => exec("redo")}>
                     <Redo2 className="h-3.5 w-3.5" />
                   </ToolbarButton>
-                  {extensions.length > 0 && <span className="mx-1 h-4 w-px bg-border" />}
                   {extensions.map((ext) => (
                     <button
                       key={ext.id}
