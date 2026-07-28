@@ -4307,6 +4307,8 @@ function Composer({
   const isDirtyRef = useRef<boolean>(false);
   // Kept for the header "تم الحفظ منذ …" UI only — not the dirty source of truth.
   const lastSavedAtRef = useRef<number>(initialDoc?.updatedAt ?? 0);
+  // Diagnostic: last hard-failure code from the saver (null on success).
+  const lastFailCodeRef = useRef<string | null>(null);
   const recomputeDirty = () => {
     isDirtyRef.current = generationRef.current > savedGenerationRef.current;
   };
@@ -4423,7 +4425,7 @@ function Composer({
       },
       onStatus: setSaveStatus,
       onServerRef: (r) => setServerRef(r),
-      onCompleted: ({ completedGeneration, status }) => {
+      onCompleted: ({ completedGeneration, status, code }) => {
         // Advance the clean marker ONLY when a save actually persisted
         // (remote success, or local-fallback on NETWORK). A hard failure
         // (SESSION_REQUIRED, APPEND_FAILED, etc.) MUST leave the composer
@@ -4435,6 +4437,18 @@ function Composer({
           }
           lastSavedAtRef.current = Date.now();
           setSavedAt(lastSavedAtRef.current);
+          lastFailCodeRef.current = null;
+        } else if (status === "failed") {
+          // Diagnostic: capture the coarse code so the UI can surface it
+          // (helps distinguish APPEND_FAILED / SAFE_DRAFT_REPLACE_UNSUPPORTED
+          // / SESSION_REQUIRED / IMAP_ERROR / UNKNOWN without leaking PII).
+          lastFailCodeRef.current = code ?? "UNKNOWN";
+          // Also log to the browser console for support triage. No PII.
+          try {
+            console.error("[draft-save] failed code=", lastFailCodeRef.current);
+          } catch {
+            /* noop */
+          }
         }
         // status === "failed" → no savedGeneration advance, no savedAt bump.
       },
@@ -5322,7 +5336,9 @@ function Composer({
         return "saved_local";
       }
       // Hard failure — do NOT show a "success" toast.
-      toast.error("تعذّر حفظ المسودّة على الخادم — حاول لاحقاً");
+      toast.error(
+        `تعذّر حفظ المسودّة على الخادم — حاول لاحقاً (${lastFailCodeRef.current ?? "UNKNOWN"})`,
+      );
       return "failed";
     } finally {
       savingNowRef.current = false;
