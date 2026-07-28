@@ -121,7 +121,17 @@ async function messageExistsInFolder(
   }
 }
 
-async function buildMime(payload: SendMessagePayload): Promise<{ raw: Buffer; messageId: string }> {
+/**
+ * Build a MIME message. Optional `extraHeaders` are injected as top-level
+ * headers on the outer message (used by the drafts flow to stamp
+ * `X-MailMaestro-Draft-ID` so IMAP header search can locate the copy for
+ * idempotent APPEND + selective delete). Exported for the drafts module and
+ * the drafts test suite; not part of the public HTTP contract.
+ */
+export async function buildMime(
+  payload: SendMessagePayload,
+  extraHeaders?: Record<string, string>,
+): Promise<{ raw: Buffer; messageId: string }> {
   const composerOpts: Record<string, unknown> = {
     from: payload.from.name ? `"${payload.from.name}" <${payload.from.email}>` : payload.from.email,
     to: payload.to.map((t) => (t.name ? `"${t.name}" <${t.email}>` : t.email)).join(", "),
@@ -146,10 +156,12 @@ async function buildMime(payload: SendMessagePayload): Promise<{ raw: Buffer; me
       contentType: a.contentType,
     }));
   }
+  if (extraHeaders && Object.keys(extraHeaders).length > 0) {
+    composerOpts.headers = { ...extraHeaders };
+  }
 
   const mc = new MailComposer(composerOpts);
   const compiled = mc.compile();
-  // Force messageId generation now so the same ID flows through SMTP + APPEND.
   const messageId: string = compiled.messageId();
   const raw: Buffer = await new Promise((resolve, reject) => {
     compiled.build((err: Error | null, msg: Buffer) => {
@@ -159,6 +171,7 @@ async function buildMime(payload: SendMessagePayload): Promise<{ raw: Buffer; me
   });
   return { raw, messageId };
 }
+
 
 /**
  * Send the message via SMTP, then best-effort save a copy in Sent:
