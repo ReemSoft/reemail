@@ -301,6 +301,15 @@ export async function executeDraftSave(
     const folderPath = resolveDraftsPath(mailboxes);
     if (!folderPath) return { ok: false, error: "NO_DRAFTS_FOLDER" };
 
+    // Resolve a SAFE Trash path for the MOVE fallback used on non-UIDPLUS
+    // servers that DO advertise RFC 6851 MOVE. Server-side resolution only:
+    // SPECIAL-USE first, then a tight allowlist. Never trusts caller input,
+    // never creates a folder, and MUST differ from the Drafts folder itself
+    // (otherwise the "move stale to Trash" step would be a no-op).
+    const rawTrashPath = resolveTrashPath(mailboxes);
+    const trashPath =
+      rawTrashPath && rawTrashPath !== folderPath ? rawTrashPath : undefined;
+
     // Build MIME (with the sticky draft id header) BEFORE we take any locks
     // so IMAP holds nothing while nodemailer compiles.
     const { raw, messageId } = await buildMime(draftMimePayload(input), {
@@ -332,7 +341,12 @@ export async function executeDraftSave(
     // Replace mode = we WILL need to delete an old copy after appending.
     // Trigger it either from an actual match OR an explicit caller hint.
     const replaceMode = priorCopies.length > 0 || Boolean(input.previousRef);
-    if (replaceMode && !client.hasUidPlus()) {
+    const uidPlus = client.hasUidPlus();
+    // MOVE fallback is only available when the server ACTUALLY advertises
+    // MOVE AND we found a safe Trash target distinct from Drafts.
+    const canMoveFallback = !uidPlus && client.hasMove() && Boolean(trashPath);
+    const canSafelyReplace = uidPlus || canMoveFallback;
+    if (replaceMode && !canSafelyReplace) {
       // Refuse BEFORE APPEND. No side effects on the mailbox.
       return { ok: false, error: "SAFE_DRAFT_REPLACE_UNSUPPORTED" };
     }
@@ -350,7 +364,9 @@ export async function executeDraftSave(
 
     // 3) Reopen with lock to re-scan for all copies of this draftId.
     //    Canonical = highest UID within the current UIDVALIDITY (newest
-    //    wins). Every other UID is stale and MUST be selectively expunged.
+    //    wins). Every other UID is stale and MUST be selectively cleaned up
+    //    — via UID EXPUNGE on UIDPLUS servers, or UID MOVE to Trash on the
+    //    MOVE-only fallback. A global EXPUNGE is NEVER used here.
     //
     //    LEGACY (M4-A): drafts saved by older builds don't carry the
     //    `X-MailMaestro-Draft-ID` header, so a header search can never find
@@ -361,11 +377,11 @@ export async function executeDraftSave(
     //        (never a caller-supplied path like INBOX).
     //      * previousRef.uidValidity equals the CURRENT mailbox UIDVALIDITY
     //        (a bump invalidates the UID entirely).
-    //      * UIDPLUS is supported (guaranteed here because replace-mode
-    //        already refused non-UIDPLUS servers pre-APPEND).
+    //      * UIDPLUS OR MOVE fallback is available (guaranteed here because
+    //        replace-mode already refused otherwise pre-APPEND).
     //      * previousRef.uid is NOT the freshly-appended canonical UID.
     //    Within a single UIDVALIDITY, IMAP guarantees UIDs are never
-    //    reused, so deleting a UID that no longer exists is a harmless
+    //    reused, so acting on a UID that no longer exists is a harmless
     //    no-op — it can never target an unrelated message.
     const opened = await client.openWithLock(folderPath);
     try {
@@ -390,23 +406,39 @@ export async function executeDraftSave(
       const stale = postSearchOk ? matched.filter((u) => u !== canonical) : [];
 
       // Legacy previousRef cleanup — union with header-matched stale UIDs.
-      const toDelete = new Set<number>(stale);
+      const toCleanup = new Set<number>(stale);
       const prev = input.previousRef;
-      const canDeletePrevious =
+      const canCleanupPrevious =
         !!prev &&
         prev.folderPath === folderPath &&
         String(prev.uidValidity) === uidValidity &&
-        client.hasUidPlus() &&
+        canSafelyReplace &&
         typeof canonical === "number" &&
         prev.uid !== canonical;
-      if (canDeletePrevious && prev) toDelete.add(prev.uid);
+      if (canCleanupPrevious && prev) toCleanup.add(prev.uid);
 
-      if (toDelete.size > 0 && client.hasUidPlus()) {
-        try {
-          await client.deleteByUid([...toDelete]);
-        } catch {
-          // Cleanup failure MUST NOT fail the save. A future save/retry
-          // will re-scan and converge.
+      if (toCleanup.size > 0) {
+        // Belt-and-braces: never touch the canonical UID.
+        const cleanupList =
+          typeof canonical === "number"
+            ? [...toCleanup].filter((u) => u !== canonical)
+            : [...toCleanup];
+        if (cleanupList.length > 0) {
+          if (uidPlus) {
+            try {
+              await client.deleteByUid(cleanupList);
+            } catch {
+              // Cleanup failure MUST NOT fail the save. Next save converges.
+            }
+          } else if (canMoveFallback && trashPath) {
+            try {
+              await client.moveByUid(cleanupList, trashPath);
+            } catch {
+              // MOVE failure is non-fatal: the freshly-APPENDed canonical
+              // remains; a subsequent save re-scans and retries convergence.
+              // We DO NOT fall back to a global EXPUNGE under any condition.
+            }
+          }
         }
       }
       void priorSearchFailed;
