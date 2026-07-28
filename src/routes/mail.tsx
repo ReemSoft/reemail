@@ -151,6 +151,11 @@ import {
   type DraftDocV3,
   type PendingDeleteQueue,
 } from "@/lib/mail-draft-lifecycle";
+import {
+  createAutosaveScheduler,
+  attachInputListener,
+  attachBeforeUnloadGuard,
+} from "@/lib/mail-composer-autosave";
 import { tombstoneGhostMessage } from "@/lib/mail-ghost-cleanup.functions";
 import { indexListMessages } from "@/lib/mail-index.functions";
 import { indexListFolderCounts } from "@/lib/mail-index-counts.functions";
@@ -4291,23 +4296,29 @@ function Composer({
   const [savedAt, setSavedAt] = useState<number | null>(() => initialDoc?.updatedAt ?? null);
 
   // ----- Dirty tracking + guarded close -----
-  // bodyRev bumps on every editor `input` event so the autosave effect can
-  // observe body edits (contentEditable does NOT trigger React re-renders).
-  const [bodyRev, setBodyRev] = useState(0);
-  // lastEdit vs lastSave: dirty = we typed after the last successful save.
-  const lastEditAtRef = useRef<number>(0);
-  const lastSavedAtRef = useRef<number>(initialDoc?.updatedAt ?? 0);
+  // Generation-based dirty: `generation` bumps on every user edit (body input
+  // or structural field change). `savedGeneration` only advances when the
+  // saver reports a completion for THAT generation via `onCompleted`. A
+  // stale response never marks newer content clean.
+  const generationRef = useRef<number>(0);
+  const savedGenerationRef = useRef<number>(0);
   const isDirtyRef = useRef<boolean>(false);
+  // Kept for the header "تم الحفظ منذ …" UI only — not the dirty source of truth.
+  const lastSavedAtRef = useRef<number>(initialDoc?.updatedAt ?? 0);
   const recomputeDirty = () => {
-    isDirtyRef.current = lastEditAtRef.current > lastSavedAtRef.current;
+    isDirtyRef.current = generationRef.current > savedGenerationRef.current;
   };
   const markEdited = () => {
-    lastEditAtRef.current = Date.now();
+    generationRef.current += 1;
     recomputeDirty();
   };
+  // bodyRev mirrors generation for the autosave effect dependency (React
+  // needs a value in deps; contentEditable does not trigger re-renders).
+  const [bodyRev, setBodyRev] = useState(0);
   const [closePrompt, setClosePrompt] = useState<{
     resolve: (choice: "save" | "discard" | "cancel") => void;
   } | null>(null);
+
 
   // ----- Server-side draft saver (bridge APPEND) + pending-delete queue -----
   const bridgeSaveDraftFn = useServerFn(bridgeSaveDraft);
@@ -4411,8 +4422,22 @@ function Composer({
       },
       onStatus: setSaveStatus,
       onServerRef: (r) => setServerRef(r),
+      onCompleted: ({ completedGeneration, status }) => {
+        // Advance the clean marker only when a save actually persisted
+        // (remote or local-fallback). Never regress: a coalesced completion
+        // may report a generation older than the current savedGeneration.
+        if (completedGeneration > savedGenerationRef.current) {
+          savedGenerationRef.current = completedGeneration;
+          recomputeDirty();
+        }
+        if (status === "saved" || status === "saved-local") {
+          lastSavedAtRef.current = Date.now();
+          setSavedAt(lastSavedAtRef.current);
+        }
+      },
     });
   }
+
 
   const [plainMode, setPlainMode] = useState(false);
   const [fontFamily, setFontFamily] = useState<string>("IBM Plex Sans Arabic, sans-serif");
@@ -4603,75 +4628,118 @@ function Composer({
   filesRef.current = files;
   resolveExistingAsFilesRef.current = resolveExistingAsFiles;
 
-  // ----- Draft autosave (debounced): local write first, then remote APPEND -----
+  // ----- Draft autosave (scheduled): local write first, then remote APPEND -----
+  // Persistent, disposable scheduler + input/beforeunload guards. All three
+  // helpers expose idempotent .dispose() and are torn down inside useEffect
+  // cleanup so no callback runs after unmount.
+  const autosaveRef = useRef<ReturnType<typeof createAutosaveScheduler> | null>(null);
+  // Latest snapshot fields captured for the scheduler's callback (avoids
+  // stale-closure reads without re-instantiating the scheduler each render).
+  const snapshotInputsRef = useRef({
+    to,
+    cc,
+    bcc,
+    subject,
+    showCc,
+    showBcc,
+    accountEmail,
+    sending,
+    existingKeptLen: existingKept.length,
+    filesLen: files.length,
+  });
+  snapshotInputsRef.current = {
+    to,
+    cc,
+    bcc,
+    subject,
+    showCc,
+    showBcc,
+    accountEmail,
+    sending,
+    existingKeptLen: existingKept.length,
+    filesLen: files.length,
+  };
+
   useEffect(() => {
     if (typeof window === "undefined") return;
-    if (sending) return;
-    const html = editorRef.current?.innerHTML ?? "";
-    const isEmpty =
-      to.length === 0 &&
-      cc.length === 0 &&
-      bcc.length === 0 &&
-      !subject &&
-      !html.trim() &&
-      existingKept.length === 0 &&
-      files.length === 0;
-    const t = window.setTimeout(() => {
-      if (isEmpty) {
-        clearDraftDoc(window.localStorage, accountEmail);
-        setSavedAt(null);
-        setSaveStatus("idle");
-        lastSavedAtRef.current = Date.now();
-        recomputeDirty();
-        return;
-      }
-      const snapshot: DraftSnapshot = {
-        to,
-        cc,
-        bcc,
-        subject,
-        html,
-        showCc,
-        showBcc,
-      };
-      const persisted = writeDraftDoc(window.localStorage, accountEmail, {
-        version: 3,
-        draftId,
-        snapshot,
-        serverRef: serverRefRef.current,
-        updatedAt: Date.now(),
-      });
-      if (!persisted) {
-        setSaveStatus("failed");
-        return;
-      }
-      const now = Date.now();
-      setSavedAt(now);
-      lastSavedAtRef.current = now;
-      recomputeDirty();
-      void saverRef.current?.requestSave(snapshot, serverRefRef.current);
-    }, 800);
-    return () => window.clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [to, cc, bcc, subject, showCc, showBcc, accountEmail, draftId, sending, existingKept, files, bodyRev]);
+    const scheduler = createAutosaveScheduler({
+      delayMs: 800,
+      onFire: () => {
+        const s = snapshotInputsRef.current;
+        if (s.sending) return;
+        const html = editorRef.current?.innerHTML ?? "";
+        const isEmpty =
+          s.to.length === 0 &&
+          s.cc.length === 0 &&
+          s.bcc.length === 0 &&
+          !s.subject &&
+          !html.trim() &&
+          s.existingKeptLen === 0 &&
+          s.filesLen === 0;
+        if (isEmpty) {
+          clearDraftDoc(window.localStorage, s.accountEmail);
+          setSavedAt(null);
+          setSaveStatus("idle");
+          // Empty draft = nothing to persist; treat current gen as saved.
+          savedGenerationRef.current = generationRef.current;
+          recomputeDirty();
+          return;
+        }
+        const snapshot: DraftSnapshot = {
+          to: s.to,
+          cc: s.cc,
+          bcc: s.bcc,
+          subject: s.subject,
+          html,
+          showCc: s.showCc,
+          showBcc: s.showBcc,
+        };
+        const persisted = writeDraftDoc(window.localStorage, s.accountEmail, {
+          version: 3,
+          draftId,
+          snapshot,
+          serverRef: serverRefRef.current,
+          updatedAt: Date.now(),
+        });
+        if (!persisted) {
+          setSaveStatus("failed");
+          return;
+        }
+        // Capture generation at schedule-fire time and pass it into the
+        // saver. `savedGeneration` will only advance when onCompleted echoes
+        // this exact value (or a newer coalesced one) — a stale response
+        // can never mark newer content clean.
+        const genAtFire = generationRef.current;
+        void saverRef.current?.requestSave(snapshot, serverRefRef.current, genAtFire);
+      },
+    });
+    autosaveRef.current = scheduler;
+    return () => {
+      scheduler.dispose();
+      autosaveRef.current = null;
+    };
+  }, [draftId]);
 
-  // Editor input listener: bump bodyRev so the autosave effect observes body
-  // edits (contentEditable does not trigger React re-renders on its own).
+  // Reschedule whenever any user-editable field changes (body edits bump
+  // bodyRev via the input listener below; recipient/subject/attachment
+  // changes flow through the deps array).
+  useEffect(() => {
+    autosaveRef.current?.schedule();
+  }, [to, cc, bcc, subject, showCc, showBcc, existingKept, files, bodyRev]);
+
+  // Editor body input listener — attached via a disposable helper so cleanup
+  // runs exactly once. Per spec: `input` event on the editor body ONLY.
   useEffect(() => {
     const el = editorRef.current;
     if (!el) return;
-    const onInput = () => {
+    const disposable = attachInputListener(el, () => {
       setBodyRev((n) => n + 1);
       markEdited();
-    };
-    el.addEventListener("input", onInput);
-    el.addEventListener("paste", onInput);
-    return () => {
-      el.removeEventListener("input", onInput);
-      el.removeEventListener("paste", onInput);
-    };
+    });
+    return () => disposable.dispose();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
 
   // Mark edited on structural field changes (recipients, subject, attachments).
   const editMarkMountedRef = useRef(false);
@@ -4690,8 +4758,13 @@ function Composer({
     closePromptRef.current = closePrompt;
   }, [closePrompt]);
 
+  // Prevents double-navigation / double-close races (rapid clicks, ESC while
+  // an in-flight save is finishing, etc.).
+  const closingRef = useRef(false);
   async function requestClose(): Promise<boolean> {
+    if (closingRef.current) return false;
     if (!isDirtyRef.current) {
+      closingRef.current = true;
       onClose();
       return true;
     }
@@ -4700,39 +4773,67 @@ function Composer({
     });
     if (choice === "cancel") return false;
     if (choice === "save") {
+      closingRef.current = true;
       try {
+        // Await the save round-trip before tearing down; failure keeps the
+        // composer open so no user content is silently lost.
         await saveDraftNow();
+        if (isDirtyRef.current) {
+          // Save reported permanent failure (dirty still true) — abort close.
+          closingRef.current = false;
+          return false;
+        }
       } catch {
-        /* toast handled inside */
+        closingRef.current = false;
+        return false;
       }
       onClose();
       return true;
     }
     // discard
+    closingRef.current = true;
     try {
       if (typeof window !== "undefined") {
         clearDraftDoc(window.localStorage, accountEmail);
       }
-      // Best-effort server delete when a server ref exists.
+      // Best-effort server delete when a server ref exists; on failure hand
+      // the delete to the pending queue for the next composer session.
       const ref = serverRefRef.current;
       if (ref) {
         const token = session.mailSessionToken;
         if (token) {
-          void bridgeDeleteDraftFn({
+          bridgeDeleteDraftFn({
             data: { mailSessionToken: token, draftId, previousRef: ref },
-          }).catch(() => {
-            /* fire-and-forget */
-          });
+          })
+            .then((res) => {
+              if (!res?.ok) {
+                pendingQueueRef.current?.enqueue(accountEmail, {
+                  draftId,
+                  previousRef: ref,
+                });
+              }
+            })
+            .catch(() => {
+              pendingQueueRef.current?.enqueue(accountEmail, {
+                draftId,
+                previousRef: ref,
+              });
+            });
+        } else {
+          pendingQueueRef.current?.enqueue(accountEmail, { draftId, previousRef: ref });
         }
       }
     } catch {
       /* noop */
     }
+    // Force clean so beforeunload/guard don't re-trap on the way out.
+    savedGenerationRef.current = generationRef.current;
     lastSavedAtRef.current = Date.now();
     recomputeDirty();
     onClose();
     return true;
   }
+
 
   // Expose a global guard so parent nav actions (folder switch, list click,
   // new-message button) can prompt before tearing the composer down.
@@ -4744,20 +4845,19 @@ function Composer({
   useEffect(() => {
     (window as unknown as { __mailmaestroComposerGuard?: () => Promise<boolean> })
       .__mailmaestroComposerGuard = () => requestCloseRef.current();
-    const beforeUnload = (e: BeforeUnloadEvent) => {
-      if (isDirtyRef.current) {
-        e.preventDefault();
-        e.returnValue = "";
-      }
-    };
-    window.addEventListener("beforeunload", beforeUnload);
+    // Native beforeunload prompt — trapped ONLY while dirty. Disposable so
+    // the listener is removed exactly once on unmount.
+    const guard = attachBeforeUnloadGuard(window, () => isDirtyRef.current);
     return () => {
-      const w = window as unknown as { __mailmaestroComposerGuard?: (() => Promise<boolean>) | null };
+      const w = window as unknown as {
+        __mailmaestroComposerGuard?: (() => Promise<boolean>) | null;
+      };
       if (w.__mailmaestroComposerGuard) w.__mailmaestroComposerGuard = null;
-      window.removeEventListener("beforeunload", beforeUnload);
+      guard.dispose();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
 
   function addFiles(list: FileList | File[] | null) {
     if (!list) return;
@@ -5158,41 +5258,55 @@ function Composer({
     }
   })();
 
+  // Prevents double-submit of manual saves (rapid Ctrl+S / button clicks).
+  const savingNowRef = useRef(false);
   async function saveDraftNow() {
     if (typeof window === "undefined") return;
-    const html = sanitizeComposerHtml(editorRef.current?.innerHTML ?? "");
-    const isEmpty =
-      to.length === 0 && cc.length === 0 && bcc.length === 0 && !subject && !html.trim();
-    if (isEmpty) {
-      toast.info("لا يوجد محتوى للحفظ");
-      return;
-    }
-    const snapshot: DraftSnapshot = { to, cc, bcc, subject, html, showCc, showBcc };
-    const persisted = writeDraftDoc(window.localStorage, accountEmail, {
-      version: 3,
-      draftId,
-      snapshot,
-      serverRef: serverRefRef.current,
-      updatedAt: Date.now(),
-    });
-    if (!persisted) {
-      setSaveStatus("failed");
-      toast.error("تعذّر حفظ المسودّة");
-      return;
-    }
-    setSavedAt(Date.now());
+    if (savingNowRef.current) return;
+    savingNowRef.current = true;
     try {
-      await saverRef.current?.requestSave(snapshot, serverRefRef.current);
-      // Status is set by the saver (saved | saved-local); toast reflects it.
-      if (saverRef.current?.getStatus() === "saved") {
-        toast.success("تم حفظ المسودّة");
-      } else {
+      // Any pending debounced save must NOT race the explicit save.
+      autosaveRef.current?.cancel();
+      const html = sanitizeComposerHtml(editorRef.current?.innerHTML ?? "");
+      const isEmpty =
+        to.length === 0 && cc.length === 0 && bcc.length === 0 && !subject && !html.trim();
+      if (isEmpty) {
+        toast.info("لا يوجد محتوى للحفظ");
+        return;
+      }
+      const snapshot: DraftSnapshot = { to, cc, bcc, subject, html, showCc, showBcc };
+      const persisted = writeDraftDoc(window.localStorage, accountEmail, {
+        version: 3,
+        draftId,
+        snapshot,
+        serverRef: serverRefRef.current,
+        updatedAt: Date.now(),
+      });
+      if (!persisted) {
+        setSaveStatus("failed");
+        toast.error("تعذّر حفظ المسودّة");
+        return;
+      }
+      // Capture the caller's generation and await the round-trip. The
+      // saver's onCompleted will advance `savedGeneration` — so on the
+      // "save then close" path the composer will read clean immediately.
+      const genAtRequest = generationRef.current;
+      try {
+        await saverRef.current?.requestSave(snapshot, serverRefRef.current, genAtRequest);
+        if (saverRef.current?.getStatus() === "saved") {
+          toast.success("تم حفظ المسودّة");
+        } else {
+          toast.success("تم حفظ المسودّة محلياً");
+        }
+      } catch {
         toast.success("تم حفظ المسودّة محلياً");
       }
-    } catch {
-      toast.success("تم حفظ المسودّة محلياً");
+    } finally {
+      savingNowRef.current = false;
     }
   }
+
+
 
   return (
     <div

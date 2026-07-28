@@ -222,6 +222,26 @@ export function clearDraftDoc(storage: DraftStorageLike, accountEmail: string): 
 
 // ---------------------------------------------------------------- Saver
 
+export interface DraftSaveCompletion {
+  /**
+   * Generation number of the SNAPSHOT that was just handed to the remote
+   * (whether the remote succeeded or failed). This is the value the caller
+   * passed to `requestSave(..., generation)`; when a save is coalesced
+   * multiple times, only the most-recently-merged generation is reported —
+   * older generations are silently discarded because their content has been
+   * superseded before the network round-trip finished.
+   *
+   * REQUIRED (not optional) so callers relying on the generation-based
+   * dirty model can advance `savedGeneration` unconditionally.
+   */
+  completedGeneration: number;
+  status: DraftSaveStatus;
+  /** Populated only when `status === "saved"` and the bridge returned a UID. */
+  serverRef?: DraftServerRef;
+  /** Coarse error code from the bridge — present when the remote failed. */
+  code?: string;
+}
+
 export interface CreateDraftSaverOptions {
   saveRemote: (input: {
     draftId: string;
@@ -230,17 +250,32 @@ export interface CreateDraftSaverOptions {
   }) => Promise<SaveRemoteResult>;
   onStatus?: (status: DraftSaveStatus) => void;
   onServerRef?: (ref: DraftServerRef) => void;
+  /**
+   * Fires after each save run settles (success and soft-failure). Stale
+   * responses (superseded by a newer request before their round-trip
+   * finished) do NOT fire this callback — they are dropped silently, so
+   * the caller's `savedGeneration` never advances past the truly-persisted
+   * revision and a stale reply cannot mark newer content clean.
+   */
+  onCompleted?: (info: DraftSaveCompletion) => void;
 }
 
 export interface DraftSaver {
   /**
    * Request a save. If another save is in flight this call is coalesced:
-   * the newest snapshot is captured and a follow-up run is scheduled to
-   * fire exactly once when the in-flight save settles. The returned
-   * promise resolves when THIS caller's snapshot has been offered to the
-   * remote (whether success or failure).
+   * the newest snapshot + generation are captured and a follow-up run is
+   * scheduled to fire exactly once when the in-flight save settles.
+   * `generation` is the caller's revision counter; it is echoed back
+   * verbatim via `onCompleted`. Omitting it (legacy tests) falls back to
+   * the saver's internal monotonic sequence. The returned promise resolves
+   * when THIS caller's snapshot has been offered to the remote (whether
+   * success or failure).
    */
-  requestSave(snapshot: DraftSnapshot, previousRef: DraftServerRef | null): Promise<void>;
+  requestSave(
+    snapshot: DraftSnapshot,
+    previousRef: DraftServerRef | null,
+    generation?: number,
+  ): Promise<void>;
   isBusy(): boolean;
   getStatus(): DraftSaveStatus;
 }
@@ -254,6 +289,7 @@ export function createDraftSaver(draftId: string, opts: CreateDraftSaverOptions)
   let pending: {
     snapshot: DraftSnapshot;
     previousRef: DraftServerRef | null;
+    generation: number;
     resolvers: Array<() => void>;
   } | null = null;
 
@@ -263,7 +299,11 @@ export function createDraftSaver(draftId: string, opts: CreateDraftSaverOptions)
     opts.onStatus?.(status);
   }
 
-  async function run(snapshot: DraftSnapshot, previousRef: DraftServerRef | null): Promise<void> {
+  async function run(
+    snapshot: DraftSnapshot,
+    previousRef: DraftServerRef | null,
+    generation: number,
+  ): Promise<void> {
     const mySeq = ++seq;
     latestIssuedSeq = mySeq;
     setStatus("saving");
@@ -274,19 +314,28 @@ export function createDraftSaver(draftId: string, opts: CreateDraftSaverOptions)
       result = { ok: false, code: "UNKNOWN" };
     }
     // Generation guard: only the latest issued sequence may mutate state.
+    // Stale responses never fire `onCompleted`, never touch `serverRef`,
+    // and therefore never mark newer content clean.
     if (mySeq !== latestIssuedSeq) return;
     if (result.ok) {
-      // A UIDPLUS-less server may APPEND successfully but return no UID —
-      // that is still a full remote save, just without a canonical ref.
       if (result.serverRef) opts.onServerRef?.(result.serverRef);
       setStatus("saved");
+      opts.onCompleted?.({
+        completedGeneration: generation,
+        status: "saved",
+        serverRef: result.serverRef,
+      });
     } else {
       // Local persistence is the caller's responsibility (writeDraftDoc)
-      // and happens synchronously before requestSave — a remote failure
+      // and happens synchronously before requestSave. A remote failure
       // therefore leaves the composer in "saved-local" as long as the
-      // local write succeeded. The caller can escalate to "failed" if
-      // writeDraftDoc returned false.
+      // local write succeeded — used only for recoverable network errors.
       setStatus("saved-local");
+      opts.onCompleted?.({
+        completedGeneration: generation,
+        status: "saved-local",
+        code: result.code,
+      });
     }
   }
 
@@ -297,7 +346,7 @@ export function createDraftSaver(draftId: string, opts: CreateDraftSaverOptions)
       pending = null;
       running = true;
       try {
-        await run(p.snapshot, p.previousRef);
+        await run(p.snapshot, p.previousRef, p.generation);
       } finally {
         running = false;
       }
@@ -307,15 +356,21 @@ export function createDraftSaver(draftId: string, opts: CreateDraftSaverOptions)
     }
   }
 
-  function requestSave(snapshot: DraftSnapshot, previousRef: DraftServerRef | null): Promise<void> {
+  function requestSave(
+    snapshot: DraftSnapshot,
+    previousRef: DraftServerRef | null,
+    generation?: number,
+  ): Promise<void> {
+    const gen = typeof generation === "number" ? generation : seq + 1;
     return new Promise<void>((resolve) => {
       if (pending) {
-        // Merge: newest snapshot wins, waiters accumulate.
+        // Merge: newest snapshot + newest generation win, waiters accumulate.
         pending.snapshot = snapshot;
         pending.previousRef = previousRef;
+        pending.generation = gen;
         pending.resolvers.push(resolve);
       } else {
-        pending = { snapshot, previousRef, resolvers: [resolve] };
+        pending = { snapshot, previousRef, generation: gen, resolvers: [resolve] };
       }
       if (inFlight) return;
       inFlight = loop().finally(() => {
