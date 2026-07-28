@@ -4423,17 +4423,19 @@ function Composer({
       onStatus: setSaveStatus,
       onServerRef: (r) => setServerRef(r),
       onCompleted: ({ completedGeneration, status }) => {
-        // Advance the clean marker only when a save actually persisted
-        // (remote or local-fallback). Never regress: a coalesced completion
-        // may report a generation older than the current savedGeneration.
-        if (completedGeneration > savedGenerationRef.current) {
-          savedGenerationRef.current = completedGeneration;
-          recomputeDirty();
-        }
+        // Advance the clean marker ONLY when a save actually persisted
+        // (remote success, or local-fallback on NETWORK). A hard failure
+        // (SESSION_REQUIRED, APPEND_FAILED, etc.) MUST leave the composer
+        // dirty so the user can retry or refuse to close.
         if (status === "saved" || status === "saved-local") {
+          if (completedGeneration > savedGenerationRef.current) {
+            savedGenerationRef.current = completedGeneration;
+            recomputeDirty();
+          }
           lastSavedAtRef.current = Date.now();
           setSavedAt(lastSavedAtRef.current);
         }
+        // status === "failed" → no savedGeneration advance, no savedAt bump.
       },
     });
   }
