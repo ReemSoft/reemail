@@ -1272,8 +1272,9 @@ function MailApp() {
   // (Save / Discard / Cancel) before running the destructive nav action.
   async function guardComposerNav(): Promise<boolean> {
     if (typeof window === "undefined") return true;
-    const g = (window as unknown as { __mailmaestroComposerGuard?: (() => Promise<boolean>) | null })
-      .__mailmaestroComposerGuard;
+    const g = (
+      window as unknown as { __mailmaestroComposerGuard?: (() => Promise<boolean>) | null }
+    ).__mailmaestroComposerGuard;
     if (!g) return true;
     return g();
   }
@@ -4320,7 +4321,6 @@ function Composer({
     resolve: (choice: "save" | "discard" | "cancel") => void;
   } | null>(null);
 
-
   // ----- Server-side draft saver (bridge APPEND) + pending-delete queue -----
   const bridgeSaveDraftFn = useServerFn(bridgeSaveDraft);
   const bridgeDeleteDraftFn = useServerFn(bridgeDeleteDraft);
@@ -4440,7 +4440,6 @@ function Composer({
       },
     });
   }
-
 
   const [plainMode, setPlainMode] = useState(false);
   const [fontFamily, setFontFamily] = useState<string>("IBM Plex Sans Arabic, sans-serif");
@@ -4744,7 +4743,6 @@ function Composer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-
   // Mark edited on structural field changes (recipients, subject, attachments).
   const editMarkMountedRef = useRef(false);
   useEffect(() => {
@@ -4843,7 +4841,6 @@ function Composer({
     return flow;
   }
 
-
   // Expose a global guard so parent nav actions (folder switch, list click,
   // new-message button) can prompt before tearing the composer down.
   const requestCloseRef = useRef<() => Promise<boolean>>(async () => {
@@ -4852,8 +4849,9 @@ function Composer({
   });
   requestCloseRef.current = requestClose;
   useEffect(() => {
-    (window as unknown as { __mailmaestroComposerGuard?: () => Promise<boolean> })
-      .__mailmaestroComposerGuard = () => requestCloseRef.current();
+    (
+      window as unknown as { __mailmaestroComposerGuard?: () => Promise<boolean> }
+    ).__mailmaestroComposerGuard = () => requestCloseRef.current();
     // Native beforeunload prompt — trapped ONLY while dirty. Disposable so
     // the listener is removed exactly once on unmount.
     const guard = attachBeforeUnloadGuard(window, () => isDirtyRef.current);
@@ -4866,7 +4864,6 @@ function Composer({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
 
   function addFiles(list: FileList | File[] | null) {
     if (!list) return;
@@ -5331,8 +5328,6 @@ function Composer({
       savingNowRef.current = false;
     }
   }
-
-
 
   return (
     <div
@@ -5950,7 +5945,6 @@ function Composer({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-
     </div>
   );
 }

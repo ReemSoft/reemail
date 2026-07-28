@@ -32,13 +32,10 @@ export interface CreateAutosaveSchedulerOptions {
   clearTimeoutFn?: (handle: unknown) => void;
 }
 
-export function createAutosaveScheduler(
-  opts: CreateAutosaveSchedulerOptions,
-): AutosaveScheduler {
+export function createAutosaveScheduler(opts: CreateAutosaveSchedulerOptions): AutosaveScheduler {
   const setT = opts.setTimeoutFn ?? ((fn: () => void, ms: number) => setTimeout(fn, ms));
   const clearT =
-    opts.clearTimeoutFn ??
-    ((h: unknown) => clearTimeout(h as ReturnType<typeof setTimeout>));
+    opts.clearTimeoutFn ?? ((h: unknown) => clearTimeout(h as ReturnType<typeof setTimeout>));
   let handle: unknown = null;
   let disposed = false;
 
@@ -95,10 +92,7 @@ type EventTargetLike = {
  * after paste, contentEditable drop, IME commit, and text mutation, so an
  * extra `paste` listener would double-fire the caller).
  */
-export function attachInputListener(
-  target: EventTargetLike,
-  handler: () => void,
-): Disposable {
+export function attachInputListener(target: EventTargetLike, handler: () => void): Disposable {
   let disposed = false;
   const wrapped = () => {
     if (disposed) return;
@@ -125,10 +119,7 @@ type WindowLike = {
  * confirmation. We therefore only wire the native protocol, and only fire
  * `preventDefault` while dirty so a clean composer never traps the user.
  */
-export function attachBeforeUnloadGuard(
-  win: WindowLike,
-  isDirty: () => boolean,
-): Disposable {
+export function attachBeforeUnloadGuard(win: WindowLike, isDirty: () => boolean): Disposable {
   let disposed = false;
   const handler = (e: BeforeUnloadEvent) => {
     if (disposed) return;
