@@ -4182,19 +4182,26 @@ function Composer({
 
   // ----- Restore draft (v3 with v2 auto-migration) -----
   const accountEmail = session.account.email_address;
+  // M4-C: when opening in Edit-Draft mode we IGNORE any local v3 doc — the
+  // server-side draft is the source of truth. We also key the composer to the
+  // sticky draftId so a fresh mount cleanly re-hydrates from the server ref.
+  const isEditMode = Boolean(initial?.editDraftId);
   const initialDoc = useMemo<DraftDocV3 | null>(() => {
+    if (isEditMode) return null;
     if (initial && (initial.to || initial.cc || initial.subject || initial.body)) return null;
     if (typeof window === "undefined") return null;
     return readDraftDoc(window.localStorage, accountEmail);
-  }, [initial, accountEmail]);
+  }, [initial, accountEmail, isEditMode]);
   const restored = initialDoc?.snapshot ?? null;
 
-  const [draftId] = useState<string>(() => initialDoc?.draftId ?? newDraftId());
+  const [draftId] = useState<string>(
+    () => initial?.editDraftId ?? initialDoc?.draftId ?? newDraftId(),
+  );
   const [serverRef, setServerRef] = useState<DraftServerRef | null>(
-    () => initialDoc?.serverRef ?? null,
+    () => initial?.previousRef ?? initialDoc?.serverRef ?? null,
   );
   const [saveStatus, setSaveStatus] = useState<DraftSaveStatus>(() =>
-    initialDoc ? "saved-local" : "idle",
+    isEditMode ? "saved" : initialDoc ? "saved-local" : "idle",
   );
   const serverRefRef = useRef<DraftServerRef | null>(serverRef);
   useEffect(() => {
@@ -4215,9 +4222,23 @@ function Composer({
   const [subject, setSubject] = useState<string>(() => restored?.subject ?? initial?.subject ?? "");
   const initialHtml = useMemo(() => {
     if (restored?.html) return restored.html;
+    if (initial?.bodyIsHtml && initial.body) return initial.body;
     if (initial?.body) return plainToHtml(initial.body);
     return "";
   }, [restored, initial]);
+
+  // M4-C: existing server-side attachments carried over from the loaded
+  // Drafts message. Each entry stays as metadata until first save/send, at
+  // which point we lazily stream its bytes from the bridge (server proxy,
+  // never base64 in JSON) and cache the resulting File.
+  const [existingKept, setExistingKept] = useState<
+    import("@/lib/mail-types").MailAttachment[]
+  >(() => initial?.existingAttachments?.attachments ?? []);
+  const existingSourceIdRef = useRef<string | null>(
+    initial?.existingAttachments?.messageId ?? null,
+  );
+  const existingFilesCacheRef = useRef<Map<string, File>>(new Map());
+
 
   const [files, setFiles] = useState<File[]>([]);
   const [sending, setSending] = useState(false);
