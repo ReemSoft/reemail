@@ -115,9 +115,6 @@ export const DraftDeletePayloadSchema = z.object({
 });
 export type DraftDeletePayload = z.infer<typeof DraftDeletePayloadSchema>;
 
-
-
-
 // --- Result types ------------------------------------------------------------
 
 export interface DraftSaveOk {
@@ -145,7 +142,6 @@ export interface DraftErr {
   ok: false;
   error: DraftErrorCode;
 }
-
 
 // --- Injectable IO surface (mirrors smtp.ts style) --------------------------
 
@@ -284,8 +280,13 @@ export async function executeDraftSave(
       return { ok: false, error: "APPEND_FAILED" };
     }
 
-    // 3) Reopen with lock to re-scan for all copies of this draftId and
-    //    expunge everything except the freshly-appended one.
+    // 3) Reopen with lock to re-scan for all copies of this draftId.
+    //    Canonical = highest UID within the current UIDVALIDITY (newest
+    //    wins). Every other UID is stale and MUST be selectively expunged.
+    //    This is defense-in-depth on top of the keyed mutex in saveDraft: if
+    //    two concurrent APPENDs somehow race past the mutex, or a retry
+    //    lands mid-cleanup, all callers converge to the same canonical UID
+    //    and the folder can never end up with duplicates or empty.
     const opened = await client.openWithLock(folderPath);
     try {
       const uidValidity = appendUidValidity || opened.uidValidity || priorUidValidity;
@@ -294,7 +295,8 @@ export async function executeDraftSave(
       try {
         matched = await client.searchByHeader(DRAFT_ID_HEADER, input.draftId);
       } catch {
-        // Search failure MUST NOT roll back the APPEND.
+        // Search failure MUST NOT roll back the APPEND. Fall back to the
+        // append's own UID as the best-effort canonical reference.
         return {
           ok: true,
           draftId: input.draftId,
@@ -306,13 +308,16 @@ export async function executeDraftSave(
         };
       }
 
-      const stale =
-        appendUid == null ? matched.slice(0, -1) : matched.filter((u) => u !== appendUid);
+      // Deterministic canonical selection: highest UID wins.
+      const canonical =
+        matched.length > 0 ? matched.reduce((a, b) => (b > a ? b : a), matched[0]) : appendUid;
+      const stale = matched.filter((u) => u !== canonical);
       if (stale.length > 0 && client.hasUidPlus()) {
         try {
           await client.deleteByUid(stale);
         } catch {
-          // Cleanup failure MUST NOT fail the save.
+          // Cleanup failure MUST NOT fail the save. A future save/retry
+          // will re-scan and converge.
         }
       }
       void priorSearchFailed;
@@ -321,7 +326,7 @@ export async function executeDraftSave(
         ok: true,
         draftId: input.draftId,
         folderPath,
-        uid: appendUid,
+        uid: canonical,
         uidValidity,
         messageId,
         savedAt: now().toISOString(),
@@ -333,8 +338,6 @@ export async function executeDraftSave(
     await client.logout().catch(() => {});
   }
 }
-
-
 
 export async function executeDraftDelete(
   client: ImapDraftClient,
@@ -447,6 +450,48 @@ function defaultDeps(): DraftDeps {
   };
 }
 
+// --- Keyed mutex (Concurrency Guard) ----------------------------------------
+//
+// Guarantees only ONE save-or-delete pipeline for a given
+// (account_identity + drafts_mailbox + draftId) runs at a time inside this
+// bridge process. Rules (locked by tests):
+//
+//   * This is a Concurrency Guard, NOT an idempotency source. The IMAP
+//     `X-MailMaestro-Draft-ID` header remains the source of truth.
+//   * The key never carries the password, MIME, or subject. Only the
+//     account email + draftId (both already present in the IMAP wire
+//     traffic) plus the constant "drafts" mailbox tag.
+//   * The map entry is removed as soon as the last waiter releases, so a
+//     million unique drafts cannot leak memory.
+//   * We never log the key.
+const draftMutex = new Map<string, Promise<unknown>>();
+
+export function draftMutexKey(accountEmail: string, draftId: string): string {
+  // "drafts" segment reflects the drafts-mailbox scope required by the spec.
+  return `${accountEmail}::drafts::${draftId}`;
+}
+
+/** Exposed for tests only — verifies the map is fully drained. */
+export function draftMutexInflight(): number {
+  return draftMutex.size;
+}
+
+async function withDraftMutex<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  const prev = draftMutex.get(key);
+  const run = (prev ? prev.catch(() => {}) : Promise.resolve()).then(fn);
+  // Store a chain that resolves ONLY after `run` settles (success or fail),
+  // so the next waiter observes the full pipeline result.
+  const chain: Promise<unknown> = run.catch(() => {});
+  draftMutex.set(key, chain);
+  try {
+    return await run;
+  } finally {
+    // Only delete if we're still the tail — otherwise a later caller has
+    // taken over ownership and will clean up when it settles.
+    if (draftMutex.get(key) === chain) draftMutex.delete(key);
+  }
+}
+
 // --- High-level entry points (used by HTTP layer) ---------------------------
 
 export async function saveDraft(
@@ -455,12 +500,15 @@ export async function saveDraft(
   payload: DraftSavePayload,
   deps: DraftDeps = defaultDeps(),
 ): Promise<DraftSaveOk | DraftErr> {
-  const client = deps.createImapDraftClient(account, password);
-  try {
-    return await executeDraftSave(client, payload, deps.now);
-  } catch {
-    return { ok: false, error: "IMAP_ERROR" };
-  }
+  const key = draftMutexKey(account.email_address, payload.draftId);
+  return withDraftMutex(key, async () => {
+    const client = deps.createImapDraftClient(account, password);
+    try {
+      return await executeDraftSave(client, payload, deps.now);
+    } catch {
+      return { ok: false, error: "IMAP_ERROR" };
+    }
+  });
 }
 
 export async function deleteDraft(
@@ -469,10 +517,13 @@ export async function deleteDraft(
   payload: DraftDeletePayload,
   deps: DraftDeps = defaultDeps(),
 ): Promise<DraftDeleteOk | DraftErr> {
-  const client = deps.createImapDraftClient(account, password);
-  try {
-    return await executeDraftDelete(client, payload);
-  } catch {
-    return { ok: false, error: "IMAP_ERROR" };
-  }
+  const key = draftMutexKey(account.email_address, payload.draftId);
+  return withDraftMutex(key, async () => {
+    const client = deps.createImapDraftClient(account, password);
+    try {
+      return await executeDraftDelete(client, payload);
+    } catch {
+      return { ok: false, error: "IMAP_ERROR" };
+    }
+  });
 }
