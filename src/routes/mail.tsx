@@ -30,7 +30,6 @@ function sanitizeComposerHtml(html: string): string {
   });
 }
 
-
 import {
   Inbox,
   Star,
@@ -127,7 +126,23 @@ import {
   bridgeMove,
   bridgeDelete,
   bridgeSearch,
+  bridgeSaveDraft,
+  bridgeDeleteDraft,
 } from "@/lib/mail-bridge.functions";
+import {
+  readDraftDoc,
+  writeDraftDoc,
+  clearDraftDoc,
+  createDraftSaver,
+  createPendingDeleteQueue,
+  newDraftId,
+  type DraftSaver,
+  type DraftSaveStatus,
+  type DraftServerRef,
+  type DraftSnapshot,
+  type DraftDocV3,
+  type PendingDeleteQueue,
+} from "@/lib/mail-draft-lifecycle";
 import { tombstoneGhostMessage } from "@/lib/mail-ghost-cleanup.functions";
 import { indexListMessages } from "@/lib/mail-index.functions";
 import { indexListFolderCounts } from "@/lib/mail-index-counts.functions";
@@ -3085,7 +3100,6 @@ function MailApp() {
   );
 }
 
-
 function MessageRow({
   message,
   active,
@@ -3659,7 +3673,6 @@ function LoadingViewer({ onBack }: { onBack: () => void }) {
 
 const COMPOSE_MAX_TOTAL_BYTES = 25 * 1024 * 1024;
 const COMPOSE_MAX_FILES = 10;
-const DRAFT_STORAGE_PREFIX = "mailmaestro:draft:v2:";
 
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
@@ -3831,7 +3844,10 @@ function RecipientField({
           className="flex min-h-[42px] w-full min-w-0 flex-wrap items-center gap-2 rounded-lg border border-input bg-background px-3 py-1.5 transition focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/20"
           onClick={() => inputRef.current?.focus()}
         >
-          <div className="flex min-w-0 flex-1 basis-full flex-wrap items-center gap-1.5 sm:basis-auto" dir="ltr">
+          <div
+            className="flex min-w-0 flex-1 basis-full flex-wrap items-center gap-1.5 sm:basis-auto"
+            dir="ltr"
+          >
             {value.map((r, i) => (
               <span
                 key={`${r.email}-${i}`}
@@ -3843,7 +3859,9 @@ function RecipientField({
                 title={r.valid ? r.email : "بريد غير صالح"}
               >
                 {!r.valid && <AlertTriangle className="h-3 w-3" />}
-                <span className="max-w-[220px] truncate">{r.name ? `${r.name} · ${r.email}` : r.email}</span>
+                <span className="max-w-[220px] truncate">
+                  {r.name ? `${r.name} · ${r.email}` : r.email}
+                </span>
                 <button
                   type="button"
                   onClick={(e) => {
@@ -3976,8 +3994,6 @@ function RecipientField({
   );
 }
 
-
-
 // ------------ Rich-text editor toolbar ------------
 function ToolbarButton({
   onMouseDown,
@@ -4062,7 +4078,7 @@ function Composer({
   onClose: () => void;
   onSent: () => void;
 }) {
-  const draftKey = `${DRAFT_STORAGE_PREFIX}${session.account.email_address}`;
+  // Draft storage keying is owned by mail-draft-lifecycle (v3 + auto-migration).
 
   // ----- Address book (contact suggestions) — local IDB, hydrated once -----
   const hydrateSuggestions = useServerFn(hydrateContactSuggestions);
@@ -4107,26 +4123,26 @@ function Composer({
     [companyId, accountId, session.mailSessionToken, hideSuggestion],
   );
 
-  // ----- Restore draft (if no initial provided) -----
-  const restored = useMemo(() => {
+  // ----- Restore draft (v3 with v2 auto-migration) -----
+  const accountEmail = session.account.email_address;
+  const initialDoc = useMemo<DraftDocV3 | null>(() => {
     if (initial && (initial.to || initial.cc || initial.subject || initial.body)) return null;
     if (typeof window === "undefined") return null;
-    try {
-      const raw = window.localStorage.getItem(draftKey);
-      if (!raw) return null;
-      return JSON.parse(raw) as {
-        to: Recipient[];
-        cc: Recipient[];
-        bcc: Recipient[];
-        subject: string;
-        html: string;
-        showCc?: boolean;
-        showBcc?: boolean;
-      };
-    } catch {
-      return null;
-    }
-  }, [initial, draftKey]);
+    return readDraftDoc(window.localStorage, accountEmail);
+  }, [initial, accountEmail]);
+  const restored = initialDoc?.snapshot ?? null;
+
+  const [draftId] = useState<string>(() => initialDoc?.draftId ?? newDraftId());
+  const [serverRef, setServerRef] = useState<DraftServerRef | null>(
+    () => initialDoc?.serverRef ?? null,
+  );
+  const [saveStatus, setSaveStatus] = useState<DraftSaveStatus>(() =>
+    initialDoc ? "saved-local" : "idle",
+  );
+  const serverRefRef = useRef<DraftServerRef | null>(serverRef);
+  useEffect(() => {
+    serverRefRef.current = serverRef;
+  }, [serverRef]);
 
   const [to, setTo] = useState<Recipient[]>(
     () => restored?.to ?? parseRecipientText(initial?.to ?? ""),
@@ -4136,7 +4152,7 @@ function Composer({
   );
   const [bcc, setBcc] = useState<Recipient[]>(() => restored?.bcc ?? []);
   const [showCc, setShowCc] = useState<boolean>(
-    () => restored?.showCc ?? (parseRecipientText(initial?.cc ?? "").length > 0),
+    () => restored?.showCc ?? parseRecipientText(initial?.cc ?? "").length > 0,
   );
   const [showBcc, setShowBcc] = useState<boolean>(() => restored?.showBcc ?? false);
   const [subject, setSubject] = useState<string>(() => restored?.subject ?? initial?.subject ?? "");
@@ -4151,13 +4167,98 @@ function Composer({
   const [progress, setProgress] = useState(0);
   // Composer runs inline inside the message-viewer pane (Superhuman-style).
   const [dragging, setDragging] = useState(false);
-  const [savedAt, setSavedAt] = useState<number | null>(null);
+  const [savedAt, setSavedAt] = useState<number | null>(() => initialDoc?.updatedAt ?? null);
+
+  // ----- Server-side draft saver (bridge APPEND) + pending-delete queue -----
+  const bridgeSaveDraftFn = useServerFn(bridgeSaveDraft);
+  const bridgeDeleteDraftFn = useServerFn(bridgeDeleteDraft);
+
+  const pendingQueueRef = useRef<PendingDeleteQueue | null>(null);
+  if (!pendingQueueRef.current && typeof window !== "undefined") {
+    pendingQueueRef.current = createPendingDeleteQueue({
+      storage: window.localStorage,
+      deleteRemote: async ({ draftId: d, previousRef }) => {
+        const token = session.mailSessionToken;
+        if (!token) return { ok: false, code: "SESSION_REQUIRED" };
+        try {
+          const res = await bridgeDeleteDraftFn({
+            data: {
+              mailSessionToken: token,
+              draftId: d,
+              previousRef: previousRef ?? undefined,
+            },
+          });
+          return { ok: !!res?.ok, code: res && !res.ok ? res.code : undefined };
+        } catch {
+          return { ok: false, code: "NETWORK" };
+        }
+      },
+    });
+  }
+
+  // Flush any deletes left behind by a previous send in this browser.
+  useEffect(() => {
+    const q = pendingQueueRef.current;
+    if (!q) return;
+    void q.flush(accountEmail);
+  }, [accountEmail]);
+
+  const saverRef = useRef<DraftSaver | null>(null);
+  if (!saverRef.current) {
+    saverRef.current = createDraftSaver(draftId, {
+      saveRemote: async ({ snapshot, previousRef }) => {
+        const token = session.mailSessionToken;
+        if (!token) return { ok: false, code: "SESSION_REQUIRED" };
+        const form = new FormData();
+        const payload = {
+          mailSessionToken: token,
+          draftId,
+          to: snapshot.to
+            .filter((r) => r.valid)
+            .map((r) => ({ name: r.name ?? "", email: r.email })),
+          cc: snapshot.cc
+            .filter((r) => r.valid)
+            .map((r) => ({ name: r.name ?? "", email: r.email })),
+          bcc: snapshot.bcc
+            .filter((r) => r.valid)
+            .map((r) => ({ name: r.name ?? "", email: r.email })),
+          subject: snapshot.subject,
+          bodyHtml: snapshot.html,
+          bodyText: stripHtml(snapshot.html),
+          previousRef: previousRef ?? undefined,
+        };
+        form.append("payload", JSON.stringify(payload));
+        try {
+          const res = await bridgeSaveDraftFn({ data: form });
+          if (res?.ok) {
+            if (typeof res.uid === "number" && res.uid > 0 && res.uidValidity && res.folderPath) {
+              return {
+                ok: true,
+                serverRef: {
+                  folderPath: res.folderPath,
+                  uid: res.uid,
+                  uidValidity: res.uidValidity,
+                },
+              };
+            }
+            return { ok: true };
+          }
+          return { ok: false, code: res?.code };
+        } catch {
+          return { ok: false, code: "NETWORK" };
+        }
+      },
+      onStatus: setSaveStatus,
+      onServerRef: (r) => setServerRef(r),
+    });
+  }
+
   const [plainMode, setPlainMode] = useState(false);
   const [fontFamily, setFontFamily] = useState<string>("IBM Plex Sans Arabic, sans-serif");
   const [fontSize, setFontSize] = useState<string>("14px");
   const [blockFmt, setBlockFmt] = useState<string>("p");
-  const [extensions, setExtensions] = useState<ComposerExtension[]>(
-    () => (typeof window !== "undefined" ? window.mailmaestroComposerExtensions ?? [] : []),
+  const [extensions, setExtensions] = useState<ComposerExtension[]>(() =>
+    typeof window !== "undefined" ? (window.mailmaestroComposerExtensions ?? []) : [],
   );
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -4248,7 +4349,10 @@ function Composer({
         /* noop */
       }
       try {
-        const ff = document.queryCommandValue("fontName")?.toString().replace(/^['"]|['"]$/g, "");
+        const ff = document
+          .queryCommandValue("fontName")
+          ?.toString()
+          .replace(/^['"]|['"]$/g, "");
         if (ff) {
           // match one of our option values whose first family matches
           setFontFamily((prev) => {
@@ -4280,30 +4384,45 @@ function Composer({
 
   const totalBytes = files.reduce((acc, f) => acc + f.size, 0);
 
-  // ----- Draft autosave (debounced) -----
+  // ----- Draft autosave (debounced): local write first, then remote APPEND -----
   useEffect(() => {
     if (typeof window === "undefined") return;
+    if (sending) return;
     const html = editorRef.current?.innerHTML ?? "";
     const isEmpty =
       to.length === 0 && cc.length === 0 && bcc.length === 0 && !subject && !html.trim();
     const t = window.setTimeout(() => {
-      try {
-        if (isEmpty) {
-          window.localStorage.removeItem(draftKey);
-          setSavedAt(null);
-        } else {
-          window.localStorage.setItem(
-            draftKey,
-            JSON.stringify({ to, cc, bcc, subject, html, showCc, showBcc }),
-          );
-          setSavedAt(Date.now());
-        }
-      } catch {
-        /* quota: ignore */
+      if (isEmpty) {
+        clearDraftDoc(window.localStorage, accountEmail);
+        setSavedAt(null);
+        setSaveStatus("idle");
+        return;
       }
+      const snapshot: DraftSnapshot = {
+        to,
+        cc,
+        bcc,
+        subject,
+        html,
+        showCc,
+        showBcc,
+      };
+      const persisted = writeDraftDoc(window.localStorage, accountEmail, {
+        version: 3,
+        draftId,
+        snapshot,
+        serverRef: serverRefRef.current,
+        updatedAt: Date.now(),
+      });
+      if (!persisted) {
+        setSaveStatus("failed");
+        return;
+      }
+      setSavedAt(Date.now());
+      void saverRef.current?.requestSave(snapshot, serverRefRef.current);
     }, 800);
     return () => window.clearTimeout(t);
-  }, [to, cc, bcc, subject, showCc, showBcc, draftKey, sending]);
+  }, [to, cc, bcc, subject, showCc, showBcc, accountEmail, draftId, sending]);
 
   function addFiles(list: FileList | File[] | null) {
     if (!list) return;
@@ -4466,10 +4585,7 @@ function Composer({
         n = n.parentNode;
       }
     }
-    const cur =
-      refEl.getAttribute("dir") ||
-      window.getComputedStyle(refEl).direction ||
-      "rtl";
+    const cur = refEl.getAttribute("dir") || window.getComputedStyle(refEl).direction || "rtl";
     setEditorDirection(cur === "rtl" ? "ltr" : "rtl");
   }
   function insertHR() {
@@ -4484,9 +4600,7 @@ function Composer({
         toast.error("رابط صورة غير مدعوم");
         return;
       }
-      insertHtmlAtCursor(
-        `<img src="${u.toString()}" alt="" style="max-width:100%;height:auto" />`,
-      );
+      insertHtmlAtCursor(`<img src="${u.toString()}" alt="" style="max-width:100%;height:auto" />`);
     } catch {
       toast.error("رابط غير صالح");
     }
@@ -4552,11 +4666,36 @@ function Composer({
         toast.error(result.error || "فشل إرسال الرسالة");
         return;
       }
-      // Clear draft on successful send
+      // Clear draft on successful send: local wipe + best-effort server delete,
+      // with any failure re-queued so the next composer mount can retry it.
       try {
-        window.localStorage.removeItem(draftKey);
+        clearDraftDoc(window.localStorage, accountEmail);
       } catch {
         /* noop */
+      }
+      const refAtSend = serverRefRef.current;
+      const hadServerCopy = !!refAtSend || saveStatus !== "idle";
+      if (hadServerCopy) {
+        const token = session.mailSessionToken ?? "";
+        let deleteOk = false;
+        try {
+          const del = await bridgeDeleteDraftFn({
+            data: {
+              mailSessionToken: token,
+              draftId,
+              previousRef: refAtSend ?? undefined,
+            },
+          });
+          deleteOk = !!del?.ok;
+        } catch {
+          deleteOk = false;
+        }
+        if (!deleteOk) {
+          pendingQueueRef.current?.enqueue(accountEmail, {
+            draftId,
+            previousRef: refAtSend,
+          });
+        }
       }
       // Address book: record recipients AFTER a successful SMTP send only.
       // Never let this failure poison the send outcome.
@@ -4642,31 +4781,59 @@ function Composer({
   // light bg-surface used elsewhere, wrapped in an elegant card.
   const containerClass = "relative flex h-full w-full flex-col bg-surface";
 
-  const savedLabel = savedAt
-    ? `تم الحفظ ${new Date(savedAt).toLocaleTimeString("ar", { hour: "2-digit", minute: "2-digit" })}`
-    : "";
+  const savedLabel = (() => {
+    const t = savedAt
+      ? new Date(savedAt).toLocaleTimeString("ar", { hour: "2-digit", minute: "2-digit" })
+      : "";
+    switch (saveStatus) {
+      case "saving":
+        return "جارٍ الحفظ…";
+      case "saved":
+        return t ? `تم الحفظ ${t}` : "تم الحفظ";
+      case "saved-local":
+        return t ? `محفوظة محلياً ${t}` : "محفوظة محلياً";
+      case "failed":
+        return "تعذّر الحفظ";
+      default:
+        return "";
+    }
+  })();
 
-  function saveDraftNow() {
+  async function saveDraftNow() {
     if (typeof window === "undefined") return;
-    try {
-      const html = sanitizeComposerHtml(editorRef.current?.innerHTML ?? "");
-      const isEmpty =
-        to.length === 0 && cc.length === 0 && bcc.length === 0 && !subject && !html.trim();
-      if (isEmpty) {
-        toast.info("لا يوجد محتوى للحفظ");
-        return;
-      }
-      window.localStorage.setItem(
-        draftKey,
-        JSON.stringify({ to, cc, bcc, subject, html, showCc, showBcc }),
-      );
-      setSavedAt(Date.now());
-      toast.success("تم حفظ المسودّة");
-    } catch {
+    const html = sanitizeComposerHtml(editorRef.current?.innerHTML ?? "");
+    const isEmpty =
+      to.length === 0 && cc.length === 0 && bcc.length === 0 && !subject && !html.trim();
+    if (isEmpty) {
+      toast.info("لا يوجد محتوى للحفظ");
+      return;
+    }
+    const snapshot: DraftSnapshot = { to, cc, bcc, subject, html, showCc, showBcc };
+    const persisted = writeDraftDoc(window.localStorage, accountEmail, {
+      version: 3,
+      draftId,
+      snapshot,
+      serverRef: serverRefRef.current,
+      updatedAt: Date.now(),
+    });
+    if (!persisted) {
+      setSaveStatus("failed");
       toast.error("تعذّر حفظ المسودّة");
+      return;
+    }
+    setSavedAt(Date.now());
+    try {
+      await saverRef.current?.requestSave(snapshot, serverRefRef.current);
+      // Status is set by the saver (saved | saved-local); toast reflects it.
+      if (saverRef.current?.getStatus() === "saved") {
+        toast.success("تم حفظ المسودّة");
+      } else {
+        toast.success("تم حفظ المسودّة محلياً");
+      }
+    } catch {
+      toast.success("تم حفظ المسودّة محلياً");
     }
   }
-
 
   return (
     <div
@@ -4810,25 +4977,51 @@ function Composer({
                   </PopoverTrigger>
                   <PopoverContent align="end" className="w-auto p-2">
                     <div className="grid grid-cols-6 gap-0.5">
-                      <ToolbarButton title="يتوسطه خط" active={fmtState.strikeThrough} onMouseDown={() => exec("strikeThrough")}>
+                      <ToolbarButton
+                        title="يتوسطه خط"
+                        active={fmtState.strikeThrough}
+                        onMouseDown={() => exec("strikeThrough")}
+                      >
                         <Strikethrough className="h-3.5 w-3.5" />
                       </ToolbarButton>
-                      <ToolbarButton title="مرتفع" active={fmtState.superscript} onMouseDown={() => exec("superscript")}>
+                      <ToolbarButton
+                        title="مرتفع"
+                        active={fmtState.superscript}
+                        onMouseDown={() => exec("superscript")}
+                      >
                         <Superscript className="h-3.5 w-3.5" />
                       </ToolbarButton>
-                      <ToolbarButton title="منخفض" active={fmtState.subscript} onMouseDown={() => exec("subscript")}>
+                      <ToolbarButton
+                        title="منخفض"
+                        active={fmtState.subscript}
+                        onMouseDown={() => exec("subscript")}
+                      >
                         <Subscript className="h-3.5 w-3.5" />
                       </ToolbarButton>
-                      <ToolbarButton title="ضبط" active={fmtState.justifyFull} onMouseDown={() => exec("justifyFull")}>
+                      <ToolbarButton
+                        title="ضبط"
+                        active={fmtState.justifyFull}
+                        onMouseDown={() => exec("justifyFull")}
+                      >
                         <AlignJustify className="h-3.5 w-3.5" />
                       </ToolbarButton>
-                      <ToolbarButton title="زيادة المسافة البادئة" onMouseDown={() => exec("indent")}>
+                      <ToolbarButton
+                        title="زيادة المسافة البادئة"
+                        onMouseDown={() => exec("indent")}
+                      >
                         <Indent className="h-3.5 w-3.5" />
                       </ToolbarButton>
-                      <ToolbarButton title="تقليل المسافة البادئة" onMouseDown={() => exec("outdent")}>
+                      <ToolbarButton
+                        title="تقليل المسافة البادئة"
+                        onMouseDown={() => exec("outdent")}
+                      >
                         <Outdent className="h-3.5 w-3.5" />
                       </ToolbarButton>
-                      <ToolbarButton title="اقتباس" active={fmtState.blockquote} onMouseDown={() => exec("formatBlock", "blockquote")}>
+                      <ToolbarButton
+                        title="اقتباس"
+                        active={fmtState.blockquote}
+                        onMouseDown={() => exec("formatBlock", "blockquote")}
+                      >
                         <Quote className="h-3.5 w-3.5" />
                       </ToolbarButton>
                       <ToolbarButton title="إدراج صورة" onMouseDown={promptImage}>
@@ -4837,7 +5030,10 @@ function Composer({
                       <ToolbarButton title="خط أفقي" onMouseDown={insertHR}>
                         <Minus className="h-3.5 w-3.5" />
                       </ToolbarButton>
-                      <ToolbarButton title="تبديل اتجاه النص RTL/LTR" onMouseDown={toggleEditorDirection}>
+                      <ToolbarButton
+                        title="تبديل اتجاه النص RTL/LTR"
+                        onMouseDown={toggleEditorDirection}
+                      >
                         <ArrowLeftRight className="h-3.5 w-3.5" />
                       </ToolbarButton>
                       <ToolbarButton title="إزالة التنسيق" onMouseDown={() => exec("removeFormat")}>
@@ -4917,13 +5113,25 @@ function Composer({
                       { value: "pre", label: "كود" },
                     ]}
                   />
-                  <ToolbarButton title="عريض (Ctrl+B)" active={fmtState.bold} onMouseDown={() => exec("bold")}>
+                  <ToolbarButton
+                    title="عريض (Ctrl+B)"
+                    active={fmtState.bold}
+                    onMouseDown={() => exec("bold")}
+                  >
                     <Bold className="h-3.5 w-3.5" />
                   </ToolbarButton>
-                  <ToolbarButton title="مائل (Ctrl+I)" active={fmtState.italic} onMouseDown={() => exec("italic")}>
+                  <ToolbarButton
+                    title="مائل (Ctrl+I)"
+                    active={fmtState.italic}
+                    onMouseDown={() => exec("italic")}
+                  >
                     <Italic className="h-3.5 w-3.5" />
                   </ToolbarButton>
-                  <ToolbarButton title="تسطير (Ctrl+U)" active={fmtState.underline} onMouseDown={() => exec("underline")}>
+                  <ToolbarButton
+                    title="تسطير (Ctrl+U)"
+                    active={fmtState.underline}
+                    onMouseDown={() => exec("underline")}
+                  >
                     <Underline className="h-3.5 w-3.5" />
                   </ToolbarButton>
                   {/* Colors */}
@@ -4952,20 +5160,40 @@ function Composer({
                     />
                   </label>
                   {/* Alignment */}
-                  <ToolbarButton title="محاذاة يمين" active={fmtState.justifyRight} onMouseDown={() => exec("justifyRight")}>
+                  <ToolbarButton
+                    title="محاذاة يمين"
+                    active={fmtState.justifyRight}
+                    onMouseDown={() => exec("justifyRight")}
+                  >
                     <AlignRight className="h-3.5 w-3.5" />
                   </ToolbarButton>
-                  <ToolbarButton title="توسيط" active={fmtState.justifyCenter} onMouseDown={() => exec("justifyCenter")}>
+                  <ToolbarButton
+                    title="توسيط"
+                    active={fmtState.justifyCenter}
+                    onMouseDown={() => exec("justifyCenter")}
+                  >
                     <AlignCenter className="h-3.5 w-3.5" />
                   </ToolbarButton>
-                  <ToolbarButton title="محاذاة يسار" active={fmtState.justifyLeft} onMouseDown={() => exec("justifyLeft")}>
+                  <ToolbarButton
+                    title="محاذاة يسار"
+                    active={fmtState.justifyLeft}
+                    onMouseDown={() => exec("justifyLeft")}
+                  >
                     <AlignLeft className="h-3.5 w-3.5" />
                   </ToolbarButton>
                   {/* Lists */}
-                  <ToolbarButton title="قائمة نقطية" active={fmtState.insertUnorderedList} onMouseDown={() => exec("insertUnorderedList")}>
+                  <ToolbarButton
+                    title="قائمة نقطية"
+                    active={fmtState.insertUnorderedList}
+                    onMouseDown={() => exec("insertUnorderedList")}
+                  >
                     <List className="h-3.5 w-3.5" />
                   </ToolbarButton>
-                  <ToolbarButton title="قائمة مرقمة" active={fmtState.insertOrderedList} onMouseDown={() => exec("insertOrderedList")}>
+                  <ToolbarButton
+                    title="قائمة مرقمة"
+                    active={fmtState.insertOrderedList}
+                    onMouseDown={() => exec("insertOrderedList")}
+                  >
                     <ListOrdered className="h-3.5 w-3.5" />
                   </ToolbarButton>
                   {/* Link */}
@@ -5049,7 +5277,9 @@ function Composer({
                       </span>
                       <div className="flex flex-col leading-tight">
                         <span className="max-w-[180px] truncate font-medium">{f.name}</span>
-                        <span className="text-[10px] text-muted-foreground">{formatBytes(f.size)}</span>
+                        <span className="text-[10px] text-muted-foreground">
+                          {formatBytes(f.size)}
+                        </span>
                       </div>
                       <button
                         onClick={() => removeFile(i)}
@@ -5143,8 +5373,6 @@ function Composer({
     </div>
   );
 }
-
-
 
 // ---- Attachment card with download + inline preview ----
 const INLINE_PREVIEW_MIME = new Set<string>([
