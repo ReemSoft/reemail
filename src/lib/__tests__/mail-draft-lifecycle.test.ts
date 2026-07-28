@@ -285,7 +285,7 @@ describe("createDraftSaver", () => {
       },
       onStatus: (s) => events.push(s),
     });
-    await saver.requestSave(snap(), null);
+    await saver.requestSave(snap(), null, 1);
     expect(events).toEqual(["saving", "saved-local"]);
   });
 });
