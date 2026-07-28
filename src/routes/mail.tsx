@@ -4386,30 +4386,45 @@ function Composer({
 
   const totalBytes = files.reduce((acc, f) => acc + f.size, 0);
 
-  // ----- Draft autosave (debounced) -----
+  // ----- Draft autosave (debounced): local write first, then remote APPEND -----
   useEffect(() => {
     if (typeof window === "undefined") return;
+    if (sending) return;
     const html = editorRef.current?.innerHTML ?? "";
     const isEmpty =
       to.length === 0 && cc.length === 0 && bcc.length === 0 && !subject && !html.trim();
     const t = window.setTimeout(() => {
-      try {
-        if (isEmpty) {
-          window.localStorage.removeItem(draftKey);
-          setSavedAt(null);
-        } else {
-          window.localStorage.setItem(
-            draftKey,
-            JSON.stringify({ to, cc, bcc, subject, html, showCc, showBcc }),
-          );
-          setSavedAt(Date.now());
-        }
-      } catch {
-        /* quota: ignore */
+      if (isEmpty) {
+        clearDraftDoc(window.localStorage, accountEmail);
+        setSavedAt(null);
+        setSaveStatus("idle");
+        return;
       }
+      const snapshot: DraftSnapshot = {
+        to,
+        cc,
+        bcc,
+        subject,
+        html,
+        showCc,
+        showBcc,
+      };
+      const persisted = writeDraftDoc(window.localStorage, accountEmail, {
+        version: 3,
+        draftId,
+        snapshot,
+        serverRef: serverRefRef.current,
+        updatedAt: Date.now(),
+      });
+      if (!persisted) {
+        setSaveStatus("failed");
+        return;
+      }
+      setSavedAt(Date.now());
+      void saverRef.current?.requestSave(snapshot, serverRefRef.current);
     }, 800);
     return () => window.clearTimeout(t);
-  }, [to, cc, bcc, subject, showCc, showBcc, draftKey, sending]);
+  }, [to, cc, bcc, subject, showCc, showBcc, accountEmail, draftId, sending]);
 
   function addFiles(list: FileList | File[] | null) {
     if (!list) return;
