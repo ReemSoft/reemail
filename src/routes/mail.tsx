@@ -167,6 +167,20 @@ import {
 import type { MailFolder, MailMessage } from "@/lib/mail-types";
 import { clearMailSession, getMailSession, type MailSession } from "@/lib/mail-session";
 import {
+  hydrateContactSuggestions,
+  recordSentRecipients,
+  hideContactSuggestion,
+} from "@/lib/mail-contact-suggestions.functions";
+import {
+  ensureScopeReady,
+  searchLocal,
+  recordLocalSend,
+  forgetLocal,
+  wipeAllPersisted,
+  clearMemoryCache,
+  type AutocompleteMatch,
+} from "@/lib/mail-contact-suggestions.client";
+import {
   applyPendingMoveOverlay,
   beginPendingMove as beginPendingMoveEntry,
   clearPendingMovesForAccount,
