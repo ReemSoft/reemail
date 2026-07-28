@@ -4203,14 +4203,61 @@ function Composer({
     }
   }
   function setEditorDirection(dir: "rtl" | "ltr") {
-    if (!editorRef.current) return;
-    editorRef.current.dir = dir;
-    editorRef.current.style.textAlign = dir === "rtl" ? "right" : "left";
-    editorRef.current.focus();
+    const root = editorRef.current;
+    if (!root) return;
+    root.focus();
+    root.dir = dir;
+    root.style.textAlign = dir === "rtl" ? "right" : "left";
+    const sel = window.getSelection();
+    const findBlock = (n: Node | null): HTMLElement => {
+      let cur: Node | null = n;
+      while (cur && cur !== root) {
+        if (cur.nodeType === 1) {
+          const el = cur as HTMLElement;
+          const disp = window.getComputedStyle(el).display;
+          if (disp && disp !== "inline" && disp !== "inline-block") return el;
+        }
+        cur = cur.parentNode;
+      }
+      return root;
+    };
+    const blocks = new Set<HTMLElement>();
+    if (sel && sel.rangeCount > 0) {
+      for (let i = 0; i < sel.rangeCount; i++) {
+        const r = sel.getRangeAt(i);
+        blocks.add(findBlock(r.startContainer));
+        blocks.add(findBlock(r.endContainer));
+      }
+    }
+    if (blocks.size === 0) blocks.add(root);
+    blocks.forEach((el) => {
+      el.setAttribute("dir", dir);
+      el.style.textAlign = dir === "rtl" ? "right" : "left";
+    });
   }
   function toggleEditorDirection() {
-    if (!editorRef.current) return;
-    const cur = editorRef.current.dir || "rtl";
+    const root = editorRef.current;
+    if (!root) return;
+    const sel = window.getSelection();
+    let refEl: HTMLElement = root;
+    if (sel && sel.rangeCount > 0) {
+      let n: Node | null = sel.getRangeAt(0).startContainer;
+      while (n && n !== root) {
+        if (n.nodeType === 1) {
+          const el = n as HTMLElement;
+          const disp = window.getComputedStyle(el).display;
+          if (disp && disp !== "inline" && disp !== "inline-block") {
+            refEl = el;
+            break;
+          }
+        }
+        n = n.parentNode;
+      }
+    }
+    const cur =
+      refEl.getAttribute("dir") ||
+      window.getComputedStyle(refEl).direction ||
+      "rtl";
     setEditorDirection(cur === "rtl" ? "ltr" : "rtl");
   }
   function insertHR() {
