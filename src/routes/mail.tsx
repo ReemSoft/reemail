@@ -4527,7 +4527,69 @@ function Composer({
 
           {/* Editor */}
           <div className="flex flex-col gap-1.5">
-            <label className="text-sm font-medium text-foreground">نص الرسالة</label>
+            <div className="flex items-center justify-between gap-2">
+              <label className="text-sm font-medium text-foreground">نص الرسالة</label>
+              <div className="flex items-center gap-1">
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <button
+                      type="button"
+                      title="المزيد من الخيارات"
+                      aria-label="المزيد من الخيارات"
+                      onMouseDown={(e) => e.preventDefault()}
+                      className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+                    >
+                      <MoreVertical className="h-3.5 w-3.5" />
+                    </button>
+                  </PopoverTrigger>
+                  <PopoverContent align="end" className="w-auto p-2">
+                    <div className="grid grid-cols-6 gap-0.5">
+                      <ToolbarButton title="يتوسطه خط" active={fmtState.strikeThrough} onMouseDown={() => exec("strikeThrough")}>
+                        <Strikethrough className="h-3.5 w-3.5" />
+                      </ToolbarButton>
+                      <ToolbarButton title="مرتفع" active={fmtState.superscript} onMouseDown={() => exec("superscript")}>
+                        <Superscript className="h-3.5 w-3.5" />
+                      </ToolbarButton>
+                      <ToolbarButton title="منخفض" active={fmtState.subscript} onMouseDown={() => exec("subscript")}>
+                        <Subscript className="h-3.5 w-3.5" />
+                      </ToolbarButton>
+                      <ToolbarButton title="ضبط" active={fmtState.justifyFull} onMouseDown={() => exec("justifyFull")}>
+                        <AlignJustify className="h-3.5 w-3.5" />
+                      </ToolbarButton>
+                      <ToolbarButton title="زيادة المسافة البادئة" onMouseDown={() => exec("indent")}>
+                        <Indent className="h-3.5 w-3.5" />
+                      </ToolbarButton>
+                      <ToolbarButton title="تقليل المسافة البادئة" onMouseDown={() => exec("outdent")}>
+                        <Outdent className="h-3.5 w-3.5" />
+                      </ToolbarButton>
+                      <ToolbarButton title="اقتباس" active={fmtState.blockquote} onMouseDown={() => exec("formatBlock", "blockquote")}>
+                        <Quote className="h-3.5 w-3.5" />
+                      </ToolbarButton>
+                      <ToolbarButton title="إدراج صورة" onMouseDown={promptImage}>
+                        <ImageIcon className="h-3.5 w-3.5" />
+                      </ToolbarButton>
+                      <ToolbarButton title="خط أفقي" onMouseDown={insertHR}>
+                        <Minus className="h-3.5 w-3.5" />
+                      </ToolbarButton>
+                      <ToolbarButton title="تبديل اتجاه النص RTL/LTR" onMouseDown={toggleEditorDirection}>
+                        <ArrowLeftRight className="h-3.5 w-3.5" />
+                      </ToolbarButton>
+                      <ToolbarButton title="إزالة التنسيق" onMouseDown={() => exec("removeFormat")}>
+                        <Eraser className="h-3.5 w-3.5" />
+                      </ToolbarButton>
+                    </div>
+                  </PopoverContent>
+                </Popover>
+                <button
+                  type="button"
+                  title={plainMode ? "الوضع المنسّق" : "الوضع النصّي"}
+                  onClick={() => setPlainMode((v) => !v)}
+                  className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+                >
+                  <Type className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            </div>
             <div className="overflow-hidden rounded-lg border border-input bg-background transition focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/20">
               {!plainMode && (
                 <div className="flex flex-wrap items-center gap-0.5 border-b border-border/70 bg-muted/30 px-2 py-1.5">
@@ -4665,58 +4727,6 @@ function Composer({
                   <ToolbarButton title="إعادة (Ctrl+Y)" onMouseDown={() => exec("redo")}>
                     <Redo2 className="h-3.5 w-3.5" />
                   </ToolbarButton>
-                  <span className="mx-1 h-4 w-px bg-border" />
-                  {/* More options */}
-                  <Popover>
-                    <PopoverTrigger asChild>
-                      <button
-                        type="button"
-                        title="المزيد من الخيارات"
-                        aria-label="المزيد من الخيارات"
-                        onMouseDown={(e) => e.preventDefault()}
-                        className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
-                      >
-                        <MoreVertical className="h-3.5 w-3.5" />
-                      </button>
-                    </PopoverTrigger>
-                    <PopoverContent align="end" className="w-auto p-2">
-                      <div className="grid grid-cols-6 gap-0.5">
-                        <ToolbarButton title="يتوسطه خط" active={fmtState.strikeThrough} onMouseDown={() => exec("strikeThrough")}>
-                          <Strikethrough className="h-3.5 w-3.5" />
-                        </ToolbarButton>
-                        <ToolbarButton title="مرتفع" active={fmtState.superscript} onMouseDown={() => exec("superscript")}>
-                          <Superscript className="h-3.5 w-3.5" />
-                        </ToolbarButton>
-                        <ToolbarButton title="منخفض" active={fmtState.subscript} onMouseDown={() => exec("subscript")}>
-                          <Subscript className="h-3.5 w-3.5" />
-                        </ToolbarButton>
-                        <ToolbarButton title="ضبط" active={fmtState.justifyFull} onMouseDown={() => exec("justifyFull")}>
-                          <AlignJustify className="h-3.5 w-3.5" />
-                        </ToolbarButton>
-                        <ToolbarButton title="زيادة المسافة البادئة" onMouseDown={() => exec("indent")}>
-                          <Indent className="h-3.5 w-3.5" />
-                        </ToolbarButton>
-                        <ToolbarButton title="تقليل المسافة البادئة" onMouseDown={() => exec("outdent")}>
-                          <Outdent className="h-3.5 w-3.5" />
-                        </ToolbarButton>
-                        <ToolbarButton title="اقتباس" active={fmtState.blockquote} onMouseDown={() => exec("formatBlock", "blockquote")}>
-                          <Quote className="h-3.5 w-3.5" />
-                        </ToolbarButton>
-                        <ToolbarButton title="إدراج صورة" onMouseDown={promptImage}>
-                          <ImageIcon className="h-3.5 w-3.5" />
-                        </ToolbarButton>
-                        <ToolbarButton title="خط أفقي" onMouseDown={insertHR}>
-                          <Minus className="h-3.5 w-3.5" />
-                        </ToolbarButton>
-                        <ToolbarButton title="تبديل اتجاه النص RTL/LTR" onMouseDown={toggleEditorDirection}>
-                          <ArrowLeftRight className="h-3.5 w-3.5" />
-                        </ToolbarButton>
-                        <ToolbarButton title="إزالة التنسيق" onMouseDown={() => exec("removeFormat")}>
-                          <Eraser className="h-3.5 w-3.5" />
-                        </ToolbarButton>
-                      </div>
-                    </PopoverContent>
-                  </Popover>
                   {extensions.length > 0 && <span className="mx-1 h-4 w-px bg-border" />}
                   {extensions.map((ext) => (
                     <button
@@ -4737,16 +4747,6 @@ function Composer({
                       <span>{ext.label}</span>
                     </button>
                   ))}
-
-                  <div className="mx-auto" />
-                  <button
-                    type="button"
-                    title={plainMode ? "الوضع المنسّق" : "الوضع النصّي"}
-                    onClick={() => setPlainMode((v) => !v)}
-                    className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
-                  >
-                    <Type className="h-3.5 w-3.5" />
-                  </button>
                 </div>
               )}
 
