@@ -4291,23 +4291,29 @@ function Composer({
   const [savedAt, setSavedAt] = useState<number | null>(() => initialDoc?.updatedAt ?? null);
 
   // ----- Dirty tracking + guarded close -----
-  // bodyRev bumps on every editor `input` event so the autosave effect can
-  // observe body edits (contentEditable does NOT trigger React re-renders).
-  const [bodyRev, setBodyRev] = useState(0);
-  // lastEdit vs lastSave: dirty = we typed after the last successful save.
-  const lastEditAtRef = useRef<number>(0);
-  const lastSavedAtRef = useRef<number>(initialDoc?.updatedAt ?? 0);
+  // Generation-based dirty: `generation` bumps on every user edit (body input
+  // or structural field change). `savedGeneration` only advances when the
+  // saver reports a completion for THAT generation via `onCompleted`. A
+  // stale response never marks newer content clean.
+  const generationRef = useRef<number>(0);
+  const savedGenerationRef = useRef<number>(0);
   const isDirtyRef = useRef<boolean>(false);
+  // Kept for the header "تم الحفظ منذ …" UI only — not the dirty source of truth.
+  const lastSavedAtRef = useRef<number>(initialDoc?.updatedAt ?? 0);
   const recomputeDirty = () => {
-    isDirtyRef.current = lastEditAtRef.current > lastSavedAtRef.current;
+    isDirtyRef.current = generationRef.current > savedGenerationRef.current;
   };
   const markEdited = () => {
-    lastEditAtRef.current = Date.now();
+    generationRef.current += 1;
     recomputeDirty();
   };
+  // bodyRev mirrors generation for the autosave effect dependency (React
+  // needs a value in deps; contentEditable does not trigger re-renders).
+  const [bodyRev, setBodyRev] = useState(0);
   const [closePrompt, setClosePrompt] = useState<{
     resolve: (choice: "save" | "discard" | "cancel") => void;
   } | null>(null);
+
 
   // ----- Server-side draft saver (bridge APPEND) + pending-delete queue -----
   const bridgeSaveDraftFn = useServerFn(bridgeSaveDraft);
