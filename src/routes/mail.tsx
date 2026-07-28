@@ -461,11 +461,28 @@ function promotePendingOriginsForDestList(
   }
 }
 
+type EditDraftSource = {
+  /** MailMessage.id in "folder:uid" form; used to fetch attachment bytes. */
+  messageId: string;
+  attachments: import("@/lib/mail-types").MailAttachment[];
+};
+
 type ComposeInitial = {
   to?: string;
   cc?: string;
   subject?: string;
   body?: string;
+  /**
+   * Edit-Draft mode: when set, the composer opens as an EDIT of an existing
+   * server-side draft. draftId reuses the sticky X-MailMaestro-Draft-ID when
+   * present (legacy drafts fall back to a fresh uuid + previousRef so the
+   * bridge can atomically APPEND-then-delete the legacy copy — M4-A).
+   */
+  editDraftId?: string;
+  previousRef?: DraftServerRef;
+  existingAttachments?: EditDraftSource;
+  /** When true, `body` is already sanitized HTML and is loaded verbatim. */
+  bodyIsHtml?: boolean;
 };
 
 function stripHtml(html: string): string {
@@ -520,6 +537,46 @@ function buildForward(message: MailMessage): ComposeInitial {
     stripHtml(message.body || message.preview || "");
   return { to: "", subject, body: header };
 }
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Build an Edit-Draft ComposeInitial from a fetched Drafts folder message.
+ * When `message.draftIdHeader` is a valid uuid we reuse it (idempotency wins);
+ * otherwise we allocate a fresh id and rely on `previousRef` to let the
+ * bridge atomically APPEND-then-delete the legacy copy (M4-A contract).
+ */
+function buildEditDraft(message: MailMessage, draftsFolderPath?: string): ComposeInitial {
+  const to = (message.to ?? []).map((a) => a.email).filter(Boolean).join(", ");
+  const cc = (message.cc ?? []).map((a) => a.email).filter(Boolean).join(", ");
+  const headerId = message.draftIdHeader?.trim();
+  const editDraftId = headerId && UUID_RE.test(headerId) ? headerId : newDraftId();
+  const parsed = parseMessageId(message.id);
+  const previousRef: DraftServerRef | undefined =
+    parsed && draftsFolderPath && message.uidValidity
+      ? {
+          folderPath: draftsFolderPath,
+          uid: parsed.uid,
+          uidValidity: String(message.uidValidity),
+        }
+      : undefined;
+  const rawSubject = message.subject === "(بدون موضوع)" ? "" : message.subject;
+  const existingAttachments =
+    message.attachments && message.attachments.length > 0
+      ? { messageId: message.id, attachments: message.attachments }
+      : undefined;
+  return {
+    to,
+    cc,
+    subject: rawSubject,
+    body: message.body ?? "",
+    bodyIsHtml: true,
+    editDraftId,
+    previousRef,
+    existingAttachments,
+  };
+}
+
 
 type SortOption = "date-desc" | "date-asc" | "unread-first" | "starred-first";
 
