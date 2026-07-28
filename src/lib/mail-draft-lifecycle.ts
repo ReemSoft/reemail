@@ -222,6 +222,26 @@ export function clearDraftDoc(storage: DraftStorageLike, accountEmail: string): 
 
 // ---------------------------------------------------------------- Saver
 
+export interface DraftSaveCompletion {
+  /**
+   * Generation number of the SNAPSHOT that was just handed to the remote
+   * (whether the remote succeeded or failed). This is the value the caller
+   * passed to `requestSave(..., generation)`; when a save is coalesced
+   * multiple times, only the most-recently-merged generation is reported —
+   * older generations are silently discarded because their content has been
+   * superseded before the network round-trip finished.
+   *
+   * REQUIRED (not optional) so callers relying on the generation-based
+   * dirty model can advance `savedGeneration` unconditionally.
+   */
+  completedGeneration: number;
+  status: DraftSaveStatus;
+  /** Populated only when `status === "saved"` and the bridge returned a UID. */
+  serverRef?: DraftServerRef;
+  /** Coarse error code from the bridge — present when the remote failed. */
+  code?: string;
+}
+
 export interface CreateDraftSaverOptions {
   saveRemote: (input: {
     draftId: string;
@@ -230,17 +250,32 @@ export interface CreateDraftSaverOptions {
   }) => Promise<SaveRemoteResult>;
   onStatus?: (status: DraftSaveStatus) => void;
   onServerRef?: (ref: DraftServerRef) => void;
+  /**
+   * Fires after each save run settles (success and soft-failure). Stale
+   * responses (superseded by a newer request before their round-trip
+   * finished) do NOT fire this callback — they are dropped silently, so
+   * the caller's `savedGeneration` never advances past the truly-persisted
+   * revision and a stale reply cannot mark newer content clean.
+   */
+  onCompleted?: (info: DraftSaveCompletion) => void;
 }
 
 export interface DraftSaver {
   /**
    * Request a save. If another save is in flight this call is coalesced:
-   * the newest snapshot is captured and a follow-up run is scheduled to
-   * fire exactly once when the in-flight save settles. The returned
-   * promise resolves when THIS caller's snapshot has been offered to the
-   * remote (whether success or failure).
+   * the newest snapshot + generation are captured and a follow-up run is
+   * scheduled to fire exactly once when the in-flight save settles.
+   * `generation` is the caller's revision counter; it is echoed back
+   * verbatim via `onCompleted`. Omitting it (legacy tests) falls back to
+   * the saver's internal monotonic sequence. The returned promise resolves
+   * when THIS caller's snapshot has been offered to the remote (whether
+   * success or failure).
    */
-  requestSave(snapshot: DraftSnapshot, previousRef: DraftServerRef | null): Promise<void>;
+  requestSave(
+    snapshot: DraftSnapshot,
+    previousRef: DraftServerRef | null,
+    generation?: number,
+  ): Promise<void>;
   isBusy(): boolean;
   getStatus(): DraftSaveStatus;
 }
