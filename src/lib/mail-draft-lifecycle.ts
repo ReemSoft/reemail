@@ -35,6 +35,17 @@
 
 export type DraftSaveStatus = "idle" | "saving" | "saved" | "saved-local" | "failed";
 
+/**
+ * Bridge error codes that MUST be treated as recoverable "local-only" saves.
+ * Only true network / transport failures qualify — any protocol-level or
+ * permission-level error is a HARD failure and leaves the composer dirty so
+ * the user can retry (or lose nothing on close).
+ *
+ * Locked by tests: adding a code here relaxes the failure contract, so the
+ * list is intentionally narrow and reviewed.
+ */
+export const NETWORK_SOFT_FAIL_CODES: ReadonlySet<string> = new Set(["NETWORK"]);
+
 export interface DraftRecipient {
   email: string;
   name?: string;
