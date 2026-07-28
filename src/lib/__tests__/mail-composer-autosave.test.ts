@@ -88,11 +88,11 @@ function fakeTarget() {
   const listeners = new Map<string, Set<(e: unknown) => void>>();
   return {
     listeners,
-    addEventListener(type: string, fn: (e: unknown) => void) {
+    addEventListener(type: string, fn: (e: any) => void) {
       if (!listeners.has(type)) listeners.set(type, new Set());
       listeners.get(type)!.add(fn);
     },
-    removeEventListener(type: string, fn: (e: unknown) => void) {
+    removeEventListener(type: string, fn: (e: any) => void) {
       listeners.get(type)?.delete(fn);
     },
     emit(type: string, evt: unknown) {
