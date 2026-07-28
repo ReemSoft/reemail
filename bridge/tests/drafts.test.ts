@@ -12,11 +12,14 @@ import { resolveDraftsPath } from "../src/smtp.js";
 import {
   executeDraftSave,
   executeDraftDelete,
+  saveDraft,
   DRAFT_ID_HEADER,
   DraftSavePayloadSchema,
+  draftMutexInflight,
   type ImapDraftClient,
   type DraftSavePayload,
   type DraftDeletePayload,
+  type DraftDeps,
 } from "../src/drafts.js";
 import type { MailAccount } from "../src/types.js";
 
