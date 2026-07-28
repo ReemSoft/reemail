@@ -863,3 +863,176 @@ test("mutex: different UIDVALIDITY between pre-probe and APPEND does not leak st
   // Old 9999 UID from the previous uidvalidity MUST NOT be treated as stale-and-deleted.
   assert.equal(server.messages.has(9999), false);
 });
+
+// ---------- M4-A — Legacy Draft Support (previousRef without header) --------
+//
+// Old drafts saved before MAILMAESTRO_DRAFT_APPEND_R1 don't carry the
+// X-MailMaestro-Draft-ID header, so header-search alone can never find them.
+// M4-A requires trusting a caller-supplied previousRef ONLY under strict
+// invariants: same resolved Drafts path, same UIDVALIDITY, UIDPLUS supported,
+// APPEND happens BEFORE delete, and no global EXPUNGE.
+
+test("M4-A: legacy draft (no header) + valid previousRef → APPEND then delete old UID", async () => {
+  // Pre-APPEND probe: [] (legacy has no header). previousRef forces replace
+  // mode. Post-APPEND search: [200] (only the new one has the header).
+  const events: string[] = [];
+  const { client, rec } = mkClient({
+    mailboxes: [box("Drafts")],
+    uidValidity: "1000",
+    appendUid: 200,
+    searchResults: [[], [200]],
+  });
+  const origAppend = client.append.bind(client);
+  const origDelete = client.deleteByUid.bind(client);
+  client.append = async (p, r, f) => {
+    events.push("append");
+    return origAppend(p, r, f);
+  };
+  client.deleteByUid = async (u) => {
+    events.push(`delete:${u.join(",")}`);
+    return origDelete(u);
+  };
+  const r = await executeDraftSave(client, {
+    ...BASE_INPUT,
+    previousRef: { folderPath: "Drafts", uid: 42, uidValidity: "1000" },
+  });
+  assert.equal(r.ok, true);
+  assert.deepEqual(events, ["append", "delete:42"], "APPEND must land before delete of legacy UID");
+  assert.equal(rec.appends.length, 1);
+  assert.equal(rec.deletes.length, 1);
+  assert.deepEqual(rec.deletes[0], [42]);
+});
+
+test("M4-A: legacy APPEND failure leaves legacy previousRef UID untouched", async () => {
+  const { client, rec } = mkClient({
+    mailboxes: [box("Drafts")],
+    uidValidity: "1000",
+    appendFail: true,
+    searchResults: [[]], // legacy: no header match
+  });
+  const r = await executeDraftSave(client, {
+    ...BASE_INPUT,
+    previousRef: { folderPath: "Drafts", uid: 42, uidValidity: "1000" },
+  });
+  assert.equal(r.ok, false);
+  if (r.ok) return;
+  // Note: replace mode + no UIDPLUS refuses pre-APPEND. Here UIDPLUS defaults
+  // to true so we DO reach APPEND, which then fails. Old copy MUST be safe.
+  assert.equal(r.error, "APPEND_FAILED");
+  assert.equal(rec.deletes.length, 0, "MUST NOT touch legacy UID when APPEND fails");
+});
+
+test("M4-A: UIDVALIDITY mismatch on previousRef → APPEND ok, legacy UID NOT deleted", async () => {
+  // Caller's previousRef.uidValidity=999 but current mailbox=1000. The old
+  // UID cannot be trusted → must not be deleted. APPEND still succeeds.
+  const { client, rec } = mkClient({
+    mailboxes: [box("Drafts")],
+    uidValidity: "1000",
+    appendUid: 200,
+    searchResults: [[], [200]],
+  });
+  const r = await executeDraftSave(client, {
+    ...BASE_INPUT,
+    previousRef: { folderPath: "Drafts", uid: 42, uidValidity: "999" },
+  });
+  assert.equal(r.ok, true);
+  assert.equal(rec.appends.length, 1);
+  assert.equal(rec.deletes.length, 0, "UIDVALIDITY mismatch MUST prevent legacy UID deletion");
+});
+
+test("M4-A: previousRef.folderPath ≠ resolved Drafts path → legacy UID NOT deleted", async () => {
+  // Attacker-shaped previousRef pointing at INBOX. Even if the UIDVALIDITY
+  // matches, the folder path mismatch must veto any delete.
+  const { client, rec } = mkClient({
+    mailboxes: [box("Drafts")],
+    uidValidity: "1000",
+    appendUid: 200,
+    searchResults: [[], [200]],
+  });
+  const r = await executeDraftSave(client, {
+    ...BASE_INPUT,
+    previousRef: { folderPath: "INBOX", uid: 1, uidValidity: "1000" },
+  });
+  assert.equal(r.ok, true);
+  assert.equal(rec.deletes.length, 0, "previousRef for non-Drafts folder MUST be ignored");
+  // Server only opened its own resolved Drafts folder — INBOX never touched.
+  assert.equal(
+    rec.opens.every((p) => p === "Drafts"),
+    true,
+  );
+});
+
+test("M4-A: non-existent previousRef UID cannot delete an unrelated message (same UIDVALIDITY)", async () => {
+  // IMAP guarantees UIDs are never reused within one UIDVALIDITY, so a
+  // delete-by-UID for a UID that no longer exists is a harmless no-op. We
+  // exercise the code path and assert it only ever issues the exact UID we
+  // asked for (never a wildcard/global EXPUNGE).
+  const { client, rec } = mkClient({
+    mailboxes: [box("Drafts")],
+    uidValidity: "1000",
+    appendUid: 200,
+    searchResults: [[], [200]],
+  });
+  const r = await executeDraftSave(client, {
+    ...BASE_INPUT,
+    previousRef: { folderPath: "Drafts", uid: 9999, uidValidity: "1000" },
+  });
+  assert.equal(r.ok, true);
+  assert.equal(rec.deletes.length, 1);
+  assert.deepEqual(rec.deletes[0], [9999], "delete must target exactly the previousRef UID");
+});
+
+test("M4-A: previousRef without UIDPLUS is refused BEFORE APPEND (no legacy leak)", async () => {
+  // Belt-and-braces on top of the existing SAFE_DRAFT_REPLACE_UNSUPPORTED
+  // test — this one specifically pins the legacy path invariant.
+  const { client, rec } = mkClient({
+    mailboxes: [box("Drafts")],
+    hasUidPlus: false,
+    uidValidity: "1000",
+    searchResults: [[]], // legacy: no header match
+  });
+  const r = await executeDraftSave(client, {
+    ...BASE_INPUT,
+    previousRef: { folderPath: "Drafts", uid: 42, uidValidity: "1000" },
+  });
+  assert.equal(r.ok, false);
+  if (r.ok) return;
+  assert.equal(r.error, "SAFE_DRAFT_REPLACE_UNSUPPORTED");
+  assert.equal(rec.appends.length, 0, "MUST NOT APPEND when legacy replace is unsafe");
+  assert.equal(rec.deletes.length, 0);
+});
+
+test("M4-A: legacy previousRef with mutex — retry after crash converges to one canonical", async () => {
+  // Round 1: legacy draft exists at UID 42 (no header); previousRef points
+  // at it; APPEND lands at 100; delete of 42 happens.
+  const server = mkServer();
+  server.messages.set(42, ""); // legacy: no draftId header
+  const deps = mkSharedDeps(server);
+  const r1 = await saveDraft(
+    ACCT,
+    "pw",
+    {
+      ...BASE_INPUT,
+      previousRef: { folderPath: "Drafts", uid: 42, uidValidity: "1000" },
+    },
+    deps,
+  );
+  assert.equal(r1.ok, true);
+  assert.equal(server.messages.has(42), false, "legacy UID must be deleted");
+  assert.equal(server.messages.size, 1, "exactly one canonical copy after legacy replace");
+
+  // Round 2 (retry with same previousRef, but the legacy UID is already
+  // gone). Must still converge to a single copy.
+  const r2 = await saveDraft(
+    ACCT,
+    "pw",
+    {
+      ...BASE_INPUT,
+      previousRef: { folderPath: "Drafts", uid: 42, uidValidity: "1000" },
+    },
+    deps,
+  );
+  assert.equal(r2.ok, true);
+  assert.equal(server.messages.size, 1, "retry MUST converge to exactly one canonical copy");
+  assert.equal(draftMutexInflight(), 0);
+});

@@ -283,38 +283,59 @@ export async function executeDraftSave(
     // 3) Reopen with lock to re-scan for all copies of this draftId.
     //    Canonical = highest UID within the current UIDVALIDITY (newest
     //    wins). Every other UID is stale and MUST be selectively expunged.
-    //    This is defense-in-depth on top of the keyed mutex in saveDraft: if
-    //    two concurrent APPENDs somehow race past the mutex, or a retry
-    //    lands mid-cleanup, all callers converge to the same canonical UID
-    //    and the folder can never end up with duplicates or empty.
+    //
+    //    LEGACY (M4-A): drafts saved by older builds don't carry the
+    //    `X-MailMaestro-Draft-ID` header, so a header search can never find
+    //    them. When the caller supplies a trusted `previousRef` we treat
+    //    its UID as an additional stale candidate — but ONLY when every
+    //    safety invariant holds:
+    //      * previousRef.folderPath equals the server-resolved Drafts path
+    //        (never a caller-supplied path like INBOX).
+    //      * previousRef.uidValidity equals the CURRENT mailbox UIDVALIDITY
+    //        (a bump invalidates the UID entirely).
+    //      * UIDPLUS is supported (guaranteed here because replace-mode
+    //        already refused non-UIDPLUS servers pre-APPEND).
+    //      * previousRef.uid is NOT the freshly-appended canonical UID.
+    //    Within a single UIDVALIDITY, IMAP guarantees UIDs are never
+    //    reused, so deleting a UID that no longer exists is a harmless
+    //    no-op — it can never target an unrelated message.
     const opened = await client.openWithLock(folderPath);
     try {
       const uidValidity = appendUidValidity || opened.uidValidity || priorUidValidity;
 
       let matched: number[] = [];
+      let postSearchOk = true;
       try {
         matched = await client.searchByHeader(DRAFT_ID_HEADER, input.draftId);
       } catch {
         // Search failure MUST NOT roll back the APPEND. Fall back to the
-        // append's own UID as the best-effort canonical reference.
-        return {
-          ok: true,
-          draftId: input.draftId,
-          folderPath,
-          uid: appendUid,
-          uidValidity,
-          messageId,
-          savedAt: now().toISOString(),
-        };
+        // append's own UID as the best-effort canonical reference — but
+        // continue so an explicit previousRef can still be cleaned up.
+        postSearchOk = false;
       }
 
       // Deterministic canonical selection: highest UID wins.
       const canonical =
-        matched.length > 0 ? matched.reduce((a, b) => (b > a ? b : a), matched[0]) : appendUid;
-      const stale = matched.filter((u) => u !== canonical);
-      if (stale.length > 0 && client.hasUidPlus()) {
+        postSearchOk && matched.length > 0
+          ? matched.reduce((a, b) => (b > a ? b : a), matched[0])
+          : appendUid;
+      const stale = postSearchOk ? matched.filter((u) => u !== canonical) : [];
+
+      // Legacy previousRef cleanup — union with header-matched stale UIDs.
+      const toDelete = new Set<number>(stale);
+      const prev = input.previousRef;
+      const canDeletePrevious =
+        !!prev &&
+        prev.folderPath === folderPath &&
+        String(prev.uidValidity) === uidValidity &&
+        client.hasUidPlus() &&
+        typeof canonical === "number" &&
+        prev.uid !== canonical;
+      if (canDeletePrevious && prev) toDelete.add(prev.uid);
+
+      if (toDelete.size > 0 && client.hasUidPlus()) {
         try {
-          await client.deleteByUid(stale);
+          await client.deleteByUid([...toDelete]);
         } catch {
           // Cleanup failure MUST NOT fail the save. A future save/retry
           // will re-scan and converge.
