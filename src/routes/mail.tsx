@@ -3914,7 +3914,7 @@ function RecipientField({
                 }
               }}
               placeholder=""
-              className="min-w-[140px] flex-1 bg-transparent px-1 py-1 text-sm outline-none"
+              className="min-w-[80px] flex-1 bg-transparent px-1 py-1 text-sm outline-none"
               aria-autocomplete="list"
               aria-expanded={open}
             />
