@@ -5336,7 +5336,9 @@ function Composer({
         return "saved_local";
       }
       // Hard failure — do NOT show a "success" toast.
-      toast.error("تعذّر حفظ المسودّة على الخادم — حاول لاحقاً");
+      toast.error(
+        `تعذّر حفظ المسودّة على الخادم — حاول لاحقاً (${lastFailCodeRef.current ?? "UNKNOWN"})`,
+      );
       return "failed";
     } finally {
       savingNowRef.current = false;
