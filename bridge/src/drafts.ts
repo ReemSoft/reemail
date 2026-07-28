@@ -284,8 +284,13 @@ export async function executeDraftSave(
       return { ok: false, error: "APPEND_FAILED" };
     }
 
-    // 3) Reopen with lock to re-scan for all copies of this draftId and
-    //    expunge everything except the freshly-appended one.
+    // 3) Reopen with lock to re-scan for all copies of this draftId.
+    //    Canonical = highest UID within the current UIDVALIDITY (newest
+    //    wins). Every other UID is stale and MUST be selectively expunged.
+    //    This is defense-in-depth on top of the keyed mutex in saveDraft: if
+    //    two concurrent APPENDs somehow race past the mutex, or a retry
+    //    lands mid-cleanup, all callers converge to the same canonical UID
+    //    and the folder can never end up with duplicates or empty.
     const opened = await client.openWithLock(folderPath);
     try {
       const uidValidity = appendUidValidity || opened.uidValidity || priorUidValidity;
@@ -294,7 +299,8 @@ export async function executeDraftSave(
       try {
         matched = await client.searchByHeader(DRAFT_ID_HEADER, input.draftId);
       } catch {
-        // Search failure MUST NOT roll back the APPEND.
+        // Search failure MUST NOT roll back the APPEND. Fall back to the
+        // append's own UID as the best-effort canonical reference.
         return {
           ok: true,
           draftId: input.draftId,
@@ -306,13 +312,16 @@ export async function executeDraftSave(
         };
       }
 
-      const stale =
-        appendUid == null ? matched.slice(0, -1) : matched.filter((u) => u !== appendUid);
+      // Deterministic canonical selection: highest UID wins.
+      const canonical =
+        matched.length > 0 ? matched.reduce((a, b) => (b > a ? b : a), matched[0]) : appendUid;
+      const stale = matched.filter((u) => u !== canonical);
       if (stale.length > 0 && client.hasUidPlus()) {
         try {
           await client.deleteByUid(stale);
         } catch {
-          // Cleanup failure MUST NOT fail the save.
+          // Cleanup failure MUST NOT fail the save. A future save/retry
+          // will re-scan and converge.
         }
       }
       void priorSearchFailed;
@@ -321,7 +330,7 @@ export async function executeDraftSave(
         ok: true,
         draftId: input.draftId,
         folderPath,
-        uid: appendUid,
+        uid: canonical,
         uidValidity,
         messageId,
         savedAt: now().toISOString(),
