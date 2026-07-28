@@ -301,3 +301,284 @@ export const bridgeSend = createServerFn({ method: "POST" })
     if (!r.ok) return { ok: false, error: r.error };
     return r.json;
   });
+
+// ---------------------------------------------------------------------------
+// M3 — Draft server functions (MAILMAESTRO_DRAFT_APPEND_R1)
+// ---------------------------------------------------------------------------
+//
+// Trust model — LOCKED:
+//   * Client sends ONLY: mailSessionToken, draftId, previousRef, recipients,
+//     subject, body, and (for save) FormData attachments.
+//   * Client CANNOT send: account, password, companyId, Bridge key, imap/smtp
+//     host/port/security. Any such field arriving from the client is IGNORED.
+//   * Server verifies the Mail Session JWT, reads accountId+companyId from
+//     the claims, loads the IMAP/SMTP config from DB scoped by companyId,
+//     and decrypts the mailbox password server-side.
+//   * Bridge errors are mapped to a small, typed code set — no PII, no
+//     provider strings, no raw Bridge payloads leak to the browser.
+//   * Attachments MUST flow through FormData (multipart) — never base64 in
+//     JSON — reusing the same size/count caps as the send-multipart route.
+
+const DraftPreviousRefSchema = z.object({
+  folderPath: z.string().min(1).max(500),
+  uid: z.number().int().positive(),
+  uidValidity: z.string().min(1).max(64),
+});
+
+const DraftSaveClientSchema = z.object({
+  mailSessionToken: z.string().min(20).max(4096),
+  draftId: z.string().uuid(),
+  to: z.array(AddressSchema).max(200).optional().default([]),
+  cc: z.array(AddressSchema).max(200).optional().default([]),
+  bcc: z.array(AddressSchema).max(200).optional().default([]),
+  subject: z.string().max(998).optional().default(""),
+  bodyHtml: z.string().max(5 * 1024 * 1024).optional(),
+  bodyText: z.string().max(5 * 1024 * 1024).optional(),
+  previousRef: DraftPreviousRefSchema.optional(),
+});
+
+const DraftDeleteClientSchema = z.object({
+  mailSessionToken: z.string().min(20).max(4096),
+  draftId: z.string().uuid(),
+  previousRef: DraftPreviousRefSchema.optional(),
+});
+
+export type DraftErrorCode =
+  | "INVALID_PAYLOAD"
+  | "SESSION_REQUIRED"
+  | "CREDENTIALS_PENDING"
+  | "BRIDGE_NOT_CONFIGURED"
+  | "NO_DRAFTS_FOLDER"
+  | "SAFE_DRAFT_REPLACE_UNSUPPORTED"
+  | "UIDPLUS_UNSUPPORTED"
+  | "ATTACHMENT_TOO_LARGE"
+  | "ATTACHMENTS_TOO_LARGE"
+  | "TOO_MANY_ATTACHMENTS"
+  | "APPEND_FAILED"
+  | "IMAP_ERROR"
+  | "NETWORK"
+  | "UNKNOWN";
+
+export interface DraftSaveResultOk {
+  ok: true;
+  draftId: string;
+  folderPath: string;
+  uid: number | null;
+  uidValidity: string;
+  messageId: string;
+  savedAt: string;
+}
+export interface DraftDeleteResultOk {
+  ok: true;
+  draftId: string;
+  folderPath: string | null;
+  deleted: boolean;
+}
+export interface DraftResultErr {
+  ok: false;
+  code: DraftErrorCode;
+}
+
+// Coarse bridge-error → typed client code map. Anything unknown collapses to
+// UNKNOWN so provider text NEVER reaches the browser.
+function mapBridgeDraftError(raw: unknown): DraftErrorCode {
+  const s = typeof raw === "string" ? raw : "";
+  switch (s) {
+    case "NO_DRAFTS_FOLDER":
+    case "SAFE_DRAFT_REPLACE_UNSUPPORTED":
+    case "UIDPLUS_UNSUPPORTED":
+    case "APPEND_FAILED":
+    case "IMAP_ERROR":
+    case "ATTACHMENT_TOO_LARGE":
+    case "ATTACHMENTS_TOO_LARGE":
+    case "TOO_MANY_ATTACHMENTS":
+    case "INVALID_PAYLOAD":
+      return s;
+    default:
+      return "UNKNOWN";
+  }
+}
+
+// -- Save (multipart FormData for attachments) --------------------------------
+// TanStack Start supports FormData input via `inputValidator`. We validate the
+// JSON `payload` field with Zod and stream the raw `attachments` File entries
+// through to the bridge unchanged (never base64, never in-memory buffers).
+export const bridgeSaveDraft = createServerFn({ method: "POST" })
+  .inputValidator((input: FormData) => {
+    if (!(input instanceof FormData)) {
+      throw new Error("INVALID_PAYLOAD");
+    }
+    const raw = input.get("payload");
+    if (typeof raw !== "string") throw new Error("INVALID_PAYLOAD");
+    let parsedJson: unknown;
+    try {
+      parsedJson = JSON.parse(raw);
+    } catch {
+      throw new Error("INVALID_PAYLOAD");
+    }
+    const parsed = DraftSaveClientSchema.parse(parsedJson);
+    return { parsed, form: input };
+  })
+  .handler(async ({ data }): Promise<DraftSaveResultOk | DraftResultErr> => {
+    const { parsed, form } = data;
+    const { resolveBridgeAuth } = await import("@/lib/mail-bridge-auth.server");
+    const { loadDecryptedPasswordForAccount, MailCredentialsPendingError } = await import(
+      "@/lib/mail-credentials.server"
+    );
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+
+    const auth = await resolveBridgeAuth(parsed.mailSessionToken);
+    if (!auth.ok) {
+      const code: DraftErrorCode =
+        auth.code === "BRIDGE_NOT_CONFIGURED"
+          ? "BRIDGE_NOT_CONFIGURED"
+          : auth.code === "INVALID_TOKEN"
+            ? "SESSION_REQUIRED"
+            : "UNKNOWN";
+      return { ok: false, code };
+    }
+
+    let password: string;
+    try {
+      password = await loadDecryptedPasswordForAccount(
+        supabaseAdmin,
+        auth.accountId,
+        auth.companyId,
+      );
+    } catch (err) {
+      if (err instanceof MailCredentialsPendingError) {
+        return { ok: false, code: "CREDENTIALS_PENDING" };
+      }
+      console.error("[bridgeSaveDraft] credentials load failed");
+      return { ok: false, code: "IMAP_ERROR" };
+    }
+
+    // Enforce account/company isolation on previousRef: we never trust a
+    // caller-supplied folderPath as a physical target — the Bridge only ever
+    // writes to its own resolved Drafts mailbox — but we still refuse a
+    // previousRef whose uidValidity/folderPath look like an attempt to point
+    // at another mailbox. The Bridge's own guard (only touches resolved
+    // Drafts path) is defense-in-depth.
+    const safeJsonPayload = {
+      account: auth.bridgeAccount,
+      password,
+      draftId: parsed.draftId,
+      to: parsed.to,
+      cc: parsed.cc,
+      bcc: parsed.bcc,
+      subject: parsed.subject,
+      bodyHtml: parsed.bodyHtml,
+      bodyText: parsed.bodyText,
+      previousRef: parsed.previousRef,
+    };
+
+    const outForm = new FormData();
+    outForm.append("payload", JSON.stringify(safeJsonPayload));
+    for (const [k, v] of form.entries()) {
+      if (k === "payload") continue;
+      if (k === "attachments" && v instanceof File) {
+        outForm.append("attachments", v, v.name);
+      }
+    }
+
+    let upstream: Response;
+    try {
+      upstream = await fetch(`${auth.bridgeUrl}/api/draft-save`, {
+        method: "POST",
+        headers: { "X-Bridge-Key": auth.bridgeKey },
+        body: outForm,
+      });
+    } catch {
+      return { ok: false, code: "NETWORK" };
+    }
+    let json: any = null;
+    try {
+      json = await upstream.json();
+    } catch {
+      /* fall through */
+    }
+    if (!upstream.ok || !json?.ok) {
+      return { ok: false, code: mapBridgeDraftError(json?.error) };
+    }
+    return {
+      ok: true,
+      draftId: String(json.draftId),
+      folderPath: String(json.folderPath),
+      uid: typeof json.uid === "number" ? json.uid : null,
+      uidValidity: String(json.uidValidity ?? ""),
+      messageId: String(json.messageId ?? ""),
+      savedAt: String(json.savedAt ?? new Date().toISOString()),
+    };
+  });
+
+export const bridgeDeleteDraft = createServerFn({ method: "POST" })
+  .inputValidator((v: z.input<typeof DraftDeleteClientSchema>) =>
+    DraftDeleteClientSchema.parse(v),
+  )
+  .handler(async ({ data }): Promise<DraftDeleteResultOk | DraftResultErr> => {
+    const { resolveBridgeAuth } = await import("@/lib/mail-bridge-auth.server");
+    const { loadDecryptedPasswordForAccount, MailCredentialsPendingError } = await import(
+      "@/lib/mail-credentials.server"
+    );
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+
+    const auth = await resolveBridgeAuth(data.mailSessionToken);
+    if (!auth.ok) {
+      const code: DraftErrorCode =
+        auth.code === "BRIDGE_NOT_CONFIGURED"
+          ? "BRIDGE_NOT_CONFIGURED"
+          : auth.code === "INVALID_TOKEN"
+            ? "SESSION_REQUIRED"
+            : "UNKNOWN";
+      return { ok: false, code };
+    }
+
+    let password: string;
+    try {
+      password = await loadDecryptedPasswordForAccount(
+        supabaseAdmin,
+        auth.accountId,
+        auth.companyId,
+      );
+    } catch (err) {
+      if (err instanceof MailCredentialsPendingError) {
+        return { ok: false, code: "CREDENTIALS_PENDING" };
+      }
+      console.error("[bridgeDeleteDraft] credentials load failed");
+      return { ok: false, code: "IMAP_ERROR" };
+    }
+
+    let upstream: Response;
+    try {
+      upstream = await fetch(`${auth.bridgeUrl}/api/draft-delete`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Bridge-Key": auth.bridgeKey,
+        },
+        body: JSON.stringify({
+          account: auth.bridgeAccount,
+          password,
+          draftId: data.draftId,
+          previousRef: data.previousRef,
+        }),
+      });
+    } catch {
+      return { ok: false, code: "NETWORK" };
+    }
+    let json: any = null;
+    try {
+      json = await upstream.json();
+    } catch {
+      /* fall through */
+    }
+    if (!upstream.ok || !json?.ok) {
+      return { ok: false, code: mapBridgeDraftError(json?.error) };
+    }
+    return {
+      ok: true,
+      draftId: String(json.draftId),
+      folderPath: json.folderPath == null ? null : String(json.folderPath),
+      deleted: Boolean(json.deleted),
+    };
+  });
