@@ -4727,7 +4727,6 @@ function Composer({
                   <ToolbarButton title="إعادة (Ctrl+Y)" onMouseDown={() => exec("redo")}>
                     <Redo2 className="h-3.5 w-3.5" />
                   </ToolbarButton>
-                  <span className="mx-1 h-4 w-px bg-border" />
                   {extensions.length > 0 && <span className="mx-1 h-4 w-px bg-border" />}
                   {extensions.map((ext) => (
                     <button
