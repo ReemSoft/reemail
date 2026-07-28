@@ -4000,6 +4000,79 @@ function Composer({
     return () => window.clearInterval(id);
   }, []);
 
+  // ----- Track selection formatting state for toolbar highlighting -----
+  const [fmtState, setFmtState] = useState<Record<string, boolean>>({});
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    const TOGGLE_CMDS = [
+      "bold",
+      "italic",
+      "underline",
+      "strikeThrough",
+      "superscript",
+      "subscript",
+      "justifyLeft",
+      "justifyCenter",
+      "justifyRight",
+      "justifyFull",
+      "insertUnorderedList",
+      "insertOrderedList",
+    ];
+    let raf = 0;
+    const update = () => {
+      const editor = editorRef.current;
+      if (!editor) return;
+      const sel = window.getSelection();
+      if (!sel || sel.rangeCount === 0) return;
+      const node = sel.anchorNode;
+      if (!node || !editor.contains(node.nodeType === 1 ? node : node.parentNode)) return;
+      const next: Record<string, boolean> = {};
+      for (const c of TOGGLE_CMDS) {
+        try {
+          next[c] = document.queryCommandState(c);
+        } catch {
+          next[c] = false;
+        }
+      }
+      try {
+        const bq = document.queryCommandValue("formatBlock")?.toString().toLowerCase() || "";
+        next["blockquote"] = bq === "blockquote";
+        const cleanBlock = bq.replace(/[<>]/g, "");
+        if (cleanBlock) setBlockFmt(cleanBlock);
+      } catch {
+        /* noop */
+      }
+      try {
+        const ff = document.queryCommandValue("fontName")?.toString().replace(/^['"]|['"]$/g, "");
+        if (ff) {
+          // match one of our option values whose first family matches
+          setFontFamily((prev) => {
+            const first = ff.split(",")[0].trim().toLowerCase();
+            const prevFirst = prev.split(",")[0].trim().toLowerCase();
+            return first === prevFirst ? prev : ff;
+          });
+        }
+      } catch {
+        /* noop */
+      }
+      setFmtState((prev) => {
+        for (const k of Object.keys(next)) if (prev[k] !== next[k]) return next;
+        return prev;
+      });
+    };
+    const onChange = () => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(update);
+    };
+    document.addEventListener("selectionchange", onChange);
+    editorRef.current?.addEventListener("keyup", onChange);
+    editorRef.current?.addEventListener("mouseup", onChange);
+    return () => {
+      cancelAnimationFrame(raf);
+      document.removeEventListener("selectionchange", onChange);
+    };
+  }, []);
+
   const totalBytes = files.reduce((acc, f) => acc + f.size, 0);
 
   // ----- Draft autosave (debounced) -----
