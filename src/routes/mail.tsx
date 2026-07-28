@@ -1261,6 +1261,16 @@ function MailApp() {
   const [selection, setSelection] = useState<Set<string>>(() => new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
   const [selectMode, setSelectMode] = useState(false);
+
+  // Guarded navigation: if the composer is open with unsaved changes, prompt
+  // (Save / Discard / Cancel) before running the destructive nav action.
+  async function guardComposerNav(): Promise<boolean> {
+    if (typeof window === "undefined") return true;
+    const g = (window as unknown as { __mailmaestroComposerGuard?: (() => Promise<boolean>) | null })
+      .__mailmaestroComposerGuard;
+    if (!g) return true;
+    return g();
+  }
   const [refreshing, setRefreshing] = useState(false);
   const [searchMode, setSearchMode] = useState<"quick" | "deep">("quick");
   const [deepIncludeBody, setDeepIncludeBody] = useState(false);
