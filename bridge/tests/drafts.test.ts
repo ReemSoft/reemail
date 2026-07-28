@@ -811,6 +811,12 @@ test("mutex: retry after cleanup interruption converges to a single canonical co
           for (const u of uids) server.messages.delete(u);
           return true;
         },
+        hasMove() {
+          return false;
+        },
+        async moveByUid() {
+          return true;
+        },
         async logout() {},
       };
     },
