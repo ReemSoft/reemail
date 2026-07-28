@@ -3873,6 +3873,7 @@ function ToolbarSelect({
   title,
   ariaLabel,
   placeholder,
+  value,
   options,
   onChange,
   className,
@@ -3880,6 +3881,7 @@ function ToolbarSelect({
   title: string;
   ariaLabel: string;
   placeholder: string;
+  value?: string;
   options: { value: string; label: string }[];
   onChange: (value: string) => void;
   className?: string;
@@ -3889,10 +3891,9 @@ function ToolbarSelect({
       <select
         title={title}
         aria-label={ariaLabel}
-        defaultValue=""
+        value={value ?? ""}
         onChange={(e) => {
           const v = e.target.value;
-          e.target.value = "";
           if (v) onChange(v);
         }}
         className="peer h-7 w-full cursor-pointer appearance-none rounded-md border border-input bg-background ps-2 pe-6 text-xs text-foreground outline-none hover:bg-muted focus:ring-2 focus:ring-ring/40"
