@@ -315,9 +315,10 @@ export async function executeDraftSave(
       }
 
       // Deterministic canonical selection: highest UID wins.
-      const canonical = postSearchOk && matched.length > 0
-        ? matched.reduce((a, b) => (b > a ? b : a), matched[0])
-        : appendUid;
+      const canonical =
+        postSearchOk && matched.length > 0
+          ? matched.reduce((a, b) => (b > a ? b : a), matched[0])
+          : appendUid;
       const stale = postSearchOk ? matched.filter((u) => u !== canonical) : [];
 
       // Legacy previousRef cleanup — union with header-matched stale UIDs.
@@ -354,7 +355,6 @@ export async function executeDraftSave(
     } finally {
       opened.release();
     }
-
   } finally {
     await client.logout().catch(() => {});
   }

@@ -956,7 +956,10 @@ test("M4-A: previousRef.folderPath ≠ resolved Drafts path → legacy UID NOT d
   assert.equal(r.ok, true);
   assert.equal(rec.deletes.length, 0, "previousRef for non-Drafts folder MUST be ignored");
   // Server only opened its own resolved Drafts folder — INBOX never touched.
-  assert.equal(rec.opens.every((p) => p === "Drafts"), true);
+  assert.equal(
+    rec.opens.every((p) => p === "Drafts"),
+    true,
+  );
 });
 
 test("M4-A: non-existent previousRef UID cannot delete an unrelated message (same UIDVALIDITY)", async () => {
@@ -1005,20 +1008,30 @@ test("M4-A: legacy previousRef with mutex — retry after crash converges to one
   const server = mkServer();
   server.messages.set(42, ""); // legacy: no draftId header
   const deps = mkSharedDeps(server);
-  const r1 = await saveDraft(ACCT, "pw", {
-    ...BASE_INPUT,
-    previousRef: { folderPath: "Drafts", uid: 42, uidValidity: "1000" },
-  }, deps);
+  const r1 = await saveDraft(
+    ACCT,
+    "pw",
+    {
+      ...BASE_INPUT,
+      previousRef: { folderPath: "Drafts", uid: 42, uidValidity: "1000" },
+    },
+    deps,
+  );
   assert.equal(r1.ok, true);
   assert.equal(server.messages.has(42), false, "legacy UID must be deleted");
   assert.equal(server.messages.size, 1, "exactly one canonical copy after legacy replace");
 
   // Round 2 (retry with same previousRef, but the legacy UID is already
   // gone). Must still converge to a single copy.
-  const r2 = await saveDraft(ACCT, "pw", {
-    ...BASE_INPUT,
-    previousRef: { folderPath: "Drafts", uid: 42, uidValidity: "1000" },
-  }, deps);
+  const r2 = await saveDraft(
+    ACCT,
+    "pw",
+    {
+      ...BASE_INPUT,
+      previousRef: { folderPath: "Drafts", uid: 42, uidValidity: "1000" },
+    },
+    deps,
+  );
   assert.equal(r2.ok, true);
   assert.equal(server.messages.size, 1, "retry MUST converge to exactly one canonical copy");
   assert.equal(draftMutexInflight(), 0);
