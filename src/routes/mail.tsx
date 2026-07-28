@@ -5267,19 +5267,35 @@ function Composer({
 
   // Prevents double-submit of manual saves (rapid Ctrl+S / button clicks).
   const savingNowRef = useRef(false);
-  async function saveDraftNow() {
-    if (typeof window === "undefined") return;
-    if (savingNowRef.current) return;
+  type SaveNowResult = "saved_server" | "saved_local" | "failed" | "empty";
+  async function saveDraftNow(): Promise<SaveNowResult> {
+    if (typeof window === "undefined") return "failed";
+    if (savingNowRef.current) {
+      // Double-submit protection: reflect current effective state.
+      const st = saverRef.current?.getStatus();
+      if (st === "saved") return "saved_server";
+      if (st === "saved-local") return "saved_local";
+      if (st === "failed") return "failed";
+      return "saved_server";
+    }
     savingNowRef.current = true;
     try {
       // Any pending debounced save must NOT race the explicit save.
       autosaveRef.current?.cancel();
       const html = sanitizeComposerHtml(editorRef.current?.innerHTML ?? "");
+      // Unified emptiness contract with autosave: a draft that carries
+      // attachments (new OR kept legacy) is NOT empty even without text.
       const isEmpty =
-        to.length === 0 && cc.length === 0 && bcc.length === 0 && !subject && !html.trim();
+        to.length === 0 &&
+        cc.length === 0 &&
+        bcc.length === 0 &&
+        !subject &&
+        !html.trim() &&
+        existingKeptRef.current.length === 0 &&
+        filesRef.current.length === 0;
       if (isEmpty) {
         toast.info("لا يوجد محتوى للحفظ");
-        return;
+        return "empty";
       }
       const snapshot: DraftSnapshot = { to, cc, bcc, subject, html, showCc, showBcc };
       const persisted = writeDraftDoc(window.localStorage, accountEmail, {
@@ -5292,22 +5308,22 @@ function Composer({
       if (!persisted) {
         setSaveStatus("failed");
         toast.error("تعذّر حفظ المسودّة");
-        return;
+        return "failed";
       }
-      // Capture the caller's generation and await the round-trip. The
-      // saver's onCompleted will advance `savedGeneration` — so on the
-      // "save then close" path the composer will read clean immediately.
       const genAtRequest = generationRef.current;
-      try {
-        await saverRef.current?.requestSave(snapshot, serverRefRef.current, genAtRequest);
-        if (saverRef.current?.getStatus() === "saved") {
-          toast.success("تم حفظ المسودّة");
-        } else {
-          toast.success("تم حفظ المسودّة محلياً");
-        }
-      } catch {
-        toast.success("تم حفظ المسودّة محلياً");
+      await saverRef.current?.requestSave(snapshot, serverRefRef.current, genAtRequest);
+      const st = saverRef.current?.getStatus();
+      if (st === "saved") {
+        toast.success("تم حفظ المسودّة");
+        return "saved_server";
       }
+      if (st === "saved-local") {
+        toast.success("تم حفظ المسودّة محلياً");
+        return "saved_local";
+      }
+      // Hard failure — do NOT show a "success" toast.
+      toast.error("تعذّر حفظ المسودّة على الخادم — حاول لاحقاً");
+      return "failed";
     } finally {
       savingNowRef.current = false;
     }
