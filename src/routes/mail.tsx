@@ -4758,8 +4758,13 @@ function Composer({
     closePromptRef.current = closePrompt;
   }, [closePrompt]);
 
+  // Prevents double-navigation / double-close races (rapid clicks, ESC while
+  // an in-flight save is finishing, etc.).
+  const closingRef = useRef(false);
   async function requestClose(): Promise<boolean> {
+    if (closingRef.current) return false;
     if (!isDirtyRef.current) {
+      closingRef.current = true;
       onClose();
       return true;
     }
@@ -4768,39 +4773,67 @@ function Composer({
     });
     if (choice === "cancel") return false;
     if (choice === "save") {
+      closingRef.current = true;
       try {
+        // Await the save round-trip before tearing down; failure keeps the
+        // composer open so no user content is silently lost.
         await saveDraftNow();
+        if (isDirtyRef.current) {
+          // Save reported permanent failure (dirty still true) — abort close.
+          closingRef.current = false;
+          return false;
+        }
       } catch {
-        /* toast handled inside */
+        closingRef.current = false;
+        return false;
       }
       onClose();
       return true;
     }
     // discard
+    closingRef.current = true;
     try {
       if (typeof window !== "undefined") {
         clearDraftDoc(window.localStorage, accountEmail);
       }
-      // Best-effort server delete when a server ref exists.
+      // Best-effort server delete when a server ref exists; on failure hand
+      // the delete to the pending queue for the next composer session.
       const ref = serverRefRef.current;
       if (ref) {
         const token = session.mailSessionToken;
         if (token) {
-          void bridgeDeleteDraftFn({
+          bridgeDeleteDraftFn({
             data: { mailSessionToken: token, draftId, previousRef: ref },
-          }).catch(() => {
-            /* fire-and-forget */
-          });
+          })
+            .then((res) => {
+              if (!res?.ok) {
+                pendingQueueRef.current?.enqueue(accountEmail, {
+                  draftId,
+                  previousRef: ref,
+                });
+              }
+            })
+            .catch(() => {
+              pendingQueueRef.current?.enqueue(accountEmail, {
+                draftId,
+                previousRef: ref,
+              });
+            });
+        } else {
+          pendingQueueRef.current?.enqueue(accountEmail, { draftId, previousRef: ref });
         }
       }
     } catch {
       /* noop */
     }
+    // Force clean so beforeunload/guard don't re-trap on the way out.
+    savedGenerationRef.current = generationRef.current;
     lastSavedAtRef.current = Date.now();
     recomputeDirty();
     onClose();
     return true;
   }
+
 
   // Expose a global guard so parent nav actions (folder switch, list click,
   // new-message button) can prompt before tearing the composer down.
