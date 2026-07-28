@@ -4220,6 +4220,7 @@ function Composer({
   initial,
   onClose,
   onSent,
+  onDraftSaved,
 }: {
   session: MailSession;
   initial?: ComposeInitial | null;
