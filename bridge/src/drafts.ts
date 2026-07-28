@@ -205,12 +205,26 @@ export function draftMimePayload(input: DraftSavePayload): SendMessagePayload {
     subject: input.subject,
     bodyHtml: input.bodyHtml,
     bodyText: input.bodyText,
+    // Attachments come from the multer disk-streamed layer with identical
+    // shape and limits to the send-multipart route (see bridge/src/index.ts).
+    // Never JSON/base64; either { path } or { content: Buffer }.
+    attachments: input.attachments,
   };
 }
 
 /**
  * Core save routine. Extracted so tests can drive every branch without
  * booting a real IMAP server. Never logs / returns PII.
+ *
+ * Ordering guarantee (locked by drafts.test.ts):
+ *   1. Resolve Drafts folder (server-side, SPECIAL-USE first).
+ *   2. Open + search for existing copies of this draftId BEFORE any APPEND.
+ *   3. If a prior copy exists (or caller passed `previousRef`) AND UIDPLUS
+ *      is not supported → return SAFE_DRAFT_REPLACE_UNSUPPORTED WITHOUT
+ *      appending. This closes the "APPEND then discover we can't delete
+ *      the old copy" race that would leave duplicates on the server.
+ *   4. Otherwise APPEND the new MIME.
+ *   5. Reopen, re-search, and selectively EXPUNGE stale copies (UID EXPUNGE).
  */
 export async function executeDraftSave(
   client: ImapDraftClient,
@@ -229,7 +243,37 @@ export async function executeDraftSave(
       [DRAFT_ID_HEADER]: input.draftId,
     });
 
-    // 1) APPEND under short-lived append call (no external lock).
+    // 1) Pre-APPEND probe: does a prior copy already exist for this draftId?
+    //    We MUST know this before appending to avoid the "append then can't
+    //    delete" race on servers without UIDPLUS.
+    let priorCopies: number[] = [];
+    let priorSearchFailed = false;
+    let priorUidValidity = "";
+    {
+      const probe = await client.openWithLock(folderPath);
+      try {
+        priorUidValidity = probe.uidValidity;
+        try {
+          priorCopies = await client.searchByHeader(DRAFT_ID_HEADER, input.draftId);
+        } catch {
+          // Search failure = we can't prove idempotency; treat as no priors
+          // BUT record it so a downstream cleanup can catch up.
+          priorSearchFailed = true;
+        }
+      } finally {
+        probe.release();
+      }
+    }
+
+    // Replace mode = we WILL need to delete an old copy after appending.
+    // Trigger it either from an actual match OR an explicit caller hint.
+    const replaceMode = priorCopies.length > 0 || Boolean(input.previousRef);
+    if (replaceMode && !client.hasUidPlus()) {
+      // Refuse BEFORE APPEND. No side effects on the mailbox.
+      return { ok: false, error: "SAFE_DRAFT_REPLACE_UNSUPPORTED" };
+    }
+
+    // 2) APPEND (no external lock — imapflow takes its own).
     let appendUid: number | null;
     let appendUidValidity: string;
     try {
@@ -237,25 +281,20 @@ export async function executeDraftSave(
       appendUid = appendRes.uid ?? null;
       appendUidValidity = appendRes.uidValidity ?? "";
     } catch {
-      // Coarse only. Never surface provider details.
       return { ok: false, error: "APPEND_FAILED" };
     }
 
-    // 2) Reopen with lock to run header search + selective delete atomically
-    //    against the CURRENT uidValidity we just observed.
+    // 3) Reopen with lock to re-scan for all copies of this draftId and
+    //    expunge everything except the freshly-appended one.
     const opened = await client.openWithLock(folderPath);
     try {
-      // Use the freshly-read uidValidity as authoritative if APPEND didn't
-      // return one (server without UIDPLUS on APPEND).
-      const uidValidity = appendUidValidity || opened.uidValidity;
+      const uidValidity = appendUidValidity || opened.uidValidity || priorUidValidity;
 
       let matched: number[] = [];
       try {
         matched = await client.searchByHeader(DRAFT_ID_HEADER, input.draftId);
       } catch {
-        // Search failure MUST NOT roll back the APPEND. Return the fresh
-        // copy as-is; the stale one (if any) will be reconciled on the
-        // next successful save/delete round.
+        // Search failure MUST NOT roll back the APPEND.
         return {
           ok: true,
           draftId: input.draftId,
@@ -267,29 +306,16 @@ export async function executeDraftSave(
         };
       }
 
-      // Old copies = every match except the one we just appended.
       const stale =
         appendUid == null ? matched.slice(0, -1) : matched.filter((u) => u !== appendUid);
-      if (stale.length > 0) {
-        if (!client.hasUidPlus()) {
-          // Refuse global EXPUNGE. Leave stale copies for a later cleanup
-          // path; the caller will see a fresh copy either way.
-          return {
-            ok: true,
-            draftId: input.draftId,
-            folderPath,
-            uid: appendUid,
-            uidValidity,
-            messageId,
-            savedAt: now().toISOString(),
-          };
-        }
+      if (stale.length > 0 && client.hasUidPlus()) {
         try {
           await client.deleteByUid(stale);
         } catch {
-          // Same rationale: failed cleanup MUST NOT fail the save.
+          // Cleanup failure MUST NOT fail the save.
         }
       }
+      void priorSearchFailed;
 
       return {
         ok: true,
@@ -307,6 +333,8 @@ export async function executeDraftSave(
     await client.logout().catch(() => {});
   }
 }
+
+
 
 export async function executeDraftDelete(
   client: ImapDraftClient,
