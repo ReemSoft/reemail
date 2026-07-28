@@ -3971,6 +3971,9 @@ function Composer({
   const [dragging, setDragging] = useState(false);
   const [savedAt, setSavedAt] = useState<number | null>(null);
   const [plainMode, setPlainMode] = useState(false);
+  const [fontFamily, setFontFamily] = useState<string>("IBM Plex Sans Arabic, sans-serif");
+  const [fontSize, setFontSize] = useState<string>("14px");
+  const [blockFmt, setBlockFmt] = useState<string>("p");
   const [extensions, setExtensions] = useState<ComposerExtension[]>(
     () => (typeof window !== "undefined" ? window.mailmaestroComposerExtensions ?? [] : []),
   );
