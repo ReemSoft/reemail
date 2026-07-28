@@ -205,11 +205,11 @@ describe("createDraftSaver", () => {
     });
     const saver = createDraftSaver("d1", { saveRemote });
 
-    const p1 = saver.requestSave(snap({ subject: "one" }), null);
+    const p1 = saver.requestSave(snap({ subject: "one" }), null, 1);
     // Both of these arrive while p1 is in flight — must coalesce into ONE
     // follow-up carrying the latest snapshot ("three").
-    const p2 = saver.requestSave(snap({ subject: "two" }), null);
-    const p3 = saver.requestSave(snap({ subject: "three" }), null);
+    const p2 = saver.requestSave(snap({ subject: "two" }), null, 2);
+    const p3 = saver.requestSave(snap({ subject: "three" }), null, 3);
 
     // Only the first invocation has fired so far.
     expect(saveRemote).toHaveBeenCalledTimes(1);
