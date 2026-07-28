@@ -179,7 +179,7 @@ import {
   wipeAllPersisted,
   clearMemoryCache,
   type AutocompleteMatch,
-} from "@/lib/mail-contact-suggestions.client";
+} from "@/lib/mail-contact-suggestions.browser";
 import {
   applyPendingMoveOverlay,
   beginPendingMove as beginPendingMoveEntry,
