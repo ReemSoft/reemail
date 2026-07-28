@@ -4157,6 +4157,13 @@ function Composer({
     } catch {
       /* noop */
     }
+    // execCommand doesn't always fire selectionchange (esp. for alignment);
+    // force toolbar state refresh.
+    try {
+      document.dispatchEvent(new Event("selectionchange"));
+    } catch {
+      /* noop */
+    }
   }
 
   function promptLink() {
