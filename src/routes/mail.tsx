@@ -3824,14 +3824,14 @@ function RecipientField({
   );
 
   return (
-    <div className="flex flex-col gap-1.5">
+    <div className="flex w-full min-w-0 flex-col gap-1.5">
       <label className="text-sm font-medium text-foreground">{label}</label>
-      <div className="relative">
+      <div className="relative w-full min-w-0">
         <div
-          className="flex min-h-[42px] w-full items-center gap-2 rounded-lg border border-input bg-background px-3 py-1.5 transition focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/20"
+          className="flex min-h-[42px] w-full min-w-0 flex-wrap items-center gap-2 rounded-lg border border-input bg-background px-3 py-1.5 transition focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/20"
           onClick={() => inputRef.current?.focus()}
         >
-          <div className="flex flex-1 flex-wrap items-center gap-1.5" dir="ltr">
+          <div className="flex min-w-0 flex-1 basis-full flex-wrap items-center gap-1.5 sm:basis-auto" dir="ltr">
             {value.map((r, i) => (
               <span
                 key={`${r.email}-${i}`}
@@ -3914,7 +3914,7 @@ function RecipientField({
                 }
               }}
               placeholder=""
-              className="min-w-[140px] flex-1 bg-transparent px-1 py-1 text-sm outline-none"
+              className="min-w-[80px] flex-1 bg-transparent px-1 py-1 text-sm outline-none"
               aria-autocomplete="list"
               aria-expanded={open}
             />
@@ -4730,7 +4730,7 @@ function Composer({
             getSuggestions={suggestFor}
             onHideSuggestion={hideOne}
             rightSlot={
-              <div className="flex shrink-0 items-center gap-1 border-r border-border/60 pr-2 mr-2">
+              <div className="flex shrink-0 flex-wrap items-center gap-1 sm:border-r sm:border-border/60 sm:pr-2 sm:mr-2">
                 {!showCc && (
                   <button
                     type="button"
