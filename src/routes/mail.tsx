@@ -4417,8 +4417,22 @@ function Composer({
       },
       onStatus: setSaveStatus,
       onServerRef: (r) => setServerRef(r),
+      onCompleted: ({ completedGeneration, status }) => {
+        // Advance the clean marker only when a save actually persisted
+        // (remote or local-fallback). Never regress: a coalesced completion
+        // may report a generation older than the current savedGeneration.
+        if (completedGeneration > savedGenerationRef.current) {
+          savedGenerationRef.current = completedGeneration;
+          recomputeDirty();
+        }
+        if (status === "saved" || status === "saved-local") {
+          lastSavedAtRef.current = Date.now();
+          setSavedAt(lastSavedAtRef.current);
+        }
+      },
     });
   }
+
 
   const [plainMode, setPlainMode] = useState(false);
   const [fontFamily, setFontFamily] = useState<string>("IBM Plex Sans Arabic, sans-serif");
