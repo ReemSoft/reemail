@@ -68,6 +68,36 @@ export function resolveSentPath(mailboxes: ListResponse[]): string | undefined {
   return undefined;
 }
 
+/**
+ * Resolve the true Drafts folder path using IMAP SPECIAL-USE \Drafts first,
+ * then well-known names that actually exist in the LIST response. Never
+ * assumes "Drafts" is present and never creates it.
+ */
+export function resolveDraftsPath(mailboxes: ListResponse[]): string | undefined {
+  // 1) SPECIAL-USE \Drafts (RFC 6154) — authoritative per server.
+  for (const mb of mailboxes) {
+    const su = (mb as unknown as { specialUse?: string | string[] }).specialUse;
+    if (!su) continue;
+    if (Array.isArray(su) ? su.includes("\\Drafts") : su === "\\Drafts") return mb.path;
+  }
+  // 2) Well-known Drafts names, matched case-insensitively.
+  const known = [
+    "Drafts",
+    "Draft",
+    "[Gmail]/Drafts",
+    "INBOX.Drafts",
+    "المسودات",
+    "المسوّدات",
+    "مسودات",
+  ];
+  for (const name of known) {
+    const found = mailboxes.find((m) => m.path.toLowerCase() === name.toLowerCase());
+    if (found) return found.path;
+  }
+  return undefined;
+}
+
+
 /** Case-insensitive Message-ID search in the given mailbox. */
 async function messageExistsInFolder(
   client: ImapFlow,
