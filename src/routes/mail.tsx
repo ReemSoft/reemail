@@ -4551,13 +4551,13 @@ function Composer({
                     ]}
                   />
                   <span className="mx-1 h-4 w-px bg-border" />
-                  <ToolbarButton title="عريض (Ctrl+B)" onMouseDown={() => exec("bold")}>
+                  <ToolbarButton title="عريض (Ctrl+B)" active={fmtState.bold} onMouseDown={() => exec("bold")}>
                     <Bold className="h-3.5 w-3.5" />
                   </ToolbarButton>
-                  <ToolbarButton title="مائل (Ctrl+I)" onMouseDown={() => exec("italic")}>
+                  <ToolbarButton title="مائل (Ctrl+I)" active={fmtState.italic} onMouseDown={() => exec("italic")}>
                     <Italic className="h-3.5 w-3.5" />
                   </ToolbarButton>
-                  <ToolbarButton title="تسطير (Ctrl+U)" onMouseDown={() => exec("underline")}>
+                  <ToolbarButton title="تسطير (Ctrl+U)" active={fmtState.underline} onMouseDown={() => exec("underline")}>
                     <Underline className="h-3.5 w-3.5" />
                   </ToolbarButton>
                   <span className="mx-1 h-4 w-px bg-border" />
@@ -4588,21 +4588,21 @@ function Composer({
                   </label>
                   <span className="mx-1 h-4 w-px bg-border" />
                   {/* Alignment */}
-                  <ToolbarButton title="محاذاة يمين" onMouseDown={() => exec("justifyRight")}>
+                  <ToolbarButton title="محاذاة يمين" active={fmtState.justifyRight} onMouseDown={() => exec("justifyRight")}>
                     <AlignRight className="h-3.5 w-3.5" />
                   </ToolbarButton>
-                  <ToolbarButton title="توسيط" onMouseDown={() => exec("justifyCenter")}>
+                  <ToolbarButton title="توسيط" active={fmtState.justifyCenter} onMouseDown={() => exec("justifyCenter")}>
                     <AlignCenter className="h-3.5 w-3.5" />
                   </ToolbarButton>
-                  <ToolbarButton title="محاذاة يسار" onMouseDown={() => exec("justifyLeft")}>
+                  <ToolbarButton title="محاذاة يسار" active={fmtState.justifyLeft} onMouseDown={() => exec("justifyLeft")}>
                     <AlignLeft className="h-3.5 w-3.5" />
                   </ToolbarButton>
                   <span className="mx-1 h-4 w-px bg-border" />
                   {/* Lists */}
-                  <ToolbarButton title="قائمة نقطية" onMouseDown={() => exec("insertUnorderedList")}>
+                  <ToolbarButton title="قائمة نقطية" active={fmtState.insertUnorderedList} onMouseDown={() => exec("insertUnorderedList")}>
                     <List className="h-3.5 w-3.5" />
                   </ToolbarButton>
-                  <ToolbarButton title="قائمة مرقمة" onMouseDown={() => exec("insertOrderedList")}>
+                  <ToolbarButton title="قائمة مرقمة" active={fmtState.insertOrderedList} onMouseDown={() => exec("insertOrderedList")}>
                     <ListOrdered className="h-3.5 w-3.5" />
                   </ToolbarButton>
                   <span className="mx-1 h-4 w-px bg-border" />
