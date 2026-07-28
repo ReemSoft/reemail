@@ -4000,6 +4000,79 @@ function Composer({
     return () => window.clearInterval(id);
   }, []);
 
+  // ----- Track selection formatting state for toolbar highlighting -----
+  const [fmtState, setFmtState] = useState<Record<string, boolean>>({});
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    const TOGGLE_CMDS = [
+      "bold",
+      "italic",
+      "underline",
+      "strikeThrough",
+      "superscript",
+      "subscript",
+      "justifyLeft",
+      "justifyCenter",
+      "justifyRight",
+      "justifyFull",
+      "insertUnorderedList",
+      "insertOrderedList",
+    ];
+    let raf = 0;
+    const update = () => {
+      const editor = editorRef.current;
+      if (!editor) return;
+      const sel = window.getSelection();
+      if (!sel || sel.rangeCount === 0) return;
+      const node = sel.anchorNode;
+      if (!node || !editor.contains(node.nodeType === 1 ? node : node.parentNode)) return;
+      const next: Record<string, boolean> = {};
+      for (const c of TOGGLE_CMDS) {
+        try {
+          next[c] = document.queryCommandState(c);
+        } catch {
+          next[c] = false;
+        }
+      }
+      try {
+        const bq = document.queryCommandValue("formatBlock")?.toString().toLowerCase() || "";
+        next["blockquote"] = bq === "blockquote";
+        const cleanBlock = bq.replace(/[<>]/g, "");
+        if (cleanBlock) setBlockFmt(cleanBlock);
+      } catch {
+        /* noop */
+      }
+      try {
+        const ff = document.queryCommandValue("fontName")?.toString().replace(/^['"]|['"]$/g, "");
+        if (ff) {
+          // match one of our option values whose first family matches
+          setFontFamily((prev) => {
+            const first = ff.split(",")[0].trim().toLowerCase();
+            const prevFirst = prev.split(",")[0].trim().toLowerCase();
+            return first === prevFirst ? prev : ff;
+          });
+        }
+      } catch {
+        /* noop */
+      }
+      setFmtState((prev) => {
+        for (const k of Object.keys(next)) if (prev[k] !== next[k]) return next;
+        return prev;
+      });
+    };
+    const onChange = () => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(update);
+    };
+    document.addEventListener("selectionchange", onChange);
+    editorRef.current?.addEventListener("keyup", onChange);
+    editorRef.current?.addEventListener("mouseup", onChange);
+    return () => {
+      cancelAnimationFrame(raf);
+      document.removeEventListener("selectionchange", onChange);
+    };
+  }, []);
+
   const totalBytes = files.reduce((acc, f) => acc + f.size, 0);
 
   // ----- Draft autosave (debounced) -----
@@ -4478,13 +4551,13 @@ function Composer({
                     ]}
                   />
                   <span className="mx-1 h-4 w-px bg-border" />
-                  <ToolbarButton title="عريض (Ctrl+B)" onMouseDown={() => exec("bold")}>
+                  <ToolbarButton title="عريض (Ctrl+B)" active={fmtState.bold} onMouseDown={() => exec("bold")}>
                     <Bold className="h-3.5 w-3.5" />
                   </ToolbarButton>
-                  <ToolbarButton title="مائل (Ctrl+I)" onMouseDown={() => exec("italic")}>
+                  <ToolbarButton title="مائل (Ctrl+I)" active={fmtState.italic} onMouseDown={() => exec("italic")}>
                     <Italic className="h-3.5 w-3.5" />
                   </ToolbarButton>
-                  <ToolbarButton title="تسطير (Ctrl+U)" onMouseDown={() => exec("underline")}>
+                  <ToolbarButton title="تسطير (Ctrl+U)" active={fmtState.underline} onMouseDown={() => exec("underline")}>
                     <Underline className="h-3.5 w-3.5" />
                   </ToolbarButton>
                   <span className="mx-1 h-4 w-px bg-border" />
@@ -4515,21 +4588,21 @@ function Composer({
                   </label>
                   <span className="mx-1 h-4 w-px bg-border" />
                   {/* Alignment */}
-                  <ToolbarButton title="محاذاة يمين" onMouseDown={() => exec("justifyRight")}>
+                  <ToolbarButton title="محاذاة يمين" active={fmtState.justifyRight} onMouseDown={() => exec("justifyRight")}>
                     <AlignRight className="h-3.5 w-3.5" />
                   </ToolbarButton>
-                  <ToolbarButton title="توسيط" onMouseDown={() => exec("justifyCenter")}>
+                  <ToolbarButton title="توسيط" active={fmtState.justifyCenter} onMouseDown={() => exec("justifyCenter")}>
                     <AlignCenter className="h-3.5 w-3.5" />
                   </ToolbarButton>
-                  <ToolbarButton title="محاذاة يسار" onMouseDown={() => exec("justifyLeft")}>
+                  <ToolbarButton title="محاذاة يسار" active={fmtState.justifyLeft} onMouseDown={() => exec("justifyLeft")}>
                     <AlignLeft className="h-3.5 w-3.5" />
                   </ToolbarButton>
                   <span className="mx-1 h-4 w-px bg-border" />
                   {/* Lists */}
-                  <ToolbarButton title="قائمة نقطية" onMouseDown={() => exec("insertUnorderedList")}>
+                  <ToolbarButton title="قائمة نقطية" active={fmtState.insertUnorderedList} onMouseDown={() => exec("insertUnorderedList")}>
                     <List className="h-3.5 w-3.5" />
                   </ToolbarButton>
-                  <ToolbarButton title="قائمة مرقمة" onMouseDown={() => exec("insertOrderedList")}>
+                  <ToolbarButton title="قائمة مرقمة" active={fmtState.insertOrderedList} onMouseDown={() => exec("insertOrderedList")}>
                     <ListOrdered className="h-3.5 w-3.5" />
                   </ToolbarButton>
                   <span className="mx-1 h-4 w-px bg-border" />
@@ -4561,16 +4634,16 @@ function Composer({
                     </PopoverTrigger>
                     <PopoverContent align="end" className="w-auto p-2">
                       <div className="grid grid-cols-6 gap-0.5">
-                        <ToolbarButton title="يتوسطه خط" onMouseDown={() => exec("strikeThrough")}>
+                        <ToolbarButton title="يتوسطه خط" active={fmtState.strikeThrough} onMouseDown={() => exec("strikeThrough")}>
                           <Strikethrough className="h-3.5 w-3.5" />
                         </ToolbarButton>
-                        <ToolbarButton title="مرتفع" onMouseDown={() => exec("superscript")}>
+                        <ToolbarButton title="مرتفع" active={fmtState.superscript} onMouseDown={() => exec("superscript")}>
                           <Superscript className="h-3.5 w-3.5" />
                         </ToolbarButton>
-                        <ToolbarButton title="منخفض" onMouseDown={() => exec("subscript")}>
+                        <ToolbarButton title="منخفض" active={fmtState.subscript} onMouseDown={() => exec("subscript")}>
                           <Subscript className="h-3.5 w-3.5" />
                         </ToolbarButton>
-                        <ToolbarButton title="ضبط" onMouseDown={() => exec("justifyFull")}>
+                        <ToolbarButton title="ضبط" active={fmtState.justifyFull} onMouseDown={() => exec("justifyFull")}>
                           <AlignJustify className="h-3.5 w-3.5" />
                         </ToolbarButton>
                         <ToolbarButton title="زيادة المسافة البادئة" onMouseDown={() => exec("indent")}>
@@ -4579,7 +4652,7 @@ function Composer({
                         <ToolbarButton title="تقليل المسافة البادئة" onMouseDown={() => exec("outdent")}>
                           <Outdent className="h-3.5 w-3.5" />
                         </ToolbarButton>
-                        <ToolbarButton title="اقتباس" onMouseDown={() => exec("formatBlock", "blockquote")}>
+                        <ToolbarButton title="اقتباس" active={fmtState.blockquote} onMouseDown={() => exec("formatBlock", "blockquote")}>
                           <Quote className="h-3.5 w-3.5" />
                         </ToolbarButton>
                         <ToolbarButton title="إدراج صورة" onMouseDown={promptImage}>
