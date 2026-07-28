@@ -4736,9 +4736,14 @@ function Composer({
 
   // Expose a global guard so parent nav actions (folder switch, list click,
   // new-message button) can prompt before tearing the composer down.
+  const requestCloseRef = useRef<() => Promise<boolean>>(async () => {
+    onClose();
+    return true;
+  });
+  requestCloseRef.current = requestClose;
   useEffect(() => {
     (window as unknown as { __mailmaestroComposerGuard?: () => Promise<boolean> })
-      .__mailmaestroComposerGuard = () => requestClose();
+      .__mailmaestroComposerGuard = () => requestCloseRef.current();
     const beforeUnload = (e: BeforeUnloadEvent) => {
       if (isDirtyRef.current) {
         e.preventDefault();
