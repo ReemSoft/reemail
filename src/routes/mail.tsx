@@ -4416,7 +4416,11 @@ function Composer({
                     title="الخط"
                     ariaLabel="الخط"
                     placeholder="الخط"
-                    onChange={applyFontFamily}
+                    value={fontFamily}
+                    onChange={(v) => {
+                      setFontFamily(v);
+                      applyFontFamily(v);
+                    }}
                     className="min-w-[7.5rem]"
                     options={[
                       { value: "IBM Plex Sans Arabic, sans-serif", label: "IBM Plex Sans Arabic" },
@@ -4436,7 +4440,11 @@ function Composer({
                     title="حجم الخط"
                     ariaLabel="حجم الخط"
                     placeholder="الحجم"
-                    onChange={applyFontSize}
+                    value={fontSize}
+                    onChange={(v) => {
+                      setFontSize(v);
+                      applyFontSize(v);
+                    }}
                     className="min-w-[4.5rem]"
                     options={[
                       { value: "10px", label: "10" },
@@ -4455,7 +4463,11 @@ function Composer({
                     title="نمط الفقرة"
                     ariaLabel="نمط الفقرة"
                     placeholder="الفقرة"
-                    onChange={(v) => exec("formatBlock", v)}
+                    value={blockFmt}
+                    onChange={(v) => {
+                      setBlockFmt(v);
+                      exec("formatBlock", v);
+                    }}
                     className="min-w-[6rem]"
                     options={[
                       { value: "p", label: "نص عادي" },
