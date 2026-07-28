@@ -4700,6 +4700,8 @@ function Composer({
             value={to}
             onChange={setTo}
             autoFocus
+            getSuggestions={suggestFor}
+            onHideSuggestion={hideOne}
             rightSlot={
               <div className="flex shrink-0 items-center gap-1 border-r border-border/60 pr-2 mr-2">
                 {!showCc && (
@@ -4723,8 +4725,24 @@ function Composer({
               </div>
             }
           />
-          {showCc && <RecipientField label="نسخة إلى" value={cc} onChange={setCc} />}
-          {showBcc && <RecipientField label="نسخة مخفية إلى" value={bcc} onChange={setBcc} />}
+          {showCc && (
+            <RecipientField
+              label="نسخة إلى"
+              value={cc}
+              onChange={setCc}
+              getSuggestions={suggestFor}
+              onHideSuggestion={hideOne}
+            />
+          )}
+          {showBcc && (
+            <RecipientField
+              label="نسخة مخفية إلى"
+              value={bcc}
+              onChange={setBcc}
+              getSuggestions={suggestFor}
+              onHideSuggestion={hideOne}
+            />
+          )}
 
           {/* Subject */}
           <div className="flex flex-col gap-1.5">
