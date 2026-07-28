@@ -328,6 +328,15 @@ export async function getMessageBody(
       parsed.starred = msg.flags?.has("\\Flagged") || false;
       parsed.folder = folder;
 
+      // M4-C: expose draft header + uidValidity so the composer can enter
+      // Edit-Draft mode with a trustworthy previousRef. Both fields are
+      // best-effort and simply omitted when absent — no PII is added.
+      const draftIdHeader = headerValue(rawParsed, "X-MailMaestro-Draft-ID").trim();
+      if (draftIdHeader) parsed.draftIdHeader = draftIdHeader;
+      const mb = (client as unknown as { mailbox?: { uidValidity?: unknown } }).mailbox;
+      if (mb?.uidValidity != null) parsed.uidValidity = String(mb.uidValidity);
+
+
       // 1) Inline images: replace cid: references in the HTML body with
       // data URIs from mailparser (already parsed, zero extra IMAP calls).
       const inlineCids = new Set<string>();

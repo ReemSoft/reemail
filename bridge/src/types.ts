@@ -45,7 +45,20 @@ export interface MailMessage {
   mailedBy?: string;
   signedBy?: string;
   security?: string;
+  /**
+   * X-MailMaestro-Draft-ID header value (present only on drafts previously
+   * saved by MailMaestro). Populated by getMessageBody for Drafts folder
+   * reads. Absent on legacy drafts / non-draft messages.
+   */
+  draftIdHeader?: string;
+  /**
+   * IMAP UIDVALIDITY captured while the mailbox was open for this fetch.
+   * Populated by getMessageBody. Required to build a trustworthy previousRef
+   * when opening a drafts folder message for edit.
+   */
+  uidValidity?: string;
 }
+
 
 export interface FolderCount {
   folder: MailFolder;

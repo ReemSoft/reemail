@@ -461,11 +461,28 @@ function promotePendingOriginsForDestList(
   }
 }
 
+type EditDraftSource = {
+  /** MailMessage.id in "folder:uid" form; used to fetch attachment bytes. */
+  messageId: string;
+  attachments: import("@/lib/mail-types").MailAttachment[];
+};
+
 type ComposeInitial = {
   to?: string;
   cc?: string;
   subject?: string;
   body?: string;
+  /**
+   * Edit-Draft mode: when set, the composer opens as an EDIT of an existing
+   * server-side draft. draftId reuses the sticky X-MailMaestro-Draft-ID when
+   * present (legacy drafts fall back to a fresh uuid + previousRef so the
+   * bridge can atomically APPEND-then-delete the legacy copy — M4-A).
+   */
+  editDraftId?: string;
+  previousRef?: DraftServerRef;
+  existingAttachments?: EditDraftSource;
+  /** When true, `body` is already sanitized HTML and is loaded verbatim. */
+  bodyIsHtml?: boolean;
 };
 
 function stripHtml(html: string): string {
@@ -520,6 +537,46 @@ function buildForward(message: MailMessage): ComposeInitial {
     stripHtml(message.body || message.preview || "");
   return { to: "", subject, body: header };
 }
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Build an Edit-Draft ComposeInitial from a fetched Drafts folder message.
+ * When `message.draftIdHeader` is a valid uuid we reuse it (idempotency wins);
+ * otherwise we allocate a fresh id and rely on `previousRef` to let the
+ * bridge atomically APPEND-then-delete the legacy copy (M4-A contract).
+ */
+function buildEditDraft(message: MailMessage, draftsFolderPath?: string): ComposeInitial {
+  const to = (message.to ?? []).map((a) => a.email).filter(Boolean).join(", ");
+  const cc = (message.cc ?? []).map((a) => a.email).filter(Boolean).join(", ");
+  const headerId = message.draftIdHeader?.trim();
+  const editDraftId = headerId && UUID_RE.test(headerId) ? headerId : newDraftId();
+  const parsed = parseMessageId(message.id);
+  const previousRef: DraftServerRef | undefined =
+    parsed && draftsFolderPath && message.uidValidity
+      ? {
+          folderPath: draftsFolderPath,
+          uid: parsed.uid,
+          uidValidity: String(message.uidValidity),
+        }
+      : undefined;
+  const rawSubject = message.subject === "(بدون موضوع)" ? "" : message.subject;
+  const existingAttachments =
+    message.attachments && message.attachments.length > 0
+      ? { messageId: message.id, attachments: message.attachments }
+      : undefined;
+  return {
+    to,
+    cc,
+    subject: rawSubject,
+    body: message.body ?? "",
+    bodyIsHtml: true,
+    editDraftId,
+    previousRef,
+    existingAttachments,
+  };
+}
+
 
 type SortOption = "date-desc" | "date-asc" | "unread-first" | "starred-first";
 
@@ -1044,6 +1101,8 @@ function useMailData(session: MailSession | null) {
   return {
     folder,
     setFolder,
+    folderPaths,
+
     sort,
     setSort,
     counts,
@@ -1199,7 +1258,9 @@ function MailApp() {
   const {
     folder,
     setFolder,
+    folderPaths,
     sort,
+
     setSort,
     counts,
     setCounts,
@@ -1610,6 +1671,21 @@ function MailApp() {
       const msg = await fetchMessage(id);
       if (msg) setSelectedMessage(msg);
       else if (!cached) throw new Error("فشل فتح الرسالة");
+
+      // M4-C: Drafts folder → open the message directly inside the composer
+      // as an Edit-Draft (server-side draft is the source of truth). We
+      // intentionally do this AFTER the fetch so the composer receives full
+      // recipients / body / attachments metadata rather than list-preview.
+      const loaded = msg ?? cached ?? null;
+      if (loaded && parsed.folder === "drafts") {
+        const draftsPath = folderPaths.drafts ?? undefined;
+        setCompose(buildEditDraft(loaded, draftsPath));
+        setSelectedId(null);
+        setSelectedMessage(null);
+        setReading(false);
+        return;
+      }
+
 
       const listMsg = messages.find((m) => m.id === id);
       if (listMsg && !listMsg.read) {
@@ -4125,19 +4201,26 @@ function Composer({
 
   // ----- Restore draft (v3 with v2 auto-migration) -----
   const accountEmail = session.account.email_address;
+  // M4-C: when opening in Edit-Draft mode we IGNORE any local v3 doc — the
+  // server-side draft is the source of truth. We also key the composer to the
+  // sticky draftId so a fresh mount cleanly re-hydrates from the server ref.
+  const isEditMode = Boolean(initial?.editDraftId);
   const initialDoc = useMemo<DraftDocV3 | null>(() => {
+    if (isEditMode) return null;
     if (initial && (initial.to || initial.cc || initial.subject || initial.body)) return null;
     if (typeof window === "undefined") return null;
     return readDraftDoc(window.localStorage, accountEmail);
-  }, [initial, accountEmail]);
+  }, [initial, accountEmail, isEditMode]);
   const restored = initialDoc?.snapshot ?? null;
 
-  const [draftId] = useState<string>(() => initialDoc?.draftId ?? newDraftId());
+  const [draftId] = useState<string>(
+    () => initial?.editDraftId ?? initialDoc?.draftId ?? newDraftId(),
+  );
   const [serverRef, setServerRef] = useState<DraftServerRef | null>(
-    () => initialDoc?.serverRef ?? null,
+    () => initial?.previousRef ?? initialDoc?.serverRef ?? null,
   );
   const [saveStatus, setSaveStatus] = useState<DraftSaveStatus>(() =>
-    initialDoc ? "saved-local" : "idle",
+    isEditMode ? "saved" : initialDoc ? "saved-local" : "idle",
   );
   const serverRefRef = useRef<DraftServerRef | null>(serverRef);
   useEffect(() => {
@@ -4158,9 +4241,23 @@ function Composer({
   const [subject, setSubject] = useState<string>(() => restored?.subject ?? initial?.subject ?? "");
   const initialHtml = useMemo(() => {
     if (restored?.html) return restored.html;
+    if (initial?.bodyIsHtml && initial.body) return initial.body;
     if (initial?.body) return plainToHtml(initial.body);
     return "";
   }, [restored, initial]);
+
+  // M4-C: existing server-side attachments carried over from the loaded
+  // Drafts message. Each entry stays as metadata until first save/send, at
+  // which point we lazily stream its bytes from the bridge (server proxy,
+  // never base64 in JSON) and cache the resulting File.
+  const [existingKept, setExistingKept] = useState<
+    import("@/lib/mail-types").MailAttachment[]
+  >(() => initial?.existingAttachments?.attachments ?? []);
+  const existingSourceIdRef = useRef<string | null>(
+    initial?.existingAttachments?.messageId ?? null,
+  );
+  const existingFilesCacheRef = useRef<Map<string, File>>(new Map());
+
 
   const [files, setFiles] = useState<File[]>([]);
   const [sending, setSending] = useState(false);
@@ -4203,12 +4300,31 @@ function Composer({
     void q.flush(accountEmail);
   }, [accountEmail]);
 
+  // Forward refs so the persistent saveRemote closure (created once at mount)
+  // always reads the latest attachment state without a re-instantiation.
+  const filesRef = useRef<File[]>([]);
+  const resolveExistingAsFilesRef = useRef<() => Promise<File[] | null>>(async () => []);
+
   const saverRef = useRef<DraftSaver | null>(null);
+
   if (!saverRef.current) {
     saverRef.current = createDraftSaver(draftId, {
       saveRemote: async ({ snapshot, previousRef }) => {
         const token = session.mailSessionToken;
         if (!token) return { ok: false, code: "SESSION_REQUIRED" };
+        // M4-C: every save must carry the CURRENT attachment set so the
+        // bridge's APPEND-then-delete cycle preserves both kept legacy
+        // attachments and newly added files. A failed download aborts the
+        // save rather than silently producing an attachment-less draft.
+        let keptFiles: File[] = [];
+        try {
+          const resolved = await resolveExistingAsFilesRef.current();
+          if (resolved === null) return { ok: false, code: "NETWORK" };
+          keptFiles = resolved;
+        } catch {
+          return { ok: false, code: "NETWORK" };
+        }
+        const currentFiles = filesRef.current;
         const form = new FormData();
         const payload = {
           mailSessionToken: token,
@@ -4228,6 +4344,8 @@ function Composer({
           previousRef: previousRef ?? undefined,
         };
         form.append("payload", JSON.stringify(payload));
+        for (const f of keptFiles) form.append("attachments", f, f.name);
+        for (const f of currentFiles) form.append("attachments", f, f.name);
         try {
           const res = await bridgeSaveDraftFn({ data: form });
           if (res?.ok) {
@@ -4252,6 +4370,7 @@ function Composer({
       onServerRef: (r) => setServerRef(r),
     });
   }
+
 
   const [plainMode, setPlainMode] = useState(false);
   const [fontFamily, setFontFamily] = useState<string>("IBM Plex Sans Arabic, sans-serif");
@@ -4382,7 +4501,66 @@ function Composer({
     };
   }, []);
 
-  const totalBytes = files.reduce((acc, f) => acc + f.size, 0);
+  const existingBytes = existingKept.reduce((acc, a) => acc + (a.size || 0), 0);
+  const totalBytes = files.reduce((acc, f) => acc + f.size, 0) + existingBytes;
+  const totalCount = files.length + existingKept.length;
+
+  // Ref mirror so the (persistent) saveRemote closure created at first mount
+  // always reads the latest kept-attachment list without being torn down.
+  const existingKeptRef = useRef(existingKept);
+  useEffect(() => {
+    existingKeptRef.current = existingKept;
+  }, [existingKept]);
+
+  /**
+   * Lazily fetch every kept existing attachment as a File, streaming bytes
+   * from the bridge via the authenticated proxy (never base64 in JSON). All
+   * downloads are cached per-composer-session so autosaves are cheap after
+   * the first save. Returns `null` when any attachment fails so the caller
+   * can abort — we never silently drop a kept attachment.
+   */
+  async function resolveExistingAsFiles(): Promise<File[] | null> {
+    const kept = existingKeptRef.current;
+    if (kept.length === 0) return [];
+    const sourceId = existingSourceIdRef.current;
+    if (!sourceId) return null;
+    const parsed = parseMessageId(sourceId);
+    if (!parsed) return null;
+    const cache = existingFilesCacheRef.current;
+    const out: File[] = [];
+    for (const att of kept) {
+      const cached = cache.get(att.id);
+      if (cached) {
+        out.push(cached);
+        continue;
+      }
+      if (!att.part) return null;
+      const res = await fetch("/api/mail-attachment", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mailSessionToken: session.mailSessionToken ?? "",
+          password: session.password,
+          folder: parsed.folder,
+          uid: parsed.uid,
+          part: att.part,
+        }),
+      });
+      if (!res.ok) return null;
+      const blob = await res.blob();
+      const file = new File([blob], att.filename || "attachment", {
+        type: att.mimeType || blob.type || "application/octet-stream",
+      });
+      cache.set(att.id, file);
+      out.push(file);
+    }
+    return out;
+  }
+
+  // Publish the latest values to the persistent saveRemote closure refs.
+  filesRef.current = files;
+  resolveExistingAsFilesRef.current = resolveExistingAsFiles;
+
 
   // ----- Draft autosave (debounced): local write first, then remote APPEND -----
   useEffect(() => {
@@ -4390,7 +4568,13 @@ function Composer({
     if (sending) return;
     const html = editorRef.current?.innerHTML ?? "";
     const isEmpty =
-      to.length === 0 && cc.length === 0 && bcc.length === 0 && !subject && !html.trim();
+      to.length === 0 &&
+      cc.length === 0 &&
+      bcc.length === 0 &&
+      !subject &&
+      !html.trim() &&
+      existingKept.length === 0 &&
+      files.length === 0;
     const t = window.setTimeout(() => {
       if (isEmpty) {
         clearDraftDoc(window.localStorage, accountEmail);
@@ -4422,7 +4606,7 @@ function Composer({
       void saverRef.current?.requestSave(snapshot, serverRefRef.current);
     }, 800);
     return () => window.clearTimeout(t);
-  }, [to, cc, bcc, subject, showCc, showBcc, accountEmail, draftId, sending]);
+  }, [to, cc, bcc, subject, showCc, showBcc, accountEmail, draftId, sending, existingKept, files]);
 
   function addFiles(list: FileList | File[] | null) {
     if (!list) return;
@@ -4430,8 +4614,9 @@ function Composer({
     if (incoming.length === 0) return;
     const merged: File[] = [...files];
     let runningTotal = totalBytes;
+    let runningCount = totalCount;
     for (const f of incoming) {
-      if (merged.length >= COMPOSE_MAX_FILES) {
+      if (runningCount >= COMPOSE_MAX_FILES) {
         toast.error(`الحد الأقصى ${COMPOSE_MAX_FILES} ملفات`);
         break;
       }
@@ -4441,10 +4626,18 @@ function Composer({
       }
       merged.push(f);
       runningTotal += f.size;
+      runningCount += 1;
     }
     setFiles(merged);
     if (fileInputRef.current) fileInputRef.current.value = "";
   }
+
+  function removeExistingAttachment(id: string) {
+    setExistingKept((prev) => prev.filter((a) => a.id !== id));
+    existingFilesCacheRef.current.delete(id);
+  }
+
+
 
   function removeFile(index: number) {
     setFiles((prev) => prev.filter((_, i) => i !== index));
@@ -4639,9 +4832,27 @@ function Composer({
         bodyText,
       };
 
+      // M4-C: preserve kept legacy/server attachments alongside newly added
+      // files. If any kept attachment can't be streamed we ABORT rather than
+      // silently sending a message with missing attachments.
+      let keptFiles: File[] = [];
+      try {
+        const resolved = await resolveExistingAsFiles();
+        if (resolved === null) {
+          toast.error("تعذّر تحميل مرفق من المسودة الأصلية");
+          return;
+        }
+        keptFiles = resolved;
+      } catch {
+        toast.error("تعذّر تحميل مرفق من المسودة الأصلية");
+        return;
+      }
+
       const form = new FormData();
       form.append("payload", JSON.stringify(payload));
+      for (const f of keptFiles) form.append("attachments", f, f.name);
       for (const f of files) form.append("attachments", f, f.name);
+
 
       const result = await new Promise<{ ok: boolean; error?: string }>((resolve, reject) => {
         const xhr = new XMLHttpRequest();
@@ -5256,18 +5467,48 @@ function Composer({
             </div>
           </div>
 
-          {/* Attachments */}
-          {files.length > 0 && (
+          {/* Attachments — existing (from loaded draft) + newly added files */}
+          {(existingKept.length > 0 || files.length > 0) && (
             <div className="flex flex-col gap-1.5">
               <label className="text-sm font-medium text-foreground">
                 المرفقات · {formatBytes(totalBytes)} / 25 MB
               </label>
               <div className="flex flex-wrap gap-2 rounded-lg border border-dashed border-border bg-background/50 p-3">
+                {existingKept.map((a) => {
+                  const { Icon, tint } = getAttachmentIcon(a.mimeType || "", a.filename);
+                  return (
+                    <div
+                      key={`kept-${a.id}`}
+                      className="group inline-flex items-center gap-2 rounded-lg border border-border bg-card px-2.5 py-1.5 text-xs shadow-soft"
+                      title="مرفق من المسودة الأصلية"
+                    >
+                      <span
+                        className={`inline-flex h-6 w-6 items-center justify-center rounded-md ${tint}`}
+                      >
+                        <Icon className="h-3.5 w-3.5" />
+                      </span>
+                      <div className="flex flex-col leading-tight">
+                        <span className="max-w-[180px] truncate font-medium">{a.filename}</span>
+                        <span className="text-[10px] text-muted-foreground">
+                          {formatBytes(a.size || 0)}
+                        </span>
+                      </div>
+                      <button
+                        onClick={() => removeExistingAttachment(a.id)}
+                        disabled={sending}
+                        className="rounded p-0.5 opacity-60 hover:bg-muted hover:opacity-100"
+                        aria-label="حذف المرفق"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  );
+                })}
                 {files.map((f, i) => {
                   const { Icon, tint } = getAttachmentIcon(f.type, f.name);
                   return (
                     <div
-                      key={`${f.name}-${i}`}
+                      key={`new-${f.name}-${i}`}
                       className="group inline-flex items-center gap-2 rounded-lg border border-border bg-card px-2.5 py-1.5 text-xs shadow-soft"
                     >
                       <span
@@ -5295,6 +5536,7 @@ function Composer({
               </div>
             </div>
           )}
+
 
           {sending && progress > 0 && (
             <div className="h-1 overflow-hidden rounded-full bg-muted">
@@ -5329,7 +5571,7 @@ function Composer({
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}
-            disabled={sending || files.length >= COMPOSE_MAX_FILES}
+            disabled={sending || totalCount >= COMPOSE_MAX_FILES}
             className="inline-flex items-center gap-1.5 rounded-lg border border-input bg-background px-2.5 py-2 text-xs text-muted-foreground transition hover:bg-muted hover:text-foreground disabled:opacity-40 sm:px-3"
             aria-label="إرفاق ملف"
             title="إرفاق ملف"
