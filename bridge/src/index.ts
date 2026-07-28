@@ -21,6 +21,12 @@ import {
   downloadAttachment,
 } from "./imap.js";
 import { sendMessage } from "./smtp.js";
+import {
+  DraftSavePayloadSchema,
+  DraftDeletePayloadSchema,
+  saveDraft,
+  deleteDraft,
+} from "./drafts.js";
 import type { MailAccount, MailFolder } from "./types.js";
 import {
   InitialSyncSchema,
