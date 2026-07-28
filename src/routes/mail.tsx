@@ -1258,7 +1258,9 @@ function MailApp() {
   const {
     folder,
     setFolder,
+    folderPaths,
     sort,
+
     setSort,
     counts,
     setCounts,
