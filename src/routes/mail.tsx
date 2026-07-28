@@ -4608,6 +4608,8 @@ function Composer({
         clearDraftDoc(window.localStorage, accountEmail);
         setSavedAt(null);
         setSaveStatus("idle");
+        lastSavedAtRef.current = Date.now();
+        recomputeDirty();
         return;
       }
       const snapshot: DraftSnapshot = {
@@ -4630,11 +4632,114 @@ function Composer({
         setSaveStatus("failed");
         return;
       }
-      setSavedAt(Date.now());
+      const now = Date.now();
+      setSavedAt(now);
+      lastSavedAtRef.current = now;
+      recomputeDirty();
       void saverRef.current?.requestSave(snapshot, serverRefRef.current);
     }, 800);
     return () => window.clearTimeout(t);
-  }, [to, cc, bcc, subject, showCc, showBcc, accountEmail, draftId, sending, existingKept, files]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [to, cc, bcc, subject, showCc, showBcc, accountEmail, draftId, sending, existingKept, files, bodyRev]);
+
+  // Editor input listener: bump bodyRev so the autosave effect observes body
+  // edits (contentEditable does not trigger React re-renders on its own).
+  useEffect(() => {
+    const el = editorRef.current;
+    if (!el) return;
+    const onInput = () => {
+      setBodyRev((n) => n + 1);
+      markEdited();
+    };
+    el.addEventListener("input", onInput);
+    el.addEventListener("paste", onInput);
+    return () => {
+      el.removeEventListener("input", onInput);
+      el.removeEventListener("paste", onInput);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Mark edited on structural field changes (recipients, subject, attachments).
+  const editMarkMountedRef = useRef(false);
+  useEffect(() => {
+    if (!editMarkMountedRef.current) {
+      editMarkMountedRef.current = true;
+      return;
+    }
+    markEdited();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [to, cc, bcc, subject, showCc, showBcc, existingKept, files]);
+
+  // ----- Guarded close: intercept close attempts when there are unsaved changes -----
+  const closePromptRef = useRef(closePrompt);
+  useEffect(() => {
+    closePromptRef.current = closePrompt;
+  }, [closePrompt]);
+
+  async function requestClose(): Promise<boolean> {
+    if (!isDirtyRef.current) {
+      onClose();
+      return true;
+    }
+    const choice = await new Promise<"save" | "discard" | "cancel">((resolve) => {
+      setClosePrompt({ resolve });
+    });
+    if (choice === "cancel") return false;
+    if (choice === "save") {
+      try {
+        await saveDraftNow();
+      } catch {
+        /* toast handled inside */
+      }
+      onClose();
+      return true;
+    }
+    // discard
+    try {
+      if (typeof window !== "undefined") {
+        clearDraftDoc(window.localStorage, accountEmail);
+      }
+      // Best-effort server delete when a server ref exists.
+      const ref = serverRefRef.current;
+      if (ref) {
+        const token = session.mailSessionToken;
+        if (token) {
+          void bridgeDeleteDraftFn({
+            data: { mailSessionToken: token, draftId, previousRef: ref },
+          }).catch(() => {
+            /* fire-and-forget */
+          });
+        }
+      }
+    } catch {
+      /* noop */
+    }
+    lastSavedAtRef.current = Date.now();
+    recomputeDirty();
+    onClose();
+    return true;
+  }
+
+  // Expose a global guard so parent nav actions (folder switch, list click,
+  // new-message button) can prompt before tearing the composer down.
+  useEffect(() => {
+    (window as unknown as { __mailmaestroComposerGuard?: () => Promise<boolean> })
+      .__mailmaestroComposerGuard = () => requestClose();
+    const beforeUnload = (e: BeforeUnloadEvent) => {
+      if (isDirtyRef.current) {
+        e.preventDefault();
+        e.returnValue = "";
+      }
+    };
+    window.addEventListener("beforeunload", beforeUnload);
+    return () => {
+      const w = window as unknown as { __mailmaestroComposerGuard?: (() => Promise<boolean>) | null };
+      if (w.__mailmaestroComposerGuard) w.__mailmaestroComposerGuard = null;
+      window.removeEventListener("beforeunload", beforeUnload);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   function addFiles(list: FileList | File[] | null) {
     if (!list) return;
