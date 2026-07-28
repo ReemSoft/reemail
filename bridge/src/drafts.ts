@@ -107,6 +107,16 @@ export type DraftSavePayload = z.infer<typeof DraftSavePayloadSchema> & {
   attachments?: SendAttachment[];
 };
 
+export const DraftDeletePayloadSchema = z.object({
+  account: AccountSchema,
+  password: z.string().min(1),
+  draftId: z.string().uuid(),
+  previousRef: PreviousRefSchema.optional(),
+});
+export type DraftDeletePayload = z.infer<typeof DraftDeletePayloadSchema>;
+
+
+
 
 // --- Result types ------------------------------------------------------------
 
