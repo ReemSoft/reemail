@@ -5726,7 +5726,7 @@ function Composer({
             <span>{to.length + cc.length + bcc.length} مستلم</span>
           )}
           <button
-            onClick={onClose}
+            onClick={() => void requestClose()}
             className="rounded-lg border border-input bg-background px-3 py-2 text-xs text-muted-foreground transition hover:border-primary hover:text-foreground"
           >
             إلغاء
