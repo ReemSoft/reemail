@@ -78,11 +78,13 @@ interface FakeOpts {
   mailboxes: Array<{ path: string; specialUse?: string }>;
   uidValidity?: string;
   hasUidPlus?: boolean;
+  hasMove?: boolean;
   appendUid?: number;
   appendFail?: boolean;
   searchResults?: number[][]; // per-call
   searchFail?: boolean;
   deleteFail?: boolean;
+  moveFail?: boolean;
   connectFail?: boolean;
   listFail?: boolean;
 }
@@ -95,8 +97,10 @@ interface Recorder {
   appends: Array<{ path: string; raw: Buffer; flags: string[] }>;
   searches: Array<{ name: string; value: string }>;
   deletes: Array<number[]>;
+  moves: Array<{ uids: number[]; dest: string }>;
   logouts: number;
   hasUidPlusCalls: number;
+  hasMoveCalls: number;
 }
 
 function mkClient(opts: FakeOpts): { client: ImapDraftClient; rec: Recorder } {
@@ -108,8 +112,10 @@ function mkClient(opts: FakeOpts): { client: ImapDraftClient; rec: Recorder } {
     appends: [],
     searches: [],
     deletes: [],
+    moves: [],
     logouts: 0,
     hasUidPlusCalls: 0,
+    hasMoveCalls: 0,
   };
   let searchIdx = 0;
   const client: ImapDraftClient = {
@@ -125,6 +131,10 @@ function mkClient(opts: FakeOpts): { client: ImapDraftClient; rec: Recorder } {
     hasUidPlus() {
       rec.hasUidPlusCalls++;
       return opts.hasUidPlus ?? true;
+    },
+    hasMove() {
+      rec.hasMoveCalls++;
+      return opts.hasMove ?? false;
     },
     async openWithLock(path) {
       rec.opens.push(path);
@@ -153,6 +163,11 @@ function mkClient(opts: FakeOpts): { client: ImapDraftClient; rec: Recorder } {
     async deleteByUid(uids) {
       rec.deletes.push([...uids]);
       if (opts.deleteFail) throw new Error("delete failed");
+      return true;
+    },
+    async moveByUid(uids, dest) {
+      rec.moves.push({ uids: [...uids], dest });
+      if (opts.moveFail) throw new Error("move failed");
       return true;
     },
     async logout() {
