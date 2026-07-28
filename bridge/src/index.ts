@@ -349,11 +349,7 @@ app.post("/api/send", requireKey, async (req, res) => {
 app.post("/api/draft-save", requireKey, imapGate("interactive"), async (req, res) => {
   try {
     const payload = DraftSavePayloadSchema.parse(req.body);
-    const result = await saveDraft(
-      payload.account as any,
-      payload.password,
-      payload,
-    );
+    const result = await saveDraft(payload.account as any, payload.password, payload);
     if (result.ok === false) {
       const err = result.error;
       const status = err === "NO_DRAFTS_FOLDER" ? 422 : 500;
@@ -382,11 +378,7 @@ app.post("/api/draft-save", requireKey, imapGate("interactive"), async (req, res
 app.post("/api/draft-delete", requireKey, imapGate("interactive"), async (req, res) => {
   try {
     const payload = DraftDeletePayloadSchema.parse(req.body);
-    const result = await deleteDraft(
-      payload.account as any,
-      payload.password,
-      payload,
-    );
+    const result = await deleteDraft(payload.account as any, payload.password, payload);
     if (result.ok === false) {
       const err = result.error;
       const status = err === "UIDPLUS_UNSUPPORTED" ? 409 : 500;

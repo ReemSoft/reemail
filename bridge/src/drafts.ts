@@ -190,7 +190,6 @@ export function draftMimePayload(input: DraftSavePayload): SendMessagePayload {
   };
 }
 
-
 /**
  * Core save routine. Extracted so tests can drive every branch without
  * booting a real IMAP server. Never logs / returns PII.
@@ -251,7 +250,8 @@ export async function executeDraftSave(
       }
 
       // Old copies = every match except the one we just appended.
-      const stale = appendUid == null ? matched.slice(0, -1) : matched.filter((u) => u !== appendUid);
+      const stale =
+        appendUid == null ? matched.slice(0, -1) : matched.filter((u) => u !== appendUid);
       if (stale.length > 0) {
         if (!client.hasUidPlus()) {
           // Refuse global EXPUNGE. Leave stale copies for a later cleanup
@@ -374,10 +374,9 @@ function defaultDeps(): DraftDeps {
           };
         },
         async searchByHeader(name, value) {
-          const res = (await client.search(
-            { header: { [name.toLowerCase()]: value } } as never,
-            { uid: true },
-          )) as number[] | false;
+          const res = (await client.search({ header: { [name.toLowerCase()]: value } } as never, {
+            uid: true,
+          })) as number[] | false;
           return Array.isArray(res) ? res : [];
         },
         async append(path, raw, flags) {
@@ -392,10 +391,7 @@ function defaultDeps(): DraftDeps {
         },
         async deleteByUid(uids) {
           if (uids.length === 0) return true;
-          const ok = await client.messageDelete(
-            { uid: uids.join(",") } as never,
-            { uid: true },
-          );
+          const ok = await client.messageDelete({ uid: uids.join(",") } as never, { uid: true });
           return Boolean(ok);
         },
         logout: () => client.logout().catch(() => {}) as unknown as Promise<void>,

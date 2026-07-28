@@ -97,7 +97,6 @@ export function resolveDraftsPath(mailboxes: ListResponse[]): string | undefined
   return undefined;
 }
 
-
 /** Case-insensitive Message-ID search in the given mailbox. */
 async function messageExistsInFolder(
   client: ImapFlow,
@@ -171,7 +170,6 @@ export async function buildMime(
   });
   return { raw, messageId };
 }
-
 
 /**
  * Send the message via SMTP, then best-effort save a copy in Sent:

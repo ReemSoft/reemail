@@ -27,12 +27,7 @@ function box(path: string, specialUse?: string): any {
 }
 
 test("resolveDraftsPath prefers SPECIAL-USE \\Drafts over any well-known name", () => {
-  const boxes = [
-    box("INBOX"),
-    box("Custom/WIP", "\\Drafts"),
-    box("Drafts"),
-    box("[Gmail]/Drafts"),
-  ];
+  const boxes = [box("INBOX"), box("Custom/WIP", "\\Drafts"), box("Drafts"), box("[Gmail]/Drafts")];
   assert.equal(resolveDraftsPath(boxes as any), "Custom/WIP");
 });
 
