@@ -4623,75 +4623,118 @@ function Composer({
   filesRef.current = files;
   resolveExistingAsFilesRef.current = resolveExistingAsFiles;
 
-  // ----- Draft autosave (debounced): local write first, then remote APPEND -----
+  // ----- Draft autosave (scheduled): local write first, then remote APPEND -----
+  // Persistent, disposable scheduler + input/beforeunload guards. All three
+  // helpers expose idempotent .dispose() and are torn down inside useEffect
+  // cleanup so no callback runs after unmount.
+  const autosaveRef = useRef<ReturnType<typeof createAutosaveScheduler> | null>(null);
+  // Latest snapshot fields captured for the scheduler's callback (avoids
+  // stale-closure reads without re-instantiating the scheduler each render).
+  const snapshotInputsRef = useRef({
+    to,
+    cc,
+    bcc,
+    subject,
+    showCc,
+    showBcc,
+    accountEmail,
+    sending,
+    existingKeptLen: existingKept.length,
+    filesLen: files.length,
+  });
+  snapshotInputsRef.current = {
+    to,
+    cc,
+    bcc,
+    subject,
+    showCc,
+    showBcc,
+    accountEmail,
+    sending,
+    existingKeptLen: existingKept.length,
+    filesLen: files.length,
+  };
+
   useEffect(() => {
     if (typeof window === "undefined") return;
-    if (sending) return;
-    const html = editorRef.current?.innerHTML ?? "";
-    const isEmpty =
-      to.length === 0 &&
-      cc.length === 0 &&
-      bcc.length === 0 &&
-      !subject &&
-      !html.trim() &&
-      existingKept.length === 0 &&
-      files.length === 0;
-    const t = window.setTimeout(() => {
-      if (isEmpty) {
-        clearDraftDoc(window.localStorage, accountEmail);
-        setSavedAt(null);
-        setSaveStatus("idle");
-        lastSavedAtRef.current = Date.now();
-        recomputeDirty();
-        return;
-      }
-      const snapshot: DraftSnapshot = {
-        to,
-        cc,
-        bcc,
-        subject,
-        html,
-        showCc,
-        showBcc,
-      };
-      const persisted = writeDraftDoc(window.localStorage, accountEmail, {
-        version: 3,
-        draftId,
-        snapshot,
-        serverRef: serverRefRef.current,
-        updatedAt: Date.now(),
-      });
-      if (!persisted) {
-        setSaveStatus("failed");
-        return;
-      }
-      const now = Date.now();
-      setSavedAt(now);
-      lastSavedAtRef.current = now;
-      recomputeDirty();
-      void saverRef.current?.requestSave(snapshot, serverRefRef.current);
-    }, 800);
-    return () => window.clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [to, cc, bcc, subject, showCc, showBcc, accountEmail, draftId, sending, existingKept, files, bodyRev]);
+    const scheduler = createAutosaveScheduler({
+      delayMs: 800,
+      onFire: () => {
+        const s = snapshotInputsRef.current;
+        if (s.sending) return;
+        const html = editorRef.current?.innerHTML ?? "";
+        const isEmpty =
+          s.to.length === 0 &&
+          s.cc.length === 0 &&
+          s.bcc.length === 0 &&
+          !s.subject &&
+          !html.trim() &&
+          s.existingKeptLen === 0 &&
+          s.filesLen === 0;
+        if (isEmpty) {
+          clearDraftDoc(window.localStorage, s.accountEmail);
+          setSavedAt(null);
+          setSaveStatus("idle");
+          // Empty draft = nothing to persist; treat current gen as saved.
+          savedGenerationRef.current = generationRef.current;
+          recomputeDirty();
+          return;
+        }
+        const snapshot: DraftSnapshot = {
+          to: s.to,
+          cc: s.cc,
+          bcc: s.bcc,
+          subject: s.subject,
+          html,
+          showCc: s.showCc,
+          showBcc: s.showBcc,
+        };
+        const persisted = writeDraftDoc(window.localStorage, s.accountEmail, {
+          version: 3,
+          draftId,
+          snapshot,
+          serverRef: serverRefRef.current,
+          updatedAt: Date.now(),
+        });
+        if (!persisted) {
+          setSaveStatus("failed");
+          return;
+        }
+        // Capture generation at schedule-fire time and pass it into the
+        // saver. `savedGeneration` will only advance when onCompleted echoes
+        // this exact value (or a newer coalesced one) — a stale response
+        // can never mark newer content clean.
+        const genAtFire = generationRef.current;
+        void saverRef.current?.requestSave(snapshot, serverRefRef.current, genAtFire);
+      },
+    });
+    autosaveRef.current = scheduler;
+    return () => {
+      scheduler.dispose();
+      autosaveRef.current = null;
+    };
+  }, [draftId]);
 
-  // Editor input listener: bump bodyRev so the autosave effect observes body
-  // edits (contentEditable does not trigger React re-renders on its own).
+  // Reschedule whenever any user-editable field changes (body edits bump
+  // bodyRev via the input listener below; recipient/subject/attachment
+  // changes flow through the deps array).
+  useEffect(() => {
+    autosaveRef.current?.schedule();
+  }, [to, cc, bcc, subject, showCc, showBcc, existingKept, files, bodyRev]);
+
+  // Editor body input listener — attached via a disposable helper so cleanup
+  // runs exactly once. Per spec: `input` event on the editor body ONLY.
   useEffect(() => {
     const el = editorRef.current;
     if (!el) return;
-    const onInput = () => {
+    const disposable = attachInputListener(el, () => {
       setBodyRev((n) => n + 1);
       markEdited();
-    };
-    el.addEventListener("input", onInput);
-    el.addEventListener("paste", onInput);
-    return () => {
-      el.removeEventListener("input", onInput);
-      el.removeEventListener("paste", onInput);
-    };
+    });
+    return () => disposable.dispose();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
 
   // Mark edited on structural field changes (recipients, subject, attachments).
   const editMarkMountedRef = useRef(false);
