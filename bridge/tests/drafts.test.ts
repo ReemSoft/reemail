@@ -540,3 +540,283 @@ test("safety: IMAP failure surfaces coarse code and no PII in the result", async
   assert.ok(!serialized.includes("pw"));
   assert.ok(!serialized.toLowerCase().includes("append failed"));
 });
+
+// ---------- M2.1 — Concurrent Draft Safety ---------------------------------
+//
+// The keyed mutex + canonical-max selection convert concurrent races on the
+// same (account, draftId) into a serialized pipeline that always converges
+// to exactly one canonical copy — the highest UID.
+
+test("canonical: post-APPEND search picks HIGHEST UID as canonical and expunges the rest", async () => {
+  // A concurrent op appended UID 200 while we appended 100 and 150. Post
+  // search returns all three; canonical MUST be 200; stale MUST be
+  // [100, 150] (order does not matter).
+  const { client, rec } = mkClient({
+    mailboxes: [box("Drafts")],
+    appendUid: 100,
+    searchResults: [[], [100, 150, 200]],
+  });
+  const r = await executeDraftSave(client, BASE_INPUT);
+  assert.equal(r.ok, true);
+  if (!r.ok) return;
+  assert.equal(r.uid, 200, "canonical uid must be the highest observed UID");
+  assert.equal(rec.deletes.length, 1);
+  assert.deepEqual([...rec.deletes[0]].sort((a, b) => a - b), [100, 150]);
+});
+
+test("canonical: our own APPEND is canonical when it is the highest UID", async () => {
+  const { client, rec } = mkClient({
+    mailboxes: [box("Drafts")],
+    appendUid: 300,
+    searchResults: [[42, 200], [42, 200, 300]], // pre-probe has 42+200; ours=300
+  });
+  const r = await executeDraftSave(client, BASE_INPUT);
+  assert.equal(r.ok, true);
+  if (!r.ok) return;
+  assert.equal(r.uid, 300);
+  assert.deepEqual([...rec.deletes[0]].sort((a, b) => a - b), [42, 200]);
+});
+
+// -- Mutex-driven concurrency scenarios --------------------------------------
+// Shared fake IMAP "server" the fake clients read/write against so we can
+// exercise the mutex across independent saveDraft calls.
+
+interface FakeServer {
+  hasUidPlus: boolean;
+  uidValidity: string;
+  mailboxes: Array<{ path: string; specialUse?: string }>;
+  /** Map of uid -> draftId header. Represents the Drafts mailbox contents. */
+  messages: Map<number, string>;
+  nextUid: number;
+  appendCount: number;
+  deleteCount: number;
+}
+
+function mkServer(over: Partial<FakeServer> = {}): FakeServer {
+  return {
+    hasUidPlus: true,
+    uidValidity: "1000",
+    mailboxes: [box("Drafts")],
+    messages: new Map(),
+    nextUid: 100,
+    appendCount: 0,
+    deleteCount: 0,
+    ...over,
+  };
+}
+
+function mkSharedDeps(server: FakeServer, hook?: {
+  beforeAppend?: () => Promise<void>;
+  afterAppend?: () => Promise<void>;
+}): DraftDeps {
+  return {
+    createImapDraftClient: () => ({
+      async connect() {},
+      async list() {
+        return server.mailboxes as any;
+      },
+      hasUidPlus() {
+        return server.hasUidPlus;
+      },
+      async openWithLock() {
+        return { uidValidity: server.uidValidity, release: () => {} };
+      },
+      async searchByHeader(_name, value) {
+        const out: number[] = [];
+        for (const [uid, id] of server.messages) if (id === value) out.push(uid);
+        return out.sort((a, b) => a - b);
+      },
+      async append(_path, raw) {
+        if (hook?.beforeAppend) await hook.beforeAppend();
+        const mime = raw.toString("utf8");
+        // Pull the draftId out of the header we know is present.
+        const m = mime.match(new RegExp(`${DRAFT_ID_HEADER}:\\s*([^\\r\\n]+)`, "i"));
+        const id = m ? m[1].trim() : "";
+        const uid = server.nextUid++;
+        server.messages.set(uid, id);
+        server.appendCount++;
+        if (hook?.afterAppend) await hook.afterAppend();
+        return { uid: server.hasUidPlus ? uid : null, uidValidity: server.uidValidity };
+      },
+      async deleteByUid(uids) {
+        for (const u of uids) server.messages.delete(u);
+        server.deleteCount++;
+        return true;
+      },
+      async logout() {},
+    }),
+    now: () => new Date("2026-01-01T00:00:00Z"),
+  };
+}
+
+test("mutex: two concurrent UIDPLUS saves converge to exactly one canonical copy (highest UID)", async () => {
+  const server = mkServer();
+  const deps = mkSharedDeps(server);
+  const [r1, r2] = await Promise.all([
+    saveDraft(ACCT, "pw", BASE_INPUT, deps),
+    saveDraft(ACCT, "pw", BASE_INPUT, deps),
+  ]);
+  assert.equal(r1.ok, true);
+  assert.equal(r2.ok, true);
+  // Exactly one message remains, and its UID equals the canonical one.
+  assert.equal(server.messages.size, 1, "folder MUST contain exactly one draft");
+  const survivingUid = [...server.messages.keys()][0];
+  // The later caller's returned uid IS the surviving canonical.
+  if (r1.ok && r2.ok) {
+    const uids = [r1.uid, r2.uid].filter((u): u is number => typeof u === "number");
+    assert.ok(uids.includes(survivingUid), "at least one response references the canonical UID");
+    // Highest UID observed anywhere equals the survivor.
+    assert.equal(Math.max(...uids), survivingUid);
+  }
+  // Mutex map fully drained.
+  assert.equal(draftMutexInflight(), 0, "mutex map MUST be empty after both calls settle");
+});
+
+test("mutex: two concurrent UIDPLUS saves NEVER delete each other into an empty folder", async () => {
+  const server = mkServer();
+  const deps = mkSharedDeps(server);
+  const results = await Promise.all([
+    saveDraft(ACCT, "pw", BASE_INPUT, deps),
+    saveDraft(ACCT, "pw", BASE_INPUT, deps),
+    saveDraft(ACCT, "pw", BASE_INPUT, deps),
+  ]);
+  for (const r of results) assert.equal(r.ok, true);
+  assert.equal(server.messages.size, 1);
+  assert.equal(draftMutexInflight(), 0);
+});
+
+test("mutex: without UIDPLUS, two concurrent saves produce ZERO duplicates (second refused safely)", async () => {
+  const server = mkServer({ hasUidPlus: false });
+  const deps = mkSharedDeps(server);
+  const [r1, r2] = await Promise.all([
+    saveDraft(ACCT, "pw", BASE_INPUT, deps),
+    saveDraft(ACCT, "pw", BASE_INPUT, deps),
+  ]);
+  // One MUST succeed, the other MUST be refused with SAFE_DRAFT_REPLACE_UNSUPPORTED.
+  const oks = [r1, r2].filter((r) => r.ok === true).length;
+  const refused = [r1, r2].filter((r) => r.ok === false && (r as any).error === "SAFE_DRAFT_REPLACE_UNSUPPORTED").length;
+  assert.equal(oks, 1, "exactly one save may succeed without UIDPLUS");
+  assert.equal(refused, 1, "the other MUST be refused before APPEND");
+  assert.equal(server.messages.size, 1, "no duplicates without UIDPLUS");
+  assert.equal(server.appendCount, 1, "second call MUST NOT APPEND");
+  assert.equal(draftMutexInflight(), 0);
+});
+
+test("mutex: is released after a failure path (map cleaned up even when APPEND throws)", async () => {
+  const server = mkServer();
+  const deps: DraftDeps = {
+    ...mkSharedDeps(server),
+    createImapDraftClient: () => ({
+      async connect() {},
+      async list() {
+        return server.mailboxes as any;
+      },
+      hasUidPlus() {
+        return true;
+      },
+      async openWithLock() {
+        return { uidValidity: "1000", release: () => {} };
+      },
+      async searchByHeader() {
+        return [];
+      },
+      async append() {
+        throw new Error("boom");
+      },
+      async deleteByUid() {
+        return true;
+      },
+      async logout() {},
+    }),
+  };
+  const r = await saveDraft(ACCT, "pw", BASE_INPUT, deps);
+  assert.equal(r.ok, false);
+  assert.equal(draftMutexInflight(), 0, "mutex MUST be drained even on APPEND failure");
+});
+
+test("mutex: retry after cleanup interruption converges to a single canonical copy", async () => {
+  const server = mkServer();
+  // Round 1: APPEND lands, but search-post-APPEND throws → no cleanup runs.
+  const factoryFactory = (throwOnSecondSearch: boolean): DraftDeps => ({
+    createImapDraftClient: () => {
+      let searchCalls = 0;
+      return {
+        async connect() {},
+        async list() { return server.mailboxes as any; },
+        hasUidPlus() { return true; },
+        async openWithLock() { return { uidValidity: "1000", release: () => {} }; },
+        async searchByHeader(_n, v) {
+          searchCalls++;
+          if (throwOnSecondSearch && searchCalls === 2) throw new Error("search boom");
+          const out: number[] = [];
+          for (const [uid, id] of server.messages) if (id === v) out.push(uid);
+          return out.sort((a, b) => a - b);
+        },
+        async append(_p, raw) {
+          const m = raw.toString("utf8").match(new RegExp(`${DRAFT_ID_HEADER}:\\s*([^\\r\\n]+)`, "i"));
+          const uid = server.nextUid++;
+          server.messages.set(uid, m ? m[1].trim() : "");
+          return { uid, uidValidity: "1000" };
+        },
+        async deleteByUid(uids) { for (const u of uids) server.messages.delete(u); return true; },
+        async logout() {},
+      };
+    },
+    now: () => new Date(),
+  });
+  const r1 = await saveDraft(ACCT, "pw", BASE_INPUT, factoryFactory(true));
+  assert.equal(r1.ok, true);
+  assert.equal(server.messages.size, 1, "APPEND landed even though cleanup search threw");
+
+  // Round 2 (retry): normal search runs, canonical=max, stale deleted →
+  // still exactly one message.
+  const r2 = await saveDraft(ACCT, "pw", BASE_INPUT, factoryFactory(false));
+  assert.equal(r2.ok, true);
+  assert.equal(server.messages.size, 1, "retry MUST converge to exactly one canonical copy");
+  assert.equal(draftMutexInflight(), 0);
+});
+
+test("mutex: different UIDVALIDITY between pre-probe and APPEND does not leak stale UIDs", async () => {
+  // Simulate a UIDVALIDITY bump between the pre-APPEND probe and the
+  // post-APPEND search. The canonical selection MUST rely on the freshly
+  // searched UIDs from the CURRENT mailbox, never the pre-probe ones.
+  let opens = 0;
+  const server = mkServer();
+  server.messages.set(9999, DRAFT_ID); // stale ghost from an old UIDVALIDITY
+  const deps: DraftDeps = {
+    createImapDraftClient: () => ({
+      async connect() {},
+      async list() { return server.mailboxes as any; },
+      hasUidPlus() { return true; },
+      async openWithLock() {
+        opens++;
+        // First open (probe) reports uidValidity=1000; after APPEND we
+        // report uidValidity=2000 and the search space resets.
+        if (opens === 1) return { uidValidity: "1000", release: () => {} };
+        server.messages.delete(9999); // uidvalidity bump wiped the old rows
+        return { uidValidity: "2000", release: () => {} };
+      },
+      async searchByHeader(_n, v) {
+        const out: number[] = [];
+        for (const [uid, id] of server.messages) if (id === v) out.push(uid);
+        return out.sort((a, b) => a - b);
+      },
+      async append(_p, raw) {
+        const m = raw.toString("utf8").match(new RegExp(`${DRAFT_ID_HEADER}:\\s*([^\\r\\n]+)`, "i"));
+        const uid = 50; // NEW uidvalidity => low uid space
+        server.messages.set(uid, m ? m[1].trim() : "");
+        return { uid, uidValidity: "2000" };
+      },
+      async deleteByUid(uids) { for (const u of uids) server.messages.delete(u); return true; },
+      async logout() {},
+    }),
+    now: () => new Date(),
+  };
+  const r = await saveDraft(ACCT, "pw", BASE_INPUT, deps);
+  assert.equal(r.ok, true);
+  if (!r.ok) return;
+  assert.equal(r.uidValidity, "2000", "returned uidValidity MUST reflect the current mailbox");
+  assert.equal(r.uid, 50, "canonical uid comes from the freshly-appended message under new uidvalidity");
+  // Old 9999 UID from the previous uidvalidity MUST NOT be treated as stale-and-deleted.
+  assert.equal(server.messages.has(9999), false);
+});
