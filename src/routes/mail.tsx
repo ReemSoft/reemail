@@ -30,7 +30,6 @@ function sanitizeComposerHtml(html: string): string {
   });
 }
 
-
 import {
   Inbox,
   Star,
@@ -3101,7 +3100,6 @@ function MailApp() {
   );
 }
 
-
 function MessageRow({
   message,
   active,
@@ -3676,7 +3674,6 @@ function LoadingViewer({ onBack }: { onBack: () => void }) {
 const COMPOSE_MAX_TOTAL_BYTES = 25 * 1024 * 1024;
 const COMPOSE_MAX_FILES = 10;
 
-
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
@@ -3847,7 +3844,10 @@ function RecipientField({
           className="flex min-h-[42px] w-full min-w-0 flex-wrap items-center gap-2 rounded-lg border border-input bg-background px-3 py-1.5 transition focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/20"
           onClick={() => inputRef.current?.focus()}
         >
-          <div className="flex min-w-0 flex-1 basis-full flex-wrap items-center gap-1.5 sm:basis-auto" dir="ltr">
+          <div
+            className="flex min-w-0 flex-1 basis-full flex-wrap items-center gap-1.5 sm:basis-auto"
+            dir="ltr"
+          >
             {value.map((r, i) => (
               <span
                 key={`${r.email}-${i}`}
@@ -3859,7 +3859,9 @@ function RecipientField({
                 title={r.valid ? r.email : "بريد غير صالح"}
               >
                 {!r.valid && <AlertTriangle className="h-3 w-3" />}
-                <span className="max-w-[220px] truncate">{r.name ? `${r.name} · ${r.email}` : r.email}</span>
+                <span className="max-w-[220px] truncate">
+                  {r.name ? `${r.name} · ${r.email}` : r.email}
+                </span>
                 <button
                   type="button"
                   onClick={(e) => {
@@ -3991,8 +3993,6 @@ function RecipientField({
     </div>
   );
 }
-
-
 
 // ------------ Rich-text editor toolbar ------------
 function ToolbarButton({
@@ -4136,8 +4136,8 @@ function Composer({
   const [serverRef, setServerRef] = useState<DraftServerRef | null>(
     () => initialDoc?.serverRef ?? null,
   );
-  const [saveStatus, setSaveStatus] = useState<DraftSaveStatus>(
-    () => (initialDoc ? "saved-local" : "idle"),
+  const [saveStatus, setSaveStatus] = useState<DraftSaveStatus>(() =>
+    initialDoc ? "saved-local" : "idle",
   );
   const serverRefRef = useRef<DraftServerRef | null>(serverRef);
   useEffect(() => {
@@ -4152,7 +4152,7 @@ function Composer({
   );
   const [bcc, setBcc] = useState<Recipient[]>(() => restored?.bcc ?? []);
   const [showCc, setShowCc] = useState<boolean>(
-    () => restored?.showCc ?? (parseRecipientText(initial?.cc ?? "").length > 0),
+    () => restored?.showCc ?? parseRecipientText(initial?.cc ?? "").length > 0,
   );
   const [showBcc, setShowBcc] = useState<boolean>(() => restored?.showBcc ?? false);
   const [subject, setSubject] = useState<string>(() => restored?.subject ?? initial?.subject ?? "");
@@ -4231,12 +4231,7 @@ function Composer({
         try {
           const res = await bridgeSaveDraftFn({ data: form });
           if (res?.ok) {
-            if (
-              typeof res.uid === "number" &&
-              res.uid > 0 &&
-              res.uidValidity &&
-              res.folderPath
-            ) {
+            if (typeof res.uid === "number" && res.uid > 0 && res.uidValidity && res.folderPath) {
               return {
                 ok: true,
                 serverRef: {
@@ -4262,8 +4257,8 @@ function Composer({
   const [fontFamily, setFontFamily] = useState<string>("IBM Plex Sans Arabic, sans-serif");
   const [fontSize, setFontSize] = useState<string>("14px");
   const [blockFmt, setBlockFmt] = useState<string>("p");
-  const [extensions, setExtensions] = useState<ComposerExtension[]>(
-    () => (typeof window !== "undefined" ? window.mailmaestroComposerExtensions ?? [] : []),
+  const [extensions, setExtensions] = useState<ComposerExtension[]>(() =>
+    typeof window !== "undefined" ? (window.mailmaestroComposerExtensions ?? []) : [],
   );
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -4354,7 +4349,10 @@ function Composer({
         /* noop */
       }
       try {
-        const ff = document.queryCommandValue("fontName")?.toString().replace(/^['"]|['"]$/g, "");
+        const ff = document
+          .queryCommandValue("fontName")
+          ?.toString()
+          .replace(/^['"]|['"]$/g, "");
         if (ff) {
           // match one of our option values whose first family matches
           setFontFamily((prev) => {
@@ -4587,10 +4585,7 @@ function Composer({
         n = n.parentNode;
       }
     }
-    const cur =
-      refEl.getAttribute("dir") ||
-      window.getComputedStyle(refEl).direction ||
-      "rtl";
+    const cur = refEl.getAttribute("dir") || window.getComputedStyle(refEl).direction || "rtl";
     setEditorDirection(cur === "rtl" ? "ltr" : "rtl");
   }
   function insertHR() {
@@ -4605,9 +4600,7 @@ function Composer({
         toast.error("رابط صورة غير مدعوم");
         return;
       }
-      insertHtmlAtCursor(
-        `<img src="${u.toString()}" alt="" style="max-width:100%;height:auto" />`,
-      );
+      insertHtmlAtCursor(`<img src="${u.toString()}" alt="" style="max-width:100%;height:auto" />`);
     } catch {
       toast.error("رابط غير صالح");
     }
@@ -4842,7 +4835,6 @@ function Composer({
     }
   }
 
-
   return (
     <div
       ref={containerRef}
@@ -4985,25 +4977,51 @@ function Composer({
                   </PopoverTrigger>
                   <PopoverContent align="end" className="w-auto p-2">
                     <div className="grid grid-cols-6 gap-0.5">
-                      <ToolbarButton title="يتوسطه خط" active={fmtState.strikeThrough} onMouseDown={() => exec("strikeThrough")}>
+                      <ToolbarButton
+                        title="يتوسطه خط"
+                        active={fmtState.strikeThrough}
+                        onMouseDown={() => exec("strikeThrough")}
+                      >
                         <Strikethrough className="h-3.5 w-3.5" />
                       </ToolbarButton>
-                      <ToolbarButton title="مرتفع" active={fmtState.superscript} onMouseDown={() => exec("superscript")}>
+                      <ToolbarButton
+                        title="مرتفع"
+                        active={fmtState.superscript}
+                        onMouseDown={() => exec("superscript")}
+                      >
                         <Superscript className="h-3.5 w-3.5" />
                       </ToolbarButton>
-                      <ToolbarButton title="منخفض" active={fmtState.subscript} onMouseDown={() => exec("subscript")}>
+                      <ToolbarButton
+                        title="منخفض"
+                        active={fmtState.subscript}
+                        onMouseDown={() => exec("subscript")}
+                      >
                         <Subscript className="h-3.5 w-3.5" />
                       </ToolbarButton>
-                      <ToolbarButton title="ضبط" active={fmtState.justifyFull} onMouseDown={() => exec("justifyFull")}>
+                      <ToolbarButton
+                        title="ضبط"
+                        active={fmtState.justifyFull}
+                        onMouseDown={() => exec("justifyFull")}
+                      >
                         <AlignJustify className="h-3.5 w-3.5" />
                       </ToolbarButton>
-                      <ToolbarButton title="زيادة المسافة البادئة" onMouseDown={() => exec("indent")}>
+                      <ToolbarButton
+                        title="زيادة المسافة البادئة"
+                        onMouseDown={() => exec("indent")}
+                      >
                         <Indent className="h-3.5 w-3.5" />
                       </ToolbarButton>
-                      <ToolbarButton title="تقليل المسافة البادئة" onMouseDown={() => exec("outdent")}>
+                      <ToolbarButton
+                        title="تقليل المسافة البادئة"
+                        onMouseDown={() => exec("outdent")}
+                      >
                         <Outdent className="h-3.5 w-3.5" />
                       </ToolbarButton>
-                      <ToolbarButton title="اقتباس" active={fmtState.blockquote} onMouseDown={() => exec("formatBlock", "blockquote")}>
+                      <ToolbarButton
+                        title="اقتباس"
+                        active={fmtState.blockquote}
+                        onMouseDown={() => exec("formatBlock", "blockquote")}
+                      >
                         <Quote className="h-3.5 w-3.5" />
                       </ToolbarButton>
                       <ToolbarButton title="إدراج صورة" onMouseDown={promptImage}>
@@ -5012,7 +5030,10 @@ function Composer({
                       <ToolbarButton title="خط أفقي" onMouseDown={insertHR}>
                         <Minus className="h-3.5 w-3.5" />
                       </ToolbarButton>
-                      <ToolbarButton title="تبديل اتجاه النص RTL/LTR" onMouseDown={toggleEditorDirection}>
+                      <ToolbarButton
+                        title="تبديل اتجاه النص RTL/LTR"
+                        onMouseDown={toggleEditorDirection}
+                      >
                         <ArrowLeftRight className="h-3.5 w-3.5" />
                       </ToolbarButton>
                       <ToolbarButton title="إزالة التنسيق" onMouseDown={() => exec("removeFormat")}>
@@ -5092,13 +5113,25 @@ function Composer({
                       { value: "pre", label: "كود" },
                     ]}
                   />
-                  <ToolbarButton title="عريض (Ctrl+B)" active={fmtState.bold} onMouseDown={() => exec("bold")}>
+                  <ToolbarButton
+                    title="عريض (Ctrl+B)"
+                    active={fmtState.bold}
+                    onMouseDown={() => exec("bold")}
+                  >
                     <Bold className="h-3.5 w-3.5" />
                   </ToolbarButton>
-                  <ToolbarButton title="مائل (Ctrl+I)" active={fmtState.italic} onMouseDown={() => exec("italic")}>
+                  <ToolbarButton
+                    title="مائل (Ctrl+I)"
+                    active={fmtState.italic}
+                    onMouseDown={() => exec("italic")}
+                  >
                     <Italic className="h-3.5 w-3.5" />
                   </ToolbarButton>
-                  <ToolbarButton title="تسطير (Ctrl+U)" active={fmtState.underline} onMouseDown={() => exec("underline")}>
+                  <ToolbarButton
+                    title="تسطير (Ctrl+U)"
+                    active={fmtState.underline}
+                    onMouseDown={() => exec("underline")}
+                  >
                     <Underline className="h-3.5 w-3.5" />
                   </ToolbarButton>
                   {/* Colors */}
@@ -5127,20 +5160,40 @@ function Composer({
                     />
                   </label>
                   {/* Alignment */}
-                  <ToolbarButton title="محاذاة يمين" active={fmtState.justifyRight} onMouseDown={() => exec("justifyRight")}>
+                  <ToolbarButton
+                    title="محاذاة يمين"
+                    active={fmtState.justifyRight}
+                    onMouseDown={() => exec("justifyRight")}
+                  >
                     <AlignRight className="h-3.5 w-3.5" />
                   </ToolbarButton>
-                  <ToolbarButton title="توسيط" active={fmtState.justifyCenter} onMouseDown={() => exec("justifyCenter")}>
+                  <ToolbarButton
+                    title="توسيط"
+                    active={fmtState.justifyCenter}
+                    onMouseDown={() => exec("justifyCenter")}
+                  >
                     <AlignCenter className="h-3.5 w-3.5" />
                   </ToolbarButton>
-                  <ToolbarButton title="محاذاة يسار" active={fmtState.justifyLeft} onMouseDown={() => exec("justifyLeft")}>
+                  <ToolbarButton
+                    title="محاذاة يسار"
+                    active={fmtState.justifyLeft}
+                    onMouseDown={() => exec("justifyLeft")}
+                  >
                     <AlignLeft className="h-3.5 w-3.5" />
                   </ToolbarButton>
                   {/* Lists */}
-                  <ToolbarButton title="قائمة نقطية" active={fmtState.insertUnorderedList} onMouseDown={() => exec("insertUnorderedList")}>
+                  <ToolbarButton
+                    title="قائمة نقطية"
+                    active={fmtState.insertUnorderedList}
+                    onMouseDown={() => exec("insertUnorderedList")}
+                  >
                     <List className="h-3.5 w-3.5" />
                   </ToolbarButton>
-                  <ToolbarButton title="قائمة مرقمة" active={fmtState.insertOrderedList} onMouseDown={() => exec("insertOrderedList")}>
+                  <ToolbarButton
+                    title="قائمة مرقمة"
+                    active={fmtState.insertOrderedList}
+                    onMouseDown={() => exec("insertOrderedList")}
+                  >
                     <ListOrdered className="h-3.5 w-3.5" />
                   </ToolbarButton>
                   {/* Link */}
@@ -5224,7 +5277,9 @@ function Composer({
                       </span>
                       <div className="flex flex-col leading-tight">
                         <span className="max-w-[180px] truncate font-medium">{f.name}</span>
-                        <span className="text-[10px] text-muted-foreground">{formatBytes(f.size)}</span>
+                        <span className="text-[10px] text-muted-foreground">
+                          {formatBytes(f.size)}
+                        </span>
                       </div>
                       <button
                         onClick={() => removeFile(i)}
@@ -5318,8 +5373,6 @@ function Composer({
     </div>
   );
 }
-
-
 
 // ---- Attachment card with download + inline preview ----
 const INLINE_PREVIEW_MIME = new Set<string>([

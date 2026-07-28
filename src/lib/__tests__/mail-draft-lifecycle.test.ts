@@ -64,7 +64,12 @@ describe("v2 → v3 migration", () => {
     };
     s.setItem(draftKeyV2(email), JSON.stringify(legacy));
 
-    const doc = readDraftDoc(s, email, () => "fixed-id", () => 1000);
+    const doc = readDraftDoc(
+      s,
+      email,
+      () => "fixed-id",
+      () => 1000,
+    );
     expect(doc).not.toBeNull();
     expect(doc!.version).toBe(3);
     expect(doc!.draftId).toBe("fixed-id");

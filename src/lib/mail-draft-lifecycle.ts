@@ -245,10 +245,7 @@ export interface DraftSaver {
   getStatus(): DraftSaveStatus;
 }
 
-export function createDraftSaver(
-  draftId: string,
-  opts: CreateDraftSaverOptions,
-): DraftSaver {
+export function createDraftSaver(draftId: string, opts: CreateDraftSaverOptions): DraftSaver {
   let status: DraftSaveStatus = "idle";
   let seq = 0;
   let latestIssuedSeq = 0;
@@ -266,10 +263,7 @@ export function createDraftSaver(
     opts.onStatus?.(status);
   }
 
-  async function run(
-    snapshot: DraftSnapshot,
-    previousRef: DraftServerRef | null,
-  ): Promise<void> {
+  async function run(snapshot: DraftSnapshot, previousRef: DraftServerRef | null): Promise<void> {
     const mySeq = ++seq;
     latestIssuedSeq = mySeq;
     setStatus("saving");
@@ -313,10 +307,7 @@ export function createDraftSaver(
     }
   }
 
-  function requestSave(
-    snapshot: DraftSnapshot,
-    previousRef: DraftServerRef | null,
-  ): Promise<void> {
+  function requestSave(snapshot: DraftSnapshot, previousRef: DraftServerRef | null): Promise<void> {
     return new Promise<void>((resolve) => {
       if (pending) {
         // Merge: newest snapshot wins, waiters accumulate.
@@ -371,8 +362,7 @@ function readQueue(storage: DraftStorageLike, accountEmail: string): PendingDele
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
     return parsed.filter(
-      (e): e is PendingDeleteEntry =>
-        !!e && typeof e === "object" && typeof e.draftId === "string",
+      (e): e is PendingDeleteEntry => !!e && typeof e === "object" && typeof e.draftId === "string",
     );
   } catch {
     return [];
