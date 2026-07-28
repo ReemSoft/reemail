@@ -35,12 +35,65 @@ import { makeImapClient, listMailboxes } from "./imap.js";
 import {
   buildMime,
   resolveDraftsPath,
+  resolveTrashPath,
   type SendMessagePayload,
   type SendAttachment,
 } from "./smtp.js";
 import type { MailAccount } from "./types.js";
 
 export const DRAFT_ID_HEADER = "X-MailMaestro-Draft-ID";
+
+// --- IMAP capability detection ---------------------------------------------
+//
+// ImapFlow exposes `client.capabilities` as `Map<string, boolean | number>`
+// after CONNECT. Iterating a Map yields `[key, value]` tuples, so the
+// previous `for (const c of caps)` + `String(c)` produced strings like
+// "UIDPLUS,true" and NEVER matched — which made the drafts save flow refuse
+// UIDPLUS-capable servers with SAFE_DRAFT_REPLACE_UNSUPPORTED. This helper
+// reads Map KEYS, tolerates Set/Iterable inputs for defensive compatibility,
+// is case-insensitive, and treats presence as support unless the value is
+// explicitly `false`. Never logs the capability list — the account/server is
+// PII in this codebase's threat model.
+export function hasImapCapability(
+  capabilities:
+    | Map<string, boolean | number>
+    | Set<string>
+    | Iterable<unknown>
+    | undefined
+    | null,
+  capability: string,
+): boolean {
+  if (!capabilities) return false;
+  const want = capability.toUpperCase();
+  // Fast path: real ImapFlow Map. Read keys, not entries.
+  if (capabilities instanceof Map) {
+    for (const [name, value] of capabilities) {
+      if (typeof name !== "string") continue;
+      if (name.toUpperCase() !== want) continue;
+      return value !== false;
+    }
+    return false;
+  }
+  // Set (or Set-like)
+  if (capabilities instanceof Set) {
+    for (const name of capabilities) {
+      if (typeof name === "string" && name.toUpperCase() === want) return true;
+    }
+    return false;
+  }
+  // Generic iterable fallback (test fakes, legacy shapes).
+  for (const entry of capabilities as Iterable<unknown>) {
+    if (Array.isArray(entry)) {
+      const [name, value] = entry as [unknown, unknown];
+      if (typeof name === "string" && name.toUpperCase() === want) {
+        return value !== false;
+      }
+    } else if (typeof entry === "string") {
+      if (entry.toUpperCase() === want) return true;
+    }
+  }
+  return false;
+}
 
 // --- Validation --------------------------------------------------------------
 
@@ -175,6 +228,21 @@ export interface ImapDraftClient {
    * under an open lock on the target mailbox.
    */
   deleteByUid(uids: number[]): Promise<boolean>;
+  /**
+   * Whether the server advertised RFC 6851 MOVE. Used only by the drafts
+   * MOVE fallback on servers that support MOVE but NOT UIDPLUS: stale draft
+   * copies are moved to Trash rather than expunged. Callers MUST NOT invoke
+   * `moveByUid` when this returns false.
+   */
+  hasMove(): boolean;
+  /**
+   * UID MOVE the given UIDs from the currently-open mailbox to
+   * `destinationPath`. Callers MUST have verified `hasMove()` first — this
+   * function MUST NOT be implemented as a client-side COPY+EXPUNGE emulation
+   * on servers that lack real MOVE, or unrelated \Deleted messages could be
+   * evicted. Called under an open lock on the source mailbox.
+   */
+  moveByUid(uids: number[], destinationPath: string): Promise<boolean>;
   logout(): Promise<void>;
 }
 
@@ -233,6 +301,15 @@ export async function executeDraftSave(
     const folderPath = resolveDraftsPath(mailboxes);
     if (!folderPath) return { ok: false, error: "NO_DRAFTS_FOLDER" };
 
+    // Resolve a SAFE Trash path for the MOVE fallback used on non-UIDPLUS
+    // servers that DO advertise RFC 6851 MOVE. Server-side resolution only:
+    // SPECIAL-USE first, then a tight allowlist. Never trusts caller input,
+    // never creates a folder, and MUST differ from the Drafts folder itself
+    // (otherwise the "move stale to Trash" step would be a no-op).
+    const rawTrashPath = resolveTrashPath(mailboxes);
+    const trashPath =
+      rawTrashPath && rawTrashPath !== folderPath ? rawTrashPath : undefined;
+
     // Build MIME (with the sticky draft id header) BEFORE we take any locks
     // so IMAP holds nothing while nodemailer compiles.
     const { raw, messageId } = await buildMime(draftMimePayload(input), {
@@ -264,7 +341,12 @@ export async function executeDraftSave(
     // Replace mode = we WILL need to delete an old copy after appending.
     // Trigger it either from an actual match OR an explicit caller hint.
     const replaceMode = priorCopies.length > 0 || Boolean(input.previousRef);
-    if (replaceMode && !client.hasUidPlus()) {
+    const uidPlus = client.hasUidPlus();
+    // MOVE fallback is only available when the server ACTUALLY advertises
+    // MOVE AND we found a safe Trash target distinct from Drafts.
+    const canMoveFallback = !uidPlus && client.hasMove() && Boolean(trashPath);
+    const canSafelyReplace = uidPlus || canMoveFallback;
+    if (replaceMode && !canSafelyReplace) {
       // Refuse BEFORE APPEND. No side effects on the mailbox.
       return { ok: false, error: "SAFE_DRAFT_REPLACE_UNSUPPORTED" };
     }
@@ -282,7 +364,9 @@ export async function executeDraftSave(
 
     // 3) Reopen with lock to re-scan for all copies of this draftId.
     //    Canonical = highest UID within the current UIDVALIDITY (newest
-    //    wins). Every other UID is stale and MUST be selectively expunged.
+    //    wins). Every other UID is stale and MUST be selectively cleaned up
+    //    — via UID EXPUNGE on UIDPLUS servers, or UID MOVE to Trash on the
+    //    MOVE-only fallback. A global EXPUNGE is NEVER used here.
     //
     //    LEGACY (M4-A): drafts saved by older builds don't carry the
     //    `X-MailMaestro-Draft-ID` header, so a header search can never find
@@ -293,11 +377,11 @@ export async function executeDraftSave(
     //        (never a caller-supplied path like INBOX).
     //      * previousRef.uidValidity equals the CURRENT mailbox UIDVALIDITY
     //        (a bump invalidates the UID entirely).
-    //      * UIDPLUS is supported (guaranteed here because replace-mode
-    //        already refused non-UIDPLUS servers pre-APPEND).
+    //      * UIDPLUS OR MOVE fallback is available (guaranteed here because
+    //        replace-mode already refused otherwise pre-APPEND).
     //      * previousRef.uid is NOT the freshly-appended canonical UID.
     //    Within a single UIDVALIDITY, IMAP guarantees UIDs are never
-    //    reused, so deleting a UID that no longer exists is a harmless
+    //    reused, so acting on a UID that no longer exists is a harmless
     //    no-op — it can never target an unrelated message.
     const opened = await client.openWithLock(folderPath);
     try {
@@ -322,23 +406,39 @@ export async function executeDraftSave(
       const stale = postSearchOk ? matched.filter((u) => u !== canonical) : [];
 
       // Legacy previousRef cleanup — union with header-matched stale UIDs.
-      const toDelete = new Set<number>(stale);
+      const toCleanup = new Set<number>(stale);
       const prev = input.previousRef;
-      const canDeletePrevious =
+      const canCleanupPrevious =
         !!prev &&
         prev.folderPath === folderPath &&
         String(prev.uidValidity) === uidValidity &&
-        client.hasUidPlus() &&
+        canSafelyReplace &&
         typeof canonical === "number" &&
         prev.uid !== canonical;
-      if (canDeletePrevious && prev) toDelete.add(prev.uid);
+      if (canCleanupPrevious && prev) toCleanup.add(prev.uid);
 
-      if (toDelete.size > 0 && client.hasUidPlus()) {
-        try {
-          await client.deleteByUid([...toDelete]);
-        } catch {
-          // Cleanup failure MUST NOT fail the save. A future save/retry
-          // will re-scan and converge.
+      if (toCleanup.size > 0) {
+        // Belt-and-braces: never touch the canonical UID.
+        const cleanupList =
+          typeof canonical === "number"
+            ? [...toCleanup].filter((u) => u !== canonical)
+            : [...toCleanup];
+        if (cleanupList.length > 0) {
+          if (uidPlus) {
+            try {
+              await client.deleteByUid(cleanupList);
+            } catch {
+              // Cleanup failure MUST NOT fail the save. Next save converges.
+            }
+          } else if (canMoveFallback && trashPath) {
+            try {
+              await client.moveByUid(cleanupList, trashPath);
+            } catch {
+              // MOVE failure is non-fatal: the freshly-APPENDed canonical
+              // remains; a subsequent save re-scans and retries convergence.
+              // We DO NOT fall back to a global EXPUNGE under any condition.
+            }
+          }
         }
       }
       void priorSearchFailed;
@@ -420,20 +520,19 @@ function defaultDeps(): DraftDeps {
   return {
     createImapDraftClient(account, password) {
       const client = makeImapClient(account, password);
-      // imapflow exposes `capabilities` as a Set<string> after connect.
-      const hasUidPlus = () => {
-        const caps =
-          (client as unknown as { capabilities?: Iterable<string> }).capabilities ??
-          new Set<string>();
-        for (const c of caps) {
-          if (String(c).toUpperCase() === "UIDPLUS") return true;
-        }
-        return false;
-      };
+      // ImapFlow exposes `capabilities` as `Map<string, boolean | number>`
+      // after connect. Read via `hasImapCapability` — iterating the Map
+      // directly yields `[key, value]` tuples and would misread as strings
+      // like "UIDPLUS,true", which was the SAFE_DRAFT_REPLACE_UNSUPPORTED
+      // root cause on UIDPLUS-capable servers.
+      const getCaps = () =>
+        (client as unknown as { capabilities?: Map<string, boolean | number> })
+          .capabilities;
       return {
         connect: () => client.connect(),
         list: () => listMailboxes(client),
-        hasUidPlus,
+        hasUidPlus: () => hasImapCapability(getCaps(), "UIDPLUS"),
+        hasMove: () => hasImapCapability(getCaps(), "MOVE"),
         async openWithLock(path) {
           const lock = await client.getMailboxLock(path);
           const mb = (client as unknown as { mailbox?: { uidValidity?: unknown } }).mailbox;
@@ -463,6 +562,18 @@ function defaultDeps(): DraftDeps {
           if (uids.length === 0) return true;
           const ok = await client.messageDelete({ uid: uids.join(",") } as never, { uid: true });
           return Boolean(ok);
+        },
+        async moveByUid(uids, destinationPath) {
+          if (uids.length === 0) return true;
+          // Guard-rail: never call messageMove without the MOVE capability;
+          // some IMAP client libs emulate MOVE via COPY+STORE+EXPUNGE, which
+          // would evict unrelated \Deleted messages. `executeDraftSave`
+          // already checks `hasMove()`, but we double-check here.
+          if (!hasImapCapability(getCaps(), "MOVE")) return false;
+          const res = (await client.messageMove(uids.join(","), destinationPath, {
+            uid: true,
+          })) as unknown;
+          return Boolean(res);
         },
         logout: () => client.logout().catch(() => {}) as unknown as Promise<void>,
       };

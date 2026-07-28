@@ -97,6 +97,30 @@ export function resolveDraftsPath(mailboxes: ListResponse[]): string | undefined
   return undefined;
 }
 
+/**
+ * Resolve the true Trash folder path. Conservative: SPECIAL-USE \Trash first,
+ * then a small allowlist of well-known Trash names that ACTUALLY exist on the
+ * server. Never trusts caller-supplied paths, never creates a folder. Returns
+ * undefined when no safe Trash target exists.
+ *
+ * Used by the drafts MOVE fallback (bridge/src/drafts.ts) on servers that
+ * advertise MOVE but not UIDPLUS: stale draft copies are moved to Trash
+ * instead of being selectively expunged.
+ */
+export function resolveTrashPath(mailboxes: ListResponse[]): string | undefined {
+  for (const mb of mailboxes) {
+    const su = (mb as unknown as { specialUse?: string | string[] }).specialUse;
+    if (!su) continue;
+    if (Array.isArray(su) ? su.includes("\\Trash") : su === "\\Trash") return mb.path;
+  }
+  const known = ["Trash", "Deleted Items", "Deleted", "[Gmail]/Trash", "[Gmail]/Bin"];
+  for (const name of known) {
+    const found = mailboxes.find((m) => m.path.toLowerCase() === name.toLowerCase());
+    if (found) return found.path;
+  }
+  return undefined;
+}
+
 /** Case-insensitive Message-ID search in the given mailbox. */
 async function messageExistsInFolder(
   client: ImapFlow,
