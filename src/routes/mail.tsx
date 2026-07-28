@@ -2501,6 +2501,10 @@ function MailApp() {
     // same device doesn't inherit stale restore targets.
     clearAccountOrigins(safeOriginStorage(), currentAccountId);
 
+    // Address-book: wipe local suggestion cache so a new sign-in on the same
+    // device starts fresh and never surfaces a previous scope's contacts.
+    void wipeAllPersisted();
+
     clearMailSession();
     navigate({ to: "/login" });
   }
