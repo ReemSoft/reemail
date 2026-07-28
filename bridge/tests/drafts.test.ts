@@ -674,6 +674,12 @@ function mkSharedDeps(
         server.deleteCount++;
         return true;
       },
+      hasMove() {
+        return false;
+      },
+      async moveByUid() {
+        return true;
+      },
       async logout() {},
     }),
     now: () => new Date("2026-01-01T00:00:00Z"),
