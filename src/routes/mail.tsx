@@ -5270,17 +5270,9 @@ function Composer({
       }
     } finally {
       savingNowRef.current = false;
-      // Restore the scheduler for further edits after this explicit save.
-      if (!autosaveRef.current && typeof window !== "undefined") {
-        autosaveRef.current = createAutosaveScheduler({
-          delayMs: 800,
-          onFire: () => {
-            /* re-armed by useEffect on next render tick */
-          },
-        });
-      }
     }
   }
+
 
 
   return (
