@@ -332,8 +332,14 @@ const DraftSaveClientSchema = z.object({
   cc: z.array(AddressSchema).max(200).optional().default([]),
   bcc: z.array(AddressSchema).max(200).optional().default([]),
   subject: z.string().max(998).optional().default(""),
-  bodyHtml: z.string().max(5 * 1024 * 1024).optional(),
-  bodyText: z.string().max(5 * 1024 * 1024).optional(),
+  bodyHtml: z
+    .string()
+    .max(5 * 1024 * 1024)
+    .optional(),
+  bodyText: z
+    .string()
+    .max(5 * 1024 * 1024)
+    .optional(),
   previousRef: DraftPreviousRefSchema.optional(),
 });
 
@@ -422,9 +428,8 @@ export const bridgeSaveDraft = createServerFn({ method: "POST" })
   .handler(async ({ data }): Promise<DraftSaveResultOk | DraftResultErr> => {
     const { parsed, form } = data;
     const { resolveBridgeAuth } = await import("@/lib/mail-bridge-auth.server");
-    const { loadDecryptedPasswordForAccount, MailCredentialsPendingError } = await import(
-      "@/lib/mail-credentials.server"
-    );
+    const { loadDecryptedPasswordForAccount, MailCredentialsPendingError } =
+      await import("@/lib/mail-credentials.server");
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
 
     const auth = await resolveBridgeAuth(parsed.mailSessionToken);
@@ -512,14 +517,11 @@ export const bridgeSaveDraft = createServerFn({ method: "POST" })
   });
 
 export const bridgeDeleteDraft = createServerFn({ method: "POST" })
-  .inputValidator((v: z.input<typeof DraftDeleteClientSchema>) =>
-    DraftDeleteClientSchema.parse(v),
-  )
+  .inputValidator((v: z.input<typeof DraftDeleteClientSchema>) => DraftDeleteClientSchema.parse(v))
   .handler(async ({ data }): Promise<DraftDeleteResultOk | DraftResultErr> => {
     const { resolveBridgeAuth } = await import("@/lib/mail-bridge-auth.server");
-    const { loadDecryptedPasswordForAccount, MailCredentialsPendingError } = await import(
-      "@/lib/mail-credentials.server"
-    );
+    const { loadDecryptedPasswordForAccount, MailCredentialsPendingError } =
+      await import("@/lib/mail-credentials.server");
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
 
     const auth = await resolveBridgeAuth(data.mailSessionToken);

@@ -115,9 +115,6 @@ export const DraftDeletePayloadSchema = z.object({
 });
 export type DraftDeletePayload = z.infer<typeof DraftDeletePayloadSchema>;
 
-
-
-
 // --- Result types ------------------------------------------------------------
 
 export interface DraftSaveOk {
@@ -145,7 +142,6 @@ export interface DraftErr {
   ok: false;
   error: DraftErrorCode;
 }
-
 
 // --- Injectable IO surface (mirrors smtp.ts style) --------------------------
 
@@ -342,8 +338,6 @@ export async function executeDraftSave(
     await client.logout().catch(() => {});
   }
 }
-
-
 
 export async function executeDraftDelete(
   client: ImapDraftClient,
