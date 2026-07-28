@@ -342,38 +342,125 @@ app.post("/api/send", requireKey, async (req, res) => {
   }
 });
 
+// ---- Attachment upload pipeline (shared by send-multipart AND draft-save) ----
+// Streaming to disk (see uploads.ts) keeps RSS flat under upload bursts.
+// A dedicated concurrency gate then caps how many sends can be in flight so
+// SMTP dial-out itself cannot blow up memory. Drafts REUSE the exact same
+// multer instance / limits / disk-streaming pipeline so we never diverge
+// from the send contract on file-size, count, or storage.
+const SEND_MAX_TOTAL_BYTES = Number(process.env.SEND_MAX_TOTAL_BYTES || 25 * 1024 * 1024);
+const SEND_MAX_FILES = Number(process.env.SEND_MAX_FILES || 10);
+
+const SEND_GLOBAL_MAX = Number(process.env.SEND_GLOBAL_MAX || 20);
+const SEND_PER_ACCOUNT_MAX = Number(process.env.SEND_PER_ACCOUNT_MAX || 3);
+
+const sendGates = createSendGates({
+  globalMax: SEND_GLOBAL_MAX,
+  perKeyMax: SEND_PER_ACCOUNT_MAX,
+});
+
+const sendUpload = multer({
+  storage: uploadStorage,
+  limits: {
+    fileSize: SEND_MAX_TOTAL_BYTES,
+    files: SEND_MAX_FILES,
+    fields: 20,
+    fieldSize: 5 * 1024 * 1024, // body HTML can be up to 5MB
+  },
+});
+
 // ---- Drafts (MAILMAESTRO_DRAFT_APPEND_R1) ----
 // APPEND-then-delete-old against the resolved Drafts folder. Idempotent via
 // the X-MailMaestro-Draft-ID header (IMAP is the source of truth — no
 // process-local memory). Never returns subject/body/recipients in errors.
-app.post("/api/draft-save", requireKey, imapGate("interactive"), async (req, res) => {
-  try {
-    const payload = DraftSavePayloadSchema.parse(req.body);
-    const result = await saveDraft(payload.account as any, payload.password, payload);
-    if (result.ok === false) {
-      const err = result.error;
-      const status = err === "NO_DRAFTS_FOLDER" ? 422 : 500;
-      return res.status(status).json({ ok: false, error: err });
-    }
+// Multipart shape mirrors /api/send-multipart: a JSON `payload` field plus
+// `attachments` files streamed to disk. Attachment limits are the shared
+// SEND_MAX_TOTAL_BYTES / SEND_MAX_FILES so drafts can never overrun send.
+app.post(
+  "/api/draft-save",
+  requireKey,
+  imapGate("interactive"),
+  sendUpload.array("attachments", SEND_MAX_FILES),
+  async (req, res) => {
+    const files = (req.files as Express.Multer.File[] | undefined) ?? [];
+    const abortHandler = () => {
+      if (!res.writableEnded) cleanupFiles(files).catch(() => {});
+    };
+    req.on("aborted", abortHandler);
+    res.on("close", abortHandler);
+    try {
+      // Multipart: JSON body arrives in a `payload` string field. Fallback to
+      // req.body for legacy JSON callers so the endpoint stays compatible.
+      let source: unknown;
+      const raw = req.body?.payload;
+      if (typeof raw === "string") {
+        try {
+          source = JSON.parse(raw);
+        } catch {
+          return res.status(400).json({ ok: false, error: "INVALID_PAYLOAD" });
+        }
+      } else {
+        source = req.body;
+      }
+      const payload = DraftSavePayloadSchema.parse(source);
 
-    return res.json({
-      ok: true,
-      draftId: result.draftId,
-      folderPath: result.folderPath,
-      uid: result.uid,
-      uidValidity: result.uidValidity,
-      messageId: result.messageId,
-      savedAt: result.savedAt,
-    });
-  } catch (err: any) {
-    if (err instanceof z.ZodError) {
-      // Do NOT surface issue paths — they can echo user-controlled fields.
-      return res.status(400).json({ ok: false, error: "INVALID_PAYLOAD" });
+      const totalBytes = files.reduce((acc, f) => acc + f.size, 0);
+      if (totalBytes > SEND_MAX_TOTAL_BYTES) {
+        return res.status(413).json({ ok: false, error: "ATTACHMENTS_TOO_LARGE" });
+      }
+
+      // Stream from disk — never load attachment bytes into heap.
+      const attachments = files.map((f) => ({
+        filename: f.originalname,
+        path: f.path,
+        contentType: f.mimetype,
+      }));
+
+      const result = await saveDraft(payload.account as any, payload.password, {
+        ...payload,
+        attachments,
+      });
+      if (result.ok === false) {
+        const err = result.error;
+        const status =
+          err === "NO_DRAFTS_FOLDER"
+            ? 422
+            : err === "SAFE_DRAFT_REPLACE_UNSUPPORTED"
+              ? 409
+              : 500;
+        return res.status(status).json({ ok: false, error: err });
+      }
+
+      return res.json({
+        ok: true,
+        draftId: result.draftId,
+        folderPath: result.folderPath,
+        uid: result.uid,
+        uidValidity: result.uidValidity,
+        messageId: result.messageId,
+        savedAt: result.savedAt,
+      });
+    } catch (err: any) {
+      if (err instanceof z.ZodError) {
+        // Do NOT surface issue paths — they can echo user-controlled fields.
+        return res.status(400).json({ ok: false, error: "INVALID_PAYLOAD" });
+      }
+      if (err?.code === "LIMIT_FILE_SIZE") {
+        return res.status(413).json({ ok: false, error: "ATTACHMENT_TOO_LARGE" });
+      }
+      if (err?.code === "LIMIT_FILE_COUNT") {
+        return res.status(413).json({ ok: false, error: "TOO_MANY_ATTACHMENTS" });
+      }
+      // Log ONLY coarse code — never filename / content / body / recipients.
+      console.error("[bridge] /api/draft-save error:", err?.code || "unknown");
+      return res.status(500).json({ ok: false, error: "IMAP_ERROR" });
+    } finally {
+      req.off("aborted", abortHandler);
+      res.off("close", abortHandler);
+      await cleanupFiles(files).catch(() => {});
     }
-    console.error("[bridge] /api/draft-save error:", err?.code || "unknown");
-    return res.status(500).json({ ok: false, error: "IMAP_ERROR" });
-  }
-});
+  },
+);
 
 app.post("/api/draft-delete", requireKey, imapGate("interactive"), async (req, res) => {
   try {
@@ -401,29 +488,7 @@ app.post("/api/draft-delete", requireKey, imapGate("interactive"), async (req, r
 });
 
 // ---- Send with attachments (multipart/form-data, streamed to disk) ----
-// Streaming to disk (see uploads.ts) keeps RSS flat under upload bursts.
-// A dedicated concurrency gate then caps how many sends can be in flight so
-// SMTP dial-out itself cannot blow up memory.
-const SEND_MAX_TOTAL_BYTES = Number(process.env.SEND_MAX_TOTAL_BYTES || 25 * 1024 * 1024);
-const SEND_MAX_FILES = Number(process.env.SEND_MAX_FILES || 10);
 
-const SEND_GLOBAL_MAX = Number(process.env.SEND_GLOBAL_MAX || 20);
-const SEND_PER_ACCOUNT_MAX = Number(process.env.SEND_PER_ACCOUNT_MAX || 3);
-
-const sendGates = createSendGates({
-  globalMax: SEND_GLOBAL_MAX,
-  perKeyMax: SEND_PER_ACCOUNT_MAX,
-});
-
-const sendUpload = multer({
-  storage: uploadStorage,
-  limits: {
-    fileSize: SEND_MAX_TOTAL_BYTES,
-    files: SEND_MAX_FILES,
-    fields: 20,
-    fieldSize: 5 * 1024 * 1024, // body HTML can be up to 5MB
-  },
-});
 
 app.post(
   "/api/send-multipart",
