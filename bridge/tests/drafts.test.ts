@@ -767,6 +767,12 @@ test("mutex: is released after a failure path (map cleaned up even when APPEND t
       async deleteByUid() {
         return true;
       },
+      hasMove() {
+        return false;
+      },
+      async moveByUid() {
+        return true;
+      },
       async logout() {},
     }),
   };
