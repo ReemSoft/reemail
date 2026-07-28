@@ -4307,6 +4307,8 @@ function Composer({
   const isDirtyRef = useRef<boolean>(false);
   // Kept for the header "تم الحفظ منذ …" UI only — not the dirty source of truth.
   const lastSavedAtRef = useRef<number>(initialDoc?.updatedAt ?? 0);
+  // Diagnostic: last hard-failure code from the saver (null on success).
+  const lastFailCodeRef = useRef<string | null>(null);
   const recomputeDirty = () => {
     isDirtyRef.current = generationRef.current > savedGenerationRef.current;
   };
