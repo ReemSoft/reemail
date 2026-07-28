@@ -354,10 +354,12 @@ app.post("/api/draft-save", requireKey, imapGate("interactive"), async (req, res
       payload.password,
       payload,
     );
-    if (!result.ok) {
-      const status = result.error === "NO_DRAFTS_FOLDER" ? 422 : 500;
-      return res.status(status).json({ ok: false, error: result.error });
+    if (result.ok === false) {
+      const err = result.error;
+      const status = err === "NO_DRAFTS_FOLDER" ? 422 : 500;
+      return res.status(status).json({ ok: false, error: err });
     }
+
     return res.json({
       ok: true,
       draftId: result.draftId,
