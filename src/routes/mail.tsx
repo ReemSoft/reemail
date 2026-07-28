@@ -4078,7 +4078,7 @@ function Composer({
   onClose: () => void;
   onSent: () => void;
 }) {
-  const draftKey = `${DRAFT_STORAGE_PREFIX}${session.account.email_address}`;
+  // Draft storage keying is owned by mail-draft-lifecycle (v3 + auto-migration).
 
   // ----- Address book (contact suggestions) — local IDB, hydrated once -----
   const hydrateSuggestions = useServerFn(hydrateContactSuggestions);
