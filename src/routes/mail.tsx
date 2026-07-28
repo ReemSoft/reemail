@@ -547,8 +547,14 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
  * bridge atomically APPEND-then-delete the legacy copy (M4-A contract).
  */
 function buildEditDraft(message: MailMessage, draftsFolderPath?: string): ComposeInitial {
-  const to = (message.to ?? []).map((a) => a.email).filter(Boolean).join(", ");
-  const cc = (message.cc ?? []).map((a) => a.email).filter(Boolean).join(", ");
+  const to = (message.to ?? [])
+    .map((a) => a.email)
+    .filter(Boolean)
+    .join(", ");
+  const cc = (message.cc ?? [])
+    .map((a) => a.email)
+    .filter(Boolean)
+    .join(", ");
   const headerId = message.draftIdHeader?.trim();
   const editDraftId = headerId && UUID_RE.test(headerId) ? headerId : newDraftId();
   const parsed = parseMessageId(message.id);
@@ -576,7 +582,6 @@ function buildEditDraft(message: MailMessage, draftsFolderPath?: string): Compos
     existingAttachments,
   };
 }
-
 
 type SortOption = "date-desc" | "date-asc" | "unread-first" | "starred-first";
 
@@ -1685,7 +1690,6 @@ function MailApp() {
         setReading(false);
         return;
       }
-
 
       const listMsg = messages.find((m) => m.id === id);
       if (listMsg && !listMsg.read) {
@@ -4250,14 +4254,13 @@ function Composer({
   // Drafts message. Each entry stays as metadata until first save/send, at
   // which point we lazily stream its bytes from the bridge (server proxy,
   // never base64 in JSON) and cache the resulting File.
-  const [existingKept, setExistingKept] = useState<
-    import("@/lib/mail-types").MailAttachment[]
-  >(() => initial?.existingAttachments?.attachments ?? []);
+  const [existingKept, setExistingKept] = useState<import("@/lib/mail-types").MailAttachment[]>(
+    () => initial?.existingAttachments?.attachments ?? [],
+  );
   const existingSourceIdRef = useRef<string | null>(
     initial?.existingAttachments?.messageId ?? null,
   );
   const existingFilesCacheRef = useRef<Map<string, File>>(new Map());
-
 
   const [files, setFiles] = useState<File[]>([]);
   const [sending, setSending] = useState(false);
@@ -4370,7 +4373,6 @@ function Composer({
       onServerRef: (r) => setServerRef(r),
     });
   }
-
 
   const [plainMode, setPlainMode] = useState(false);
   const [fontFamily, setFontFamily] = useState<string>("IBM Plex Sans Arabic, sans-serif");
@@ -4561,7 +4563,6 @@ function Composer({
   filesRef.current = files;
   resolveExistingAsFilesRef.current = resolveExistingAsFiles;
 
-
   // ----- Draft autosave (debounced): local write first, then remote APPEND -----
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -4636,8 +4637,6 @@ function Composer({
     setExistingKept((prev) => prev.filter((a) => a.id !== id));
     existingFilesCacheRef.current.delete(id);
   }
-
-
 
   function removeFile(index: number) {
     setFiles((prev) => prev.filter((_, i) => i !== index));
@@ -4852,7 +4851,6 @@ function Composer({
       form.append("payload", JSON.stringify(payload));
       for (const f of keptFiles) form.append("attachments", f, f.name);
       for (const f of files) form.append("attachments", f, f.name);
-
 
       const result = await new Promise<{ ok: boolean; error?: string }>((resolve, reject) => {
         const xhr = new XMLHttpRequest();
@@ -5536,7 +5534,6 @@ function Composer({
               </div>
             </div>
           )}
-
 
           {sending && progress > 0 && (
             <div className="h-1 overflow-hidden rounded-full bg-muted">

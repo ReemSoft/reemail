@@ -48,9 +48,7 @@ export function resolveFolderPath(
     const inbox = mailboxes.find((m) => m.path.toUpperCase() === "INBOX");
     if (inbox) return inbox.path;
     // Fall back to a real Starred mailbox if the server exposes one (Gmail).
-    const gmailStarred = mailboxes.find((m) =>
-      m.path.toLowerCase().includes("starred"),
-    );
+    const gmailStarred = mailboxes.find((m) => m.path.toLowerCase().includes("starred"));
     if (gmailStarred) return gmailStarred.path;
     return "INBOX";
   }
@@ -104,9 +102,19 @@ export async function getFolderCounts(
         try {
           const lock = await client.getMailboxLock(inboxPath);
           try {
-            const uids = (await client.search({ flagged: true } as SearchObject, { uid: true })) as number[];
-            const unseen = (await client.search({ flagged: true, seen: false } as SearchObject, { uid: true })) as number[];
-            counts.push({ folder, total: uids?.length ?? 0, unread: unseen?.length ?? 0, supported: true, path: inboxPath });
+            const uids = (await client.search({ flagged: true } as SearchObject, {
+              uid: true,
+            })) as number[];
+            const unseen = (await client.search({ flagged: true, seen: false } as SearchObject, {
+              uid: true,
+            })) as number[];
+            counts.push({
+              folder,
+              total: uids?.length ?? 0,
+              unread: unseen?.length ?? 0,
+              supported: true,
+              path: inboxPath,
+            });
           } finally {
             lock.release();
           }
@@ -119,8 +127,8 @@ export async function getFolderCounts(
       // For `all`, only treat as supported if a real "All Mail" mailbox exists
       // (e.g. Gmail). Otherwise skip to avoid expensive cross-folder aggregation.
       if (folder === "all") {
-        const allMailPath = mailboxes.find((m) =>
-          /all\s*mail/i.test(m.path) || /\[Gmail\]\/All Mail/i.test(m.path),
+        const allMailPath = mailboxes.find(
+          (m) => /all\s*mail/i.test(m.path) || /\[Gmail\]\/All Mail/i.test(m.path),
         )?.path;
         if (!allMailPath) {
           counts.push({ folder, total: 0, unread: 0, supported: false });
@@ -201,8 +209,7 @@ export async function getMessages(
       // only for the slice. This keeps the cost O(page) regardless of sort.
       let orderedUids: number[] = [];
 
-      const fastPath =
-        !baseCriteria && (sort === "date-desc" || sort === "date-asc");
+      const fastPath = !baseCriteria && (sort === "date-desc" || sort === "date-asc");
 
       if (fastPath) {
         // Ultra-fast path: use sequence numbers, no SEARCH needed.
@@ -232,9 +239,7 @@ export async function getMessages(
           messages.push(parsed);
         }
         return messages.sort((a, b) =>
-          sort === "date-asc"
-            ? a.date < b.date ? -1 : 1
-            : a.date < b.date ? 1 : -1,
+          sort === "date-asc" ? (a.date < b.date ? -1 : 1) : a.date < b.date ? 1 : -1,
         );
       }
 
@@ -248,12 +253,14 @@ export async function getMessages(
       };
 
       if (sort === "unread-first" || sort === "starred-first") {
-        const primary = sort === "unread-first"
-          ? await runSearch({ seen: false } as SearchObject)
-          : await runSearch({ flagged: true } as SearchObject);
-        const secondary = sort === "unread-first"
-          ? await runSearch({ seen: true } as SearchObject)
-          : await runSearch({ flagged: false } as SearchObject);
+        const primary =
+          sort === "unread-first"
+            ? await runSearch({ seen: false } as SearchObject)
+            : await runSearch({ flagged: true } as SearchObject);
+        const secondary =
+          sort === "unread-first"
+            ? await runSearch({ seen: true } as SearchObject)
+            : await runSearch({ flagged: false } as SearchObject);
         // Each group ordered newest-first (UID desc ~ arrival order).
         primary.sort((a, b) => b - a);
         secondary.sort((a, b) => b - a);
@@ -261,9 +268,7 @@ export async function getMessages(
       } else if (baseCriteria) {
         // starred folder with date sort
         const uids = await runSearch({} as SearchObject);
-        orderedUids = uids.sort((a, b) =>
-          sort === "date-asc" ? a - b : b - a,
-        );
+        orderedUids = uids.sort((a, b) => (sort === "date-asc" ? a - b : b - a));
       }
 
       if (orderedUids.length === 0) return [];
@@ -271,13 +276,17 @@ export async function getMessages(
       if (slice.length === 0) return [];
 
       const messages: MailMessage[] = [];
-      for await (const msg of client.fetch(slice as any, {
-        uid: true,
-        envelope: true,
-        internalDate: true,
-        flags: true,
-        bodyStructure: true,
-      }, { uid: true })) {
+      for await (const msg of client.fetch(
+        slice as any,
+        {
+          uid: true,
+          envelope: true,
+          internalDate: true,
+          flags: true,
+          bodyStructure: true,
+        },
+        { uid: true },
+      )) {
         const parsed = await messageFromFetch(msg, folder, client);
         messages.push(parsed);
       }
@@ -297,7 +306,6 @@ export async function getMessages(
   }
 }
 
-
 export async function getMessageBody(
   account: MailAccount,
   password: string,
@@ -315,7 +323,14 @@ export async function getMessageBody(
     try {
       const msg = await client.fetchOne(
         uid.toString(),
-        { uid: true, envelope: true, internalDate: true, flags: true, bodyStructure: true, source: true },
+        {
+          uid: true,
+          envelope: true,
+          internalDate: true,
+          flags: true,
+          bodyStructure: true,
+          source: true,
+        },
         { uid: true },
       );
       if (!msg) return null;
@@ -335,7 +350,6 @@ export async function getMessageBody(
       if (draftIdHeader) parsed.draftIdHeader = draftIdHeader;
       const mb = (client as unknown as { mailbox?: { uidValidity?: unknown } }).mailbox;
       if (mb?.uidValidity != null) parsed.uidValidity = String(mb.uidValidity);
-
 
       // 1) Inline images: replace cid: references in the HTML body with
       // data URIs from mailparser (already parsed, zero extra IMAP calls).
@@ -427,12 +441,22 @@ export async function downloadAttachment(
     const cleanup = async () => {
       if (released) return;
       released = true;
-      try { lock.release(); } catch {}
-      try { await client.logout(); } catch {}
+      try {
+        lock.release();
+      } catch {}
+      try {
+        await client.logout();
+      } catch {}
     };
-    dl.content.once("end", () => { cleanup().catch(() => {}); });
-    dl.content.once("close", () => { cleanup().catch(() => {}); });
-    dl.content.once("error", () => { cleanup().catch(() => {}); });
+    dl.content.once("end", () => {
+      cleanup().catch(() => {});
+    });
+    dl.content.once("close", () => {
+      cleanup().catch(() => {});
+    });
+    dl.content.once("error", () => {
+      cleanup().catch(() => {});
+    });
     return {
       meta: {
         contentType: (dl.meta as any)?.contentType,
@@ -444,7 +468,9 @@ export async function downloadAttachment(
       cleanup,
     };
   } catch (err) {
-    try { lock.release(); } catch {}
+    try {
+      lock.release();
+    } catch {}
     await client.logout().catch(() => {});
     throw err;
   }
@@ -457,7 +483,9 @@ async function messageFromFetch(
 ): Promise<MailMessage> {
   const uid: number = msg.uid;
   const envelope = msg.envelope;
-  const date = msg.internalDate ? new Date(msg.internalDate).toISOString() : new Date().toISOString();
+  const date = msg.internalDate
+    ? new Date(msg.internalDate).toISOString()
+    : new Date().toISOString();
   const attachments = collectAttachmentParts(msg.bodyStructure);
   const hasAttachments = attachments.length > 0;
 
@@ -502,14 +530,15 @@ function addressFromEnvelope(addr: any, fallback: string): { name: string; email
  * with its IMAP part number (usable directly with client.download(uid, part)).
  * Zero extra round-trips: bodyStructure is already fetched for list/read.
  */
-export function collectAttachmentParts(structure: any, acc: MailAttachment[] = []): MailAttachment[] {
+export function collectAttachmentParts(
+  structure: any,
+  acc: MailAttachment[] = [],
+): MailAttachment[] {
   if (!structure) return acc;
   const mime = String(structure.type || "").toLowerCase();
   const isMultipart = mime.startsWith("multipart/");
   const filename =
-    structure.dispositionParameters?.filename ||
-    structure.parameters?.name ||
-    undefined;
+    structure.dispositionParameters?.filename || structure.parameters?.name || undefined;
   const disp = structure.disposition ? String(structure.disposition).toLowerCase() : undefined;
 
   if (!isMultipart && structure.part) {
@@ -550,9 +579,7 @@ async function parseMessageSource(source: Buffer, folder: MailFolder): Promise<M
 }
 
 export function parsedMailToMessage(parsed: ParsedMail, folder: MailFolder): MailMessage {
-  const from = parsed.from
-    ? addressFromAddressObject(parsed.from)
-    : { name: "", email: "" };
+  const from = parsed.from ? addressFromAddressObject(parsed.from) : { name: "", email: "" };
   const to = parsed.to ? addressesFromAddressObject(parsed.to) : [];
   const cc = parsed.cc ? addressesFromAddressObject(parsed.cc) : [];
 
@@ -641,13 +668,16 @@ function extractSecurityHeaders(parsed: ParsedMail): {
   return { mailedBy, signedBy, security };
 }
 
-
-function flattenAddressObject(obj: AddressObject | AddressObject[]): { name: string; email: string }[] {
+function flattenAddressObject(
+  obj: AddressObject | AddressObject[],
+): { name: string; email: string }[] {
   const arr = Array.isArray(obj) ? obj : [obj];
   const out: { name: string; email: string }[] = [];
   for (const item of arr) {
     if (!item) continue;
-    const values = (item as any).value as Array<{ name?: string; address?: string; group?: any[] }> | undefined;
+    const values = (item as any).value as
+      | Array<{ name?: string; address?: string; group?: any[] }>
+      | undefined;
     if (Array.isArray(values) && values.length) {
       for (const v of values) {
         if (v?.address || v?.name) {
@@ -665,7 +695,9 @@ function addressFromAddressObject(obj: AddressObject): { name: string; email: st
   return flattenAddressObject(obj)[0] || { name: "", email: "" };
 }
 
-function addressesFromAddressObject(obj: AddressObject | AddressObject[]): { name: string; email: string }[] {
+function addressesFromAddressObject(
+  obj: AddressObject | AddressObject[],
+): { name: string; email: string }[] {
   return flattenAddressObject(obj);
 }
 
@@ -768,11 +800,9 @@ export async function moveMessage(
     if (!fromPath || !toPath) throw new Error("Folder not found");
     const lock = await client.getMailboxLock(fromPath);
     try {
-      const raw = (await client.messageMove(
-        { uid: String(uid) } as any,
-        toPath,
-        { uid: true },
-      )) as unknown;
+      const raw = (await client.messageMove({ uid: String(uid) } as any, toPath, {
+        uid: true,
+      })) as unknown;
       return parseMoveResponse(raw, uid, toPath);
     } finally {
       lock.release();
@@ -865,10 +895,7 @@ export type DeleteResult =
  */
 export interface PermanentDeleteImapClient {
   getMailboxLock(path: string): Promise<{ release: () => void }>;
-  messageDelete(
-    query: unknown,
-    options: { uid: true },
-  ): Promise<boolean>;
+  messageDelete(query: unknown, options: { uid: true }): Promise<boolean>;
 }
 
 export async function executePermanentDelete(
@@ -898,11 +925,7 @@ export async function permanentDeleteMessage(
     const mailboxes = await listMailboxes(client);
     const path = resolveFolderPath(mailboxes, folder);
     if (!path) throw new Error("Folder not found");
-    return await executePermanentDelete(
-      client as unknown as PermanentDeleteImapClient,
-      path,
-      uid,
-    );
+    return await executePermanentDelete(client as unknown as PermanentDeleteImapClient, path, uid);
   } finally {
     await client.logout().catch(() => {});
   }
@@ -1000,16 +1023,23 @@ export async function searchMessages(
     try {
       const uids = ((await client.search(criteria, { uid: true })) as number[]) || [];
       if (uids.length === 0) return [];
-      const sorted = uids.slice().sort((a, b) => b - a).slice(0, limit);
+      const sorted = uids
+        .slice()
+        .sort((a, b) => b - a)
+        .slice(0, limit);
 
       const messages: MailMessage[] = [];
-      for await (const msg of client.fetch(sorted as any, {
-        uid: true,
-        envelope: true,
-        internalDate: true,
-        flags: true,
-        bodyStructure: true,
-      }, { uid: true })) {
+      for await (const msg of client.fetch(
+        sorted as any,
+        {
+          uid: true,
+          envelope: true,
+          internalDate: true,
+          flags: true,
+          bodyStructure: true,
+        },
+        { uid: true },
+      )) {
         const parsed = await messageFromFetch(msg, folder, client);
         messages.push(parsed);
       }
