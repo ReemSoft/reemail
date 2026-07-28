@@ -4167,7 +4167,97 @@ function Composer({
   const [progress, setProgress] = useState(0);
   // Composer runs inline inside the message-viewer pane (Superhuman-style).
   const [dragging, setDragging] = useState(false);
-  const [savedAt, setSavedAt] = useState<number | null>(null);
+  const [savedAt, setSavedAt] = useState<number | null>(() => initialDoc?.updatedAt ?? null);
+
+  // ----- Server-side draft saver (bridge APPEND) + pending-delete queue -----
+  const bridgeSaveDraftFn = useServerFn(bridgeSaveDraft);
+  const bridgeDeleteDraftFn = useServerFn(bridgeDeleteDraft);
+
+  const pendingQueueRef = useRef<PendingDeleteQueue | null>(null);
+  if (!pendingQueueRef.current && typeof window !== "undefined") {
+    pendingQueueRef.current = createPendingDeleteQueue({
+      storage: window.localStorage,
+      deleteRemote: async ({ draftId: d, previousRef }) => {
+        const token = session.mailSessionToken;
+        if (!token) return { ok: false, code: "SESSION_REQUIRED" };
+        try {
+          const res = await bridgeDeleteDraftFn({
+            data: {
+              mailSessionToken: token,
+              draftId: d,
+              previousRef: previousRef ?? undefined,
+            },
+          });
+          return { ok: !!res?.ok, code: res && !res.ok ? res.code : undefined };
+        } catch {
+          return { ok: false, code: "NETWORK" };
+        }
+      },
+    });
+  }
+
+  // Flush any deletes left behind by a previous send in this browser.
+  useEffect(() => {
+    const q = pendingQueueRef.current;
+    if (!q) return;
+    void q.flush(accountEmail);
+  }, [accountEmail]);
+
+  const saverRef = useRef<DraftSaver | null>(null);
+  if (!saverRef.current) {
+    saverRef.current = createDraftSaver(draftId, {
+      saveRemote: async ({ snapshot, previousRef }) => {
+        const token = session.mailSessionToken;
+        if (!token) return { ok: false, code: "SESSION_REQUIRED" };
+        const form = new FormData();
+        const payload = {
+          mailSessionToken: token,
+          draftId,
+          to: snapshot.to
+            .filter((r) => r.valid)
+            .map((r) => ({ name: r.name ?? "", email: r.email })),
+          cc: snapshot.cc
+            .filter((r) => r.valid)
+            .map((r) => ({ name: r.name ?? "", email: r.email })),
+          bcc: snapshot.bcc
+            .filter((r) => r.valid)
+            .map((r) => ({ name: r.name ?? "", email: r.email })),
+          subject: snapshot.subject,
+          bodyHtml: snapshot.html,
+          bodyText: stripHtml(snapshot.html),
+          previousRef: previousRef ?? undefined,
+        };
+        form.append("payload", JSON.stringify(payload));
+        try {
+          const res = await bridgeSaveDraftFn({ data: form });
+          if (res?.ok) {
+            if (
+              typeof res.uid === "number" &&
+              res.uid > 0 &&
+              res.uidValidity &&
+              res.folderPath
+            ) {
+              return {
+                ok: true,
+                serverRef: {
+                  folderPath: res.folderPath,
+                  uid: res.uid,
+                  uidValidity: res.uidValidity,
+                },
+              };
+            }
+            return { ok: true };
+          }
+          return { ok: false, code: res?.code };
+        } catch {
+          return { ok: false, code: "NETWORK" };
+        }
+      },
+      onStatus: setSaveStatus,
+      onServerRef: (r) => setServerRef(r),
+    });
+  }
+
   const [plainMode, setPlainMode] = useState(false);
   const [fontFamily, setFontFamily] = useState<string>("IBM Plex Sans Arabic, sans-serif");
   const [fontSize, setFontSize] = useState<string>("14px");
