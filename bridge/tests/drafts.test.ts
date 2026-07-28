@@ -881,6 +881,12 @@ test("mutex: different UIDVALIDITY between pre-probe and APPEND does not leak st
         for (const u of uids) server.messages.delete(u);
         return true;
       },
+      hasMove() {
+        return false;
+      },
+      async moveByUid() {
+        return true;
+      },
       async logout() {},
     }),
     now: () => new Date(),
