@@ -5225,41 +5225,63 @@ function Composer({
     }
   })();
 
+  // Prevents double-submit of manual saves (rapid Ctrl+S / button clicks).
+  const savingNowRef = useRef(false);
   async function saveDraftNow() {
     if (typeof window === "undefined") return;
-    const html = sanitizeComposerHtml(editorRef.current?.innerHTML ?? "");
-    const isEmpty =
-      to.length === 0 && cc.length === 0 && bcc.length === 0 && !subject && !html.trim();
-    if (isEmpty) {
-      toast.info("لا يوجد محتوى للحفظ");
-      return;
-    }
-    const snapshot: DraftSnapshot = { to, cc, bcc, subject, html, showCc, showBcc };
-    const persisted = writeDraftDoc(window.localStorage, accountEmail, {
-      version: 3,
-      draftId,
-      snapshot,
-      serverRef: serverRefRef.current,
-      updatedAt: Date.now(),
-    });
-    if (!persisted) {
-      setSaveStatus("failed");
-      toast.error("تعذّر حفظ المسودّة");
-      return;
-    }
-    setSavedAt(Date.now());
+    if (savingNowRef.current) return;
+    savingNowRef.current = true;
     try {
-      await saverRef.current?.requestSave(snapshot, serverRefRef.current);
-      // Status is set by the saver (saved | saved-local); toast reflects it.
-      if (saverRef.current?.getStatus() === "saved") {
-        toast.success("تم حفظ المسودّة");
-      } else {
+      // Any pending debounced save must NOT race the explicit save.
+      autosaveRef.current?.dispose();
+      const html = sanitizeComposerHtml(editorRef.current?.innerHTML ?? "");
+      const isEmpty =
+        to.length === 0 && cc.length === 0 && bcc.length === 0 && !subject && !html.trim();
+      if (isEmpty) {
+        toast.info("لا يوجد محتوى للحفظ");
+        return;
+      }
+      const snapshot: DraftSnapshot = { to, cc, bcc, subject, html, showCc, showBcc };
+      const persisted = writeDraftDoc(window.localStorage, accountEmail, {
+        version: 3,
+        draftId,
+        snapshot,
+        serverRef: serverRefRef.current,
+        updatedAt: Date.now(),
+      });
+      if (!persisted) {
+        setSaveStatus("failed");
+        toast.error("تعذّر حفظ المسودّة");
+        return;
+      }
+      // Capture the caller's generation and await the round-trip. The
+      // saver's onCompleted will advance `savedGeneration` — so on the
+      // "save then close" path the composer will read clean immediately.
+      const genAtRequest = generationRef.current;
+      try {
+        await saverRef.current?.requestSave(snapshot, serverRefRef.current, genAtRequest);
+        if (saverRef.current?.getStatus() === "saved") {
+          toast.success("تم حفظ المسودّة");
+        } else {
+          toast.success("تم حفظ المسودّة محلياً");
+        }
+      } catch {
         toast.success("تم حفظ المسودّة محلياً");
       }
-    } catch {
-      toast.success("تم حفظ المسودّة محلياً");
+    } finally {
+      savingNowRef.current = false;
+      // Restore the scheduler for further edits after this explicit save.
+      if (!autosaveRef.current && typeof window !== "undefined") {
+        autosaveRef.current = createAutosaveScheduler({
+          delayMs: 800,
+          onFire: () => {
+            /* re-armed by useEffect on next render tick */
+          },
+        });
+      }
     }
   }
+
 
   return (
     <div
