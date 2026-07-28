@@ -228,6 +228,21 @@ export interface ImapDraftClient {
    * under an open lock on the target mailbox.
    */
   deleteByUid(uids: number[]): Promise<boolean>;
+  /**
+   * Whether the server advertised RFC 6851 MOVE. Used only by the drafts
+   * MOVE fallback on servers that support MOVE but NOT UIDPLUS: stale draft
+   * copies are moved to Trash rather than expunged. Callers MUST NOT invoke
+   * `moveByUid` when this returns false.
+   */
+  hasMove(): boolean;
+  /**
+   * UID MOVE the given UIDs from the currently-open mailbox to
+   * `destinationPath`. Callers MUST have verified `hasMove()` first — this
+   * function MUST NOT be implemented as a client-side COPY+EXPUNGE emulation
+   * on servers that lack real MOVE, or unrelated \Deleted messages could be
+   * evicted. Called under an open lock on the source mailbox.
+   */
+  moveByUid(uids: number[], destinationPath: string): Promise<boolean>;
   logout(): Promise<void>;
 }
 
