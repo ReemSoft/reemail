@@ -792,6 +792,10 @@ export type Database = {
           running: number
         }[]
       }
+      record_mail_contact_suggestions: {
+        Args: { p_account_id: string; p_company_id: string; p_items: Json }
+        Returns: number
+      }
       release_mail_sync_lock: {
         Args: {
           p_account_id: string
