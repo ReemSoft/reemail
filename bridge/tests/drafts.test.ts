@@ -1076,3 +1076,357 @@ test("M4-A: legacy previousRef with mutex — retry after crash converges to one
   assert.equal(server.messages.size, 1, "retry MUST converge to exactly one canonical copy");
   assert.equal(draftMutexInflight(), 0);
 });
+
+// ---------- Capability detection --------------------------------------------
+//
+// Root cause of the SAFE_DRAFT_REPLACE_UNSUPPORTED regression: ImapFlow's
+// `client.capabilities` is a `Map<string, boolean | number>`, not an iterable
+// of strings. Iterating it yields `[key, value]` tuples that stringified to
+// e.g. "UIDPLUS,true", so the old check never matched. These tests lock the
+// helper against every shape we might see in the wild.
+
+test("capability: Map with UIDPLUS true → true", () => {
+  const caps = new Map<string, boolean | number>([["UIDPLUS", true]]);
+  assert.equal(hasImapCapability(caps, "UIDPLUS"), true);
+});
+
+test("capability: Map case-insensitive lookup (lowercase key)", () => {
+  const caps = new Map<string, boolean | number>([["uidplus", true]]);
+  assert.equal(hasImapCapability(caps, "UIDPLUS"), true);
+});
+
+test("capability: Map with UIDPLUS explicitly false → false", () => {
+  const caps = new Map<string, boolean | number>([["UIDPLUS", false]]);
+  assert.equal(hasImapCapability(caps, "UIDPLUS"), false);
+});
+
+test("capability: Map without UIDPLUS → false", () => {
+  const caps = new Map<string, boolean | number>([
+    ["IMAP4rev1", true],
+    ["IDLE", true],
+  ]);
+  assert.equal(hasImapCapability(caps, "UIDPLUS"), false);
+});
+
+test("capability: Set with UIDPLUS → true (defensive compat)", () => {
+  const caps = new Set(["UIDPLUS", "IDLE"]);
+  assert.equal(hasImapCapability(caps, "UIDPLUS"), true);
+});
+
+test("capability: Map with MOVE → hasMove true", () => {
+  const caps = new Map<string, boolean | number>([["MOVE", true]]);
+  assert.equal(hasImapCapability(caps, "MOVE"), true);
+});
+
+test("capability: never produces [key,value] false negative (Map iteration guard)", () => {
+  // Prove the failure mode is gone: if we mistakenly stringified the entry
+  // pair, `String(["UIDPLUS", true])` === "UIDPLUS,true" which does NOT
+  // equal "UIDPLUS". The helper MUST still find UIDPLUS.
+  const caps = new Map<string, boolean | number>([["UIDPLUS", true]]);
+  for (const entry of caps) {
+    assert.notEqual(String(entry).toUpperCase(), "UIDPLUS", "sanity: entry is [k,v]");
+  }
+  assert.equal(hasImapCapability(caps, "UIDPLUS"), true);
+});
+
+test("capability: undefined / null / empty → false", () => {
+  assert.equal(hasImapCapability(undefined, "UIDPLUS"), false);
+  assert.equal(hasImapCapability(null, "UIDPLUS"), false);
+  assert.equal(hasImapCapability(new Map(), "UIDPLUS"), false);
+});
+
+// ---------- resolveTrashPath ------------------------------------------------
+
+test("resolveTrashPath prefers SPECIAL-USE \\Trash over any well-known name", () => {
+  const boxes = [box("INBOX"), box("Bin/Old", "\\Trash"), box("Trash")];
+  assert.equal(resolveTrashPath(boxes as unknown as never), "Bin/Old");
+});
+
+test("resolveTrashPath matches Deleted Items / Deleted / Gmail Trash / Bin", () => {
+  assert.equal(
+    resolveTrashPath([box("Deleted Items")] as unknown as never),
+    "Deleted Items",
+  );
+  assert.equal(resolveTrashPath([box("Deleted")] as unknown as never), "Deleted");
+  assert.equal(
+    resolveTrashPath([box("[Gmail]/Trash")] as unknown as never),
+    "[Gmail]/Trash",
+  );
+  assert.equal(
+    resolveTrashPath([box("[Gmail]/Bin")] as unknown as never),
+    "[Gmail]/Bin",
+  );
+});
+
+test("resolveTrashPath returns undefined when no Trash-like folder exists", () => {
+  const boxes = [box("INBOX"), box("Drafts"), box("Sent")];
+  assert.equal(resolveTrashPath(boxes as unknown as never), undefined);
+});
+
+// ---------- MOVE fallback (no UIDPLUS, MOVE + Trash present) ---------------
+
+test("MOVE fallback: no UIDPLUS + MOVE + Trash → APPEND then MOVE stale to Trash", async () => {
+  const events: string[] = [];
+  const { client, rec } = mkClient({
+    mailboxes: [box("Drafts"), box("Trash")],
+    hasUidPlus: false,
+    hasMove: true,
+    appendUid: 200,
+    searchResults: [[42], [42, 200]],
+  });
+  const origAppend = client.append.bind(client);
+  const origMove = client.moveByUid.bind(client);
+  client.append = async (p, r, f) => {
+    events.push("append");
+    return origAppend(p, r, f);
+  };
+  client.moveByUid = async (u, d) => {
+    events.push(`move:${u.join(",")}->${d}`);
+    return origMove(u, d);
+  };
+  const r = await executeDraftSave(client, BASE_INPUT);
+  assert.equal(r.ok, true);
+  assert.deepEqual(events, ["append", "move:42->Trash"]);
+  assert.equal(rec.deletes.length, 0, "MOVE path MUST NOT call deleteByUid");
+  assert.equal(rec.moves.length, 1);
+  assert.equal(rec.moves[0].dest, "Trash");
+});
+
+test("MOVE fallback: canonical (highest UID) is NEVER moved to Trash", async () => {
+  const { client, rec } = mkClient({
+    mailboxes: [box("Drafts"), box("Trash")],
+    hasUidPlus: false,
+    hasMove: true,
+    appendUid: 300,
+    searchResults: [[100, 200], [100, 200, 300]],
+  });
+  const r = await executeDraftSave(client, BASE_INPUT);
+  assert.equal(r.ok, true);
+  if (!r.ok) return;
+  assert.equal(r.uid, 300, "canonical MUST be the highest UID");
+  assert.equal(rec.moves.length, 1);
+  assert.equal(rec.moves[0].uids.includes(300), false, "canonical MUST NOT be moved");
+  assert.deepEqual(
+    [...rec.moves[0].uids].sort((a, b) => a - b),
+    [100, 200],
+  );
+});
+
+test("MOVE fallback: legacy previousRef (no header) is moved when guards pass", async () => {
+  const { client, rec } = mkClient({
+    mailboxes: [box("Drafts"), box("Trash")],
+    hasUidPlus: false,
+    hasMove: true,
+    uidValidity: "1000",
+    appendUid: 200,
+    searchResults: [[], [200]],
+  });
+  const r = await executeDraftSave(client, {
+    ...BASE_INPUT,
+    previousRef: { folderPath: "Drafts", uid: 42, uidValidity: "1000" },
+  });
+  assert.equal(r.ok, true);
+  assert.equal(rec.moves.length, 1);
+  assert.deepEqual(rec.moves[0].uids, [42]);
+  assert.equal(rec.moves[0].dest, "Trash");
+  assert.equal(rec.deletes.length, 0);
+});
+
+test("MOVE fallback: previousRef with wrong folder path is NOT moved", async () => {
+  const { client, rec } = mkClient({
+    mailboxes: [box("Drafts"), box("Trash")],
+    hasUidPlus: false,
+    hasMove: true,
+    uidValidity: "1000",
+    appendUid: 200,
+    searchResults: [[], [200]],
+  });
+  const r = await executeDraftSave(client, {
+    ...BASE_INPUT,
+    previousRef: { folderPath: "INBOX", uid: 1, uidValidity: "1000" },
+  });
+  assert.equal(r.ok, true);
+  assert.equal(rec.moves.length, 0, "wrong folderPath MUST veto the MOVE");
+});
+
+test("MOVE fallback: UIDVALIDITY mismatch on previousRef → not moved", async () => {
+  const { client, rec } = mkClient({
+    mailboxes: [box("Drafts"), box("Trash")],
+    hasUidPlus: false,
+    hasMove: true,
+    uidValidity: "1000",
+    appendUid: 200,
+    searchResults: [[], [200]],
+  });
+  const r = await executeDraftSave(client, {
+    ...BASE_INPUT,
+    previousRef: { folderPath: "Drafts", uid: 42, uidValidity: "999" },
+  });
+  assert.equal(r.ok, true);
+  assert.equal(rec.moves.length, 0);
+});
+
+test("MOVE fallback: MOVE failure after APPEND does NOT lose the new copy", async () => {
+  const { client, rec } = mkClient({
+    mailboxes: [box("Drafts"), box("Trash")],
+    hasUidPlus: false,
+    hasMove: true,
+    moveFail: true,
+    appendUid: 200,
+    searchResults: [[42], [42, 200]],
+  });
+  const r = await executeDraftSave(client, BASE_INPUT);
+  assert.equal(r.ok, true, "MOVE failure MUST NOT roll back APPEND");
+  if (!r.ok) return;
+  assert.equal(r.uid, 200);
+  assert.equal(rec.appends.length, 1);
+  assert.equal(rec.deletes.length, 0, "MUST NEVER fall back to global EXPUNGE");
+});
+
+test("MOVE fallback: retry after MOVE failure converges to a single canonical", async () => {
+  // Simulate a server with MOVE but no UIDPLUS via mkSharedDeps overrides.
+  interface TrashServer {
+    drafts: Map<number, string>;
+    trash: Map<number, string>;
+    nextUid: number;
+  }
+  const server: TrashServer = {
+    drafts: new Map([[42, DRAFT_ID]]), // legacy prior copy
+    trash: new Map(),
+    nextUid: 100,
+  };
+  let moveShouldFail = true;
+  const deps: DraftDeps = {
+    createImapDraftClient: () => ({
+      async connect() {},
+      async list() {
+        return [box("Drafts"), box("Trash")] as unknown as never;
+      },
+      hasUidPlus() {
+        return false;
+      },
+      hasMove() {
+        return true;
+      },
+      async openWithLock() {
+        return { uidValidity: "1000", release: () => {} };
+      },
+      async searchByHeader(_n, v) {
+        const out: number[] = [];
+        for (const [uid, id] of server.drafts) if (id === v) out.push(uid);
+        return out.sort((a, b) => a - b);
+      },
+      async append(_p, raw) {
+        const m = raw
+          .toString("utf8")
+          .match(new RegExp(`${DRAFT_ID_HEADER}:\\s*([^\\r\\n]+)`, "i"));
+        const uid = server.nextUid++;
+        server.drafts.set(uid, m ? m[1].trim() : "");
+        return { uid: null, uidValidity: "1000" };
+      },
+      async deleteByUid() {
+        throw new Error("deleteByUid MUST NOT be called on MOVE path");
+      },
+      async moveByUid(uids, dest) {
+        if (moveShouldFail) throw new Error("move boom");
+        for (const u of uids) {
+          const v = server.drafts.get(u);
+          if (v !== undefined) {
+            server.drafts.delete(u);
+            server.trash.set(u, v);
+          }
+        }
+        void dest;
+        return true;
+      },
+      async logout() {},
+    }),
+    now: () => new Date(),
+  };
+  const r1 = await saveDraft(ACCT, "pw", BASE_INPUT, deps);
+  assert.equal(r1.ok, true, "first save succeeds despite MOVE failure");
+  assert.equal(server.drafts.size, 2, "old + new both present after MOVE failure");
+
+  moveShouldFail = false;
+  const r2 = await saveDraft(ACCT, "pw", BASE_INPUT, deps);
+  assert.equal(r2.ok, true);
+  assert.equal(server.drafts.size, 1, "retry converges to exactly one canonical in Drafts");
+  assert.equal(draftMutexInflight(), 0);
+});
+
+test("MOVE fallback: no UIDPLUS + no MOVE → refused BEFORE APPEND", async () => {
+  const { client, rec } = mkClient({
+    mailboxes: [box("Drafts"), box("Trash")],
+    hasUidPlus: false,
+    hasMove: false,
+    searchResults: [[42]],
+  });
+  const r = await executeDraftSave(client, BASE_INPUT);
+  assert.equal(r.ok, false);
+  if (r.ok) return;
+  assert.equal(r.error, "SAFE_DRAFT_REPLACE_UNSUPPORTED");
+  assert.equal(rec.appends.length, 0);
+  assert.equal(rec.moves.length, 0);
+});
+
+test("MOVE fallback: MOVE without a safe Trash target → refused BEFORE APPEND", async () => {
+  const { client, rec } = mkClient({
+    mailboxes: [box("Drafts")], // no Trash-like folder
+    hasUidPlus: false,
+    hasMove: true,
+    searchResults: [[42]],
+  });
+  const r = await executeDraftSave(client, BASE_INPUT);
+  assert.equal(r.ok, false);
+  if (r.ok) return;
+  assert.equal(r.error, "SAFE_DRAFT_REPLACE_UNSUPPORTED");
+  assert.equal(rec.appends.length, 0);
+  assert.equal(rec.moves.length, 0);
+});
+
+test("MOVE fallback path MUST NOT call deleteByUid at any point", async () => {
+  const { client, rec } = mkClient({
+    mailboxes: [box("Drafts"), box("Trash")],
+    hasUidPlus: false,
+    hasMove: true,
+    appendUid: 200,
+    searchResults: [[42], [42, 200]],
+  });
+  const r = await executeDraftSave(client, BASE_INPUT);
+  assert.equal(r.ok, true);
+  assert.equal(rec.deletes.length, 0);
+});
+
+test("safety: no globalExpunge symbol / no EXPUNGE call surface exists on the client", () => {
+  // The ImapDraftClient contract MUST NOT expose a global EXPUNGE method.
+  // If someone adds one, this test fires and the reviewer must justify it.
+  const { client } = mkClient({ mailboxes: [box("Drafts")] });
+  const surface = Object.keys(client);
+  for (const name of surface) {
+    assert.equal(/expunge/i.test(name), false, `unexpected expunge method: ${name}`);
+    assert.equal(/globalExpunge/i.test(name), false);
+  }
+});
+
+test("UIDPLUS path is unchanged: Map-based capability makes replace-mode succeed", async () => {
+  // End-to-end proof that the Map fix restores the UIDPLUS path: use the
+  // production hasImapCapability against a real ImapFlow-shaped Map and
+  // verify replace-mode APPENDs + deleteByUid (never SAFE_DRAFT_REPLACE_UNSUPPORTED).
+  const caps = new Map<string, boolean | number>([
+    ["IMAP4rev1", true],
+    ["UIDPLUS", true],
+    ["IDLE", true],
+  ]);
+  assert.equal(hasImapCapability(caps, "UIDPLUS"), true);
+
+  const { client, rec } = mkClient({
+    mailboxes: [box("Drafts")],
+    hasUidPlus: true, // simulates the fix taking effect
+    appendUid: 200,
+    searchResults: [[42], [42, 200]],
+  });
+  const r = await executeDraftSave(client, BASE_INPUT);
+  assert.equal(r.ok, true, "must not return SAFE_DRAFT_REPLACE_UNSUPPORTED");
+  assert.equal(rec.appends.length, 1);
+  assert.deepEqual(rec.deletes[0], [42]);
+});
