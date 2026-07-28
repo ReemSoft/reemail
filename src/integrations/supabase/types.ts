@@ -190,6 +190,63 @@ export type Database = {
           },
         ]
       }
+      mail_contact_suggestions: {
+        Row: {
+          company_id: string
+          created_at: string
+          display_name: string | null
+          email_normalized: string
+          frequency: number
+          hidden_at: string | null
+          id: string
+          last_used_at: string
+          mailbox_account_id: string
+          source: string
+          updated_at: string
+        }
+        Insert: {
+          company_id: string
+          created_at?: string
+          display_name?: string | null
+          email_normalized: string
+          frequency?: number
+          hidden_at?: string | null
+          id?: string
+          last_used_at?: string
+          mailbox_account_id: string
+          source?: string
+          updated_at?: string
+        }
+        Update: {
+          company_id?: string
+          created_at?: string
+          display_name?: string | null
+          email_normalized?: string
+          frequency?: number
+          hidden_at?: string | null
+          id?: string
+          last_used_at?: string
+          mailbox_account_id?: string
+          source?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "mail_contact_suggestions_company_id_fkey"
+            columns: ["company_id"]
+            isOneToOne: false
+            referencedRelation: "companies"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "mail_contact_suggestions_mailbox_account_id_fkey"
+            columns: ["mailbox_account_id"]
+            isOneToOne: false
+            referencedRelation: "mail_accounts"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       mail_folders: {
         Row: {
           account_id: string
@@ -734,6 +791,10 @@ export type Database = {
           queued: number
           running: number
         }[]
+      }
+      record_mail_contact_suggestions: {
+        Args: { p_account_id: string; p_company_id: string; p_items: Json }
+        Returns: number
       }
       release_mail_sync_lock: {
         Args: {

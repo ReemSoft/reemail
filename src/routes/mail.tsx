@@ -167,6 +167,20 @@ import {
 import type { MailFolder, MailMessage } from "@/lib/mail-types";
 import { clearMailSession, getMailSession, type MailSession } from "@/lib/mail-session";
 import {
+  hydrateContactSuggestions,
+  recordSentRecipients,
+  hideContactSuggestion,
+} from "@/lib/mail-contact-suggestions.functions";
+import {
+  ensureScopeReady,
+  searchLocal,
+  recordLocalSend,
+  forgetLocal,
+  wipeAllPersisted,
+  clearMemoryCache,
+  type AutocompleteMatch,
+} from "@/lib/mail-contact-suggestions.client";
+import {
   applyPendingMoveOverlay,
   beginPendingMove as beginPendingMoveEntry,
   clearPendingMovesForAccount,
@@ -2487,6 +2501,10 @@ function MailApp() {
     // same device doesn't inherit stale restore targets.
     clearAccountOrigins(safeOriginStorage(), currentAccountId);
 
+    // Address-book: wipe local suggestion cache so a new sign-in on the same
+    // device starts fresh and never surfaces a previous scope's contacts.
+    void wipeAllPersisted();
+
     clearMailSession();
     navigate({ to: "/login" });
   }
@@ -3728,6 +3746,8 @@ function RecipientField({
   onFocus,
   autoFocus,
   rightSlot,
+  getSuggestions,
+  onHideSuggestion,
 }: {
   label: string;
   value: Recipient[];
@@ -3735,13 +3755,43 @@ function RecipientField({
   onFocus?: () => void;
   autoFocus?: boolean;
   rightSlot?: React.ReactNode;
+  /**
+   * Purely-local (no-network) address-book lookup for the current mail scope.
+   * `exclude` are chip emails already chosen in this field.
+   */
+  getSuggestions?: (query: string, exclude: string[]) => AutocompleteMatch[];
+  /** Fire-and-forget hide (server + local cache). */
+  onHideSuggestion?: (email: string) => void;
 }) {
   const [text, setText] = useState("");
+  const [suggestions, setSuggestions] = useState<AutocompleteMatch[]>([]);
+  const [activeIdx, setActiveIdx] = useState(0);
+  const [open, setOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     if (autoFocus) inputRef.current?.focus();
   }, [autoFocus]);
+
+  // Recompute local suggestions on every keystroke. All in-memory, zero I/O.
+  useEffect(() => {
+    if (!getSuggestions) {
+      setSuggestions([]);
+      setOpen(false);
+      return;
+    }
+    const q = text.trim();
+    if (q.length < 1) {
+      setSuggestions([]);
+      setOpen(false);
+      return;
+    }
+    const excl = value.map((r) => r.email);
+    const matches = getSuggestions(q, excl);
+    setSuggestions(matches);
+    setActiveIdx(0);
+    setOpen(matches.length > 0);
+  }, [text, value, getSuggestions]);
 
   const commit = useCallback(
     (raw: string) => {
@@ -3749,7 +3799,6 @@ function RecipientField({
       if (!trimmed) return;
       const next = parseRecipientText(trimmed);
       if (next.length === 0) return;
-      // De-dupe by email
       const seen = new Set(value.map((r) => r.email.toLowerCase()));
       const merged = [...value];
       for (const r of next) {
@@ -3761,82 +3810,172 @@ function RecipientField({
       }
       onChange(merged);
       setText("");
+      setOpen(false);
     },
     [value, onChange],
+  );
+
+  const acceptSuggestion = useCallback(
+    (m: AutocompleteMatch) => {
+      const formatted = m.name ? `${m.name} <${m.email}>` : m.email;
+      commit(formatted);
+    },
+    [commit],
   );
 
   return (
     <div className="flex flex-col gap-1.5">
       <label className="text-sm font-medium text-foreground">{label}</label>
-      <div
-        className="flex min-h-[42px] w-full items-center gap-2 rounded-lg border border-input bg-background px-3 py-1.5 transition focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/20"
-        onClick={() => inputRef.current?.focus()}
-      >
-        <div className="flex flex-1 flex-wrap items-center gap-1.5" dir="ltr">
-          {value.map((r, i) => (
-            <span
-              key={`${r.email}-${i}`}
-              className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs ${
-                r.valid
-                  ? "bg-muted text-foreground"
-                  : "bg-red-500/10 text-red-600 dark:text-red-400"
-              }`}
-              title={r.valid ? r.email : "بريد غير صالح"}
-            >
-              {!r.valid && <AlertTriangle className="h-3 w-3" />}
-              <span className="max-w-[220px] truncate">{r.name ? `${r.name} · ${r.email}` : r.email}</span>
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onChange(value.filter((_, idx) => idx !== i));
-                }}
-                className="rounded-full p-0.5 hover:bg-background/60"
-                aria-label={`إزالة ${r.email}`}
+      <div className="relative">
+        <div
+          className="flex min-h-[42px] w-full items-center gap-2 rounded-lg border border-input bg-background px-3 py-1.5 transition focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/20"
+          onClick={() => inputRef.current?.focus()}
+        >
+          <div className="flex flex-1 flex-wrap items-center gap-1.5" dir="ltr">
+            {value.map((r, i) => (
+              <span
+                key={`${r.email}-${i}`}
+                className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs ${
+                  r.valid
+                    ? "bg-muted text-foreground"
+                    : "bg-red-500/10 text-red-600 dark:text-red-400"
+                }`}
+                title={r.valid ? r.email : "بريد غير صالح"}
               >
-                <X className="h-3 w-3" />
-              </button>
-            </span>
-          ))}
-          <input
-            ref={inputRef}
-            value={text}
-            onChange={(e) => {
-              const v = e.target.value;
-              if (/[,;]/.test(v)) {
-                commit(v);
-                return;
-              }
-              setText(v);
-            }}
-            onFocus={onFocus}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === "Tab") {
-                if (text.trim()) {
-                  e.preventDefault();
-                  commit(text);
+                {!r.valid && <AlertTriangle className="h-3 w-3" />}
+                <span className="max-w-[220px] truncate">{r.name ? `${r.name} · ${r.email}` : r.email}</span>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onChange(value.filter((_, idx) => idx !== i));
+                  }}
+                  className="rounded-full p-0.5 hover:bg-background/60"
+                  aria-label={`إزالة ${r.email}`}
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </span>
+            ))}
+            <input
+              ref={inputRef}
+              value={text}
+              onChange={(e) => {
+                const v = e.target.value;
+                if (/[,;]/.test(v)) {
+                  commit(v);
+                  return;
                 }
-              } else if (e.key === "Backspace" && text === "" && value.length > 0) {
-                onChange(value.slice(0, -1));
-              }
-            }}
-            onBlur={() => commit(text)}
-            onPaste={(e) => {
-              const p = e.clipboardData.getData("text");
-              if (/[,;\n<>]/.test(p) || p.split(/\s+/).length > 1) {
-                e.preventDefault();
-                commit(p);
-              }
-            }}
-            placeholder=""
-            className="min-w-[140px] flex-1 bg-transparent px-1 py-1 text-sm outline-none"
-          />
+                setText(v);
+              }}
+              onFocus={onFocus}
+              onKeyDown={(e) => {
+                if (open && suggestions.length > 0) {
+                  if (e.key === "ArrowDown") {
+                    e.preventDefault();
+                    setActiveIdx((i) => (i + 1) % suggestions.length);
+                    return;
+                  }
+                  if (e.key === "ArrowUp") {
+                    e.preventDefault();
+                    setActiveIdx((i) => (i - 1 + suggestions.length) % suggestions.length);
+                    return;
+                  }
+                  if (e.key === "Escape") {
+                    e.preventDefault();
+                    setOpen(false);
+                    return;
+                  }
+                  if (e.key === "Enter" || e.key === "Tab") {
+                    e.preventDefault();
+                    acceptSuggestion(suggestions[activeIdx]);
+                    return;
+                  }
+                }
+                if (e.key === "Enter" || e.key === "Tab") {
+                  if (text.trim()) {
+                    e.preventDefault();
+                    commit(text);
+                  }
+                } else if (e.key === "Backspace" && text === "" && value.length > 0) {
+                  onChange(value.slice(0, -1));
+                }
+              }}
+              onBlur={() => {
+                // Delay so a click on a suggestion still registers.
+                setTimeout(() => setOpen(false), 120);
+                commit(text);
+              }}
+              onPaste={(e) => {
+                const p = e.clipboardData.getData("text");
+                if (/[,;\n<>]/.test(p) || p.split(/\s+/).length > 1) {
+                  e.preventDefault();
+                  commit(p);
+                }
+              }}
+              placeholder=""
+              className="min-w-[140px] flex-1 bg-transparent px-1 py-1 text-sm outline-none"
+              aria-autocomplete="list"
+              aria-expanded={open}
+            />
+          </div>
+          {rightSlot}
         </div>
-        {rightSlot}
+        {open && suggestions.length > 0 && (
+          <ul
+            className="absolute inset-x-0 top-full z-50 mt-1 max-h-64 overflow-auto rounded-lg border border-border bg-popover py-1 text-sm text-popover-foreground shadow-lg"
+            role="listbox"
+            dir="ltr"
+          >
+            {suggestions.map((m, i) => (
+              <li
+                key={m.email}
+                role="option"
+                aria-selected={i === activeIdx}
+                onMouseDown={(e) => {
+                  e.preventDefault(); // keep focus
+                  acceptSuggestion(m);
+                }}
+                onMouseEnter={() => setActiveIdx(i)}
+                className={`flex items-center justify-between gap-2 px-3 py-1.5 ${
+                  i === activeIdx ? "bg-accent" : "hover:bg-accent/60"
+                }`}
+              >
+                <div className="min-w-0 flex-1">
+                  {m.name ? (
+                    <>
+                      <div className="truncate font-medium">{m.name}</div>
+                      <div className="truncate text-xs text-muted-foreground">{m.email}</div>
+                    </>
+                  ) : (
+                    <div className="truncate">{m.email}</div>
+                  )}
+                </div>
+                {onHideSuggestion && (
+                  <button
+                    type="button"
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      onHideSuggestion(m.email);
+                      setSuggestions((prev) => prev.filter((s) => s.email !== m.email));
+                    }}
+                    className="rounded p-1 text-muted-foreground opacity-60 hover:bg-background hover:opacity-100"
+                    title="إزالة من الاقتراحات"
+                    aria-label="إزالة من الاقتراحات"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
     </div>
   );
 }
+
 
 
 // ------------ Rich-text editor toolbar ------------
@@ -3924,6 +4063,49 @@ function Composer({
   onSent: () => void;
 }) {
   const draftKey = `${DRAFT_STORAGE_PREFIX}${session.account.email_address}`;
+
+  // ----- Address book (contact suggestions) — local IDB, hydrated once -----
+  const hydrateSuggestions = useServerFn(hydrateContactSuggestions);
+  const recordSuggestions = useServerFn(recordSentRecipients);
+  const hideSuggestion = useServerFn(hideContactSuggestion);
+  const companyId = session.account.company_id;
+  const accountId = session.account.id;
+  const lastScopeRef = useRef<string | null>(null);
+  useEffect(() => {
+    const scopeKey = `${companyId}:${accountId}`;
+    if (lastScopeRef.current && lastScopeRef.current !== scopeKey) {
+      // Account switched inside the same tab — drop the previous scope's mem cache.
+      clearMemoryCache();
+    }
+    lastScopeRef.current = scopeKey;
+    const token = session.mailSessionToken;
+    void ensureScopeReady(companyId, accountId, async () => {
+      if (!token) return null;
+      try {
+        const res = await hydrateSuggestions({ data: { mailSessionToken: token } });
+        return res?.ok ? res.suggestions : null;
+      } catch {
+        return null;
+      }
+    });
+  }, [companyId, accountId, session.mailSessionToken, hydrateSuggestions]);
+
+  const suggestFor = useCallback(
+    (query: string, exclude: string[]) =>
+      searchLocal(companyId, accountId, query, { exclude, limit: 8 }),
+    [companyId, accountId],
+  );
+  const hideOne = useCallback(
+    (email: string) => {
+      void forgetLocal(companyId, accountId, email);
+      const token = session.mailSessionToken;
+      if (!token) return;
+      void hideSuggestion({ data: { mailSessionToken: token, email } }).catch(() => {
+        /* fire-and-forget */
+      });
+    },
+    [companyId, accountId, session.mailSessionToken, hideSuggestion],
+  );
 
   // ----- Restore draft (if no initial provided) -----
   const restored = useMemo(() => {
@@ -4376,6 +4558,33 @@ function Composer({
       } catch {
         /* noop */
       }
+      // Address book: record recipients AFTER a successful SMTP send only.
+      // Never let this failure poison the send outcome.
+      try {
+        const own = (session.account.email_address ?? "").toLowerCase().trim();
+        const collected: Array<{ email: string; name: string | null }> = [];
+        const seen = new Set<string>();
+        for (const r of [...to, ...cc, ...bcc]) {
+          if (!r.valid) continue;
+          const e = r.email.toLowerCase();
+          if (!e || e === own || seen.has(e)) continue;
+          seen.add(e);
+          collected.push({ email: e, name: r.name ?? null });
+        }
+        if (collected.length > 0) {
+          void recordLocalSend(companyId, accountId, collected);
+          const token = session.mailSessionToken;
+          if (token) {
+            void recordSuggestions({
+              data: { mailSessionToken: token, recipients: collected },
+            }).catch(() => {
+              /* fire-and-forget */
+            });
+          }
+        }
+      } catch {
+        /* noop — never fail the send */
+      }
       toast.success("تم إرسال الرسالة");
       onClose();
       onSent();
@@ -4518,6 +4727,8 @@ function Composer({
             value={to}
             onChange={setTo}
             autoFocus
+            getSuggestions={suggestFor}
+            onHideSuggestion={hideOne}
             rightSlot={
               <div className="flex shrink-0 items-center gap-1 border-r border-border/60 pr-2 mr-2">
                 {!showCc && (
@@ -4541,8 +4752,24 @@ function Composer({
               </div>
             }
           />
-          {showCc && <RecipientField label="نسخة إلى" value={cc} onChange={setCc} />}
-          {showBcc && <RecipientField label="نسخة مخفية إلى" value={bcc} onChange={setBcc} />}
+          {showCc && (
+            <RecipientField
+              label="نسخة إلى"
+              value={cc}
+              onChange={setCc}
+              getSuggestions={suggestFor}
+              onHideSuggestion={hideOne}
+            />
+          )}
+          {showBcc && (
+            <RecipientField
+              label="نسخة مخفية إلى"
+              value={bcc}
+              onChange={setBcc}
+              getSuggestions={suggestFor}
+              onHideSuggestion={hideOne}
+            />
+          )}
 
           {/* Subject */}
           <div className="flex flex-col gap-1.5">
