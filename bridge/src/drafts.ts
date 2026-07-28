@@ -560,7 +560,7 @@ function defaultDeps(): DraftDeps {
         },
         async deleteByUid(uids) {
           if (uids.length === 0) return true;
-          const ok = await client.messageDelete({ uid: uids.join(",") } as never, { uid: true });
+          const ok = await client.messageDelete(uids, { uid: true });
           return Boolean(ok);
         },
         async moveByUid(uids, destinationPath) {

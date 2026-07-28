@@ -12,6 +12,7 @@ import {
   pendingDeleteKey,
   readDraftDoc,
   writeDraftDoc,
+  updateDraftDocServerRef,
   type DraftSaveStatus,
   type DraftSnapshot,
   type DraftStorageLike,
@@ -155,6 +156,60 @@ describe("writeDraftDoc / clearDraftDoc", () => {
     clearDraftDoc(s, email);
     expect(s.getItem(draftKeyV2(email))).toBeNull();
     expect(s.getItem(draftKeyV3(email))).toBeNull();
+  });
+
+  it("patches serverRef for the matching v3 draft only", () => {
+    const s = memStorage();
+    const doc = {
+      version: 3 as const,
+      draftId: "d1",
+      snapshot: snap({ subject: "s" }),
+      serverRef: null,
+      updatedAt: 5,
+    };
+    writeDraftDoc(s, email, doc);
+    const ok = updateDraftDocServerRef(
+      s,
+      email,
+      "d1",
+      { folderPath: "Drafts", uid: 9, uidValidity: "v" },
+      () => 10,
+    );
+    expect(ok).toBe(true);
+    const read = readDraftDoc(s, email);
+    expect(read?.serverRef).toEqual({ folderPath: "Drafts", uid: 9, uidValidity: "v" });
+    expect(read?.updatedAt).toBe(10);
+    expect(updateDraftDocServerRef(s, email, "other", null)).toBe(false);
+    expect(readDraftDoc(s, email)?.serverRef?.uid).toBe(9);
+  });
+});
+
+describe("createDraftSaver — serverRef freshness", () => {
+  it("uses the latest returned serverRef for a queued follow-up save", async () => {
+    const seenPreviousRefs: Array<unknown> = [];
+    const gates: Array<{ resolve: (v: SaveRemoteResult) => void }> = [];
+    const saveRemote = vi.fn(async ({ previousRef }: { previousRef: unknown }) => {
+      seenPreviousRefs.push(previousRef);
+      const d = deferred<SaveRemoteResult>();
+      gates.push({ resolve: d.resolve });
+      return d.promise;
+    });
+    const saver = createDraftSaver("d1", { saveRemote });
+    const p1 = saver.requestSave(snap({ subject: "one" }), null, 1);
+    await Promise.resolve();
+    const p2 = saver.requestSave(snap({ subject: "two" }), null, 2);
+    gates[0].resolve({
+      ok: true,
+      serverRef: { folderPath: "Drafts", uid: 10, uidValidity: "v" },
+    });
+    await p1;
+    expect(saveRemote).toHaveBeenCalledTimes(2);
+    expect(seenPreviousRefs[1]).toEqual({ folderPath: "Drafts", uid: 10, uidValidity: "v" });
+    gates[1].resolve({
+      ok: true,
+      serverRef: { folderPath: "Drafts", uid: 11, uidValidity: "v" },
+    });
+    await p2;
   });
 });
 
