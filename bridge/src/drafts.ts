@@ -172,19 +172,24 @@ export interface DraftDeps {
 // --- Pure helpers (unit-testable) -------------------------------------------
 
 export function draftMimePayload(input: DraftSavePayload): SendMessagePayload {
+  const toRecipient = (r: { name?: string; email?: string }) => ({
+    name: r.name ?? "",
+    email: r.email ?? "",
+  });
   return {
     from: {
       name: input.account.display_name || input.account.email_address,
       email: input.account.email_address,
     },
-    to: input.to,
-    cc: input.cc,
-    bcc: input.bcc,
+    to: (input.to ?? []).map(toRecipient),
+    cc: (input.cc ?? []).map(toRecipient),
+    bcc: (input.bcc ?? []).map(toRecipient),
     subject: input.subject,
     bodyHtml: input.bodyHtml,
     bodyText: input.bodyText,
   };
 }
+
 
 /**
  * Core save routine. Extracted so tests can drive every branch without
