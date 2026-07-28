@@ -4760,80 +4760,85 @@ function Composer({
     closePromptRef.current = closePrompt;
   }, [closePrompt]);
 
-  // Prevents double-navigation / double-close races (rapid clicks, ESC while
-  // an in-flight save is finishing, etc.).
-  const closingRef = useRef(false);
+  // Single-flight close: the FIRST requestClose creates one shared Promise.
+  // Any concurrent requestClose (rapid X click, Escape, folder switch, etc.)
+  // returns that same Promise without opening a second dialog or replacing
+  // the existing resolver. Cleared on Cancel / after onClose so a later
+  // attempt can start fresh.
+  const closeFlowRef = useRef<Promise<boolean> | null>(null);
   async function requestClose(): Promise<boolean> {
-    if (closingRef.current) return false;
-    if (!isDirtyRef.current) {
-      closingRef.current = true;
-      onClose();
-      return true;
-    }
-    const choice = await new Promise<"save" | "discard" | "cancel">((resolve) => {
-      setClosePrompt({ resolve });
-    });
-    if (choice === "cancel") return false;
-    if (choice === "save") {
-      closingRef.current = true;
-      try {
-        // Await the save round-trip before tearing down; failure keeps the
-        // composer open so no user content is silently lost.
-        await saveDraftNow();
-        if (isDirtyRef.current) {
-          // Save reported permanent failure (dirty still true) — abort close.
-          closingRef.current = false;
-          return false;
-        }
-      } catch {
-        closingRef.current = false;
+    if (closeFlowRef.current) return closeFlowRef.current;
+    const flow = (async (): Promise<boolean> => {
+      if (!isDirtyRef.current) {
+        onClose();
+        return true;
+      }
+      const choice = await new Promise<"save" | "discard" | "cancel">((resolve) => {
+        setClosePrompt({ resolve });
+      });
+      if (choice === "cancel") {
+        // Release the single-flight so the user can try again.
         return false;
       }
-      onClose();
-      return true;
-    }
-    // discard
-    closingRef.current = true;
-    try {
-      if (typeof window !== "undefined") {
-        clearDraftDoc(window.localStorage, accountEmail);
+      if (choice === "save") {
+        const result = await saveDraftNow();
+        // saved_server + saved_local(NETWORK) → composer becomes clean and
+        // we may close. failed / empty (unexpected here since we were dirty)
+        // → keep composer open so nothing is silently lost.
+        if (result === "saved_server" || result === "saved_local") {
+          onClose();
+          return true;
+        }
+        return false;
       }
-      // Best-effort server delete when a server ref exists; on failure hand
-      // the delete to the pending queue for the next composer session.
-      const ref = serverRefRef.current;
-      if (ref) {
-        const token = session.mailSessionToken;
-        if (token) {
-          bridgeDeleteDraftFn({
-            data: { mailSessionToken: token, draftId, previousRef: ref },
-          })
-            .then((res) => {
-              if (!res?.ok) {
+      // discard
+      try {
+        if (typeof window !== "undefined") {
+          clearDraftDoc(window.localStorage, accountEmail);
+        }
+        // Best-effort server delete when a server ref exists; on failure hand
+        // the delete to the pending queue for the next composer session.
+        const ref = serverRefRef.current;
+        if (ref) {
+          const token = session.mailSessionToken;
+          if (token) {
+            bridgeDeleteDraftFn({
+              data: { mailSessionToken: token, draftId, previousRef: ref },
+            })
+              .then((res) => {
+                if (!res?.ok) {
+                  pendingQueueRef.current?.enqueue(accountEmail, {
+                    draftId,
+                    previousRef: ref,
+                  });
+                }
+              })
+              .catch(() => {
                 pendingQueueRef.current?.enqueue(accountEmail, {
                   draftId,
                   previousRef: ref,
                 });
-              }
-            })
-            .catch(() => {
-              pendingQueueRef.current?.enqueue(accountEmail, {
-                draftId,
-                previousRef: ref,
               });
-            });
-        } else {
-          pendingQueueRef.current?.enqueue(accountEmail, { draftId, previousRef: ref });
+          } else {
+            pendingQueueRef.current?.enqueue(accountEmail, { draftId, previousRef: ref });
+          }
         }
+      } catch {
+        /* noop */
       }
-    } catch {
-      /* noop */
-    }
-    // Force clean so beforeunload/guard don't re-trap on the way out.
-    savedGenerationRef.current = generationRef.current;
-    lastSavedAtRef.current = Date.now();
-    recomputeDirty();
-    onClose();
-    return true;
+      // Force clean so beforeunload/guard don't re-trap on the way out.
+      savedGenerationRef.current = generationRef.current;
+      lastSavedAtRef.current = Date.now();
+      recomputeDirty();
+      onClose();
+      return true;
+    })().finally(() => {
+      // Release single-flight AFTER the flow settles. On close (onClose
+      // called) the component is unmounting so this ref is discarded anyway.
+      closeFlowRef.current = null;
+    });
+    closeFlowRef.current = flow;
+    return flow;
   }
 
 
