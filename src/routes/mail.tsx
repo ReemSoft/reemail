@@ -4660,7 +4660,6 @@ function Composer({
                       { value: "pre", label: "كود" },
                     ]}
                   />
-                  <span className="mx-1 h-4 w-px bg-border" />
                   <ToolbarButton title="عريض (Ctrl+B)" active={fmtState.bold} onMouseDown={() => exec("bold")}>
                     <Bold className="h-3.5 w-3.5" />
                   </ToolbarButton>
@@ -4670,7 +4669,6 @@ function Composer({
                   <ToolbarButton title="تسطير (Ctrl+U)" active={fmtState.underline} onMouseDown={() => exec("underline")}>
                     <Underline className="h-3.5 w-3.5" />
                   </ToolbarButton>
-                  <span className="mx-1 h-4 w-px bg-border" />
                   {/* Colors */}
                   <label
                     title="لون النص"
@@ -4696,7 +4694,6 @@ function Composer({
                       className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
                     />
                   </label>
-                  <span className="mx-1 h-4 w-px bg-border" />
                   {/* Alignment */}
                   <ToolbarButton title="محاذاة يمين" active={fmtState.justifyRight} onMouseDown={() => exec("justifyRight")}>
                     <AlignRight className="h-3.5 w-3.5" />
@@ -4707,7 +4704,6 @@ function Composer({
                   <ToolbarButton title="محاذاة يسار" active={fmtState.justifyLeft} onMouseDown={() => exec("justifyLeft")}>
                     <AlignLeft className="h-3.5 w-3.5" />
                   </ToolbarButton>
-                  <span className="mx-1 h-4 w-px bg-border" />
                   {/* Lists */}
                   <ToolbarButton title="قائمة نقطية" active={fmtState.insertUnorderedList} onMouseDown={() => exec("insertUnorderedList")}>
                     <List className="h-3.5 w-3.5" />
@@ -4715,12 +4711,10 @@ function Composer({
                   <ToolbarButton title="قائمة مرقمة" active={fmtState.insertOrderedList} onMouseDown={() => exec("insertOrderedList")}>
                     <ListOrdered className="h-3.5 w-3.5" />
                   </ToolbarButton>
-                  <span className="mx-1 h-4 w-px bg-border" />
                   {/* Link */}
                   <ToolbarButton title="إدراج رابط" onMouseDown={promptLink}>
                     <Link2 className="h-3.5 w-3.5" />
                   </ToolbarButton>
-                  <span className="mx-1 h-4 w-px bg-border" />
                   {/* Undo / Redo */}
                   <ToolbarButton title="تراجع (Ctrl+Z)" onMouseDown={() => exec("undo")}>
                     <Undo2 className="h-3.5 w-3.5" />
@@ -4728,7 +4722,6 @@ function Composer({
                   <ToolbarButton title="إعادة (Ctrl+Y)" onMouseDown={() => exec("redo")}>
                     <Redo2 className="h-3.5 w-3.5" />
                   </ToolbarButton>
-                  {extensions.length > 0 && <span className="mx-1 h-4 w-px bg-border" />}
                   {extensions.map((ext) => (
                     <button
                       key={ext.id}
