@@ -4591,11 +4591,7 @@ function Composer({
     existingFilesCacheRef.current.delete(id);
   }
 
-      runningTotal += f.size;
-    }
-    setFiles(merged);
-    if (fileInputRef.current) fileInputRef.current.value = "";
-  }
+
 
   function removeFile(index: number) {
     setFiles((prev) => prev.filter((_, i) => i !== index));
