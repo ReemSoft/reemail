@@ -116,6 +116,14 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { useServerFn } from "@tanstack/react-start";
 import { toast } from "sonner";
 import { useConfirm } from "@/components/ui/confirm-provider";
+import {
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { useCompanyTheme } from "@/hooks/use-company-theme";
 import {
   bridgeGetFolderCounts,
@@ -1253,6 +1261,16 @@ function MailApp() {
   const [selection, setSelection] = useState<Set<string>>(() => new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
   const [selectMode, setSelectMode] = useState(false);
+
+  // Guarded navigation: if the composer is open with unsaved changes, prompt
+  // (Save / Discard / Cancel) before running the destructive nav action.
+  async function guardComposerNav(): Promise<boolean> {
+    if (typeof window === "undefined") return true;
+    const g = (window as unknown as { __mailmaestroComposerGuard?: (() => Promise<boolean>) | null })
+      .__mailmaestroComposerGuard;
+    if (!g) return true;
+    return g();
+  }
   const [refreshing, setRefreshing] = useState(false);
   const [searchMode, setSearchMode] = useState<"quick" | "deep">("quick");
   const [deepIncludeBody, setDeepIncludeBody] = useState(false);
@@ -1657,6 +1675,7 @@ function MailApp() {
   const inDeepSearch = searchMode === "deep" && query.trim().length >= 2;
 
   async function openMessage(id: string) {
+    if (!(await guardComposerNav())) return;
     setSelectedId(id);
     const parsed = parseMessageId(id);
     if (!parsed || !session) {
@@ -2812,7 +2831,8 @@ function MailApp() {
         >
           <div className="p-4">
             <button
-              onClick={() => {
+              onClick={async () => {
+                if (!(await guardComposerNav())) return;
                 setCompose({});
                 setSidebarOpen(false);
               }}
@@ -2834,7 +2854,8 @@ function MailApp() {
                 return (
                   <button
                     key={f}
-                    onClick={() => {
+                    onClick={async () => {
+                      if (!(await guardComposerNav())) return;
                       setFolder(f);
                       setSelectedId(null);
                       setSelectedMessage(null);
@@ -4269,6 +4290,25 @@ function Composer({
   const [dragging, setDragging] = useState(false);
   const [savedAt, setSavedAt] = useState<number | null>(() => initialDoc?.updatedAt ?? null);
 
+  // ----- Dirty tracking + guarded close -----
+  // bodyRev bumps on every editor `input` event so the autosave effect can
+  // observe body edits (contentEditable does NOT trigger React re-renders).
+  const [bodyRev, setBodyRev] = useState(0);
+  // lastEdit vs lastSave: dirty = we typed after the last successful save.
+  const lastEditAtRef = useRef<number>(0);
+  const lastSavedAtRef = useRef<number>(initialDoc?.updatedAt ?? 0);
+  const isDirtyRef = useRef<boolean>(false);
+  const recomputeDirty = () => {
+    isDirtyRef.current = lastEditAtRef.current > lastSavedAtRef.current;
+  };
+  const markEdited = () => {
+    lastEditAtRef.current = Date.now();
+    recomputeDirty();
+  };
+  const [closePrompt, setClosePrompt] = useState<{
+    resolve: (choice: "save" | "discard" | "cancel") => void;
+  } | null>(null);
+
   // ----- Server-side draft saver (bridge APPEND) + pending-delete queue -----
   const bridgeSaveDraftFn = useServerFn(bridgeSaveDraft);
   const bridgeDeleteDraftFn = useServerFn(bridgeDeleteDraft);
@@ -4581,6 +4621,8 @@ function Composer({
         clearDraftDoc(window.localStorage, accountEmail);
         setSavedAt(null);
         setSaveStatus("idle");
+        lastSavedAtRef.current = Date.now();
+        recomputeDirty();
         return;
       }
       const snapshot: DraftSnapshot = {
@@ -4603,11 +4645,119 @@ function Composer({
         setSaveStatus("failed");
         return;
       }
-      setSavedAt(Date.now());
+      const now = Date.now();
+      setSavedAt(now);
+      lastSavedAtRef.current = now;
+      recomputeDirty();
       void saverRef.current?.requestSave(snapshot, serverRefRef.current);
     }, 800);
     return () => window.clearTimeout(t);
-  }, [to, cc, bcc, subject, showCc, showBcc, accountEmail, draftId, sending, existingKept, files]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [to, cc, bcc, subject, showCc, showBcc, accountEmail, draftId, sending, existingKept, files, bodyRev]);
+
+  // Editor input listener: bump bodyRev so the autosave effect observes body
+  // edits (contentEditable does not trigger React re-renders on its own).
+  useEffect(() => {
+    const el = editorRef.current;
+    if (!el) return;
+    const onInput = () => {
+      setBodyRev((n) => n + 1);
+      markEdited();
+    };
+    el.addEventListener("input", onInput);
+    el.addEventListener("paste", onInput);
+    return () => {
+      el.removeEventListener("input", onInput);
+      el.removeEventListener("paste", onInput);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Mark edited on structural field changes (recipients, subject, attachments).
+  const editMarkMountedRef = useRef(false);
+  useEffect(() => {
+    if (!editMarkMountedRef.current) {
+      editMarkMountedRef.current = true;
+      return;
+    }
+    markEdited();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [to, cc, bcc, subject, showCc, showBcc, existingKept, files]);
+
+  // ----- Guarded close: intercept close attempts when there are unsaved changes -----
+  const closePromptRef = useRef(closePrompt);
+  useEffect(() => {
+    closePromptRef.current = closePrompt;
+  }, [closePrompt]);
+
+  async function requestClose(): Promise<boolean> {
+    if (!isDirtyRef.current) {
+      onClose();
+      return true;
+    }
+    const choice = await new Promise<"save" | "discard" | "cancel">((resolve) => {
+      setClosePrompt({ resolve });
+    });
+    if (choice === "cancel") return false;
+    if (choice === "save") {
+      try {
+        await saveDraftNow();
+      } catch {
+        /* toast handled inside */
+      }
+      onClose();
+      return true;
+    }
+    // discard
+    try {
+      if (typeof window !== "undefined") {
+        clearDraftDoc(window.localStorage, accountEmail);
+      }
+      // Best-effort server delete when a server ref exists.
+      const ref = serverRefRef.current;
+      if (ref) {
+        const token = session.mailSessionToken;
+        if (token) {
+          void bridgeDeleteDraftFn({
+            data: { mailSessionToken: token, draftId, previousRef: ref },
+          }).catch(() => {
+            /* fire-and-forget */
+          });
+        }
+      }
+    } catch {
+      /* noop */
+    }
+    lastSavedAtRef.current = Date.now();
+    recomputeDirty();
+    onClose();
+    return true;
+  }
+
+  // Expose a global guard so parent nav actions (folder switch, list click,
+  // new-message button) can prompt before tearing the composer down.
+  const requestCloseRef = useRef<() => Promise<boolean>>(async () => {
+    onClose();
+    return true;
+  });
+  requestCloseRef.current = requestClose;
+  useEffect(() => {
+    (window as unknown as { __mailmaestroComposerGuard?: () => Promise<boolean> })
+      .__mailmaestroComposerGuard = () => requestCloseRef.current();
+    const beforeUnload = (e: BeforeUnloadEvent) => {
+      if (isDirtyRef.current) {
+        e.preventDefault();
+        e.returnValue = "";
+      }
+    };
+    window.addEventListener("beforeunload", beforeUnload);
+    return () => {
+      const w = window as unknown as { __mailmaestroComposerGuard?: (() => Promise<boolean>) | null };
+      if (w.__mailmaestroComposerGuard) w.__mailmaestroComposerGuard = null;
+      window.removeEventListener("beforeunload", beforeUnload);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   function addFiles(list: FileList | File[] | null) {
     if (!list) return;
@@ -4977,7 +5127,7 @@ function Composer({
         handleSend();
       } else if (e.key === "Escape") {
         e.preventDefault();
-        onClose();
+        void requestClose();
       }
     }
     const el = containerRef.current;
@@ -5084,7 +5234,7 @@ function Composer({
         <div className="flex shrink-0 items-center gap-2 sm:gap-3">
           <span className="hidden text-[11px] text-muted-foreground sm:inline">{savedLabel}</span>
           <button
-            onClick={onClose}
+            onClick={() => void requestClose()}
             className="rounded-lg p-2 text-muted-foreground transition hover:bg-muted hover:text-foreground"
             title="إغلاق (Esc)"
             aria-label="إغلاق"
@@ -5594,7 +5744,7 @@ function Composer({
             <span>{to.length + cc.length + bcc.length} مستلم</span>
           )}
           <button
-            onClick={onClose}
+            onClick={() => void requestClose()}
             className="rounded-lg border border-input bg-background px-3 py-2 text-xs text-muted-foreground transition hover:border-primary hover:text-foreground"
           >
             إلغاء
@@ -5609,6 +5759,58 @@ function Composer({
           </div>
         </div>
       )}
+
+      <AlertDialog
+        open={!!closePrompt}
+        onOpenChange={(o) => {
+          if (!o && closePrompt) {
+            closePrompt.resolve("cancel");
+            setClosePrompt(null);
+          }
+        }}
+      >
+        <AlertDialogContent className="sm:max-w-md">
+          <AlertDialogHeader className="text-center sm:text-right">
+            <AlertDialogTitle>لديك تغييرات غير محفوظة</AlertDialogTitle>
+            <AlertDialogDescription>
+              هل تريد حفظ الرسالة كمسودّة قبل المغادرة؟
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="gap-2 sm:justify-start">
+            <button
+              type="button"
+              onClick={() => {
+                closePrompt?.resolve("save");
+                setClosePrompt(null);
+              }}
+              className="inline-flex h-10 items-center justify-center rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground transition hover:bg-primary/90"
+            >
+              حفظ كمسودّة
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                closePrompt?.resolve("discard");
+                setClosePrompt(null);
+              }}
+              className="inline-flex h-10 items-center justify-center rounded-md border border-destructive/40 bg-background px-4 text-sm font-medium text-destructive transition hover:bg-destructive/10"
+            >
+              بدون حفظ
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                closePrompt?.resolve("cancel");
+                setClosePrompt(null);
+              }}
+              className="inline-flex h-10 items-center justify-center rounded-md border border-input bg-background px-4 text-sm font-medium text-muted-foreground transition hover:bg-muted"
+            >
+              إلغاء
+            </button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
     </div>
   );
 }
