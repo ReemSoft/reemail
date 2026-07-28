@@ -427,15 +427,85 @@ describe("DraftSaver.onCompleted / completedGeneration", () => {
     expect(completions).toEqual([10, 12]);
   });
 
-  it("reports saved-local with generation on soft failure", async () => {
+  it("reports saved-local with generation on soft NETWORK failure", async () => {
     const saver = createDraftSaver("d3", {
-      saveRemote: async () => ({ ok: false, code: "NET" }),
+      saveRemote: async () => ({ ok: false, code: "NETWORK" }),
       onCompleted: (info) => {
         expect(info.status).toBe("saved-local");
         expect(info.completedGeneration).toBe(99);
-        expect(info.code).toBe("NET");
+        expect(info.code).toBe("NETWORK");
       },
     });
     await saver.requestSave(snap({ subject: "x" }), null, 99);
+  });
+});
+
+// ---------------------------------------------------------- Failure classification
+describe("createDraftSaver — failure classification", () => {
+  async function runWithCode(code: string | undefined) {
+    const events: DraftSaveStatus[] = [];
+    const completions: Array<{ gen: number; status: DraftSaveStatus; code?: string }> = [];
+    const onRef = vi.fn();
+    const saver = createDraftSaver("d-fc", {
+      saveRemote: async () => ({ ok: false, code }),
+      onStatus: (s) => events.push(s),
+      onServerRef: onRef,
+      onCompleted: (info) =>
+        completions.push({
+          gen: info.completedGeneration,
+          status: info.status,
+          code: info.code,
+        }),
+    });
+    await saver.requestSave(snap({ subject: "s" }), null, 7);
+    return { events, completions, onRef, saver };
+  }
+
+  it("NETWORK → saved-local, echoes generation, no serverRef", async () => {
+    const { events, completions, onRef, saver } = await runWithCode("NETWORK");
+    expect(events).toEqual(["saving", "saved-local"]);
+    expect(completions).toEqual([{ gen: 7, status: "saved-local", code: "NETWORK" }]);
+    expect(onRef).not.toHaveBeenCalled();
+    expect(saver.getStatus()).toBe("saved-local");
+  });
+
+  it.each([
+    "SESSION_REQUIRED",
+    "CREDENTIALS_PENDING",
+    "SAFE_DRAFT_REPLACE_UNSUPPORTED",
+    "ATTACHMENT_TOO_LARGE",
+    "ATTACHMENTS_TOO_LARGE",
+    "TOO_MANY_ATTACHMENTS",
+    "APPEND_FAILED",
+    "IMAP_ERROR",
+    "UNKNOWN",
+  ])("%s → failed, echoes generation with code, no serverRef", async (code) => {
+    const { events, completions, onRef, saver } = await runWithCode(code);
+    expect(events).toEqual(["saving", "failed"]);
+    expect(completions).toEqual([{ gen: 7, status: "failed", code }]);
+    expect(onRef).not.toHaveBeenCalled();
+    expect(saver.getStatus()).toBe("failed");
+  });
+
+  it("missing code on ok=false → failed (defensive)", async () => {
+    const { events, completions } = await runWithCode(undefined);
+    expect(events).toEqual(["saving", "failed"]);
+    expect(completions[0].status).toBe("failed");
+    expect(completions[0].code).toBeUndefined();
+  });
+
+  it("thrown saveRemote → NETWORK class → saved-local", async () => {
+    const events: DraftSaveStatus[] = [];
+    const completions: Array<{ status: DraftSaveStatus; code?: string }> = [];
+    const saver = createDraftSaver("d-thr", {
+      saveRemote: async () => {
+        throw new Error("boom");
+      },
+      onStatus: (s) => events.push(s),
+      onCompleted: (info) => completions.push({ status: info.status, code: info.code }),
+    });
+    await saver.requestSave(snap({ subject: "x" }), null, 1);
+    expect(events).toEqual(["saving", "saved-local"]);
+    expect(completions).toEqual([{ status: "saved-local", code: "NETWORK" }]);
   });
 });
