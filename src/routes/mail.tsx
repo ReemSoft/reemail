@@ -5109,7 +5109,7 @@ function Composer({
         handleSend();
       } else if (e.key === "Escape") {
         e.preventDefault();
-        onClose();
+        void requestClose();
       }
     }
     const el = containerRef.current;
