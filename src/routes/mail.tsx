@@ -2760,7 +2760,7 @@ function MailApp() {
         {/* Message list */}
         <div
           className={`flex w-full flex-col border-l border-border bg-card md:w-96 md:shrink-0 ${
-            selectedMessage || (selectedId && reading) ? "hidden md:flex" : "flex"
+            compose || selectedMessage || (selectedId && reading) ? "hidden md:flex" : "flex"
           }`}
         >
           {selectMode || selection.size > 0 ? (
@@ -3873,6 +3873,7 @@ function ToolbarSelect({
   title,
   ariaLabel,
   placeholder,
+  value,
   options,
   onChange,
   className,
@@ -3880,6 +3881,7 @@ function ToolbarSelect({
   title: string;
   ariaLabel: string;
   placeholder: string;
+  value?: string;
   options: { value: string; label: string }[];
   onChange: (value: string) => void;
   className?: string;
@@ -3889,10 +3891,9 @@ function ToolbarSelect({
       <select
         title={title}
         aria-label={ariaLabel}
-        defaultValue=""
+        value={value ?? ""}
         onChange={(e) => {
           const v = e.target.value;
-          e.target.value = "";
           if (v) onChange(v);
         }}
         className="peer h-7 w-full cursor-pointer appearance-none rounded-md border border-input bg-background ps-2 pe-6 text-xs text-foreground outline-none hover:bg-muted focus:ring-2 focus:ring-ring/40"
@@ -3970,6 +3971,9 @@ function Composer({
   const [dragging, setDragging] = useState(false);
   const [savedAt, setSavedAt] = useState<number | null>(null);
   const [plainMode, setPlainMode] = useState(false);
+  const [fontFamily, setFontFamily] = useState<string>("IBM Plex Sans Arabic, sans-serif");
+  const [fontSize, setFontSize] = useState<string>("14px");
+  const [blockFmt, setBlockFmt] = useState<string>("p");
   const [extensions, setExtensions] = useState<ComposerExtension[]>(
     () => (typeof window !== "undefined" ? window.mailmaestroComposerExtensions ?? [] : []),
   );
@@ -4412,7 +4416,11 @@ function Composer({
                     title="الخط"
                     ariaLabel="الخط"
                     placeholder="الخط"
-                    onChange={applyFontFamily}
+                    value={fontFamily}
+                    onChange={(v) => {
+                      setFontFamily(v);
+                      applyFontFamily(v);
+                    }}
                     className="min-w-[7.5rem]"
                     options={[
                       { value: "IBM Plex Sans Arabic, sans-serif", label: "IBM Plex Sans Arabic" },
@@ -4432,7 +4440,11 @@ function Composer({
                     title="حجم الخط"
                     ariaLabel="حجم الخط"
                     placeholder="الحجم"
-                    onChange={applyFontSize}
+                    value={fontSize}
+                    onChange={(v) => {
+                      setFontSize(v);
+                      applyFontSize(v);
+                    }}
                     className="min-w-[4.5rem]"
                     options={[
                       { value: "10px", label: "10" },
@@ -4451,7 +4463,11 @@ function Composer({
                     title="نمط الفقرة"
                     ariaLabel="نمط الفقرة"
                     placeholder="الفقرة"
-                    onChange={(v) => exec("formatBlock", v)}
+                    value={blockFmt}
+                    onChange={(v) => {
+                      setBlockFmt(v);
+                      exec("formatBlock", v);
+                    }}
                     className="min-w-[6rem]"
                     options={[
                       { value: "p", label: "نص عادي" },
