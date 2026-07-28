@@ -294,15 +294,20 @@ export function createDraftSaver(
     }
   }
 
+  let running = false;
   async function loop(): Promise<void> {
     while (pending) {
       const p = pending;
       pending = null;
+      running = true;
       try {
         await run(p.snapshot, p.previousRef);
       } finally {
-        for (const r of p.resolvers) r();
+        running = false;
       }
+      // Resolve AFTER `running` is cleared so `isBusy()` reads false the
+      // instant a waiter observes its own completion.
+      for (const r of p.resolvers) r();
     }
   }
 
@@ -328,7 +333,7 @@ export function createDraftSaver(
 
   return {
     requestSave,
-    isBusy: () => inFlight !== null,
+    isBusy: () => running || pending !== null,
     getStatus: () => status,
   };
 }
