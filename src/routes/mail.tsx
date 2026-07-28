@@ -4634,16 +4634,16 @@ function Composer({
                     </PopoverTrigger>
                     <PopoverContent align="end" className="w-auto p-2">
                       <div className="grid grid-cols-6 gap-0.5">
-                        <ToolbarButton title="يتوسطه خط" onMouseDown={() => exec("strikeThrough")}>
+                        <ToolbarButton title="يتوسطه خط" active={fmtState.strikeThrough} onMouseDown={() => exec("strikeThrough")}>
                           <Strikethrough className="h-3.5 w-3.5" />
                         </ToolbarButton>
-                        <ToolbarButton title="مرتفع" onMouseDown={() => exec("superscript")}>
+                        <ToolbarButton title="مرتفع" active={fmtState.superscript} onMouseDown={() => exec("superscript")}>
                           <Superscript className="h-3.5 w-3.5" />
                         </ToolbarButton>
-                        <ToolbarButton title="منخفض" onMouseDown={() => exec("subscript")}>
+                        <ToolbarButton title="منخفض" active={fmtState.subscript} onMouseDown={() => exec("subscript")}>
                           <Subscript className="h-3.5 w-3.5" />
                         </ToolbarButton>
-                        <ToolbarButton title="ضبط" onMouseDown={() => exec("justifyFull")}>
+                        <ToolbarButton title="ضبط" active={fmtState.justifyFull} onMouseDown={() => exec("justifyFull")}>
                           <AlignJustify className="h-3.5 w-3.5" />
                         </ToolbarButton>
                         <ToolbarButton title="زيادة المسافة البادئة" onMouseDown={() => exec("indent")}>
@@ -4652,7 +4652,7 @@ function Composer({
                         <ToolbarButton title="تقليل المسافة البادئة" onMouseDown={() => exec("outdent")}>
                           <Outdent className="h-3.5 w-3.5" />
                         </ToolbarButton>
-                        <ToolbarButton title="اقتباس" onMouseDown={() => exec("formatBlock", "blockquote")}>
+                        <ToolbarButton title="اقتباس" active={fmtState.blockquote} onMouseDown={() => exec("formatBlock", "blockquote")}>
                           <Quote className="h-3.5 w-3.5" />
                         </ToolbarButton>
                         <ToolbarButton title="إدراج صورة" onMouseDown={promptImage}>
