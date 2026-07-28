@@ -1675,6 +1675,7 @@ function MailApp() {
   const inDeepSearch = searchMode === "deep" && query.trim().length >= 2;
 
   async function openMessage(id: string) {
+    if (!(await guardComposerNav())) return;
     setSelectedId(id);
     const parsed = parseMessageId(id);
     if (!parsed || !session) {
