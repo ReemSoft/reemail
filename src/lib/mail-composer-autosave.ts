@@ -147,3 +147,35 @@ export function attachBeforeUnloadGuard(
     },
   };
 }
+
+// -------------------------------------------------------------- isDraftEmpty
+
+/**
+ * Unified emptiness contract shared by autosave AND explicit `saveDraftNow`.
+ * A draft is empty ONLY when every persistable field is absent — a lone
+ * attachment (new file OR kept legacy attachment) is enough to prove intent
+ * and MUST be persisted.
+ *
+ * Contract locked by mail-composer-autosave.test.ts.
+ */
+export interface DraftEmptinessInput {
+  toCount: number;
+  ccCount: number;
+  bccCount: number;
+  subject: string;
+  htmlTrimmed: string;
+  existingKeptCount: number;
+  filesCount: number;
+}
+
+export function isDraftEmpty(input: DraftEmptinessInput): boolean {
+  return (
+    input.toCount === 0 &&
+    input.ccCount === 0 &&
+    input.bccCount === 0 &&
+    !input.subject &&
+    !input.htmlTrimmed &&
+    input.existingKeptCount === 0 &&
+    input.filesCount === 0
+  );
+}
