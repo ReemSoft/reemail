@@ -1101,6 +1101,8 @@ function useMailData(session: MailSession | null) {
   return {
     folder,
     setFolder,
+    folderPaths,
+
     sort,
     setSort,
     counts,
