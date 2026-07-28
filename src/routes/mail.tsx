@@ -4034,6 +4034,29 @@ function Composer({
           next[c] = false;
         }
       }
+      // Alignment: derive from computed style of nearest block, since we
+      // apply text-align directly (execCommand justify* is unreliable).
+      try {
+        let el: HTMLElement | null =
+          node.nodeType === 1 ? (node as HTMLElement) : (node.parentElement as HTMLElement | null);
+        while (el && el !== editor) {
+          const disp = window.getComputedStyle(el).display;
+          if (disp && disp !== "inline" && disp !== "inline-block") break;
+          el = el.parentElement;
+        }
+        const block = (el && el !== editor ? el : editor) as HTMLElement;
+        const cs = window.getComputedStyle(block);
+        const ta = (cs.textAlign || "").toLowerCase();
+        const dir = (cs.direction || "ltr").toLowerCase();
+        const isStart = ta === "start" || ta === "" || ta === "-webkit-auto";
+        const effective = isStart ? (dir === "rtl" ? "right" : "left") : ta;
+        next["justifyLeft"] = effective === "left";
+        next["justifyCenter"] = effective === "center";
+        next["justifyRight"] = effective === "right";
+        next["justifyFull"] = effective === "justify";
+      } catch {
+        /* noop */
+      }
       try {
         const bq = document.queryCommandValue("formatBlock")?.toString().toLowerCase() || "";
         next["blockquote"] = bq === "blockquote";
@@ -4131,6 +4154,13 @@ function Composer({
     editorRef.current?.focus();
     try {
       document.execCommand(command, false, value);
+    } catch {
+      /* noop */
+    }
+    // execCommand doesn't always fire selectionchange (esp. for alignment);
+    // force toolbar state refresh.
+    try {
+      document.dispatchEvent(new Event("selectionchange"));
     } catch {
       /* noop */
     }
