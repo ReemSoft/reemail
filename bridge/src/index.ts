@@ -387,10 +387,12 @@ app.post("/api/draft-delete", requireKey, imapGate("interactive"), async (req, r
       payload.password,
       payload,
     );
-    if (!result.ok) {
-      const status = result.error === "UIDPLUS_UNSUPPORTED" ? 409 : 500;
-      return res.status(status).json({ ok: false, error: result.error });
+    if (result.ok === false) {
+      const err = result.error;
+      const status = err === "UIDPLUS_UNSUPPORTED" ? 409 : 500;
+      return res.status(status).json({ ok: false, error: err });
     }
+
     return res.json({
       ok: true,
       draftId: result.draftId,
