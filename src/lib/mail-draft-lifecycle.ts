@@ -35,6 +35,17 @@
 
 export type DraftSaveStatus = "idle" | "saving" | "saved" | "saved-local" | "failed";
 
+/**
+ * Bridge error codes that MUST be treated as recoverable "local-only" saves.
+ * Only true network / transport failures qualify — any protocol-level or
+ * permission-level error is a HARD failure and leaves the composer dirty so
+ * the user can retry (or lose nothing on close).
+ *
+ * Locked by tests: adding a code here relaxes the failure contract, so the
+ * list is intentionally narrow and reviewed.
+ */
+export const NETWORK_SOFT_FAIL_CODES: ReadonlySet<string> = new Set(["NETWORK"]);
+
 export interface DraftRecipient {
   email: string;
   name?: string;
@@ -265,16 +276,15 @@ export interface DraftSaver {
    * Request a save. If another save is in flight this call is coalesced:
    * the newest snapshot + generation are captured and a follow-up run is
    * scheduled to fire exactly once when the in-flight save settles.
-   * `generation` is the caller's revision counter; it is echoed back
-   * verbatim via `onCompleted`. Omitting it (legacy tests) falls back to
-   * the saver's internal monotonic sequence. The returned promise resolves
-   * when THIS caller's snapshot has been offered to the remote (whether
-   * success or failure).
+   * `generation` is the caller's revision counter (REQUIRED) and is echoed
+   * back verbatim via `onCompleted`. The returned promise resolves when
+   * THIS caller's snapshot has been offered to the remote (whether success
+   * or failure).
    */
   requestSave(
     snapshot: DraftSnapshot,
     previousRef: DraftServerRef | null,
-    generation?: number,
+    generation: number,
   ): Promise<void>;
   isBusy(): boolean;
   getStatus(): DraftSaveStatus;
@@ -311,7 +321,8 @@ export function createDraftSaver(draftId: string, opts: CreateDraftSaverOptions)
     try {
       result = await opts.saveRemote({ draftId, snapshot, previousRef });
     } catch {
-      result = { ok: false, code: "UNKNOWN" };
+      // Thrown remote is a transport failure → NETWORK class.
+      result = { ok: false, code: "NETWORK" };
     }
     // Generation guard: only the latest issued sequence may mutate state.
     // Stale responses never fire `onCompleted`, never touch `serverRef`,
@@ -325,18 +336,32 @@ export function createDraftSaver(draftId: string, opts: CreateDraftSaverOptions)
         status: "saved",
         serverRef: result.serverRef,
       });
-    } else {
+      return;
+    }
+    // Failure branch — classify by code.
+    const code = result.code;
+    const isSoftNetwork = code != null && NETWORK_SOFT_FAIL_CODES.has(code);
+    if (isSoftNetwork) {
       // Local persistence is the caller's responsibility (writeDraftDoc)
-      // and happens synchronously before requestSave. A remote failure
-      // therefore leaves the composer in "saved-local" as long as the
-      // local write succeeded — used only for recoverable network errors.
+      // and happens synchronously before requestSave. A NETWORK failure
+      // therefore leaves the composer in "saved-local" — the local write
+      // succeeded, only the transport dropped.
       setStatus("saved-local");
       opts.onCompleted?.({
         completedGeneration: generation,
         status: "saved-local",
-        code: result.code,
+        code,
       });
+      return;
     }
+    // Hard failure: protocol / auth / quota / unknown. Do NOT pretend the
+    // draft was saved anywhere the user can rely on — leave composer dirty.
+    setStatus("failed");
+    opts.onCompleted?.({
+      completedGeneration: generation,
+      status: "failed",
+      code,
+    });
   }
 
   let running = false;
@@ -359,18 +384,17 @@ export function createDraftSaver(draftId: string, opts: CreateDraftSaverOptions)
   function requestSave(
     snapshot: DraftSnapshot,
     previousRef: DraftServerRef | null,
-    generation?: number,
+    generation: number,
   ): Promise<void> {
-    const gen = typeof generation === "number" ? generation : seq + 1;
     return new Promise<void>((resolve) => {
       if (pending) {
         // Merge: newest snapshot + newest generation win, waiters accumulate.
         pending.snapshot = snapshot;
         pending.previousRef = previousRef;
-        pending.generation = gen;
+        pending.generation = generation;
         pending.resolvers.push(resolve);
       } else {
-        pending = { snapshot, previousRef, generation: gen, resolvers: [resolve] };
+        pending = { snapshot, previousRef, generation, resolvers: [resolve] };
       }
       if (inFlight) return;
       inFlight = loop().finally(() => {

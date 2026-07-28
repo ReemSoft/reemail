@@ -155,6 +155,7 @@ import {
   createAutosaveScheduler,
   attachInputListener,
   attachBeforeUnloadGuard,
+  isDraftEmpty,
 } from "@/lib/mail-composer-autosave";
 import { tombstoneGhostMessage } from "@/lib/mail-ghost-cleanup.functions";
 import { indexListMessages } from "@/lib/mail-index.functions";
@@ -1271,8 +1272,9 @@ function MailApp() {
   // (Save / Discard / Cancel) before running the destructive nav action.
   async function guardComposerNav(): Promise<boolean> {
     if (typeof window === "undefined") return true;
-    const g = (window as unknown as { __mailmaestroComposerGuard?: (() => Promise<boolean>) | null })
-      .__mailmaestroComposerGuard;
+    const g = (
+      window as unknown as { __mailmaestroComposerGuard?: (() => Promise<boolean>) | null }
+    ).__mailmaestroComposerGuard;
     if (!g) return true;
     return g();
   }
@@ -4319,7 +4321,6 @@ function Composer({
     resolve: (choice: "save" | "discard" | "cancel") => void;
   } | null>(null);
 
-
   // ----- Server-side draft saver (bridge APPEND) + pending-delete queue -----
   const bridgeSaveDraftFn = useServerFn(bridgeSaveDraft);
   const bridgeDeleteDraftFn = useServerFn(bridgeDeleteDraft);
@@ -4423,21 +4424,22 @@ function Composer({
       onStatus: setSaveStatus,
       onServerRef: (r) => setServerRef(r),
       onCompleted: ({ completedGeneration, status }) => {
-        // Advance the clean marker only when a save actually persisted
-        // (remote or local-fallback). Never regress: a coalesced completion
-        // may report a generation older than the current savedGeneration.
-        if (completedGeneration > savedGenerationRef.current) {
-          savedGenerationRef.current = completedGeneration;
-          recomputeDirty();
-        }
+        // Advance the clean marker ONLY when a save actually persisted
+        // (remote success, or local-fallback on NETWORK). A hard failure
+        // (SESSION_REQUIRED, APPEND_FAILED, etc.) MUST leave the composer
+        // dirty so the user can retry or refuse to close.
         if (status === "saved" || status === "saved-local") {
+          if (completedGeneration > savedGenerationRef.current) {
+            savedGenerationRef.current = completedGeneration;
+            recomputeDirty();
+          }
           lastSavedAtRef.current = Date.now();
           setSavedAt(lastSavedAtRef.current);
         }
+        // status === "failed" → no savedGeneration advance, no savedAt bump.
       },
     });
   }
-
 
   const [plainMode, setPlainMode] = useState(false);
   const [fontFamily, setFontFamily] = useState<string>("IBM Plex Sans Arabic, sans-serif");
@@ -4668,14 +4670,15 @@ function Composer({
         const s = snapshotInputsRef.current;
         if (s.sending) return;
         const html = editorRef.current?.innerHTML ?? "";
-        const isEmpty =
-          s.to.length === 0 &&
-          s.cc.length === 0 &&
-          s.bcc.length === 0 &&
-          !s.subject &&
-          !html.trim() &&
-          s.existingKeptLen === 0 &&
-          s.filesLen === 0;
+        const isEmpty = isDraftEmpty({
+          toCount: s.to.length,
+          ccCount: s.cc.length,
+          bccCount: s.bcc.length,
+          subject: s.subject,
+          htmlTrimmed: html.trim(),
+          existingKeptCount: s.existingKeptLen,
+          filesCount: s.filesLen,
+        });
         if (isEmpty) {
           clearDraftDoc(window.localStorage, s.accountEmail);
           setSavedAt(null);
@@ -4740,7 +4743,6 @@ function Composer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-
   // Mark edited on structural field changes (recipients, subject, attachments).
   const editMarkMountedRef = useRef(false);
   useEffect(() => {
@@ -4758,82 +4760,86 @@ function Composer({
     closePromptRef.current = closePrompt;
   }, [closePrompt]);
 
-  // Prevents double-navigation / double-close races (rapid clicks, ESC while
-  // an in-flight save is finishing, etc.).
-  const closingRef = useRef(false);
+  // Single-flight close: the FIRST requestClose creates one shared Promise.
+  // Any concurrent requestClose (rapid X click, Escape, folder switch, etc.)
+  // returns that same Promise without opening a second dialog or replacing
+  // the existing resolver. Cleared on Cancel / after onClose so a later
+  // attempt can start fresh.
+  const closeFlowRef = useRef<Promise<boolean> | null>(null);
   async function requestClose(): Promise<boolean> {
-    if (closingRef.current) return false;
-    if (!isDirtyRef.current) {
-      closingRef.current = true;
-      onClose();
-      return true;
-    }
-    const choice = await new Promise<"save" | "discard" | "cancel">((resolve) => {
-      setClosePrompt({ resolve });
-    });
-    if (choice === "cancel") return false;
-    if (choice === "save") {
-      closingRef.current = true;
-      try {
-        // Await the save round-trip before tearing down; failure keeps the
-        // composer open so no user content is silently lost.
-        await saveDraftNow();
-        if (isDirtyRef.current) {
-          // Save reported permanent failure (dirty still true) — abort close.
-          closingRef.current = false;
-          return false;
-        }
-      } catch {
-        closingRef.current = false;
+    if (closeFlowRef.current) return closeFlowRef.current;
+    const flow = (async (): Promise<boolean> => {
+      if (!isDirtyRef.current) {
+        onClose();
+        return true;
+      }
+      const choice = await new Promise<"save" | "discard" | "cancel">((resolve) => {
+        setClosePrompt({ resolve });
+      });
+      if (choice === "cancel") {
+        // Release the single-flight so the user can try again.
         return false;
       }
-      onClose();
-      return true;
-    }
-    // discard
-    closingRef.current = true;
-    try {
-      if (typeof window !== "undefined") {
-        clearDraftDoc(window.localStorage, accountEmail);
+      if (choice === "save") {
+        const result = await saveDraftNow();
+        // saved_server + saved_local(NETWORK) → composer becomes clean and
+        // we may close. failed / empty (unexpected here since we were dirty)
+        // → keep composer open so nothing is silently lost.
+        if (result === "saved_server" || result === "saved_local") {
+          onClose();
+          return true;
+        }
+        return false;
       }
-      // Best-effort server delete when a server ref exists; on failure hand
-      // the delete to the pending queue for the next composer session.
-      const ref = serverRefRef.current;
-      if (ref) {
-        const token = session.mailSessionToken;
-        if (token) {
-          bridgeDeleteDraftFn({
-            data: { mailSessionToken: token, draftId, previousRef: ref },
-          })
-            .then((res) => {
-              if (!res?.ok) {
+      // discard
+      try {
+        if (typeof window !== "undefined") {
+          clearDraftDoc(window.localStorage, accountEmail);
+        }
+        // Best-effort server delete when a server ref exists; on failure hand
+        // the delete to the pending queue for the next composer session.
+        const ref = serverRefRef.current;
+        if (ref) {
+          const token = session.mailSessionToken;
+          if (token) {
+            bridgeDeleteDraftFn({
+              data: { mailSessionToken: token, draftId, previousRef: ref },
+            })
+              .then((res) => {
+                if (!res?.ok) {
+                  pendingQueueRef.current?.enqueue(accountEmail, {
+                    draftId,
+                    previousRef: ref,
+                  });
+                }
+              })
+              .catch(() => {
                 pendingQueueRef.current?.enqueue(accountEmail, {
                   draftId,
                   previousRef: ref,
                 });
-              }
-            })
-            .catch(() => {
-              pendingQueueRef.current?.enqueue(accountEmail, {
-                draftId,
-                previousRef: ref,
               });
-            });
-        } else {
-          pendingQueueRef.current?.enqueue(accountEmail, { draftId, previousRef: ref });
+          } else {
+            pendingQueueRef.current?.enqueue(accountEmail, { draftId, previousRef: ref });
+          }
         }
+      } catch {
+        /* noop */
       }
-    } catch {
-      /* noop */
-    }
-    // Force clean so beforeunload/guard don't re-trap on the way out.
-    savedGenerationRef.current = generationRef.current;
-    lastSavedAtRef.current = Date.now();
-    recomputeDirty();
-    onClose();
-    return true;
+      // Force clean so beforeunload/guard don't re-trap on the way out.
+      savedGenerationRef.current = generationRef.current;
+      lastSavedAtRef.current = Date.now();
+      recomputeDirty();
+      onClose();
+      return true;
+    })().finally(() => {
+      // Release single-flight AFTER the flow settles. On close (onClose
+      // called) the component is unmounting so this ref is discarded anyway.
+      closeFlowRef.current = null;
+    });
+    closeFlowRef.current = flow;
+    return flow;
   }
-
 
   // Expose a global guard so parent nav actions (folder switch, list click,
   // new-message button) can prompt before tearing the composer down.
@@ -4843,8 +4849,9 @@ function Composer({
   });
   requestCloseRef.current = requestClose;
   useEffect(() => {
-    (window as unknown as { __mailmaestroComposerGuard?: () => Promise<boolean> })
-      .__mailmaestroComposerGuard = () => requestCloseRef.current();
+    (
+      window as unknown as { __mailmaestroComposerGuard?: () => Promise<boolean> }
+    ).__mailmaestroComposerGuard = () => requestCloseRef.current();
     // Native beforeunload prompt — trapped ONLY while dirty. Disposable so
     // the listener is removed exactly once on unmount.
     const guard = attachBeforeUnloadGuard(window, () => isDirtyRef.current);
@@ -4857,7 +4864,6 @@ function Composer({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
 
   function addFiles(list: FileList | File[] | null) {
     if (!list) return;
@@ -5260,19 +5266,36 @@ function Composer({
 
   // Prevents double-submit of manual saves (rapid Ctrl+S / button clicks).
   const savingNowRef = useRef(false);
-  async function saveDraftNow() {
-    if (typeof window === "undefined") return;
-    if (savingNowRef.current) return;
+  type SaveNowResult = "saved_server" | "saved_local" | "failed" | "empty";
+  async function saveDraftNow(): Promise<SaveNowResult> {
+    if (typeof window === "undefined") return "failed";
+    if (savingNowRef.current) {
+      // Double-submit protection: reflect current effective state.
+      const st = saverRef.current?.getStatus();
+      if (st === "saved") return "saved_server";
+      if (st === "saved-local") return "saved_local";
+      if (st === "failed") return "failed";
+      return "saved_server";
+    }
     savingNowRef.current = true;
     try {
       // Any pending debounced save must NOT race the explicit save.
       autosaveRef.current?.cancel();
       const html = sanitizeComposerHtml(editorRef.current?.innerHTML ?? "");
-      const isEmpty =
-        to.length === 0 && cc.length === 0 && bcc.length === 0 && !subject && !html.trim();
+      // Unified emptiness contract with autosave: a draft that carries
+      // attachments (new OR kept legacy) is NOT empty even without text.
+      const isEmpty = isDraftEmpty({
+        toCount: to.length,
+        ccCount: cc.length,
+        bccCount: bcc.length,
+        subject,
+        htmlTrimmed: html.trim(),
+        existingKeptCount: existingKeptRef.current.length,
+        filesCount: filesRef.current.length,
+      });
       if (isEmpty) {
         toast.info("لا يوجد محتوى للحفظ");
-        return;
+        return "empty";
       }
       const snapshot: DraftSnapshot = { to, cc, bcc, subject, html, showCc, showBcc };
       const persisted = writeDraftDoc(window.localStorage, accountEmail, {
@@ -5285,28 +5308,26 @@ function Composer({
       if (!persisted) {
         setSaveStatus("failed");
         toast.error("تعذّر حفظ المسودّة");
-        return;
+        return "failed";
       }
-      // Capture the caller's generation and await the round-trip. The
-      // saver's onCompleted will advance `savedGeneration` — so on the
-      // "save then close" path the composer will read clean immediately.
       const genAtRequest = generationRef.current;
-      try {
-        await saverRef.current?.requestSave(snapshot, serverRefRef.current, genAtRequest);
-        if (saverRef.current?.getStatus() === "saved") {
-          toast.success("تم حفظ المسودّة");
-        } else {
-          toast.success("تم حفظ المسودّة محلياً");
-        }
-      } catch {
-        toast.success("تم حفظ المسودّة محلياً");
+      await saverRef.current?.requestSave(snapshot, serverRefRef.current, genAtRequest);
+      const st = saverRef.current?.getStatus();
+      if (st === "saved") {
+        toast.success("تم حفظ المسودّة");
+        return "saved_server";
       }
+      if (st === "saved-local") {
+        toast.success("تم حفظ المسودّة محلياً");
+        return "saved_local";
+      }
+      // Hard failure — do NOT show a "success" toast.
+      toast.error("تعذّر حفظ المسودّة على الخادم — حاول لاحقاً");
+      return "failed";
     } finally {
       savingNowRef.current = false;
     }
   }
-
-
 
   return (
     <div
@@ -5924,7 +5945,6 @@ function Composer({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-
     </div>
   );
 }
