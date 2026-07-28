@@ -68,6 +68,35 @@ export function resolveSentPath(mailboxes: ListResponse[]): string | undefined {
   return undefined;
 }
 
+/**
+ * Resolve the true Drafts folder path using IMAP SPECIAL-USE \Drafts first,
+ * then well-known names that actually exist in the LIST response. Never
+ * assumes "Drafts" is present and never creates it.
+ */
+export function resolveDraftsPath(mailboxes: ListResponse[]): string | undefined {
+  // 1) SPECIAL-USE \Drafts (RFC 6154) — authoritative per server.
+  for (const mb of mailboxes) {
+    const su = (mb as unknown as { specialUse?: string | string[] }).specialUse;
+    if (!su) continue;
+    if (Array.isArray(su) ? su.includes("\\Drafts") : su === "\\Drafts") return mb.path;
+  }
+  // 2) Well-known Drafts names, matched case-insensitively.
+  const known = [
+    "Drafts",
+    "Draft",
+    "[Gmail]/Drafts",
+    "INBOX.Drafts",
+    "المسودات",
+    "المسوّدات",
+    "مسودات",
+  ];
+  for (const name of known) {
+    const found = mailboxes.find((m) => m.path.toLowerCase() === name.toLowerCase());
+    if (found) return found.path;
+  }
+  return undefined;
+}
+
 /** Case-insensitive Message-ID search in the given mailbox. */
 async function messageExistsInFolder(
   client: ImapFlow,
@@ -91,7 +120,17 @@ async function messageExistsInFolder(
   }
 }
 
-async function buildMime(payload: SendMessagePayload): Promise<{ raw: Buffer; messageId: string }> {
+/**
+ * Build a MIME message. Optional `extraHeaders` are injected as top-level
+ * headers on the outer message (used by the drafts flow to stamp
+ * `X-MailMaestro-Draft-ID` so IMAP header search can locate the copy for
+ * idempotent APPEND + selective delete). Exported for the drafts module and
+ * the drafts test suite; not part of the public HTTP contract.
+ */
+export async function buildMime(
+  payload: SendMessagePayload,
+  extraHeaders?: Record<string, string>,
+): Promise<{ raw: Buffer; messageId: string }> {
   const composerOpts: Record<string, unknown> = {
     from: payload.from.name ? `"${payload.from.name}" <${payload.from.email}>` : payload.from.email,
     to: payload.to.map((t) => (t.name ? `"${t.name}" <${t.email}>` : t.email)).join(", "),
@@ -116,10 +155,12 @@ async function buildMime(payload: SendMessagePayload): Promise<{ raw: Buffer; me
       contentType: a.contentType,
     }));
   }
+  if (extraHeaders && Object.keys(extraHeaders).length > 0) {
+    composerOpts.headers = { ...extraHeaders };
+  }
 
   const mc = new MailComposer(composerOpts);
   const compiled = mc.compile();
-  // Force messageId generation now so the same ID flows through SMTP + APPEND.
   const messageId: string = compiled.messageId();
   const raw: Buffer = await new Promise((resolve, reject) => {
     compiled.build((err: Error | null, msg: Buffer) => {

@@ -21,6 +21,12 @@ import {
   downloadAttachment,
 } from "./imap.js";
 import { sendMessage } from "./smtp.js";
+import {
+  DraftSavePayloadSchema,
+  DraftDeletePayloadSchema,
+  saveDraft,
+  deleteDraft,
+} from "./drafts.js";
 import type { MailAccount, MailFolder } from "./types.js";
 import {
   InitialSyncSchema,
@@ -333,6 +339,64 @@ app.post("/api/send", requireKey, async (req, res) => {
   } catch (err: any) {
     console.error("[bridge] /api/send error:", err);
     return res.status(500).json({ ok: false, error: err?.message || "Failed to send message" });
+  }
+});
+
+// ---- Drafts (MAILMAESTRO_DRAFT_APPEND_R1) ----
+// APPEND-then-delete-old against the resolved Drafts folder. Idempotent via
+// the X-MailMaestro-Draft-ID header (IMAP is the source of truth — no
+// process-local memory). Never returns subject/body/recipients in errors.
+app.post("/api/draft-save", requireKey, imapGate("interactive"), async (req, res) => {
+  try {
+    const payload = DraftSavePayloadSchema.parse(req.body);
+    const result = await saveDraft(payload.account as any, payload.password, payload);
+    if (result.ok === false) {
+      const err = result.error;
+      const status = err === "NO_DRAFTS_FOLDER" ? 422 : 500;
+      return res.status(status).json({ ok: false, error: err });
+    }
+
+    return res.json({
+      ok: true,
+      draftId: result.draftId,
+      folderPath: result.folderPath,
+      uid: result.uid,
+      uidValidity: result.uidValidity,
+      messageId: result.messageId,
+      savedAt: result.savedAt,
+    });
+  } catch (err: any) {
+    if (err instanceof z.ZodError) {
+      // Do NOT surface issue paths — they can echo user-controlled fields.
+      return res.status(400).json({ ok: false, error: "INVALID_PAYLOAD" });
+    }
+    console.error("[bridge] /api/draft-save error:", err?.code || "unknown");
+    return res.status(500).json({ ok: false, error: "IMAP_ERROR" });
+  }
+});
+
+app.post("/api/draft-delete", requireKey, imapGate("interactive"), async (req, res) => {
+  try {
+    const payload = DraftDeletePayloadSchema.parse(req.body);
+    const result = await deleteDraft(payload.account as any, payload.password, payload);
+    if (result.ok === false) {
+      const err = result.error;
+      const status = err === "UIDPLUS_UNSUPPORTED" ? 409 : 500;
+      return res.status(status).json({ ok: false, error: err });
+    }
+
+    return res.json({
+      ok: true,
+      draftId: result.draftId,
+      folderPath: result.folderPath,
+      deleted: result.deleted,
+    });
+  } catch (err: any) {
+    if (err instanceof z.ZodError) {
+      return res.status(400).json({ ok: false, error: "INVALID_PAYLOAD" });
+    }
+    console.error("[bridge] /api/draft-delete error:", err?.code || "unknown");
+    return res.status(500).json({ ok: false, error: "IMAP_ERROR" });
   }
 });
 
