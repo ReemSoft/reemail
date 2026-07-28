@@ -46,7 +46,20 @@ export interface MailMessage {
   mailedBy?: string;
   signedBy?: string;
   security?: string;
+  /**
+   * X-MailMaestro-Draft-ID header value — present only on drafts that were
+   * previously saved by MailMaestro. Populated by the bridge when reading a
+   * Drafts folder message. Absent on legacy drafts and non-draft mail.
+   */
+  draftIdHeader?: string;
+  /**
+   * IMAP UIDVALIDITY captured while the mailbox was open for this fetch.
+   * Used by the composer to build a trustworthy `previousRef` when opening
+   * a Drafts folder message for edit.
+   */
+  uidValidity?: string;
 }
+
 
 export interface FolderCount {
   folder: MailFolder;
