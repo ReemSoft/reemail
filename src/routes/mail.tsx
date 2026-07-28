@@ -5233,7 +5233,7 @@ function Composer({
     savingNowRef.current = true;
     try {
       // Any pending debounced save must NOT race the explicit save.
-      autosaveRef.current?.dispose();
+      autosaveRef.current?.cancel();
       const html = sanitizeComposerHtml(editorRef.current?.innerHTML ?? "");
       const isEmpty =
         to.length === 0 && cc.length === 0 && bcc.length === 0 && !subject && !html.trim();
