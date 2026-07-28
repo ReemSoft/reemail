@@ -342,6 +342,68 @@ app.post("/api/send", requireKey, async (req, res) => {
   }
 });
 
+// ---- Drafts (MAILMAESTRO_DRAFT_APPEND_R1) ----
+// APPEND-then-delete-old against the resolved Drafts folder. Idempotent via
+// the X-MailMaestro-Draft-ID header (IMAP is the source of truth — no
+// process-local memory). Never returns subject/body/recipients in errors.
+app.post("/api/draft-save", requireKey, imapGate("interactive"), async (req, res) => {
+  try {
+    const payload = DraftSavePayloadSchema.parse(req.body);
+    const result = await saveDraft(
+      payload.account as any,
+      payload.password,
+      payload,
+    );
+    if (!result.ok) {
+      const status = result.error === "NO_DRAFTS_FOLDER" ? 422 : 500;
+      return res.status(status).json({ ok: false, error: result.error });
+    }
+    return res.json({
+      ok: true,
+      draftId: result.draftId,
+      folderPath: result.folderPath,
+      uid: result.uid,
+      uidValidity: result.uidValidity,
+      messageId: result.messageId,
+      savedAt: result.savedAt,
+    });
+  } catch (err: any) {
+    if (err instanceof z.ZodError) {
+      // Do NOT surface issue paths — they can echo user-controlled fields.
+      return res.status(400).json({ ok: false, error: "INVALID_PAYLOAD" });
+    }
+    console.error("[bridge] /api/draft-save error:", err?.code || "unknown");
+    return res.status(500).json({ ok: false, error: "IMAP_ERROR" });
+  }
+});
+
+app.post("/api/draft-delete", requireKey, imapGate("interactive"), async (req, res) => {
+  try {
+    const payload = DraftDeletePayloadSchema.parse(req.body);
+    const result = await deleteDraft(
+      payload.account as any,
+      payload.password,
+      payload,
+    );
+    if (!result.ok) {
+      const status = result.error === "UIDPLUS_UNSUPPORTED" ? 409 : 500;
+      return res.status(status).json({ ok: false, error: result.error });
+    }
+    return res.json({
+      ok: true,
+      draftId: result.draftId,
+      folderPath: result.folderPath,
+      deleted: result.deleted,
+    });
+  } catch (err: any) {
+    if (err instanceof z.ZodError) {
+      return res.status(400).json({ ok: false, error: "INVALID_PAYLOAD" });
+    }
+    console.error("[bridge] /api/draft-delete error:", err?.code || "unknown");
+    return res.status(500).json({ ok: false, error: "IMAP_ERROR" });
+  }
+});
+
 // ---- Send with attachments (multipart/form-data, streamed to disk) ----
 // Streaming to disk (see uploads.ts) keeps RSS flat under upload bursts.
 // A dedicated concurrency gate then caps how many sends can be in flight so
