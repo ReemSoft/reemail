@@ -148,19 +148,14 @@ export const recordSentRecipients = createServerFn({ method: "POST" })
     }
     if (items.length === 0) return { ok: true, written: 0 };
 
-    const { data: written, error } = await supabaseAdmin.rpc(
-      "record_mail_contact_suggestions",
-      {
+    const { data: written, error } = await (supabaseAdmin as any)
+      .schema("private")
+      .rpc("record_mail_contact_suggestions", {
         p_company_id: claims.cid,
         p_account_id: claims.sub,
         p_items: items,
-      },
-      { schema: "private" } as any,
-    );
+      });
     if (error) {
-      // Fallback: some supabase-js versions ignore the schema option. Retry
-      // via PostgREST rpc call on the private schema client shim if needed —
-      // otherwise report but don't throw (caller must not fail the send).
       return { ok: false, written: 0, error: error.message };
     }
     return { ok: true, written: typeof written === "number" ? written : items.length };
