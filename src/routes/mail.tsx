@@ -4813,9 +4813,27 @@ function Composer({
         bodyText,
       };
 
+      // M4-C: preserve kept legacy/server attachments alongside newly added
+      // files. If any kept attachment can't be streamed we ABORT rather than
+      // silently sending a message with missing attachments.
+      let keptFiles: File[] = [];
+      try {
+        const resolved = await resolveExistingAsFiles();
+        if (resolved === null) {
+          toast.error("تعذّر تحميل مرفق من المسودة الأصلية");
+          return;
+        }
+        keptFiles = resolved;
+      } catch {
+        toast.error("تعذّر تحميل مرفق من المسودة الأصلية");
+        return;
+      }
+
       const form = new FormData();
       form.append("payload", JSON.stringify(payload));
+      for (const f of keptFiles) form.append("attachments", f, f.name);
       for (const f of files) form.append("attachments", f, f.name);
+
 
       const result = await new Promise<{ ok: boolean; error?: string }>((resolve, reject) => {
         const xhr = new XMLHttpRequest();
