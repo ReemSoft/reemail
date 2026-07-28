@@ -127,7 +127,23 @@ import {
   bridgeMove,
   bridgeDelete,
   bridgeSearch,
+  bridgeSaveDraft,
+  bridgeDeleteDraft,
 } from "@/lib/mail-bridge.functions";
+import {
+  readDraftDoc,
+  writeDraftDoc,
+  clearDraftDoc,
+  createDraftSaver,
+  createPendingDeleteQueue,
+  newDraftId,
+  type DraftSaver,
+  type DraftSaveStatus,
+  type DraftServerRef,
+  type DraftSnapshot,
+  type DraftDocV3,
+  type PendingDeleteQueue,
+} from "@/lib/mail-draft-lifecycle";
 import { tombstoneGhostMessage } from "@/lib/mail-ghost-cleanup.functions";
 import { indexListMessages } from "@/lib/mail-index.functions";
 import { indexListFolderCounts } from "@/lib/mail-index-counts.functions";
