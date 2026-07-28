@@ -5448,18 +5448,48 @@ function Composer({
             </div>
           </div>
 
-          {/* Attachments */}
-          {files.length > 0 && (
+          {/* Attachments — existing (from loaded draft) + newly added files */}
+          {(existingKept.length > 0 || files.length > 0) && (
             <div className="flex flex-col gap-1.5">
               <label className="text-sm font-medium text-foreground">
                 المرفقات · {formatBytes(totalBytes)} / 25 MB
               </label>
               <div className="flex flex-wrap gap-2 rounded-lg border border-dashed border-border bg-background/50 p-3">
+                {existingKept.map((a) => {
+                  const { Icon, tint } = getAttachmentIcon(a.mimeType || "", a.filename);
+                  return (
+                    <div
+                      key={`kept-${a.id}`}
+                      className="group inline-flex items-center gap-2 rounded-lg border border-border bg-card px-2.5 py-1.5 text-xs shadow-soft"
+                      title="مرفق من المسودة الأصلية"
+                    >
+                      <span
+                        className={`inline-flex h-6 w-6 items-center justify-center rounded-md ${tint}`}
+                      >
+                        <Icon className="h-3.5 w-3.5" />
+                      </span>
+                      <div className="flex flex-col leading-tight">
+                        <span className="max-w-[180px] truncate font-medium">{a.filename}</span>
+                        <span className="text-[10px] text-muted-foreground">
+                          {formatBytes(a.size || 0)}
+                        </span>
+                      </div>
+                      <button
+                        onClick={() => removeExistingAttachment(a.id)}
+                        disabled={sending}
+                        className="rounded p-0.5 opacity-60 hover:bg-muted hover:opacity-100"
+                        aria-label="حذف المرفق"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  );
+                })}
                 {files.map((f, i) => {
                   const { Icon, tint } = getAttachmentIcon(f.type, f.name);
                   return (
                     <div
-                      key={`${f.name}-${i}`}
+                      key={`new-${f.name}-${i}`}
                       className="group inline-flex items-center gap-2 rounded-lg border border-border bg-card px-2.5 py-1.5 text-xs shadow-soft"
                     >
                       <span
@@ -5487,6 +5517,7 @@ function Composer({
               </div>
             </div>
           )}
+
 
           {sending && progress > 0 && (
             <div className="h-1 overflow-hidden rounded-full bg-muted">
