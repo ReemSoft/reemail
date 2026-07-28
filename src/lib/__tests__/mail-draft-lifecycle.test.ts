@@ -247,9 +247,9 @@ describe("createDraftSaver", () => {
       onServerRef: (r) => refs.push(r),
       onStatus: (s) => events.push(s),
     });
-    const p1 = saver.requestSave(snap({ subject: "a" }), null);
+    const p1 = saver.requestSave(snap({ subject: "a" }), null, 1);
     // Kick a follow-up that will settle first with a "newer" ref.
-    const p2 = saver.requestSave(snap({ subject: "b" }), null);
+    const p2 = saver.requestSave(snap({ subject: "b" }), null, 2);
 
     // Settle the follow-up (#2) FIRST — this is the latest issued seq once
     // #1's own run completes and triggers the queued run. Simulate by
