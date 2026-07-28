@@ -35,12 +35,65 @@ import { makeImapClient, listMailboxes } from "./imap.js";
 import {
   buildMime,
   resolveDraftsPath,
+  resolveTrashPath,
   type SendMessagePayload,
   type SendAttachment,
 } from "./smtp.js";
 import type { MailAccount } from "./types.js";
 
 export const DRAFT_ID_HEADER = "X-MailMaestro-Draft-ID";
+
+// --- IMAP capability detection ---------------------------------------------
+//
+// ImapFlow exposes `client.capabilities` as `Map<string, boolean | number>`
+// after CONNECT. Iterating a Map yields `[key, value]` tuples, so the
+// previous `for (const c of caps)` + `String(c)` produced strings like
+// "UIDPLUS,true" and NEVER matched — which made the drafts save flow refuse
+// UIDPLUS-capable servers with SAFE_DRAFT_REPLACE_UNSUPPORTED. This helper
+// reads Map KEYS, tolerates Set/Iterable inputs for defensive compatibility,
+// is case-insensitive, and treats presence as support unless the value is
+// explicitly `false`. Never logs the capability list — the account/server is
+// PII in this codebase's threat model.
+export function hasImapCapability(
+  capabilities:
+    | Map<string, boolean | number>
+    | Set<string>
+    | Iterable<unknown>
+    | undefined
+    | null,
+  capability: string,
+): boolean {
+  if (!capabilities) return false;
+  const want = capability.toUpperCase();
+  // Fast path: real ImapFlow Map. Read keys, not entries.
+  if (capabilities instanceof Map) {
+    for (const [name, value] of capabilities) {
+      if (typeof name !== "string") continue;
+      if (name.toUpperCase() !== want) continue;
+      return value !== false;
+    }
+    return false;
+  }
+  // Set (or Set-like)
+  if (capabilities instanceof Set) {
+    for (const name of capabilities) {
+      if (typeof name === "string" && name.toUpperCase() === want) return true;
+    }
+    return false;
+  }
+  // Generic iterable fallback (test fakes, legacy shapes).
+  for (const entry of capabilities as Iterable<unknown>) {
+    if (Array.isArray(entry)) {
+      const [name, value] = entry as [unknown, unknown];
+      if (typeof name === "string" && name.toUpperCase() === want) {
+        return value !== false;
+      }
+    } else if (typeof entry === "string") {
+      if (entry.toUpperCase() === want) return true;
+    }
+  }
+  return false;
+}
 
 // --- Validation --------------------------------------------------------------
 
