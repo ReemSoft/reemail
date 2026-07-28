@@ -4064,6 +4064,49 @@ function Composer({
 }) {
   const draftKey = `${DRAFT_STORAGE_PREFIX}${session.account.email_address}`;
 
+  // ----- Address book (contact suggestions) — local IDB, hydrated once -----
+  const hydrateSuggestions = useServerFn(hydrateContactSuggestions);
+  const recordSuggestions = useServerFn(recordSentRecipients);
+  const hideSuggestion = useServerFn(hideContactSuggestion);
+  const companyId = session.account.company_id;
+  const accountId = session.account.id;
+  const lastScopeRef = useRef<string | null>(null);
+  useEffect(() => {
+    const scopeKey = `${companyId}:${accountId}`;
+    if (lastScopeRef.current && lastScopeRef.current !== scopeKey) {
+      // Account switched inside the same tab — drop the previous scope's mem cache.
+      clearMemoryCache();
+    }
+    lastScopeRef.current = scopeKey;
+    const token = session.mailSessionToken;
+    void ensureScopeReady(companyId, accountId, async () => {
+      if (!token) return null;
+      try {
+        const res = await hydrateSuggestions({ data: { mailSessionToken: token } });
+        return res?.ok ? res.suggestions : null;
+      } catch {
+        return null;
+      }
+    });
+  }, [companyId, accountId, session.mailSessionToken, hydrateSuggestions]);
+
+  const suggestFor = useCallback(
+    (query: string, exclude: string[]) =>
+      searchLocal(companyId, accountId, query, { exclude, limit: 8 }),
+    [companyId, accountId],
+  );
+  const hideOne = useCallback(
+    (email: string) => {
+      void forgetLocal(companyId, accountId, email);
+      const token = session.mailSessionToken;
+      if (!token) return;
+      void hideSuggestion({ data: { mailSessionToken: token, email } }).catch(() => {
+        /* fire-and-forget */
+      });
+    },
+    [companyId, accountId, session.mailSessionToken, hideSuggestion],
+  );
+
   // ----- Restore draft (if no initial provided) -----
   const restored = useMemo(() => {
     if (initial && (initial.to || initial.cc || initial.subject || initial.body)) return null;
