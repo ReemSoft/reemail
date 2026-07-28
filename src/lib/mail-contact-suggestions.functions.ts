@@ -148,13 +148,14 @@ export const recordSentRecipients = createServerFn({ method: "POST" })
     }
     if (items.length === 0) return { ok: true, written: 0 };
 
-    const { data: written, error } = await (supabaseAdmin as any)
-      .schema("private")
-      .rpc("record_mail_contact_suggestions", {
+    const { data: written, error } = await supabaseAdmin.rpc(
+      "record_mail_contact_suggestions" as any,
+      {
         p_company_id: claims.cid,
         p_account_id: claims.sub,
         p_items: items,
-      });
+      } as any,
+    );
     if (error) {
       return { ok: false, written: 0, error: error.message };
     }
