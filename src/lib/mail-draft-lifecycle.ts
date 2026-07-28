@@ -217,6 +217,34 @@ export function writeDraftDoc(
   }
 }
 
+/**
+ * Patch only the serverRef of an existing v3 draft document. This is used
+ * after a remote APPEND succeeds so rapid follow-up saves and page reloads
+ * never keep using a stale previousRef while React state is still catching up.
+ * Returns false when the draft is missing, belongs to a different draftId, or
+ * storage throws.
+ */
+export function updateDraftDocServerRef(
+  storage: DraftStorageLike,
+  accountEmail: string,
+  draftId: string,
+  serverRef: DraftServerRef | null,
+  now: () => number = () => Date.now(),
+): boolean {
+  try {
+    const raw = storage.getItem(draftKeyV3(accountEmail));
+    if (!raw) return false;
+    const parsed: unknown = JSON.parse(raw);
+    if (!isV3Doc(parsed)) return false;
+    if (parsed.draftId !== draftId) return false;
+    const next: DraftDocV3 = { ...parsed, serverRef, updatedAt: now() };
+    storage.setItem(draftKeyV3(accountEmail), JSON.stringify(next));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function clearDraftDoc(storage: DraftStorageLike, accountEmail: string): void {
   try {
     storage.removeItem(draftKeyV3(accountEmail));
@@ -295,6 +323,7 @@ export function createDraftSaver(draftId: string, opts: CreateDraftSaverOptions)
   let seq = 0;
   let latestIssuedSeq = 0;
   let inFlight: Promise<void> | null = null;
+  let latestKnownServerRef: DraftServerRef | null = null;
   // Snapshot queued while a save is in flight ("keep last edit").
   let pending: {
     snapshot: DraftSnapshot;
@@ -319,7 +348,8 @@ export function createDraftSaver(draftId: string, opts: CreateDraftSaverOptions)
     setStatus("saving");
     let result: SaveRemoteResult;
     try {
-      result = await opts.saveRemote({ draftId, snapshot, previousRef });
+      const effectivePreviousRef = latestKnownServerRef ?? previousRef;
+      result = await opts.saveRemote({ draftId, snapshot, previousRef: effectivePreviousRef });
     } catch {
       // Thrown remote is a transport failure → NETWORK class.
       result = { ok: false, code: "NETWORK" };
@@ -329,7 +359,10 @@ export function createDraftSaver(draftId: string, opts: CreateDraftSaverOptions)
     // and therefore never mark newer content clean.
     if (mySeq !== latestIssuedSeq) return;
     if (result.ok) {
-      if (result.serverRef) opts.onServerRef?.(result.serverRef);
+      if (result.serverRef) {
+        latestKnownServerRef = result.serverRef;
+        opts.onServerRef?.(result.serverRef);
+      }
       setStatus("saved");
       opts.onCompleted?.({
         completedGeneration: generation,
