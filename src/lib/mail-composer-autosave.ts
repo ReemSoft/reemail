@@ -64,6 +64,10 @@ export function createAutosaveScheduler(
       cancel();
       opts.onFire();
     },
+    cancel() {
+      if (disposed) return;
+      cancel();
+    },
     dispose() {
       if (disposed) return;
       disposed = true;
