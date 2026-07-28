@@ -4530,16 +4530,25 @@ function Composer({
             <div className="flex items-center justify-between gap-2">
               <label className="text-sm font-medium text-foreground">نص الرسالة</label>
               <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  title={plainMode ? "الوضع المنسّق" : "الوضع النصّي"}
+                  onClick={() => setPlainMode((v) => !v)}
+                  className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+                >
+                  <Type className="h-3.5 w-3.5" />
+                </button>
                 <Popover>
                   <PopoverTrigger asChild>
                     <button
                       type="button"
-                      title="المزيد من الخيارات"
-                      aria-label="المزيد من الخيارات"
+                      title="خيارات متقدمة"
+                      aria-label="خيارات متقدمة"
                       onMouseDown={(e) => e.preventDefault()}
-                      className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+                      className="inline-flex h-7 items-center gap-1 rounded-md px-1.5 text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
                     >
                       <MoreVertical className="h-3.5 w-3.5" />
+                      <span>متقدم</span>
                     </button>
                   </PopoverTrigger>
                   <PopoverContent align="end" className="w-auto p-2">
@@ -4580,14 +4589,6 @@ function Composer({
                     </div>
                   </PopoverContent>
                 </Popover>
-                <button
-                  type="button"
-                  title={plainMode ? "الوضع المنسّق" : "الوضع النصّي"}
-                  onClick={() => setPlainMode((v) => !v)}
-                  className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
-                >
-                  <Type className="h-3.5 w-3.5" />
-                </button>
               </div>
             </div>
             <div className="overflow-hidden rounded-lg border border-input bg-background transition focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/20">
