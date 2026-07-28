@@ -25,28 +25,28 @@ import type { MailAccount } from "../src/types.js";
 
 // ---------- resolveDraftsPath ------------------------------------------------
 
-function box(path: string, specialUse?: string): any {
+function box(path: string, specialUse?: string): { path: string; specialUse?: string } {
   return specialUse ? { path, specialUse } : { path };
 }
 
 test("resolveDraftsPath prefers SPECIAL-USE \\Drafts over any well-known name", () => {
   const boxes = [box("INBOX"), box("Custom/WIP", "\\Drafts"), box("Drafts"), box("[Gmail]/Drafts")];
-  assert.equal(resolveDraftsPath(boxes as any), "Custom/WIP");
+  assert.equal(resolveDraftsPath(boxes as unknown as never), "Custom/WIP");
 });
 
 test("resolveDraftsPath falls back to well-known 'Drafts' when SPECIAL-USE absent", () => {
   const boxes = [box("INBOX"), box("Sent"), box("Drafts"), box("Trash")];
-  assert.equal(resolveDraftsPath(boxes as any), "Drafts");
+  assert.equal(resolveDraftsPath(boxes as unknown as never), "Drafts");
 });
 
 test("resolveDraftsPath recognizes [Gmail]/Drafts", () => {
   const boxes = [box("INBOX"), box("[Gmail]/Drafts")];
-  assert.equal(resolveDraftsPath(boxes as any), "[Gmail]/Drafts");
+  assert.equal(resolveDraftsPath(boxes as unknown as never), "[Gmail]/Drafts");
 });
 
 test("resolveDraftsPath returns undefined when no Drafts-like folder exists", () => {
   const boxes = [box("INBOX"), box("Trash")];
-  assert.equal(resolveDraftsPath(boxes as any), undefined);
+  assert.equal(resolveDraftsPath(boxes as unknown as never), undefined);
 });
 
 // ---------- Test scaffolding -------------------------------------------------
@@ -119,7 +119,7 @@ function mkClient(opts: FakeOpts): { client: ImapDraftClient; rec: Recorder } {
     async list() {
       rec.lists++;
       if (opts.listFail) throw new Error("list failed");
-      return opts.mailboxes as any;
+      return opts.mailboxes as unknown as never;
     },
     hasUidPlus() {
       rec.hasUidPlusCalls++;
