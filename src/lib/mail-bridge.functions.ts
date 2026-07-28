@@ -75,7 +75,7 @@ async function bridgeCall(
   extraBody: Record<string, unknown>,
   password: string,
 ): Promise<
-  | { ok: true; json: Record<string, unknown> }
+  | { ok: true; json: any }
   | { ok: false; error: string; status?: number; unavailable?: boolean }
 > {
   const { resolveBridgeAuth } = await import("@/lib/mail-bridge-auth.server");
