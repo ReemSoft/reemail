@@ -4123,26 +4123,26 @@ function Composer({
     [companyId, accountId, session.mailSessionToken, hideSuggestion],
   );
 
-  // ----- Restore draft (if no initial provided) -----
-  const restored = useMemo(() => {
+  // ----- Restore draft (v3 with v2 auto-migration) -----
+  const accountEmail = session.account.email_address;
+  const initialDoc = useMemo<DraftDocV3 | null>(() => {
     if (initial && (initial.to || initial.cc || initial.subject || initial.body)) return null;
     if (typeof window === "undefined") return null;
-    try {
-      const raw = window.localStorage.getItem(draftKey);
-      if (!raw) return null;
-      return JSON.parse(raw) as {
-        to: Recipient[];
-        cc: Recipient[];
-        bcc: Recipient[];
-        subject: string;
-        html: string;
-        showCc?: boolean;
-        showBcc?: boolean;
-      };
-    } catch {
-      return null;
-    }
-  }, [initial, draftKey]);
+    return readDraftDoc(window.localStorage, accountEmail);
+  }, [initial, accountEmail]);
+  const restored = initialDoc?.snapshot ?? null;
+
+  const [draftId] = useState<string>(() => initialDoc?.draftId ?? newDraftId());
+  const [serverRef, setServerRef] = useState<DraftServerRef | null>(
+    () => initialDoc?.serverRef ?? null,
+  );
+  const [saveStatus, setSaveStatus] = useState<DraftSaveStatus>(
+    () => (initialDoc ? "saved-local" : "idle"),
+  );
+  const serverRefRef = useRef<DraftServerRef | null>(serverRef);
+  useEffect(() => {
+    serverRefRef.current = serverRef;
+  }, [serverRef]);
 
   const [to, setTo] = useState<Recipient[]>(
     () => restored?.to ?? parseRecipientText(initial?.to ?? ""),
