@@ -4460,7 +4460,61 @@ function Composer({
     };
   }, []);
 
-  const totalBytes = files.reduce((acc, f) => acc + f.size, 0);
+  const existingBytes = existingKept.reduce((acc, a) => acc + (a.size || 0), 0);
+  const totalBytes = files.reduce((acc, f) => acc + f.size, 0) + existingBytes;
+  const totalCount = files.length + existingKept.length;
+
+  // Ref mirror so the (persistent) saveRemote closure created at first mount
+  // always reads the latest kept-attachment list without being torn down.
+  const existingKeptRef = useRef(existingKept);
+  useEffect(() => {
+    existingKeptRef.current = existingKept;
+  }, [existingKept]);
+
+  /**
+   * Lazily fetch every kept existing attachment as a File, streaming bytes
+   * from the bridge via the authenticated proxy (never base64 in JSON). All
+   * downloads are cached per-composer-session so autosaves are cheap after
+   * the first save. Returns `null` when any attachment fails so the caller
+   * can abort — we never silently drop a kept attachment.
+   */
+  async function resolveExistingAsFiles(): Promise<File[] | null> {
+    const kept = existingKeptRef.current;
+    if (kept.length === 0) return [];
+    const sourceId = existingSourceIdRef.current;
+    if (!sourceId) return null;
+    const parsed = parseMessageId(sourceId);
+    if (!parsed) return null;
+    const cache = existingFilesCacheRef.current;
+    const out: File[] = [];
+    for (const att of kept) {
+      const cached = cache.get(att.id);
+      if (cached) {
+        out.push(cached);
+        continue;
+      }
+      if (!att.part) return null;
+      const res = await fetch("/api/mail-attachment", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mailSessionToken: session.mailSessionToken ?? "",
+          password: session.password,
+          folder: parsed.folder,
+          uid: parsed.uid,
+          part: att.part,
+        }),
+      });
+      if (!res.ok) return null;
+      const blob = await res.blob();
+      const file = new File([blob], att.filename || "attachment", {
+        type: att.mimeType || blob.type || "application/octet-stream",
+      });
+      cache.set(att.id, file);
+      out.push(file);
+    }
+    return out;
+  }
 
   // ----- Draft autosave (debounced): local write first, then remote APPEND -----
   useEffect(() => {
@@ -4468,7 +4522,13 @@ function Composer({
     if (sending) return;
     const html = editorRef.current?.innerHTML ?? "";
     const isEmpty =
-      to.length === 0 && cc.length === 0 && bcc.length === 0 && !subject && !html.trim();
+      to.length === 0 &&
+      cc.length === 0 &&
+      bcc.length === 0 &&
+      !subject &&
+      !html.trim() &&
+      existingKept.length === 0 &&
+      files.length === 0;
     const t = window.setTimeout(() => {
       if (isEmpty) {
         clearDraftDoc(window.localStorage, accountEmail);
@@ -4500,7 +4560,7 @@ function Composer({
       void saverRef.current?.requestSave(snapshot, serverRefRef.current);
     }, 800);
     return () => window.clearTimeout(t);
-  }, [to, cc, bcc, subject, showCc, showBcc, accountEmail, draftId, sending]);
+  }, [to, cc, bcc, subject, showCc, showBcc, accountEmail, draftId, sending, existingKept, files]);
 
   function addFiles(list: FileList | File[] | null) {
     if (!list) return;
@@ -4508,8 +4568,9 @@ function Composer({
     if (incoming.length === 0) return;
     const merged: File[] = [...files];
     let runningTotal = totalBytes;
+    let runningCount = totalCount;
     for (const f of incoming) {
-      if (merged.length >= COMPOSE_MAX_FILES) {
+      if (runningCount >= COMPOSE_MAX_FILES) {
         toast.error(`الحد الأقصى ${COMPOSE_MAX_FILES} ملفات`);
         break;
       }
@@ -4518,6 +4579,18 @@ function Composer({
         break;
       }
       merged.push(f);
+      runningTotal += f.size;
+      runningCount += 1;
+    }
+    setFiles(merged);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  }
+
+  function removeExistingAttachment(id: string) {
+    setExistingKept((prev) => prev.filter((a) => a.id !== id));
+    existingFilesCacheRef.current.delete(id);
+  }
+
       runningTotal += f.size;
     }
     setFiles(merged);
