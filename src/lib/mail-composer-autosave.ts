@@ -16,6 +16,8 @@ export interface AutosaveScheduler {
   schedule(): void;
   /** Fire the callback immediately, canceling any pending timer. */
   flushNow(): void;
+  /** Cancel any pending timer without disposing. Idempotent. */
+  cancel(): void;
   /** Cancel timer and prevent any further callback. Idempotent. */
   dispose(): void;
   /** For tests / debugging. */
