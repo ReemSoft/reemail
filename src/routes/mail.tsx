@@ -1668,6 +1668,21 @@ function MailApp() {
       if (msg) setSelectedMessage(msg);
       else if (!cached) throw new Error("فشل فتح الرسالة");
 
+      // M4-C: Drafts folder → open the message directly inside the composer
+      // as an Edit-Draft (server-side draft is the source of truth). We
+      // intentionally do this AFTER the fetch so the composer receives full
+      // recipients / body / attachments metadata rather than list-preview.
+      const loaded = msg ?? cached ?? null;
+      if (loaded && parsed.folder === "drafts") {
+        const draftsPath = folderPaths.drafts ?? undefined;
+        setCompose(buildEditDraft(loaded, draftsPath));
+        setSelectedId(null);
+        setSelectedMessage(null);
+        setReading(false);
+        return;
+      }
+
+
       const listMsg = messages.find((m) => m.id === id);
       if (listMsg && !listMsg.read) {
         // Optimistic read
