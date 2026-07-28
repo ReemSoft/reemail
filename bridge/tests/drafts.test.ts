@@ -628,7 +628,7 @@ function mkSharedDeps(
     createImapDraftClient: () => ({
       async connect() {},
       async list() {
-        return server.mailboxes as any;
+        return server.mailboxes as unknown as never;
       },
       hasUidPlus() {
         return server.hasUidPlus;
@@ -710,7 +710,9 @@ test("mutex: without UIDPLUS, two concurrent saves produce ZERO duplicates (seco
   // One MUST succeed, the other MUST be refused with SAFE_DRAFT_REPLACE_UNSUPPORTED.
   const oks = [r1, r2].filter((r) => r.ok === true).length;
   const refused = [r1, r2].filter(
-    (r) => r.ok === false && (r as any).error === "SAFE_DRAFT_REPLACE_UNSUPPORTED",
+    (r) =>
+      r.ok === false &&
+      (r as { ok: false; error: string }).error === "SAFE_DRAFT_REPLACE_UNSUPPORTED",
   ).length;
   assert.equal(oks, 1, "exactly one save may succeed without UIDPLUS");
   assert.equal(refused, 1, "the other MUST be refused before APPEND");
@@ -726,7 +728,7 @@ test("mutex: is released after a failure path (map cleaned up even when APPEND t
     createImapDraftClient: () => ({
       async connect() {},
       async list() {
-        return server.mailboxes as any;
+        return server.mailboxes as unknown as never;
       },
       hasUidPlus() {
         return true;
@@ -760,7 +762,7 @@ test("mutex: retry after cleanup interruption converges to a single canonical co
       return {
         async connect() {},
         async list() {
-          return server.mailboxes as any;
+          return server.mailboxes as unknown as never;
         },
         hasUidPlus() {
           return true;
@@ -815,7 +817,7 @@ test("mutex: different UIDVALIDITY between pre-probe and APPEND does not leak st
     createImapDraftClient: () => ({
       async connect() {},
       async list() {
-        return server.mailboxes as any;
+        return server.mailboxes as unknown as never;
       },
       hasUidPlus() {
         return true;
