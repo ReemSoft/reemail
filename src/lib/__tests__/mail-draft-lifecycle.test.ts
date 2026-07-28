@@ -173,7 +173,7 @@ describe("createDraftSaver", () => {
       onStatus: (s) => events.push(s),
       onServerRef: (r) => (capturedRef = r),
     });
-    await saver.requestSave(snap({ subject: "a" }), null);
+    await saver.requestSave(snap({ subject: "a" }), null, 1);
     expect(events).toEqual(["saving", "saved"]);
     expect(capturedRef).toEqual({ folderPath: "Drafts", uid: 7, uidValidity: "1" });
     expect(saveRemote).toHaveBeenCalledTimes(1);
