@@ -2760,7 +2760,7 @@ function MailApp() {
         {/* Message list */}
         <div
           className={`flex w-full flex-col border-l border-border bg-card md:w-96 md:shrink-0 ${
-            selectedMessage || (selectedId && reading) ? "hidden md:flex" : "flex"
+            compose || selectedMessage || (selectedId && reading) ? "hidden md:flex" : "flex"
           }`}
         >
           {selectMode || selection.size > 0 ? (
