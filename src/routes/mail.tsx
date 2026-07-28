@@ -4281,7 +4281,13 @@ function Composer({
     void q.flush(accountEmail);
   }, [accountEmail]);
 
+  // Forward refs so the persistent saveRemote closure (created once at mount)
+  // always reads the latest attachment state without a re-instantiation.
+  const filesRef = useRef<File[]>([]);
+  const resolveExistingAsFilesRef = useRef<() => Promise<File[] | null>>(async () => []);
+
   const saverRef = useRef<DraftSaver | null>(null);
+
   if (!saverRef.current) {
     saverRef.current = createDraftSaver(draftId, {
       saveRemote: async ({ snapshot, previousRef }) => {
