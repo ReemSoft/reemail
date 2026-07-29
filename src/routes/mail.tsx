@@ -2927,7 +2927,9 @@ function MailApp() {
           >
             <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin text-primary" : ""}`} />
           </button>
+          <LanguageSwitcher />
           <button
+
             onClick={handleSignOut}
             className="hidden items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm font-medium text-muted-foreground hover:bg-destructive/10 hover:text-destructive sm:inline-flex"
             title={tr("تسجيل الخروج")}
