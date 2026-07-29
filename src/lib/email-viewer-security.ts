@@ -114,6 +114,12 @@ export interface BuildSrcDocOptions {
   nonce: string;
   channelId: string;
   parentOrigin: string;
+  /**
+   * When true, allow HTTPS image sources (only). Default is false: only
+   * `data:` and `blob:` are allowed. HTTP is never allowed regardless of
+   * this flag — mixed-content and cleartext trackers are always blocked.
+   */
+  allowRemoteImages?: boolean;
 }
 
 function jsonSafe(value: string): string {
@@ -121,15 +127,30 @@ function jsonSafe(value: string): string {
   return JSON.stringify(value).replace(/</g, "\\u003c");
 }
 
+/**
+ * Detects whether the (already sanitized) HTML contains any remote image
+ * references that the default CSP would block. Used by the viewer to decide
+ * whether to show the "external images blocked" banner.
+ */
+export function hasRemoteImages(html: string): boolean {
+  if (!html) return false;
+  // <img src="http(s)://..."> or protocol-relative //host/...
+  return /<img\b[^>]*\bsrc\s*=\s*(['"])\s*(https?:|\/\/)/i.test(html);
+}
+
 export function buildEmailSrcDoc({
   html,
   nonce,
   channelId,
   parentOrigin,
+  allowRemoteImages = false,
 }: BuildSrcDocOptions): string {
-  // CSP: opaque-origin iframe. Only inline styles are permitted (emails ship
-  // them by design). Scripts require our per-render nonce, so the sandboxed
-  // document can execute only the trusted measurement script below.
+  // Privacy-first image policy: block ALL remote images by default (trackers,
+  // read receipts, spy pixels). Only inline `data:`/`blob:` render. When the
+  // user explicitly opts in for a message, allow `https:` only — `http:` is
+  // NEVER allowed (mixed-content + cleartext tracking).
+  const imgSrc = allowRemoteImages ? "img-src data: blob: https:" : "img-src data: blob:";
+
   const csp = [
     "default-src 'none'",
     "connect-src 'none'",
@@ -142,7 +163,7 @@ export function buildEmailSrcDoc({
     "base-uri 'none'",
     "form-action 'none'",
     "style-src 'unsafe-inline'",
-    "img-src data: blob: https: http:",
+    imgSrc,
     `script-src 'nonce-${nonce}'`,
   ].join("; ");
 
