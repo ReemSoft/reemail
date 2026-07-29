@@ -2954,8 +2954,8 @@ function MailApp() {
       <div className="relative flex flex-1 overflow-hidden">
         {/* Sidebar */}
         <aside
-          className={`fixed inset-y-0 right-0 top-14 z-30 w-64 shrink-0 transform border-l border-border bg-sidebar transition-transform lg:relative lg:top-0 lg:translate-x-0 ${
-            sidebarOpen ? "translate-x-0" : "translate-x-full lg:translate-x-0"
+          className={`fixed inset-y-0 start-0 top-14 z-30 w-64 shrink-0 transform border-e border-border bg-sidebar transition-transform lg:relative lg:top-0 lg:translate-x-0 ${
+            sidebarOpen ? "translate-x-0" : "rtl:translate-x-full ltr:-translate-x-full lg:translate-x-0"
           }`}
         >
           <div className="p-4">
