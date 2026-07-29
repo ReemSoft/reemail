@@ -150,8 +150,10 @@ describe("buildEmailSrcDoc — CSP + measurement contract", () => {
 
   it("never uses postMessage with '*' targetOrigin", () => {
     expect(doc).not.toMatch(/postMessage\([^,]+,\s*['"]\*['"]\)/);
-    // Must include the exact parent origin string.
-    expect(doc).toMatch(/postMessage\([^)]*"https:\/\/app\.example\.com"\)/);
+    // Parent origin must be baked in — script uses `parent.postMessage(..., origin)`
+    // and `var origin = "https://app.example.com"` at the top of the measurement IIFE.
+    expect(doc).toMatch(/var\s+origin\s*=\s*"https:\/\/app\.example\.com"/);
+    expect(doc).toMatch(/postMessage\([^)]*,\s*origin\)/);
   });
 
   it("embeds the channelId in the payload", () => {
