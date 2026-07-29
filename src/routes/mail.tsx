@@ -2249,7 +2249,7 @@ function MailApp() {
         confirmHideRow(id);
         confirmPendingMove(id);
         const label = FOLDER_META[target as MailFolder]?.label || target;
-        toast.success(tr(`تم استعادة الرسالة إلى ${label}`));
+        toast.success(tr(`تم استعادة الرسالة إلى ${tr(label)}`));
       } catch (err: any) {
         unhideRow(id);
         rollbackPendingMove(id);
