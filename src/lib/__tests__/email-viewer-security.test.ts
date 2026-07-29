@@ -1,4 +1,6 @@
 /**
+ * @vitest-environment happy-dom
+ *
  * Contract tests for the hardened email viewer security helpers.
  */
 import { describe, it, expect } from "vitest";
