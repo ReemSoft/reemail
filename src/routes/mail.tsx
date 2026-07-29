@@ -74,18 +74,54 @@ function EmailBodyFrame({ html, className }: { html: string; className?: string 
   const handleLoad = useCallback(() => {
     const iframe = ref.current;
     if (!iframe) return;
+    const doc = iframe.contentDocument;
+    if (!doc?.body) return;
+
+    const measure = () => {
+      try {
+        const h = Math.max(
+          doc.body.scrollHeight,
+          doc.documentElement?.scrollHeight ?? 0,
+        );
+        if (h > 0) setHeight((prev) => (Math.abs(prev - (h + 8)) > 1 ? h + 8 : prev));
+      } catch { /* ignore */ }
+    };
+
+    measure();
+
+    // Re-measure after each image loads (common cause of underestimated height).
+    const imgs = Array.from(doc.images || []);
+    imgs.forEach((img) => {
+      if (!img.complete) {
+        img.addEventListener("load", measure, { once: true });
+        img.addEventListener("error", measure, { once: true });
+      }
+    });
+
+    // Observe body size changes (web fonts, late CSS, dynamic content).
+    let ro: ResizeObserver | null = null;
     try {
-      const doc = iframe.contentDocument;
-      if (!doc?.body) return;
-      // Measure once. Use scrollHeight of documentElement/body max.
-      const h = Math.max(
-        doc.body.scrollHeight,
-        doc.documentElement?.scrollHeight ?? 0,
-      );
-      if (h > 0) setHeight(h + 8);
-    } catch {
-      /* cross-origin should not happen with srcDoc; ignore */
-    }
+      const RO = (iframe.contentWindow as any)?.ResizeObserver || (window as any).ResizeObserver;
+      if (RO) {
+        ro = new RO(() => measure());
+        ro!.observe(doc.documentElement);
+        ro!.observe(doc.body);
+      }
+    } catch { /* ignore */ }
+
+    // Safety net: a few delayed measures for late layout.
+    const t1 = setTimeout(measure, 150);
+    const t2 = setTimeout(measure, 600);
+    const t3 = setTimeout(measure, 1500);
+
+    (iframe as any)._cleanup = () => {
+      clearTimeout(t1); clearTimeout(t2); clearTimeout(t3);
+      try { ro?.disconnect(); } catch { /* ignore */ }
+    };
+  }, []);
+
+  useEffect(() => () => {
+    try { (ref.current as any)?._cleanup?.(); } catch { /* ignore */ }
   }, []);
 
   return (
@@ -95,8 +131,9 @@ function EmailBodyFrame({ html, className }: { html: string; className?: string 
       srcDoc={srcDoc}
       onLoad={handleLoad}
       sandbox="allow-popups allow-popups-to-escape-sandbox"
+      scrolling="no"
       className={className}
-      style={{ width: "100%", height, border: 0, display: "block" }}
+      style={{ width: "100%", height, border: 0, display: "block", overflow: "hidden" }}
     />
   );
 }
