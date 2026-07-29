@@ -3639,7 +3639,7 @@ function MessageView({
             <Trash2 className="h-4 w-4" />
           </button>
         </div>
-        <DropdownMenu>
+        <DropdownMenu dir={uiDir}>
           <DropdownMenuTrigger asChild>
             <button className="rounded-lg p-2 hover:bg-muted" aria-label={tr("خيارات أكثر")}>
               <MoreVertical className="h-4 w-4" />
@@ -3649,7 +3649,7 @@ function MessageView({
             align="end"
             sideOffset={8}
             collisionPadding={12}
-            className="w-56 [direction:rtl] [&_[role=menuitem]]:flex-row [&_[role=menuitem]]:justify-start [&_[role=menuitem]]:text-right"
+            className="w-56 [&_[role=menuitem]]:flex-row [&_[role=menuitem]]:justify-start [&_[role=menuitem]]:text-start"
           >
             <DropdownMenuItem onClick={onReply}>
               <Reply className="h-4 w-4" /> {tr("رد")}
