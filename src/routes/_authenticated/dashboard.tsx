@@ -704,7 +704,7 @@ function AccountsTab({
                 className="inline-flex items-center gap-1.5 rounded-lg bg-brand-gradient px-4 py-2 text-sm font-semibold text-white shadow-soft disabled:opacity-60"
               >
                 {submitting && <Loader2 className="h-4 w-4 animate-spin" />}
-                حفظ الإعدادات
+                {tr("حفظ الإعدادات")}
               </button>
             </div>
           </form>
