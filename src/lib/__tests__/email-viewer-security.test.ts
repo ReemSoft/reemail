@@ -193,6 +193,52 @@ describe("buildEmailSrcDoc — CSP + measurement contract", () => {
   });
 });
 
+describe("buildEmailSrcDoc — remote image privacy gate", () => {
+  const opts = {
+    html: `<img src="https://tracker.example/pixel.gif">`,
+    nonce: "n1",
+    channelId: "c1",
+    parentOrigin: "https://app.example.com",
+  };
+
+  it("default srcDoc allows neither https: nor http: images", () => {
+    const dir = extractImgSrc(buildEmailSrcDoc(opts));
+    expect(dir).toBe("img-src data: blob:");
+    expect(dir).not.toMatch(/\bhttps:/);
+    expect(dir).not.toMatch(/\bhttp:/);
+  });
+
+  it("after explicit consent, allows https: only — http: stays blocked", () => {
+    const dir = extractImgSrc(buildEmailSrcDoc({ ...opts, allowRemoteImages: true }));
+    expect(dir).toBe("img-src data: blob: https:");
+    expect(dir).toMatch(/\bhttps:/);
+    // http: never appears as a standalone scheme token in the directive.
+    expect(dir.split(/\s+/)).not.toContain("http:");
+  });
+
+  it("does not embed remote image URLs into the CSP itself (no allowlist leaks)", () => {
+    const doc = buildEmailSrcDoc(opts);
+    // The remote host must not appear in CSP or the head — only inside body <img>.
+    const head = doc.split("</head>")[0];
+    expect(head).not.toMatch(/tracker\.example/);
+  });
+});
+
+describe("hasRemoteImages", () => {
+  it("detects http/https/protocol-relative <img src>", () => {
+    expect(hasRemoteImages(`<img src="https://x/y.png">`)).toBe(true);
+    expect(hasRemoteImages(`<img src="http://x/y.png">`)).toBe(true);
+    expect(hasRemoteImages(`<img src="//x/y.png">`)).toBe(true);
+  });
+
+  it("ignores inline (data:/cid:) images and empty input", () => {
+    expect(hasRemoteImages(`<img src="data:image/png;base64,AAAA">`)).toBe(false);
+    expect(hasRemoteImages(`<img src="cid:abc">`)).toBe(false);
+    expect(hasRemoteImages("")).toBe(false);
+    expect(hasRemoteImages("<p>no images</p>")).toBe(false);
+  });
+});
+
 describe("isValidHeightPayload", () => {
   it("accepts a well-formed message with matching channel", () => {
     expect(isValidHeightPayload({ __mm: "h", channel: "c1", h: 400 }, "c1")).toBe(true);
