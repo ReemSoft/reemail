@@ -5,6 +5,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useServerFn } from "@tanstack/react-start";
 import { registerCompanyAdmin } from "@/lib/admin-signup.functions";
 import { toast } from "sonner";
+import { tr } from "@/i18n";
 
 export const Route = createFileRoute("/company")({
   head: () => ({
@@ -13,7 +14,7 @@ export const Route = createFileRoute("/company")({
       {
         name: "description",
         content:
-          "سجّل شركتك على منصة MailMaestro أو ادخل إلى لوحة تحكم شركتك لإدارة إيميلات عملائك.",
+          tr("سجّل شركتك على منصة MailMaestro أو ادخل إلى لوحة تحكم شركتك لإدارة إيميلات عملائك."),
       },
       { property: "og:title", content: "بوابة الشركات — MailMaestro" },
       {
@@ -82,12 +83,12 @@ function CompanyPortalPage() {
           </Link>
           <div>
             <h2 className="text-4xl font-bold leading-tight">
-              أدِر إيميلات
+              {tr("أدِر إيميلات")}
               <br />
-              عملائك من مكان واحد
+              {tr("عملائك من مكان واحد")}
             </h2>
             <p className="mt-4 text-lg text-white/85">
-              منصة بيضاء العلامة (White-label) لشركتك.
+              {tr("منصة بيضاء العلامة (White-label) لشركتك.")}
             </p>
           </div>
           <p className="text-sm text-white/70">
@@ -102,7 +103,7 @@ function CompanyPortalPage() {
             to="/"
             className="mb-8 inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"
           >
-            <ArrowLeft className="h-4 w-4" /> العودة
+            <ArrowLeft className="h-4 w-4" /> {tr("العودة")}
           </Link>
 
           <div className="mb-8 grid grid-cols-2 gap-2 rounded-xl border border-border bg-card p-1.5">
@@ -115,7 +116,7 @@ function CompanyPortalPage() {
                   : "text-muted-foreground hover:text-foreground"
               }`}
             >
-              <Building2 className="h-4 w-4" /> تسجيل شركة جديدة
+              <Building2 className="h-4 w-4" /> {tr("تسجيل شركة جديدة")}
             </button>
             <button
               type="button"
@@ -126,7 +127,7 @@ function CompanyPortalPage() {
                   : "text-muted-foreground hover:text-foreground"
               }`}
             >
-              <LogIn className="h-4 w-4" /> دخول المدير
+              <LogIn className="h-4 w-4" /> {tr("دخول المدير")}
             </button>
           </div>
 
@@ -137,12 +138,12 @@ function CompanyPortalPage() {
           )}
 
           <div className="mt-8 rounded-xl border border-border bg-card p-4 text-center text-sm">
-            <p className="text-muted-foreground">هل أنت عميل تريد فتح بريدك؟</p>
+            <p className="text-muted-foreground">{tr("هل أنت عميل تريد فتح بريدك؟")}</p>
             <Link
               to="/login"
               className="mt-1 inline-block font-semibold text-primary hover:underline"
             >
-              دخول العملاء ←
+              {tr("دخول العملاء ←")}
             </Link>
           </div>
         </div>
@@ -167,10 +168,10 @@ function SignInForm() {
       });
       if (error) throw error;
       const dest = await destinationForUser(signIn.user!.id);
-      toast.success("مرحباً بعودتك 👋");
+      toast.success(tr("مرحباً بعودتك 👋"));
       navigate({ to: dest });
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "حدث خطأ غير متوقع";
+      const msg = err instanceof Error ? err.message : tr("حدث خطأ غير متوقع");
       toast.error(msg);
     } finally {
       setLoading(false);
@@ -179,13 +180,13 @@ function SignInForm() {
 
   return (
     <>
-      <h1 className="text-3xl font-bold tracking-tight">دخول مدير الشركة</h1>
+      <h1 className="text-3xl font-bold tracking-tight">{tr("دخول مدير الشركة")}</h1>
       <p className="mt-2 text-muted-foreground">
-        سجّل دخولك للوصول إلى لوحة تحكم شركتك.
+        {tr("سجّل دخولك للوصول إلى لوحة تحكم شركتك.")}
       </p>
       <form onSubmit={handleSubmit} className="mt-8 space-y-4">
         <Field
-          label="البريد الإلكتروني"
+          label=tr("البريد الإلكتروني")
           type="email"
           value={email}
           onChange={setEmail}
@@ -193,7 +194,7 @@ function SignInForm() {
           required
         />
         <Field
-          label="كلمة المرور"
+          label=tr("كلمة المرور")
           type="password"
           value={password}
           onChange={setPassword}
@@ -201,7 +202,7 @@ function SignInForm() {
           minLength={6}
           required
         />
-        <SubmitButton loading={loading}>تسجيل الدخول</SubmitButton>
+        <SubmitButton loading={loading}>{tr("تسجيل الدخول")}</SubmitButton>
       </form>
     </>
   );
@@ -251,14 +252,14 @@ function RegisterCompanyForm({ onDone }: { onDone: () => void }) {
         password,
       });
       if (signErr) {
-        toast.success("تم إنشاء الشركة. سجّل الدخول الآن.");
+        toast.success(tr("تم إنشاء الشركة. سجّل الدخول الآن."));
         onDone();
         return;
       }
-      toast.success("مرحباً بك! جاري تجهيز لوحة التحكم…");
+      toast.success(tr("مرحباً بك! جاري تجهيز لوحة التحكم…"));
       navigate({ to: "/dashboard" });
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "حدث خطأ غير متوقع";
+      const msg = err instanceof Error ? err.message : tr("حدث خطأ غير متوقع");
       toast.error(msg);
     } finally {
       setLoading(false);
@@ -267,21 +268,21 @@ function RegisterCompanyForm({ onDone }: { onDone: () => void }) {
 
   return (
     <>
-      <h1 className="text-3xl font-bold tracking-tight">سجّل شركتك</h1>
+      <h1 className="text-3xl font-bold tracking-tight">{tr("سجّل شركتك")}</h1>
       <p className="mt-2 text-muted-foreground">
-        أنشئ حساب شركتك في دقيقة، ثم أضف إيميلات عملائك.
+        {tr("أنشئ حساب شركتك في دقيقة، ثم أضف إيميلات عملائك.")}
       </p>
       <form onSubmit={handleSubmit} className="mt-8 space-y-4">
         <Field
-          label="اسم الشركة"
+          label=tr("اسم الشركة")
           type="text"
           value={companyName}
           onChange={handleNameChange}
-          placeholder="مثال: MailMaestro"
+          placeholder=tr("مثال: MailMaestro")
           required
         />
         <Field
-          label="معرّف الشركة (بالإنجليزية)"
+          label=tr("معرّف الشركة (بالإنجليزية)")
           type="text"
           value={companySlug}
           onChange={(v) =>
@@ -294,15 +295,15 @@ function RegisterCompanyForm({ onDone }: { onDone: () => void }) {
           ltr
         />
         <Field
-          label="اسمك الكامل"
+          label=tr("اسمك الكامل")
           type="text"
           value={fullName}
           onChange={setFullName}
-          placeholder="محمد أحمد"
+          placeholder=tr("محمد أحمد")
           required
         />
         <Field
-          label="بريدك الإلكتروني"
+          label=tr("بريدك الإلكتروني")
           type="email"
           value={email}
           onChange={setEmail}
@@ -310,18 +311,18 @@ function RegisterCompanyForm({ onDone }: { onDone: () => void }) {
           required
         />
         <Field
-          label="كلمة المرور"
+          label=tr("كلمة المرور")
           type="password"
           value={password}
           onChange={setPassword}
-          placeholder="6 أحرف على الأقل"
+          placeholder=tr("6 أحرف على الأقل")
           minLength={6}
           required
         />
-        <SubmitButton loading={loading}>إنشاء الشركة</SubmitButton>
+        <SubmitButton loading={loading}>{tr("إنشاء الشركة")}</SubmitButton>
       </form>
       <p className="mt-6 text-center text-xs text-muted-foreground">
-        بالتسجيل أنت توافق على شروط الاستخدام.
+        {tr("بالتسجيل أنت توافق على شروط الاستخدام.")}
       </p>
     </>
   );

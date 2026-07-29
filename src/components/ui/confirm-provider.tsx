@@ -1,6 +1,7 @@
 import * as React from "react";
 import { createContext, useContext, useState, useCallback } from "react";
 import {
+import { tr } from "@/i18n";
   AlertDialog,
   AlertDialogAction,
   AlertDialogCancel,
@@ -49,9 +50,9 @@ export function ConfirmProvider({ children }: { children: React.ReactNode }) {
         id: Date.now(),
         resolve,
         title: "تأكيد",
-        description: "هل أنت متأكد؟",
-        confirmLabel: "تأكيد",
-        cancelLabel: "إلغاء",
+        description: tr("هل أنت متأكد؟"),
+        confirmLabel: tr("تأكيد"),
+        cancelLabel: tr("إلغاء"),
         variant: "default",
         ...options,
       });
