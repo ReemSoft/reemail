@@ -135,6 +135,8 @@ function RootShell({ children }: { children: ReactNode }) {
 
 function RootComponent() {
   const { queryClient } = Route.useRouteContext();
+  // Mount the language sync so <html lang/dir> reflect the current language.
+  useLanguage();
 
   return (
     <QueryClientProvider client={queryClient}>
@@ -146,4 +148,5 @@ function RootComponent() {
     </QueryClientProvider>
   );
 }
+
 
