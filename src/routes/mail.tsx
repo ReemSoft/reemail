@@ -325,15 +325,16 @@ export const Route = createFileRoute("/mail")({
   component: MailApp,
 });
 
+// Labels are natural-language keys (Arabic). Wrap with tr() at render.
 const FOLDER_META: Record<MailFolder, { label: string; icon: typeof Inbox }> = {
-  inbox: { label: tr("الوارد"), icon: Inbox },
-  starred: { label: tr("المميّزة"), icon: Star },
-  sent: { label: tr("المرسلة"), icon: Send },
-  drafts: { label: tr("المسودّات"), icon: FileText },
-  spam: { label: tr("المزعجة"), icon: AlertOctagon },
-  trash: { label: tr("المهملات"), icon: Trash2 },
-  archive: { label: tr("الأرشيف"), icon: Archive },
-  all: { label: tr("الكل"), icon: MailIcon },
+  inbox: { label: "الوارد", icon: Inbox },
+  starred: { label: "المميّزة", icon: Star },
+  sent: { label: "المرسلة", icon: Send },
+  drafts: { label: "المسودّات", icon: FileText },
+  spam: { label: "المزعجة", icon: AlertOctagon },
+  trash: { label: "المهملات", icon: Trash2 },
+  archive: { label: "الأرشيف", icon: Archive },
+  all: { label: "الكل", icon: MailIcon },
 };
 
 function parseMessageId(id: string): { folder: MailFolder; uid: number } | null {
