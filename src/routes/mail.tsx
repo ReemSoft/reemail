@@ -1,5 +1,6 @@
 import { tr } from "@/i18n";
 import { LanguageSwitcher } from "@/components/language-switcher";
+import { useLanguage } from "@/hooks/use-language";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { Virtuoso } from "react-virtuoso";
@@ -325,15 +326,16 @@ export const Route = createFileRoute("/mail")({
   component: MailApp,
 });
 
+// Labels are natural-language keys (Arabic). Wrap with tr() at render.
 const FOLDER_META: Record<MailFolder, { label: string; icon: typeof Inbox }> = {
-  inbox: { label: tr("الوارد"), icon: Inbox },
-  starred: { label: tr("المميّزة"), icon: Star },
-  sent: { label: tr("المرسلة"), icon: Send },
-  drafts: { label: tr("المسودّات"), icon: FileText },
-  spam: { label: tr("المزعجة"), icon: AlertOctagon },
-  trash: { label: tr("المهملات"), icon: Trash2 },
-  archive: { label: tr("الأرشيف"), icon: Archive },
-  all: { label: tr("الكل"), icon: MailIcon },
+  inbox: { label: "الوارد", icon: Inbox },
+  starred: { label: "المميّزة", icon: Star },
+  sent: { label: "المرسلة", icon: Send },
+  drafts: { label: "المسودّات", icon: FileText },
+  spam: { label: "المزعجة", icon: AlertOctagon },
+  trash: { label: "المهملات", icon: Trash2 },
+  archive: { label: "الأرشيف", icon: Archive },
+  all: { label: "الكل", icon: MailIcon },
 };
 
 function parseMessageId(id: string): { folder: MailFolder; uid: number } | null {
@@ -1372,6 +1374,7 @@ function useMailData(session: MailSession | null) {
 
 function MailApp() {
   const navigate = useNavigate();
+  const { dir: uiDir } = useLanguage();
   const { confirm } = useConfirm();
   const [session, setSession] = useState<MailSession | null | undefined>(undefined);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -2246,7 +2249,7 @@ function MailApp() {
         confirmHideRow(id);
         confirmPendingMove(id);
         const label = FOLDER_META[target as MailFolder]?.label || target;
-        toast.success(tr(`تم استعادة الرسالة إلى ${label}`));
+        toast.success(tr(`تم استعادة الرسالة إلى ${tr(label)}`));
       } catch (err: any) {
         unhideRow(id);
         rollbackPendingMove(id);
@@ -2824,7 +2827,7 @@ function MailApp() {
               <X className="h-3.5 w-3.5" />
             </button>
           )}
-          <DropdownMenu dir="rtl">
+          <DropdownMenu dir={uiDir}>
             <DropdownMenuTrigger asChild>
               <button
                 className={`flex shrink-0 items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium transition ${
@@ -2951,8 +2954,8 @@ function MailApp() {
       <div className="relative flex flex-1 overflow-hidden">
         {/* Sidebar */}
         <aside
-          className={`fixed inset-y-0 right-0 top-14 z-30 w-64 shrink-0 transform border-l border-border bg-sidebar transition-transform lg:relative lg:top-0 lg:translate-x-0 ${
-            sidebarOpen ? "translate-x-0" : "translate-x-full lg:translate-x-0"
+          className={`fixed inset-y-0 start-0 top-14 z-30 w-64 shrink-0 transform border-e border-border bg-sidebar transition-transform lg:relative lg:top-0 lg:translate-x-0 ${
+            sidebarOpen ? "translate-x-0" : "rtl:translate-x-full ltr:-translate-x-full lg:translate-x-0"
           }`}
         >
           <div className="p-4">
@@ -2987,14 +2990,14 @@ function MailApp() {
                       setSelectedMessage(null);
                       setSidebarOpen(false);
                     }}
-                    className={`mb-0.5 flex w-full items-center gap-3 rounded-r-full rounded-l-md px-4 py-2.5 text-sm transition ${
+                    className={`mb-0.5 flex w-full items-center gap-3 rounded-s-full rounded-e-md px-4 py-2.5 text-sm transition ${
                       active
                         ? "bg-sidebar-hover font-semibold text-foreground"
                         : "text-sidebar-foreground hover:bg-sidebar-hover/60"
                     }`}
                   >
                     <Icon className={`h-4 w-4 ${active ? "text-primary" : ""}`} />
-                    <span className="flex-1 text-right">{meta.label}</span>
+                    <span className="flex-1 text-start">{tr(meta.label)}</span>
                     {total > 0 && (
                       <span
                         className={`rounded-full px-1.5 text-[11px] font-bold ${
@@ -3048,7 +3051,7 @@ function MailApp() {
               <div className="flex-1" />
               {bulkBusy && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />}
               {selection.size > 0 && (
-                <DropdownMenu dir="rtl">
+                <DropdownMenu dir={uiDir}>
                   <DropdownMenuTrigger asChild>
                     <button
                       disabled={bulkBusy}
@@ -3164,7 +3167,7 @@ function MailApp() {
                   {selectMode ? tr("إلغاء") : tr("تحديد")}
                 </button>
                 {!inDeepSearch && (
-                  <DropdownMenu dir="rtl">
+                  <DropdownMenu dir={uiDir}>
                     <DropdownMenuTrigger asChild>
                       <button
                         className="flex items-center gap-1 rounded px-2 py-1.5 text-xs font-medium text-foreground hover:bg-muted"
@@ -3497,6 +3500,7 @@ function MessageView({
   onRestore: () => void;
   onPrint: () => void;
 }) {
+  const { dir: uiDir } = useLanguage();
   const [detailsOpen, setDetailsOpen] = useState(false);
   const recipientsAll = [
     ...message.to.map((t) => ({ ...t, kind: "to" as const })),
@@ -3635,7 +3639,7 @@ function MessageView({
             <Trash2 className="h-4 w-4" />
           </button>
         </div>
-        <DropdownMenu>
+        <DropdownMenu dir={uiDir}>
           <DropdownMenuTrigger asChild>
             <button className="rounded-lg p-2 hover:bg-muted" aria-label={tr("خيارات أكثر")}>
               <MoreVertical className="h-4 w-4" />
@@ -3645,7 +3649,7 @@ function MessageView({
             align="end"
             sideOffset={8}
             collisionPadding={12}
-            className="w-56 [direction:rtl] [&_[role=menuitem]]:flex-row [&_[role=menuitem]]:justify-start [&_[role=menuitem]]:text-right"
+            className="w-56 [&_[role=menuitem]]:flex-row [&_[role=menuitem]]:justify-start [&_[role=menuitem]]:text-start"
           >
             <DropdownMenuItem onClick={onReply}>
               <Reply className="h-4 w-4" /> {tr("رد")}

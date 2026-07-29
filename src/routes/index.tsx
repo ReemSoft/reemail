@@ -160,32 +160,32 @@ function Landing() {
             {[
               {
                 icon: Zap,
-                title: "أداء سرعة البرق",
+                title: tr("أداء سرعة البرق"),
                 desc: tr("واجهة محسّنة تحمّل صندوق الوارد فوراً مع كاش ذكي وتحديثات فورية."),
               },
               {
                 icon: Palette,
-                title: "تخصيص كامل بالعلامة",
+                title: tr("تخصيص كامل بالعلامة"),
                 desc: tr("شعارك، ألوانك، اسم التطبيق — كل شركة تظهر كتطبيق مصمّم خصيصاً لها."),
               },
               {
                 icon: Shield,
-                title: "أمان مؤسسي",
+                title: tr("أمان مؤسسي"),
                 desc: tr("تشفير AES-GCM لكل كلمات المرور، عزل تام بين بيانات الشركات."),
               },
               {
                 icon: Users,
-                title: "متعدد المستخدمين",
+                title: tr("متعدد المستخدمين"),
                 desc: tr("لوحة تحكم لكل شركة لإدارة عملائها وحساباتهم بسهولة."),
               },
               {
                 icon: Mail,
-                title: "IMAP/SMTP قياسي",
+                title: tr("IMAP/SMTP قياسي"),
                 desc: tr("يعمل مع أي خادم بريد: Gmail، Outlook، cPanel، خوادم مخصصة."),
               },
               {
                 icon: Cloud,
-                title: "متجاوب لكل الشاشات",
+                title: tr("متجاوب لكل الشاشات"),
                 desc: tr("تجربة مثالية على الموبايل والتابلت والديسكتوب."),
               },
             ].map((f) => (
@@ -225,7 +225,7 @@ function Landing() {
 
       <footer className="border-t border-border py-8">
         <div className="mx-auto flex max-w-7xl flex-col items-center justify-between gap-3 px-4 text-sm text-muted-foreground sm:flex-row">
-          <span>© {new Date().getFullYear()} MailMaestro. جميع الحقوق محفوظة.</span>
+          <span>© {new Date().getFullYear()} MailMaestro. {tr("جميع الحقوق محفوظة.")}</span>
           <div className="flex gap-6">
             <a href="#" className="hover:text-foreground">
               {tr("الخصوصية")}

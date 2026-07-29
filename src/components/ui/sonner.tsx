@@ -1,13 +1,15 @@
 import { Toaster as Sonner } from "sonner";
+import { useLanguage } from "@/hooks/use-language";
 
 type ToasterProps = React.ComponentProps<typeof Sonner>;
 
 const Toaster = ({ ...props }: ToasterProps) => {
+  const { dir } = useLanguage();
   return (
     <Sonner
       className="toaster group"
       position="bottom-left"
-      dir="rtl"
+      dir={dir}
       richColors
       duration={4000}
       visibleToasts={5}

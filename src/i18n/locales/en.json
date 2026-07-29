@@ -1,4 +1,7 @@
 {
+  "فتح البريد": "Open Mail",
+  "حفظ الإعدادات": "Save Settings",
+  "جميع الحقوق محفوظة.": "All rights reserved.",
   "${selection.size} محددة": "${selection.size} selected",
   "(بدون موضوع)": "(No subject)",
   "(مرسل غير معروف)": "(Unknown sender)",
