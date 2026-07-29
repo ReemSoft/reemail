@@ -225,7 +225,7 @@ function Landing() {
 
       <footer className="border-t border-border py-8">
         <div className="mx-auto flex max-w-7xl flex-col items-center justify-between gap-3 px-4 text-sm text-muted-foreground sm:flex-row">
-          <span>© {new Date().getFullYear()} MailMaestro. جميع الحقوق محفوظة.</span>
+          <span>© {new Date().getFullYear()} MailMaestro. {tr("جميع الحقوق محفوظة.")}</span>
           <div className="flex gap-6">
             <a href="#" className="hover:text-foreground">
               {tr("الخصوصية")}
