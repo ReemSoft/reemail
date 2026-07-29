@@ -2,26 +2,18 @@ import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { Virtuoso } from "react-virtuoso";
 import DOMPurify from "dompurify";
+import {
+  sanitizeAndHardenEmailHtml,
+  buildEmailSrcDoc,
+  isValidHeightPayload,
+  randomToken,
+} from "@/lib/email-viewer-security";
 
-// Strict allow-list sanitizer for inbound email HTML. DOMPurify's defaults
-// already strip <script>, on*= handlers, and javascript: URLs; we harden a
-// bit further by forbidding tags that can execute or exfiltrate (iframe,
-// object, embed, form, link, meta, base, style) and by forcing external
-// links to open in a new tab without leaking the referrer.
+// Kept as a thin wrapper — the heavy lifting (DOMPurify + CSS url()/@import
+// stripping + anchor hardening) lives in `@/lib/email-viewer-security` and is
+// covered by dedicated tests.
 function sanitizeEmailHtml(html: string): string {
-  if (!html) return "";
-  // Allow <style> and inline style="..." so incoming emails keep their real
-  // design (Gmail/GitHub/newsletters ship inline CSS + <style>). Isolation
-  // and script safety are enforced by rendering inside a sandboxed <iframe>
-  // via EmailBodyFrame — DOMPurify still strips script/iframe/on*= handlers
-  // and javascript: URLs, so allowing style is safe here.
-  const clean = DOMPurify.sanitize(html, {
-    FORBID_TAGS: ["script", "iframe", "object", "embed", "form", "link", "meta", "base"],
-    FORBID_ATTR: ["srcdoc", "formaction"],
-    ALLOW_DATA_ATTR: false,
-  });
-  // Best-effort target hardening — DOMPurify already blocks javascript: URLs.
-  return clean.replace(/<a\s/gi, '<a target="_blank" rel="noopener noreferrer nofollow" ');
+  return sanitizeAndHardenEmailHtml(html);
 }
 
 // Sanitizer for OUTGOING composer HTML — allows inline styles/fonts/colors
@@ -36,93 +28,42 @@ function sanitizeComposerHtml(html: string): string {
 }
 
 /**
- * EmailBodyFrame — renders sanitized email HTML inside a sandboxed iframe.
- *
- * Why: real-world emails ship inline CSS + <style> blocks (Gmail, GitHub,
- * newsletters). Rendering them directly in the app DOM either strips the
- * design (if we forbid style) or leaks the email's CSS into the app shell
- * (if we allow it). Gmail/Outlook/Roundcube all render inside an iframe —
- * we do the same.
- *
- * Safety: sandbox has NO allow-scripts, so JS in the body cannot run even
- * if it slipped past DOMPurify. Links open in a new top-level tab via
- * allow-popups-to-escape-sandbox + our target="_blank" rewrite.
- *
- * Performance: single iframe per open message, height set once after load
- * from body.scrollHeight — no polling, no ResizeObserver on the parent.
+ * EmailBodyFrame — renders sanitized email HTML inside a sandboxed iframe with
+ * a strict Content-Security-Policy. The sandbox has NO `allow-same-origin`,
+ * so the document's origin is opaque ("null"). Only a per-render nonce'd
+ * measurement script may run; it posts height updates to the parent using
+ * the exact parent origin and a per-render channelId, both verified on
+ * receive. Links open in a new top-level tab and never leak referrer.
  */
 function EmailBodyFrame({ html, className }: { html: string; className?: string }) {
   const ref = useRef<HTMLIFrameElement | null>(null);
-  const frameId = useMemo(
-    () => `mm-frame-${Math.random().toString(36).slice(2)}`,
-    [],
-  );
+  const nonce = useMemo(() => randomToken(12), []);
+  const channelId = useMemo(() => `mm-${randomToken(12)}`, []);
   const [height, setHeight] = useState<number>(60);
 
-  const srcDoc = useMemo(() => {
-    // Inline script runs inside opaque-origin sandbox: no access to parent DOM,
-    // no cookies, no storage — only postMessage. Same isolation model as Gmail.
-    const measureScript = `
-      (function(){
-        var last=0;
-        function send(){
-          try{
-            var b=document.body, d=document.documentElement;
-            var h=Math.max(
-              b?b.scrollHeight:0, b?b.offsetHeight:0,
-              d?d.scrollHeight:0, d?d.offsetHeight:0
-            );
-            if(h && Math.abs(h-last)>1){
-              last=h;
-              parent.postMessage({__mm:'h', id:${JSON.stringify(frameId)}, h:h}, '*');
-            }
-          }catch(e){}
-        }
-        // Initial + after full load (fonts/images).
-        if(document.readyState==='complete') send();
-        else window.addEventListener('load', send);
-        window.addEventListener('DOMContentLoaded', send);
-        // Image load fallbacks.
-        Array.prototype.forEach.call(document.images||[], function(img){
-          if(!img.complete){ img.addEventListener('load', send); img.addEventListener('error', send); }
-        });
-        // Native observer — cheap, runs inside the iframe only.
-        try{
-          if(window.ResizeObserver){
-            var ro=new ResizeObserver(send);
-            ro.observe(document.documentElement);
-            if(document.body) ro.observe(document.body);
-          }
-        }catch(e){}
-      })();
-    `;
-    const base = `
-      <base target="_blank">
-      <style>
-        html,body{margin:0;padding:0;background:transparent;color:#111;
-          font-family:'IBM Plex Sans Arabic',system-ui,-apple-system,Segoe UI,sans-serif;
-          font-size:14px;line-height:1.6;word-wrap:break-word;overflow-wrap:anywhere;
-          overflow:hidden;}
-        img,video{max-width:100%;height:auto;border-radius:6px;}
-        table{max-width:100%;}
-        a{color:#2563eb;}
-        blockquote{border-inline-start:3px solid #e5e7eb;margin:8px 0;padding:4px 12px;color:#4b5563;}
-        pre,code{white-space:pre-wrap;word-break:break-word;}
-      </style>`;
-    return `<!doctype html><html><head><meta charset="utf-8">${base}</head><body>${html}<script>${measureScript}<\/script></body></html>`;
-  }, [html, frameId]);
+  const parentOrigin = useMemo(
+    () => (typeof window !== "undefined" ? window.location.origin : "null"),
+    [],
+  );
+
+  const srcDoc = useMemo(
+    () => buildEmailSrcDoc({ html, nonce, channelId, parentOrigin }),
+    [html, nonce, channelId, parentOrigin],
+  );
 
   useEffect(() => {
     function onMsg(e: MessageEvent) {
-      const d = e.data as any;
-      if (!d || d.__mm !== "h" || d.id !== frameId) return;
-      const h = Number(d.h);
-      if (!Number.isFinite(h) || h <= 0) return;
+      // Sandbox without allow-same-origin ⇒ event.origin is the literal
+      // string "null". Reject anything else.
+      if (e.origin !== "null") return;
+      if (!ref.current || e.source !== ref.current.contentWindow) return;
+      if (!isValidHeightPayload(e.data, channelId)) return;
+      const h = (e.data as { h: number }).h;
       setHeight((prev) => (Math.abs(prev - (h + 4)) > 1 ? h + 4 : prev));
     }
     window.addEventListener("message", onMsg);
     return () => window.removeEventListener("message", onMsg);
-  }, [frameId]);
+  }, [channelId]);
 
   return (
     <iframe
@@ -130,6 +71,7 @@ function EmailBodyFrame({ html, className }: { html: string; className?: string 
       title="email-body"
       srcDoc={srcDoc}
       sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
+      referrerPolicy="no-referrer"
       scrolling="no"
       className={className}
       style={{ width: "100%", height, border: 0, display: "block", overflow: "hidden" }}
