@@ -52,6 +52,10 @@ export function sanitizeAndHardenEmailHtml(html: string): string {
     FORBID_TAGS: ["script", "iframe", "object", "embed", "form", "link", "meta", "base"],
     FORBID_ATTR: ["srcdoc", "formaction"],
     ALLOW_DATA_ATTR: false,
+    // Treat the input as body-fragment content so <style> blocks that ship
+    // in real-world newsletters survive sanitization (DOMPurify otherwise
+    // drops <style> at the document root).
+    FORCE_BODY: true,
   });
 
   // Parse in a detached document so we don't touch the app DOM.
