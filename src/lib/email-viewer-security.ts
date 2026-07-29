@@ -142,7 +142,7 @@ export function buildEmailSrcDoc({
     "base-uri 'none'",
     "form-action 'none'",
     "style-src 'unsafe-inline'",
-    "img-src data: blob:",
+    "img-src data: blob: https: http:",
     `script-src 'nonce-${nonce}'`,
   ].join("; ");
 
