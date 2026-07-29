@@ -4422,9 +4422,10 @@ function Composer({
   // stale response never marks newer content clean.
   const generationRef = useRef<number>(0);
   const savedGenerationRef = useRef<number>(0);
-  const isDirtyRef = useRef<boolean>{tr("(false);
-  // Kept for the header tr(\"تم الحفظ منذ …\") UI only — not the dirty source of truth.
-  const lastSavedAtRef = useRef")}<number>(initialDoc?.updatedAt ?? 0);
+  const isDirtyRef = useRef<boolean>(false);
+  // Kept for the header "saved just now" UI only — not the dirty source of truth.
+  const lastSavedAtRef = useRef<number>(initialDoc?.updatedAt ?? 0);
+
   // Diagnostic: last hard-failure code from the saver (null on success).
   const lastFailCodeRef = useRef<string | null>(null);
   const recomputeDirty = () => {
