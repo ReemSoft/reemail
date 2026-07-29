@@ -1,3 +1,5 @@
+import { tr } from "@/i18n";
+import { LanguageSwitcher } from "@/components/language-switcher";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useState } from "react";
 import {
@@ -154,7 +156,7 @@ function CompanyDashboard() {
     setSaving(false);
     if (error) return toast.error(error.message);
     setOriginalCompany(company);
-    toast.success("تم حفظ التغييرات");
+    toast.success(tr("تم حفظ التغييرات"));
   }
 
   async function handleLogout() {
@@ -176,20 +178,20 @@ function CompanyDashboard() {
       <div className="flex min-h-screen items-center justify-center p-8 text-center">
         <div className="flex flex-col items-center gap-3">
           <p className="text-muted-foreground">
-            هذه الصفحة مخصّصة لمدراء الشركات فقط.
+            {tr("هذه الصفحة مخصّصة لمدراء الشركات فقط.")}
           </p>
           <Link
             to="/mail"
             className="inline-flex rounded-lg bg-brand-gradient px-4 py-2 text-sm font-semibold text-white"
           >
-            الذهاب للبريد
+            {tr("الذهاب للبريد")}
           </Link>
           <button
             onClick={handleLogout}
             className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-destructive"
           >
             <LogOut className="h-4 w-4" />
-            تسجيل الخروج
+            {tr("تسجيل الخروج")}
           </button>
         </div>
       </div>
@@ -204,7 +206,7 @@ function CompanyDashboard() {
             <Link to="/mail" className="rounded-lg p-2 hover:bg-muted">
               <ArrowLeft className="h-4 w-4" />
             </Link>
-            <h1 className="text-lg font-bold">لوحة تحكم الشركة</h1>
+            <h1 className="text-lg font-bold">{tr("لوحة تحكم الشركة")}</h1>
           </div>
           <div className="flex items-center gap-2">
             {tab === "branding" && (
@@ -223,17 +225,18 @@ function CompanyDashboard() {
                   ) : (
                     <Save className="h-4 w-4" />
                   )}
-                  حفظ
+                  {tr("حفظ")}
                 </button>
               </div>
             )}
+            <LanguageSwitcher />
             <button
               onClick={handleLogout}
               className="inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium text-muted-foreground transition hover:bg-destructive hover:text-destructive-foreground"
-              title="تسجيل الخروج"
+              title={tr("تسجيل الخروج")}
             >
               <LogOut className="h-4 w-4" />
-              <span className="hidden sm:inline">خروج</span>
+              <span className="hidden sm:inline">{tr("خروج")}</span>
             </button>
           </div>
         </div>
@@ -242,9 +245,9 @@ function CompanyDashboard() {
       <div className="mx-auto grid max-w-6xl gap-6 p-4 md:grid-cols-[220px_1fr] md:p-8">
         <nav className="flex gap-2 overflow-x-auto md:flex-col">
           {[
-            { id: "branding", label: "العلامة التجارية", icon: Palette },
-            { id: "accounts", label: "حسابات البريد", icon: MailIcon, count: accounts.length },
-            { id: "domains", label: "دومينات مشتركة", icon: Globe, count: domains.length },
+            { id: "branding", label: tr("العلامة التجارية"), icon: Palette },
+            { id: "accounts", label: tr("حسابات البريد"), icon: MailIcon, count: accounts.length },
+            { id: "domains", label: tr("دومينات مشتركة"), icon: Globe, count: domains.length },
           ].map((t) => (
             <button
               key={t.id}
@@ -302,42 +305,42 @@ function BrandingTab({
 }) {
   return (
     <div className="rounded-2xl border border-border bg-card p-6 shadow-soft">
-      <h2 className="text-xl font-bold">العلامة التجارية</h2>
+      <h2 className="text-xl font-bold">{tr("العلامة التجارية")}</h2>
       <p className="mt-1 text-sm text-muted-foreground">
-        سيرى عملاؤك هذه العلامة في واجهة البريد الخاصة بهم.
+        {tr("سيرى عملاؤك هذه العلامة في واجهة البريد الخاصة بهم.")}
       </p>
 
       <div className="mt-6 space-y-5">
-        <Field label="اسم الشركة">
+        <Field label={tr("اسم الشركة")}>
           <input
             value={company.name}
             onChange={(e) => setCompany({ ...company, name: e.target.value })}
             className="w-full rounded-lg border border-input bg-background px-4 py-2.5 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
           />
         </Field>
-        <Field label="اسم التطبيق المُخصّص">
+        <Field label={tr("اسم التطبيق المُخصّص")}>
           <input
             value={company.app_name ?? ""}
             onChange={(e) => setCompany({ ...company, app_name: e.target.value })}
-            placeholder="مثال: Aramco Mail"
+            placeholder={tr("مثال: Aramco Mail")}
             className="w-full rounded-lg border border-input bg-background px-4 py-2.5 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
           />
         </Field>
 
         <div className="grid gap-4 sm:grid-cols-2">
           <ColorInput
-            label="اللون الأساسي"
+            label={tr("اللون الأساسي")}
             value={company.brand_primary}
             onChange={(v) => setCompany({ ...company, brand_primary: v })}
           />
           <ColorInput
-            label="لون التمييز"
+            label={tr("لون التمييز")}
             value={company.brand_accent}
             onChange={(v) => setCompany({ ...company, brand_accent: v })}
           />
         </div>
 
-        <Field label="شعار الشركة">
+        <Field label={tr("شعار الشركة")}>
           <div className="flex items-center gap-4">
             <div className="flex h-20 w-20 items-center justify-center rounded-2xl border-2 border-dashed border-border bg-muted/30">
               {company.logo_url ? (
@@ -353,7 +356,7 @@ function BrandingTab({
             <input
               value={company.logo_url ?? ""}
               onChange={(e) => setCompany({ ...company, logo_url: e.target.value })}
-              placeholder="https://... رابط الشعار"
+              placeholder={tr("https://... رابط الشعار")}
               className="flex-1 rounded-lg border border-input bg-background px-4 py-2.5 text-sm outline-none focus:border-primary"
               dir="ltr"
             />
@@ -445,7 +448,7 @@ function AccountsTab({
         .eq("id", editingId);
       setSubmitting(false);
       if (error) return toast.error(error.message);
-      toast.success("تم تحديث الحساب");
+      toast.success(tr("تم تحديث الحساب"));
     } else {
       const { error } = await supabase.from("mail_accounts").insert({
         company_id: companyId,
@@ -454,7 +457,7 @@ function AccountsTab({
       });
       setSubmitting(false);
       if (error) return toast.error(error.message);
-      toast.success("تمت إضافة الحساب");
+      toast.success(tr("تمت إضافة الحساب"));
     }
 
     closeModal();
@@ -464,9 +467,9 @@ function AccountsTab({
   async function handleDelete(id: string) {
     const confirmed = await confirm({
       title: "حذف الحساب",
-      description: "هل أنت متأكد من حذف هذا الحساب؟ لا يمكن التراجع عن هذا الإجراء.",
-      confirmLabel: "حذف",
-      cancelLabel: "إلغاء",
+      description: tr("هل أنت متأكد من حذف هذا الحساب؟ لا يمكن التراجع عن هذا الإجراء."),
+      confirmLabel: tr("حذف"),
+      cancelLabel: tr("إلغاء"),
       variant: "destructive",
     });
     if (!confirmed) return;
@@ -474,7 +477,7 @@ function AccountsTab({
     const { error } = await supabase.from("mail_accounts").delete().eq("id", id);
     setBusyId(null);
     if (error) return toast.error(error.message);
-    toast.success("تم الحذف");
+    toast.success(tr("تم الحذف"));
     await onChange();
   }
 
@@ -496,9 +499,9 @@ function AccountsTab({
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-xl font-bold">حسابات البريد (IMAP/SMTP)</h2>
+          <h2 className="text-xl font-bold">{tr("حسابات البريد (IMAP/SMTP)")}</h2>
           <p className="text-sm text-muted-foreground">
-            أضف عنوان البريد وإعدادات السيرفر فقط. كلمة مرور البريد يُدخلها العميل بنفسه عند فتح صندوقه.
+            {tr("أضف عنوان البريد وإعدادات السيرفر فقط. كلمة مرور البريد يُدخلها العميل بنفسه عند فتح صندوقه.")}
           </p>
         </div>
         <button
@@ -506,14 +509,14 @@ function AccountsTab({
           className="inline-flex items-center gap-1.5 rounded-lg bg-brand-gradient px-4 py-2 text-sm font-semibold text-white shadow-soft"
         >
           <Plus className="h-4 w-4" />
-          حساب جديد
+          {tr("حساب جديد")}
         </button>
       </div>
 
       <div className="overflow-hidden rounded-2xl border border-border bg-card shadow-soft">
         {accounts.length === 0 ? (
           <div className="p-10 text-center text-sm text-muted-foreground">
-            لا توجد حسابات بريد بعد.
+            {tr("لا توجد حسابات بريد بعد.")}
           </div>
         ) : (
           <ul className="divide-y divide-border">
@@ -530,7 +533,7 @@ function AccountsTab({
                       </p>
                       {a.is_default && (
                         <span className="rounded-md bg-emerald-500/10 px-1.5 py-0.5 text-xs text-emerald-600">
-                          افتراضي
+                          {tr("افتراضي")}
                         </span>
                       )}
                     </div>
@@ -547,7 +550,7 @@ function AccountsTab({
                   <button
                     onClick={() => startEdit(a)}
                     className="rounded-md p-2 text-muted-foreground hover:bg-primary/10 hover:text-primary"
-                    title="تعديل"
+                    title={tr("تعديل")}
                   >
                     <Pencil className="h-4 w-4" />
                   </button>
@@ -555,7 +558,7 @@ function AccountsTab({
                     onClick={() => handleDelete(a.id)}
                     disabled={busyId === a.id}
                     className="rounded-md p-2 text-muted-foreground hover:bg-destructive/10 hover:text-destructive disabled:opacity-50"
-                    title="حذف"
+                    title={tr("حذف")}
                   >
                     {busyId === a.id ? (
                       <Loader2 className="h-4 w-4 animate-spin" />
@@ -572,14 +575,14 @@ function AccountsTab({
 
       {open && (
         <Modal
-          title={editingId ? "تعديل إعدادات البريد" : "إعدادات بريد جديدة"}
+          title={editingId ? tr("تعديل إعدادات البريد") : tr("إعدادات بريد جديدة")}
           onClose={closeModal}
         >
           <form onSubmit={handleSubmit} className="space-y-4">
 
             <div>
               <p className="mb-1.5 text-xs font-medium text-muted-foreground">
-                اختصارات:
+                {tr("اختصارات:")}
               </p>
               <div className="flex flex-wrap gap-1.5">
                 {IMAP_PRESETS.map((p) => (
@@ -596,7 +599,7 @@ function AccountsTab({
             </div>
 
             <div className="grid gap-4 sm:grid-cols-2">
-              <Field label="البريد الإلكتروني">
+              <Field label={tr("البريد الإلكتروني")}>
                 <input
                   required
                   type="email"
@@ -608,7 +611,7 @@ function AccountsTab({
                   className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary"
                 />
               </Field>
-              <Field label="اسم العرض (اختياري)">
+              <Field label={tr("اسم العرض (اختياري)")}>
                 <input
                   value={form.display_name}
                   onChange={(e) => setForm({ ...form, display_name: e.target.value })}
@@ -619,7 +622,7 @@ function AccountsTab({
 
             <fieldset className="rounded-xl border border-border p-3">
               <legend className="px-1 text-xs font-semibold text-muted-foreground">
-                خادم الوارد (IMAP)
+                {tr("خادم الوارد (IMAP)")}
               </legend>
               <div className="grid gap-3 sm:grid-cols-[1fr_100px_auto]">
                 <input
@@ -654,7 +657,7 @@ function AccountsTab({
 
             <fieldset className="rounded-xl border border-border p-3">
               <legend className="px-1 text-xs font-semibold text-muted-foreground">
-                خادم الصادر (SMTP)
+                {tr("خادم الصادر (SMTP)")}
               </legend>
               <div className="grid gap-3 sm:grid-cols-[1fr_100px_auto]">
                 <input
@@ -693,7 +696,7 @@ function AccountsTab({
                 onClick={() => setOpen(false)}
                 className="rounded-lg px-4 py-2 text-sm hover:bg-muted"
               >
-                إلغاء
+                {tr("إلغاء")}
               </button>
               <button
                 type="submit"
@@ -770,7 +773,7 @@ function DomainsTab({
     };
     if (!payload.domain.includes(".")) {
       setSubmitting(false);
-      return toast.error("أدخل دومين صحيح مثل example.com");
+      return toast.error(tr("أدخل دومين صحيح مثل example.com"));
     }
     if (editingId) {
       const { error } = await supabase
@@ -779,14 +782,14 @@ function DomainsTab({
         .eq("id", editingId);
       setSubmitting(false);
       if (error) return toast.error(error.message);
-      toast.success("تم تحديث الدومين");
+      toast.success(tr("تم تحديث الدومين"));
     } else {
       const { error } = await supabase
         .from("email_domains")
         .insert({ company_id: companyId, ...payload });
       setSubmitting(false);
       if (error) return toast.error(error.message);
-      toast.success("تمت إضافة الدومين");
+      toast.success(tr("تمت إضافة الدومين"));
     }
     closeModal();
     await onChange();
@@ -795,9 +798,9 @@ function DomainsTab({
   async function handleDelete(id: string) {
     const confirmed = await confirm({
       title: "حذف إعدادات الدومين",
-      description: "هل أنت متأكد من حذف إعدادات هذا الدومين؟ لا يمكن التراجع عن هذا الإجراء.",
-      confirmLabel: "حذف",
-      cancelLabel: "إلغاء",
+      description: tr("هل أنت متأكد من حذف إعدادات هذا الدومين؟ لا يمكن التراجع عن هذا الإجراء."),
+      confirmLabel: tr("حذف"),
+      cancelLabel: tr("إلغاء"),
       variant: "destructive",
     });
     if (!confirmed) return;
@@ -805,7 +808,7 @@ function DomainsTab({
     const { error } = await supabase.from("email_domains").delete().eq("id", id);
     setBusyId(null);
     if (error) return toast.error(error.message);
-    toast.success("تم الحذف");
+    toast.success(tr("تم الحذف"));
     await onChange();
   }
 
@@ -825,9 +828,9 @@ function DomainsTab({
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-xl font-bold">دومينات مشتركة</h2>
+          <h2 className="text-xl font-bold">{tr("دومينات مشتركة")}</h2>
           <p className="text-sm text-muted-foreground">
-            أضف إعدادات IMAP/SMTP للدومين مرة واحدة، وأي بريد على نفس الدومين يعمل تلقائياً بدون إضافة كل حساب على حدة.
+            {tr("أضف إعدادات IMAP/SMTP للدومين مرة واحدة، وأي بريد على نفس الدومين يعمل تلقائياً بدون إضافة كل حساب على حدة.")}
           </p>
         </div>
         <button
@@ -835,14 +838,14 @@ function DomainsTab({
           className="inline-flex items-center gap-1.5 rounded-lg bg-brand-gradient px-4 py-2 text-sm font-semibold text-white shadow-soft"
         >
           <Plus className="h-4 w-4" />
-          دومين جديد
+          {tr("دومين جديد")}
         </button>
       </div>
 
       <div className="overflow-hidden rounded-2xl border border-border bg-card shadow-soft">
         {domains.length === 0 ? (
           <div className="p-10 text-center text-sm text-muted-foreground">
-            لم تُضف أي دومين بعد.
+            {tr("لم تُضف أي دومين بعد.")}
           </div>
         ) : (
           <ul className="divide-y divide-border">
@@ -862,7 +865,7 @@ function DomainsTab({
                 <button
                   onClick={() => startEdit(d)}
                   className="rounded-md p-2 text-muted-foreground hover:bg-primary/10 hover:text-primary"
-                  title="تعديل"
+                  title={tr("تعديل")}
                 >
                   <Pencil className="h-4 w-4" />
                 </button>
@@ -870,7 +873,7 @@ function DomainsTab({
                   onClick={() => handleDelete(d.id)}
                   disabled={busyId === d.id}
                   className="rounded-md p-2 text-muted-foreground hover:bg-destructive/10 hover:text-destructive disabled:opacity-50"
-                  title="حذف"
+                  title={tr("حذف")}
                 >
                   {busyId === d.id ? (
                     <Loader2 className="h-4 w-4 animate-spin" />
@@ -886,12 +889,12 @@ function DomainsTab({
 
       {open && (
         <Modal
-          title={editingId ? "تعديل إعدادات الدومين" : "إعدادات دومين جديدة"}
+          title={editingId ? tr("تعديل إعدادات الدومين") : tr("إعدادات دومين جديدة")}
           onClose={closeModal}
         >
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
-              <p className="mb-1.5 text-xs font-medium text-muted-foreground">اختصارات:</p>
+              <p className="mb-1.5 text-xs font-medium text-muted-foreground">{tr("اختصارات:")}</p>
               <div className="flex flex-wrap gap-1.5">
                 {IMAP_PRESETS.map((p) => (
                   <button
@@ -906,7 +909,7 @@ function DomainsTab({
               </div>
             </div>
 
-            <Field label="الدومين">
+            <Field label={tr("الدومين")}>
               <input
                 required
                 dir="ltr"
@@ -919,7 +922,7 @@ function DomainsTab({
 
             <fieldset className="rounded-xl border border-border p-3">
               <legend className="px-1 text-xs font-semibold text-muted-foreground">
-                خادم الوارد (IMAP)
+                {tr("خادم الوارد (IMAP)")}
               </legend>
               <div className="grid gap-3 sm:grid-cols-[1fr_100px_auto]">
                 <input
@@ -950,7 +953,7 @@ function DomainsTab({
 
             <fieldset className="rounded-xl border border-border p-3">
               <legend className="px-1 text-xs font-semibold text-muted-foreground">
-                خادم الصادر (SMTP)
+                {tr("خادم الصادر (SMTP)")}
               </legend>
               <div className="grid gap-3 sm:grid-cols-[1fr_100px_auto]">
                 <input
@@ -985,7 +988,7 @@ function DomainsTab({
                 onClick={closeModal}
                 className="rounded-lg px-4 py-2 text-sm hover:bg-muted"
               >
-                إلغاء
+                {tr("إلغاء")}
               </button>
               <button
                 type="submit"

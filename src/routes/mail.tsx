@@ -1,3 +1,5 @@
+import { tr } from "@/i18n";
+import { LanguageSwitcher } from "@/components/language-switcher";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { Virtuoso } from "react-virtuoso";
@@ -83,13 +85,13 @@ function EmailBodyFrame({ html, className }: { html: string; className?: string 
           role="status"
           className="mb-2 flex flex-wrap items-center justify-between gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900"
         >
-          <span>تم حظر الصور الخارجية لحماية خصوصيتك</span>
+          <span>{tr("تم حظر الصور الخارجية لحماية خصوصيتك")}</span>
           <button
             type="button"
             onClick={() => setAllowRemoteImages(true)}
             className="rounded border border-amber-300 bg-white px-2 py-1 text-xs font-medium text-amber-900 hover:bg-amber-100"
           >
-            عرض الصور
+            {tr("عرض الصور")}
           </button>
         </div>
       )}
@@ -324,14 +326,14 @@ export const Route = createFileRoute("/mail")({
 });
 
 const FOLDER_META: Record<MailFolder, { label: string; icon: typeof Inbox }> = {
-  inbox: { label: "الوارد", icon: Inbox },
-  starred: { label: "المميّزة", icon: Star },
-  sent: { label: "المرسلة", icon: Send },
-  drafts: { label: "المسودّات", icon: FileText },
-  spam: { label: "المزعجة", icon: AlertOctagon },
-  trash: { label: "المهملات", icon: Trash2 },
-  archive: { label: "الأرشيف", icon: Archive },
-  all: { label: "الكل", icon: MailIcon },
+  inbox: { label: tr("الوارد"), icon: Inbox },
+  starred: { label: tr("المميّزة"), icon: Star },
+  sent: { label: tr("المرسلة"), icon: Send },
+  drafts: { label: tr("المسودّات"), icon: FileText },
+  spam: { label: tr("المزعجة"), icon: AlertOctagon },
+  trash: { label: tr("المهملات"), icon: Trash2 },
+  archive: { label: tr("الأرشيف"), icon: Archive },
+  all: { label: tr("الكل"), icon: MailIcon },
 };
 
 function parseMessageId(id: string): { folder: MailFolder; uid: number } | null {
@@ -657,7 +659,7 @@ function buildEditDraft(message: MailMessage, draftsFolderPath?: string): Compos
           uidValidity: String(message.uidValidity),
         }
       : undefined;
-  const rawSubject = message.subject === "(بدون موضوع)" ? "" : message.subject;
+  const rawSubject = message.subject === tr("(بدون موضوع)") ? "" : message.subject;
   const existingAttachments =
     message.attachments && message.attachments.length > 0
       ? { messageId: message.id, attachments: message.attachments }
@@ -856,7 +858,7 @@ function useMailData(session: MailSession | null) {
       setBridgeError(null);
     } catch (err: any) {
       if (countsMutationGen.current !== gen) return;
-      setBridgeError(err?.message || "فشل الاتصال بخادم البريد");
+      setBridgeError(err?.message || tr("فشل الاتصال بخادم البريد"));
       setCounts(
         Object.fromEntries(
           getMockFolderCounts().map((c) => [
@@ -1046,7 +1048,7 @@ function useMailData(session: MailSession | null) {
         setIndexCursor(null);
       } catch (err: any) {
         if (loadReqIdRef.current !== reqId) return;
-        setBridgeError(err?.message || "تعذّر الاتصال بخادم البريد");
+        setBridgeError(err?.message || tr("تعذّر الاتصال بخادم البريد"));
         setHasMore(false);
         setUseMock(false);
         setIndexCursor(null);
@@ -1480,7 +1482,7 @@ function MailApp() {
   //   rollback in .catch fires.
   const mutateFlag = useCallback(
     async (canonical: MailFolder, uid: number, kind: "seen" | "flagged", value: boolean) => {
-      if (!session) throw new Error("لا توجد جلسة بريد");
+      if (!session) throw new Error(tr("لا توجد جلسة بريد"));
       if (session.mailSessionToken) {
         const res = await updateFlag({
           data: {
@@ -1533,12 +1535,12 @@ function MailApp() {
       /** Omit → permanent delete (only valid when sourceCanonical === "trash"). */
       toFolder?: MailFolder;
     }): Promise<IndexMoveResult | null> => {
-      if (!session) throw new Error("لا توجد جلسة بريد");
+      if (!session) throw new Error(tr("لا توجد جلسة بريد"));
       const dest = params.toFolder;
       // Permanent-delete branch — MUST use indexDeleteMessage (Blocker 1).
       if (dest === undefined) {
         if (params.sourceCanonical !== "trash") {
-          throw new Error("الحذف النهائي مسموح فقط من مجلد المهملات");
+          throw new Error(tr("الحذف النهائي مسموح فقط من مجلد المهملات"));
         }
         if (session.mailSessionToken) {
           const res = await deleteIndex({
@@ -1674,7 +1676,7 @@ function MailApp() {
             hideRow(id);
             setSelectedId((cur) => (cur === id ? null : cur));
             setSelectedMessage((cur) => (cur && cur.id === id ? null : cur));
-            toast.info("تم إزالة رسالة مفقودة من القائمة");
+            toast.info(tr("تم إزالة رسالة مفقودة من القائمة"));
             return null;
           }
 
@@ -1762,12 +1764,12 @@ function MailApp() {
         if (res.ok) setDeepResults(applyPending(res.messages));
         else {
           setDeepResults([]);
-          setDeepError(res.error || "فشل البحث على السيرفر");
+          setDeepError(res.error || tr("فشل البحث على السيرفر"));
         }
       } catch (err: any) {
         if (!cancelled) {
           setDeepResults([]);
-          setDeepError(err?.message || "فشل البحث على السيرفر");
+          setDeepError(err?.message || tr("فشل البحث على السيرفر"));
         }
       } finally {
         if (!cancelled) setDeepLoading(false);
@@ -1816,7 +1818,7 @@ function MailApp() {
     try {
       const msg = await fetchMessage(id);
       if (msg) setSelectedMessage(msg);
-      else if (!cached) throw new Error("فشل فتح الرسالة");
+      else if (!cached) throw new Error(tr("فشل فتح الرسالة"));
 
       // M4-C: Drafts folder → open the message directly inside the composer
       // as an Edit-Draft (server-side draft is the source of truth). We
@@ -1850,7 +1852,7 @@ function MailApp() {
       }
     } catch (err: any) {
       if (!cached) {
-        toast.error(err?.message || "فشل فتح الرسالة");
+        toast.error(err?.message || tr("فشل فتح الرسالة"));
         setSelectedMessage(getMockMessage(id) ?? null);
       }
     } finally {
@@ -1951,7 +1953,7 @@ function MailApp() {
       );
       const c = messageCache.current.get(id);
       if (c) messageCache.current.set(id, { ...c, starred: !nextStarred });
-      toast.error(err?.message || "فشل تحديث المميّز");
+      toast.error(err?.message || tr("فشل تحديث المميّز"));
     } finally {
       // V4: always release the star-count "hot" window, success or failure.
       endStarMutation();
@@ -1998,7 +2000,7 @@ function MailApp() {
         const unread = Math.max(0, cur.unread + delta);
         return { ...prev, [parsed.folder]: { ...cur, unread } };
       });
-      toast.error(err?.message || "فشل تحديث حالة القراءة");
+      toast.error(err?.message || tr("فشل تحديث حالة القراءة"));
     }
   }
 
@@ -2094,7 +2096,7 @@ function MailApp() {
 
         confirmHideRow(id);
         confirmPendingMove(id);
-        toast.success("تم نقل الرسالة");
+        toast.success(tr("تم نقل الرسالة"));
       } catch (err: any) {
         // Per-item rollback ONLY. Do not touch other messages that may have
         // changed concurrently.
@@ -2107,7 +2109,7 @@ function MailApp() {
           setSelectedId(id);
           if (prevSelected) setSelectedMessage(prevSelected);
         }
-        toast.error(err?.message || "فشل نقل الرسالة");
+        toast.error(err?.message || tr("فشل نقل الرسالة"));
       }
     });
   }
@@ -2117,12 +2119,12 @@ function MailApp() {
     if (!parsed || !session) return;
     const isTrash = parsed.folder === "trash";
     const confirmed = await confirm({
-      title: isTrash ? "حذف نهائي" : "نقل إلى المهملات",
+      title: isTrash ? tr("حذف نهائي") : tr("نقل إلى المهملات"),
       description: isTrash
-        ? "هل أنت متأكد من حذف هذه الرسالة نهائياً؟ لا يمكن التراجع عن هذا الإجراء."
-        : "هل أنت متأكد من نقل هذه الرسالة إلى المهملات؟",
-      confirmLabel: isTrash ? "حذف" : "نقل",
-      cancelLabel: "إلغاء",
+        ? tr("هل أنت متأكد من حذف هذه الرسالة نهائياً؟ لا يمكن التراجع عن هذا الإجراء.")
+        : tr("هل أنت متأكد من نقل هذه الرسالة إلى المهملات؟"),
+      confirmLabel: isTrash ? tr("حذف") : tr("نقل"),
+      cancelLabel: tr("إلغاء"),
       variant: isTrash ? "destructive" : "default",
     });
     if (!confirmed) return;
@@ -2187,7 +2189,7 @@ function MailApp() {
 
         confirmHideRow(id);
         confirmPendingMove(id);
-        toast.success(isTrash ? "تم حذف الرسالة نهائياً" : "تم نقل الرسالة إلى المهملات");
+        toast.success(isTrash ? tr("تم حذف الرسالة نهائياً") : tr("تم نقل الرسالة إلى المهملات"));
       } catch (err: any) {
         unhideRow(id);
         rollbackPendingMove(id);
@@ -2199,7 +2201,7 @@ function MailApp() {
           setSelectedId(id);
           if (prevSelected) setSelectedMessage(prevSelected);
         }
-        toast.error(err?.message || (isTrash ? "فشل حذف الرسالة" : "فشل نقل الرسالة إلى المهملات"));
+        toast.error(err?.message || (isTrash ? tr("فشل حذف الرسالة") : tr("فشل نقل الرسالة إلى المهملات")));
       }
     });
   }
@@ -2244,7 +2246,7 @@ function MailApp() {
         confirmHideRow(id);
         confirmPendingMove(id);
         const label = FOLDER_META[target as MailFolder]?.label || target;
-        toast.success(`تم استعادة الرسالة إلى ${label}`);
+        toast.success(tr(`تم استعادة الرسالة إلى ${label}`));
       } catch (err: any) {
         unhideRow(id);
         rollbackPendingMove(id);
@@ -2255,7 +2257,7 @@ function MailApp() {
           setSelectedId(id);
           if (prevSelected) setSelectedMessage(prevSelected);
         }
-        toast.error(err?.message || "فشل استعادة الرسالة");
+        toast.error(err?.message || tr("فشل استعادة الرسالة"));
       }
     });
   }
@@ -2295,7 +2297,7 @@ function MailApp() {
         setSelectedId(prevSelectedId);
         setSelectedMessage(prevSelected);
       }
-      toast.error(err?.message || "فشل التعليم كغير مقروءة");
+      toast.error(err?.message || tr("فشل التعليم كغير مقروءة"));
     }
   }
 
@@ -2466,9 +2468,9 @@ function MailApp() {
         setSelectedId(prevSelectedId);
         setSelectedMessage(prevSelected);
       }
-      toast.error(`فشل نقل ${failedIds.length} من ${ids.length} رسالة`);
+      toast.error(tr(`فشل نقل ${failedIds.length} من ${ids.length} رسالة`));
     } else {
-      toast.success(`تم نقل ${ids.length} رسالة`);
+      toast.success(tr(`تم نقل ${ids.length} رسالة`));
     }
   }
 
@@ -2477,12 +2479,12 @@ function MailApp() {
     const ids = Array.from(selection);
     const isTrash = folder === "trash";
     const confirmed = await confirm({
-      title: isTrash ? "حذف نهائي" : "نقل إلى المهملات",
+      title: isTrash ? tr("حذف نهائي") : tr("نقل إلى المهملات"),
       description: isTrash
-        ? `هل أنت متأكد من حذف ${ids.length} رسالة نهائياً؟ لا يمكن التراجع عن هذا الإجراء.`
-        : `هل أنت متأكد من نقل ${ids.length} رسالة إلى المهملات؟`,
-      confirmLabel: isTrash ? "حذف" : "نقل",
-      cancelLabel: "إلغاء",
+        ? tr(`هل أنت متأكد من حذف ${ids.length} رسالة نهائياً؟ لا يمكن التراجع عن هذا الإجراء.`)
+        : tr(`هل أنت متأكد من نقل ${ids.length} رسالة إلى المهملات؟`),
+      confirmLabel: isTrash ? tr("حذف") : tr("نقل"),
+      cancelLabel: tr("إلغاء"),
       variant: isTrash ? "destructive" : "default",
     });
     if (!confirmed) return;
@@ -2605,12 +2607,12 @@ function MailApp() {
       }
       toast.error(
         isTrash
-          ? `فشل حذف ${failedIds.length} من ${ids.length} رسالة`
-          : `فشل نقل ${failedIds.length} من ${ids.length} رسالة إلى المهملات`,
+          ? tr(`فشل حذف ${failedIds.length} من ${ids.length} رسالة`)
+          : tr(`فشل نقل ${failedIds.length} من ${ids.length} رسالة إلى المهملات`),
       );
     } else {
       toast.success(
-        isTrash ? `تم حذف ${ids.length} رسالة` : `تم نقل ${ids.length} رسالة إلى المهملات`,
+        isTrash ? tr(`تم حذف ${ids.length} رسالة`) : tr(`تم نقل ${ids.length} رسالة إلى المهملات`),
       );
     }
   }
@@ -2697,9 +2699,9 @@ function MailApp() {
         setSelectedId(prevSelectedId);
         setSelectedMessage(prevSelected);
       }
-      toast.error(`فشل استعادة ${failedIds.length} من ${ids.length} رسالة`);
+      toast.error(tr(`فشل استعادة ${failedIds.length} من ${ids.length} رسالة`));
     } else {
-      toast.success(`تم استعادة ${ids.length} رسالة`);
+      toast.success(tr(`تم استعادة ${ids.length} رسالة`));
     }
   }
 
@@ -2719,8 +2721,8 @@ function MailApp() {
       await mutateFlag(parsed.folder, parsed.uid, "seen", false);
     });
     setBulkBusy(false);
-    if (failed > 0) toast.error(`فشل تعليم ${failed} رسالة`);
-    else toast.success(`تم تعليم ${ids.length} رسالة كغير مقروءة`);
+    if (failed > 0) toast.error(tr(`فشل تعليم ${failed} رسالة`));
+    else toast.success(tr(`تم تعليم ${ids.length} رسالة كغير مقروءة`));
     loadCountsSoft();
   }
 
@@ -2761,12 +2763,12 @@ function MailApp() {
       {bridgeError && (
         <div className="flex items-center justify-center gap-2 bg-warning px-3 py-2 text-xs font-medium text-warning-foreground">
           <AlertOctagon className="h-4 w-4" />
-          <span>تعذّر الاتصال بخادم البريد. سنعيد المحاولة تلقائياً.</span>
+          <span>{tr("تعذّر الاتصال بخادم البريد. سنعيد المحاولة تلقائياً.")}</span>
           <button
             onClick={() => rawRefresh()}
             className="underline underline-offset-2 hover:opacity-80"
           >
-            إعادة المحاولة الآن
+            {tr("إعادة المحاولة الآن")}
           </button>
         </div>
       )}
@@ -2776,7 +2778,7 @@ function MailApp() {
         <button
           onClick={() => setSidebarOpen((s) => !s)}
           className="rounded-lg p-2 hover:bg-muted lg:hidden"
-          aria-label="القائمة"
+          aria-label={tr("القائمة")}
         >
           <Menu className="h-5 w-5" />
         </button>
@@ -2809,15 +2811,15 @@ function MailApp() {
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder={searchMode === "deep" ? "بحث شامل على السيرفر…" : "ابحث في البريد..."}
+            placeholder={searchMode === "deep" ? tr("بحث شامل على السيرفر…") : tr("ابحث في البريد...")}
             className="w-full bg-transparent px-1 text-sm outline-none placeholder:text-muted-foreground"
           />
           {query && (
             <button
               onClick={() => setQuery("")}
               className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
-              title="مسح"
-              aria-label="مسح"
+              title={tr("مسح")}
+              aria-label={tr("مسح")}
             >
               <X className="h-3.5 w-3.5" />
             </button>
@@ -2830,20 +2832,20 @@ function MailApp() {
                     ? "bg-primary/10 text-primary hover:bg-primary/15"
                     : "text-muted-foreground hover:bg-muted"
                 }`}
-                title="خيارات البحث"
+                title={tr("خيارات البحث")}
               >
                 {searchMode === "deep" ? (
                   <Globe className="h-3.5 w-3.5" />
                 ) : (
                   <Zap className="h-3.5 w-3.5" />
                 )}
-                <span className="hidden sm:inline">{searchMode === "deep" ? "شامل" : "سريع"}</span>
+                <span className="hidden sm:inline">{searchMode === "deep" ? tr("شامل") : tr("سريع")}</span>
                 <ChevronDown className="h-3 w-3 opacity-60" />
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-64">
               <div className="px-2 pb-1 pt-1 text-xs font-semibold text-muted-foreground">
-                نمط البحث
+                {tr("نمط البحث")}
               </div>
               <DropdownMenuItem
                 onSelect={() => setSearchMode("quick")}
@@ -2852,11 +2854,11 @@ function MailApp() {
                 <Zap className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
                 <div className="flex-1">
                   <div className="flex items-center justify-between">
-                    <span className="font-medium">بحث سريع</span>
+                    <span className="font-medium">{tr("بحث سريع")}</span>
                     {searchMode === "quick" && <Check className="h-3.5 w-3.5 text-primary" />}
                   </div>
                   <div className="text-[11px] text-muted-foreground">
-                    فوري في الرسائل المعروضة — دون أي طلب للسيرفر
+                    {tr("فوري في الرسائل المعروضة — دون أي طلب للسيرفر")}
                   </div>
                 </div>
               </DropdownMenuItem>
@@ -2868,11 +2870,11 @@ function MailApp() {
                 <Globe className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
                 <div className="flex-1">
                   <div className="flex items-center justify-between">
-                    <span className="font-medium">بحث شامل على السيرفر</span>
+                    <span className="font-medium">{tr("بحث شامل على السيرفر")}</span>
                     {searchMode === "deep" && <Check className="h-3.5 w-3.5 text-primary" />}
                   </div>
                   <div className="text-[11px] text-muted-foreground">
-                    IMAP SEARCH على كامل المجلد الحالي (الموضوع + المرسل + المستلمين)
+                    {tr("IMAP SEARCH على كامل المجلد الحالي (الموضوع + المرسل + المستلمين)")}
                   </div>
                 </div>
               </DropdownMenuItem>
@@ -2890,10 +2892,10 @@ function MailApp() {
                 </div>
                 <div className="flex-1">
                   <div className="flex items-center justify-between">
-                    <span className="font-medium">تضمين نص الرسالة</span>
+                    <span className="font-medium">{tr("تضمين نص الرسالة")}</span>
                   </div>
                   <div className="text-[11px] text-muted-foreground">
-                    أبطأ لكنه يبحث داخل محتوى الرسائل أيضاً
+                    {tr("أبطأ لكنه يبحث داخل محتوى الرسائل أيضاً")}
                   </div>
                 </div>
               </DropdownMenuItem>
@@ -2913,31 +2915,33 @@ function MailApp() {
             onClick={refresh}
             disabled={refreshing}
             className="hidden items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm font-medium text-muted-foreground transition hover:bg-muted hover:text-foreground disabled:opacity-70 sm:inline-flex"
-            title="تحديث البريد"
+            title={tr("تحديث البريد")}
           >
             <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin text-primary" : ""}`} />
-            <span className="hidden lg:inline">{refreshing ? "جاري التحديث..." : "تحديث"}</span>
+            <span className="hidden lg:inline">{refreshing ? tr("جاري التحديث...") : tr("تحديث")}</span>
           </button>
           <button
             onClick={refresh}
             disabled={refreshing}
             className="rounded-lg p-2 hover:bg-muted disabled:opacity-70 sm:hidden"
-            aria-label="تحديث"
+            aria-label={tr("تحديث")}
           >
             <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin text-primary" : ""}`} />
           </button>
+          <LanguageSwitcher />
           <button
+
             onClick={handleSignOut}
             className="hidden items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm font-medium text-muted-foreground hover:bg-destructive/10 hover:text-destructive sm:inline-flex"
-            title="تسجيل الخروج"
+            title={tr("تسجيل الخروج")}
           >
             <LogOut className="h-4 w-4" />
-            <span className="hidden lg:inline">خروج</span>
+            <span className="hidden lg:inline">{tr("خروج")}</span>
           </button>
           <button
             onClick={handleSignOut}
             className="rounded-lg p-2 hover:bg-muted sm:hidden"
-            aria-label="خروج"
+            aria-label={tr("خروج")}
           >
             <LogOut className="h-4 w-4" />
           </button>
@@ -2961,7 +2965,7 @@ function MailApp() {
               className="flex w-full items-center gap-3 rounded-2xl bg-brand-gradient px-5 py-3.5 text-sm font-semibold text-white shadow-brand transition hover:scale-[1.02]"
             >
               <Pencil className="h-4 w-4" />
-              رسالة جديدة
+              {tr("رسالة جديدة")}
             </button>
           </div>
 
@@ -3026,8 +3030,8 @@ function MailApp() {
                 className="flex h-9 w-9 shrink-0 items-center justify-center rounded hover:bg-muted"
                 title={
                   selection.size >= filteredMessages.length && filteredMessages.length > 0
-                    ? "إلغاء التحديد"
-                    : "تحديد الكل"
+                    ? tr("إلغاء التحديد")
+                    : tr("تحديد الكل")
                 }
               >
                 {selection.size >= filteredMessages.length && filteredMessages.length > 0 ? (
@@ -3039,7 +3043,7 @@ function MailApp() {
                 )}
               </button>
               <span className="font-semibold text-foreground">
-                {selection.size > 0 ? `${selection.size} محددة` : "اختر الرسائل"}
+                {selection.size > 0 ? tr(`${selection.size} محددة`) : tr("اختر الرسائل")}
               </span>
               <div className="flex-1" />
               {bulkBusy && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />}
@@ -3049,10 +3053,10 @@ function MailApp() {
                     <button
                       disabled={bulkBusy}
                       className="flex items-center gap-1.5 rounded px-2.5 py-1.5 text-xs font-medium text-foreground transition hover:bg-muted disabled:opacity-50"
-                      title="إجراءات"
+                      title={tr("إجراءات")}
                     >
                       <MoreVertical className="h-4 w-4" />
-                      <span>إجراءات</span>
+                      <span>{tr("إجراءات")}</span>
                     </button>
                   </DropdownMenuTrigger>
 
@@ -3065,7 +3069,7 @@ function MailApp() {
                           className="cursor-pointer hover:bg-accent focus:bg-accent"
                         >
                           <ArchiveRestore className="ms-2 h-4 w-4" />
-                          استعادة المحدد
+                          {tr("استعادة المحدد")}
                         </DropdownMenuItem>
                         <DropdownMenuSeparator />
                       </>
@@ -3076,7 +3080,7 @@ function MailApp() {
                       className="cursor-pointer hover:bg-accent focus:bg-accent"
                     >
                       <Archive className="ms-2 h-4 w-4" />
-                      أرشفة المحدد
+                      {tr("أرشفة المحدد")}
                     </DropdownMenuItem>
                     <DropdownMenuSeparator />
                     <DropdownMenuItem
@@ -3085,7 +3089,7 @@ function MailApp() {
                       className="cursor-pointer hover:bg-accent focus:bg-accent"
                     >
                       <AlertOctagon className="ms-2 h-4 w-4" />
-                      نقل إلى المزعج
+                      {tr("نقل إلى المزعج")}
                     </DropdownMenuItem>
                     <DropdownMenuSeparator />
                     <DropdownMenuItem
@@ -3094,7 +3098,7 @@ function MailApp() {
                       className="cursor-pointer hover:bg-accent focus:bg-accent"
                     >
                       <MailIcon className="ms-2 h-4 w-4" />
-                      تعليم كغير مقروءة
+                      {tr("تعليم كغير مقروءة")}
                     </DropdownMenuItem>
                     <DropdownMenuSeparator />
                     <DropdownMenuItem
@@ -3103,7 +3107,7 @@ function MailApp() {
                       className="cursor-pointer text-destructive hover:bg-destructive/10 focus:bg-destructive/10 focus:text-destructive"
                     >
                       <Trash2 className="ms-2 h-4 w-4" />
-                      {folder === "trash" ? "حذف نهائياً" : "نقل إلى المهملات"}
+                      {folder === "trash" ? tr("حذف نهائياً") : tr("نقل إلى المهملات")}
                     </DropdownMenuItem>
                   </DropdownMenuContent>
                 </DropdownMenu>
@@ -3113,9 +3117,9 @@ function MailApp() {
                 onClick={toggleSelectMode}
                 disabled={bulkBusy}
                 className="rounded px-2 py-1.5 text-xs font-medium text-muted-foreground transition hover:bg-muted hover:text-foreground disabled:opacity-50"
-                title="إلغاء التحديد"
+                title={tr("إلغاء التحديد")}
               >
-                إلغاء
+                {tr("إلغاء")}
               </button>
             </div>
           ) : (
@@ -3126,7 +3130,7 @@ function MailApp() {
                     onClick={toggleSelectAllVisible}
                     disabled={filteredMessages.length === 0}
                     className="flex h-9 w-9 shrink-0 items-center justify-center rounded hover:bg-muted disabled:opacity-40"
-                    title="تحديد الكل"
+                    title={tr("تحديد الكل")}
                   >
                     <Square className="h-5 w-5 text-muted-foreground" />
                   </button>
@@ -3138,7 +3142,7 @@ function MailApp() {
                       <span>
                         نتائج السيرفر · {filteredMessages.length}
                         {deepIncludeBody && (
-                          <span className="ms-1 text-[10px] text-primary/70">(يشمل المحتوى)</span>
+                          <span className="ms-1 text-[10px] text-primary/70">{tr("(يشمل المحتوى)")}</span>
                         )}
                       </span>
                     </span>
@@ -3157,26 +3161,26 @@ function MailApp() {
                       : "text-foreground hover:bg-muted"
                   }`}
                 >
-                  {selectMode ? "إلغاء" : "تحديد"}
+                  {selectMode ? tr("إلغاء") : tr("تحديد")}
                 </button>
                 {!inDeepSearch && (
                   <DropdownMenu dir="rtl">
                     <DropdownMenuTrigger asChild>
                       <button
                         className="flex items-center gap-1 rounded px-2 py-1.5 text-xs font-medium text-foreground hover:bg-muted"
-                        title="ترتيب العرض"
+                        title={tr("ترتيب العرض")}
                       >
                         <ArrowUpDown className="h-3.5 w-3.5" />
-                        <span>ترتيب</span>
+                        <span>{tr("ترتيب")}</span>
                       </button>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="start" className="w-56">
                       {(
                         [
-                          { value: "date-desc", label: "الأحدث أولاً" },
-                          { value: "date-asc", label: "الأقدم أولاً" },
-                          { value: "unread-first", label: "غير المقروءة أولاً" },
-                          { value: "starred-first", label: "المميّزة بنجمة أولاً" },
+                          { value: "date-desc", label: tr("الأحدث أولاً") },
+                          { value: "date-asc", label: tr("الأقدم أولاً") },
+                          { value: "unread-first", label: tr("غير المقروءة أولاً") },
+                          { value: "starred-first", label: tr("المميّزة بنجمة أولاً") },
                         ] as { value: SortOption; label: string }[]
                       ).map((opt, i) => {
                         const disabled = folder === "starred" && opt.value === "starred-first";
@@ -3206,7 +3210,7 @@ function MailApp() {
               <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
                 <Loader2 className="h-6 w-6 animate-spin text-primary" />
                 {inDeepSearch && (
-                  <p className="text-xs text-muted-foreground">جاري البحث على السيرفر…</p>
+                  <p className="text-xs text-muted-foreground">{tr("جاري البحث على السيرفر…")}</p>
                 )}
               </div>
             ) : filteredMessages.length === 0 ? (
@@ -3214,15 +3218,15 @@ function MailApp() {
                 <MailIcon className="h-10 w-10 opacity-30" />
                 {inDeepSearch ? (
                   <>
-                    <p className="text-sm">{deepError ? deepError : "لا توجد نتائج على السيرفر"}</p>
+                    <p className="text-sm">{deepError ? deepError : tr("لا توجد نتائج على السيرفر")}</p>
                     {!deepError && !deepIncludeBody && (
                       <p className="text-[11px] text-muted-foreground/70">
-                        جرّب تفعيل «تضمين نص الرسالة» من خيارات البحث
+                        {tr("جرّب تفعيل «تضمين نص الرسالة» من خيارات البحث")}
                       </p>
                     )}
                   </>
                 ) : (
-                  <p className="text-sm">لا توجد رسائل هنا</p>
+                  <p className="text-sm">{tr("لا توجد رسائل هنا")}</p>
                 )}
               </div>
             ) : (
@@ -3256,11 +3260,11 @@ function MailApp() {
                   Footer: () =>
                     loadingMore ? (
                       <div className="flex items-center justify-center gap-2 py-4 text-xs text-muted-foreground">
-                        <Loader2 className="h-4 w-4 animate-spin" /> جاري تحميل المزيد…
+                        <Loader2 className="h-4 w-4 animate-spin" /> {tr("جاري تحميل المزيد…")}
                       </div>
                     ) : !hasMore && filteredMessages.length > 0 ? (
                       <div className="py-4 text-center text-[11px] text-muted-foreground">
-                        — نهاية الرسائل —
+                        {tr("— نهاية الرسائل —")}
                       </div>
                     ) : null,
                 }}
@@ -3392,7 +3396,7 @@ function MessageRow({
           className={`absolute inset-0 z-10 flex items-center justify-center rounded-full transition ${
             selectMode || selected ? "opacity-100" : "opacity-0"
           }`}
-          title={selected ? "إلغاء التحديد" : "تحديد"}
+          title={selected ? tr("إلغاء التحديد") : tr("تحديد")}
         >
           {selected ? (
             <CheckSquare className="h-5 w-5 text-primary" />
@@ -3430,7 +3434,7 @@ function MessageRow({
               onToggleStar(e);
             }}
             className={`rounded p-0.5 hover:bg-muted ${message.starred ? "text-star" : "text-muted-foreground"}`}
-            title={message.starred ? "إزالة المميّز" : "تمييز"}
+            title={message.starred ? tr("إزالة المميّز") : tr("تمييز")}
           >
             <Star className={`h-3.5 w-3.5 ${message.starred ? "fill-star" : ""}`} />
           </button>
@@ -3441,7 +3445,7 @@ function MessageRow({
               onToggleRead(e);
             }}
             className="rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
-            title={message.read ? "تعليم كغير مقروءة" : "تعليم كمقروءة"}
+            title={message.read ? tr("تعليم كغير مقروءة") : tr("تعليم كمقروءة")}
           >
             {message.read ? (
               <MailIcon className="h-3.5 w-3.5" />
@@ -3498,7 +3502,7 @@ function MessageView({
     ...message.to.map((t) => ({ ...t, kind: "to" as const })),
     ...(message.cc || []).map((c) => ({ ...c, kind: "cc" as const })),
   ];
-  const toSummary = recipientsAll.length > 0 ? recipientsAll.map((r) => r.email).join("، ") : "—";
+  const toSummary = recipientsAll.length > 0 ? recipientsAll.map((r) => r.email).join(tr("،")) : "—";
 
   const fullDate = new Date(message.date).toLocaleString("ar", {
     dateStyle: "full",
@@ -3513,16 +3517,16 @@ function MessageView({
   async function copyEmail() {
     try {
       await navigator.clipboard.writeText(message.from.email);
-      toast.success("تم نسخ البريد");
+      toast.success(tr("تم نسخ البريد"));
     } catch {
-      toast.error("تعذّر النسخ");
+      toast.error(tr("تعذّر النسخ"));
     }
   }
 
   function printMessage() {
     const win = window.open("", "_blank", "width=800,height=900");
     if (!win) {
-      toast.error("تعذّر فتح نافذة الطباعة");
+      toast.error(tr("تعذّر فتح نافذة الطباعة"));
       return;
     }
     const esc = (s: string) =>
@@ -3530,7 +3534,7 @@ function MessageView({
         /[&<>"']/g,
         (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!,
       );
-    const subject = esc(message.subject || "(بدون موضوع)");
+    const subject = esc(message.subject || tr("(بدون موضوع)"));
     const fromName = esc(message.from.name || message.from.email);
     const fromEmail = esc(message.from.email);
     const to = esc(message.to.map((t) => t.email).join(", "));
@@ -3551,10 +3555,10 @@ function MessageView({
 </style></head><body>
 <h1>${subject}</h1>
 <div class="meta">
-  <div><strong>المرسل:</strong> ${fromName} &lt;${fromEmail}&gt;</div>
-  <div><strong>المستلم:</strong> <span dir="ltr">${to}</span></div>
-  ${cc ? `<div><strong>نسخة:</strong> <span dir="ltr">${cc}</span></div>` : ""}
-  <div><strong>التاريخ:</strong> ${date}</div>
+  <div><strong>{tr("المرسل:")}</strong> ${fromName} &lt;${fromEmail}&gt;</div>
+  <div><strong>{tr("المستلم:")}</strong> <span dir="ltr">${to}</span></div>
+  ${cc ? tr(`<div><strong>{tr("نسخة:")}</strong> <span dir="ltr">${cc}</span></div>`) : ""}
+  <div><strong>{tr("التاريخ:")}</strong> ${date}</div>
 </div>
 <div class="body">${body}</div>
 <script>window.onload=function(){setTimeout(function(){window.print();},300);};<\/script>
@@ -3568,22 +3572,22 @@ function MessageView({
         <button
           onClick={onBack}
           className="flex items-center gap-1.5 rounded-lg p-2 text-sm hover:bg-muted md:hidden"
-          aria-label="رجوع"
+          aria-label={tr("رجوع")}
         >
-          <ChevronLeft className="h-4 w-4" /> رجوع
+          <ChevronLeft className="h-4 w-4" /> {tr("رجوع")}
         </button>
         <div className="hidden gap-1 md:flex">
-          <button onClick={onReply} className="rounded-lg p-2 hover:bg-muted" title="رد">
+          <button onClick={onReply} className="rounded-lg p-2 hover:bg-muted" title={tr("رد")}>
             <Reply className="h-4 w-4" />
           </button>
           <button
             onClick={onReplyAll}
             className="rounded-lg p-2 hover:bg-muted"
-            title="رد على الكل"
+            title={tr("رد على الكل")}
           >
             <ReplyAll className="h-4 w-4" />
           </button>
-          <button onClick={onForward} className="rounded-lg p-2 hover:bg-muted" title="إعادة توجيه">
+          <button onClick={onForward} className="rounded-lg p-2 hover:bg-muted" title={tr("إعادة توجيه")}>
             <Forward className="h-4 w-4" />
           </button>
           <div className="mx-1 h-6 w-px bg-border" />
@@ -3591,34 +3595,34 @@ function MessageView({
             <button
               onClick={onRestore}
               className="rounded-lg p-2 hover:bg-muted"
-              title="استعادة إلى المجلد الأصلي"
+              title={tr("استعادة إلى المجلد الأصلي")}
             >
               <ArchiveRestore className="h-4 w-4" />
             </button>
           )}
 
           {canArchive && (
-            <button onClick={onArchive} className="rounded-lg p-2 hover:bg-muted" title="أرشفة">
+            <button onClick={onArchive} className="rounded-lg p-2 hover:bg-muted" title={tr("أرشفة")}>
               <Archive className="h-4 w-4" />
             </button>
           )}
-          <button onClick={onSpam} className="rounded-lg p-2 hover:bg-muted" title="مزعج">
+          <button onClick={onSpam} className="rounded-lg p-2 hover:bg-muted" title={tr("مزعج")}>
             <AlertOctagon className="h-4 w-4" />
           </button>
           <button
             onClick={onMarkUnread}
             className="rounded-lg p-2 hover:bg-muted"
-            title="تعليم كغير مقروءة"
+            title={tr("تعليم كغير مقروءة")}
           >
             <MailOpen className="h-4 w-4" />
           </button>
-          <button onClick={printMessage} className="rounded-lg p-2 hover:bg-muted" title="طباعة">
+          <button onClick={printMessage} className="rounded-lg p-2 hover:bg-muted" title={tr("طباعة")}>
             <Printer className="h-4 w-4" />
           </button>
           <button
             onClick={copyEmail}
             className="rounded-lg p-2 hover:bg-muted"
-            title="نسخ عنوان المرسل"
+            title={tr("نسخ عنوان المرسل")}
           >
             <Copy className="h-4 w-4" />
           </button>
@@ -3626,14 +3630,14 @@ function MessageView({
           <button
             onClick={onDelete}
             className="rounded-lg p-2 text-destructive hover:bg-destructive/10"
-            title={isTrash ? "حذف نهائي" : "نقل إلى المهملات"}
+            title={isTrash ? tr("حذف نهائي") : tr("نقل إلى المهملات")}
           >
             <Trash2 className="h-4 w-4" />
           </button>
         </div>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <button className="rounded-lg p-2 hover:bg-muted" aria-label="خيارات أكثر">
+            <button className="rounded-lg p-2 hover:bg-muted" aria-label={tr("خيارات أكثر")}>
               <MoreVertical className="h-4 w-4" />
             </button>
           </DropdownMenuTrigger>
@@ -3644,44 +3648,44 @@ function MessageView({
             className="w-56 [direction:rtl] [&_[role=menuitem]]:flex-row [&_[role=menuitem]]:justify-start [&_[role=menuitem]]:text-right"
           >
             <DropdownMenuItem onClick={onReply}>
-              <Reply className="h-4 w-4" /> رد
+              <Reply className="h-4 w-4" /> {tr("رد")}
             </DropdownMenuItem>
             <DropdownMenuItem onClick={onReplyAll}>
-              <ReplyAll className="h-4 w-4" /> رد على الكل
+              <ReplyAll className="h-4 w-4" /> {tr("رد على الكل")}
             </DropdownMenuItem>
             <DropdownMenuItem onClick={onForward}>
-              <Forward className="h-4 w-4" /> إعادة توجيه
+              <Forward className="h-4 w-4" /> {tr("إعادة توجيه")}
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem onClick={onMarkUnread}>
-              <MailOpen className="h-4 w-4" /> تعليم كغير مقروءة
+              <MailOpen className="h-4 w-4" /> {tr("تعليم كغير مقروءة")}
             </DropdownMenuItem>
             <DropdownMenuItem onClick={printMessage}>
-              <Printer className="h-4 w-4" /> طباعة
+              <Printer className="h-4 w-4" /> {tr("طباعة")}
             </DropdownMenuItem>
             <DropdownMenuItem onClick={copyEmail}>
-              <Copy className="h-4 w-4" /> نسخ عنوان المرسل
+              <Copy className="h-4 w-4" /> {tr("نسخ عنوان المرسل")}
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             {canRestore && (
               <DropdownMenuItem onClick={onRestore}>
-                <ArchiveRestore className="h-4 w-4" /> استعادة إلى المجلد الأصلي
+                <ArchiveRestore className="h-4 w-4" /> {tr("استعادة إلى المجلد الأصلي")}
               </DropdownMenuItem>
             )}
 
             {canArchive && (
               <DropdownMenuItem onClick={onArchive} className="md:hidden">
-                <Archive className="h-4 w-4" /> أرشفة
+                <Archive className="h-4 w-4" /> {tr("أرشفة")}
               </DropdownMenuItem>
             )}
             <DropdownMenuItem onClick={onSpam} className="md:hidden">
-              <AlertOctagon className="h-4 w-4" /> مزعج
+              <AlertOctagon className="h-4 w-4" /> {tr("مزعج")}
             </DropdownMenuItem>
             <DropdownMenuItem
               onClick={onDelete}
               className="text-destructive focus:text-destructive"
             >
-              <Trash2 className="h-4 w-4" /> {isTrash ? "حذف نهائي" : "نقل إلى المهملات"}
+              <Trash2 className="h-4 w-4" /> {isTrash ? tr("حذف نهائي") : tr("نقل إلى المهملات")}
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
@@ -3694,7 +3698,7 @@ function MessageView({
         ) : (
           <div className="mx-auto max-w-3xl p-4 sm:p-6">
             <h1 className="break-words text-xl font-bold leading-snug sm:text-2xl">
-              {message.subject || "(بدون موضوع)"}
+              {message.subject || tr("(بدون موضوع)")}
             </h1>
 
             <div className="mt-4 flex items-start gap-3 border-b border-border pb-4">
@@ -3705,7 +3709,7 @@ function MessageView({
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0 flex-1">
                     <div className="truncate font-semibold leading-tight">
-                      {message.from.name || message.from.email || "(مرسل غير معروف)"}
+                      {message.from.name || message.from.email || tr("(مرسل غير معروف)")}
                     </div>
                     {message.from.name && message.from.email && (
                       <div
@@ -3731,10 +3735,10 @@ function MessageView({
                     onClick={() => setDetailsOpen((v) => !v)}
                     aria-expanded={detailsOpen}
                     className="inline-flex max-w-full items-center gap-1 rounded hover:text-foreground"
-                    title="تفاصيل الرسالة"
+                    title={tr("تفاصيل الرسالة")}
                   >
                     <span className="truncate">
-                      <span className="text-foreground/70">إلى </span>
+                      <span className="text-foreground/70">{tr("إلى")} </span>
                       <span dir="ltr" className="unicode-bidi-isolate">
                         {toSummary}
                       </span>
@@ -3746,7 +3750,7 @@ function MessageView({
                   {detailsOpen && (
                     <div className="mt-2 rounded-lg border border-border bg-muted/40 p-3">
                       <dl className="grid grid-cols-[max-content_1fr] gap-x-2 gap-y-1.5 text-xs">
-                        <dt className="text-foreground/70 whitespace-nowrap">المرسل:</dt>
+                        <dt className="text-foreground/70 whitespace-nowrap">{tr("المرسل:")}</dt>
                         <dd className="min-w-0 break-all">
                           {message.from.name ? (
                             <span className="ml-1">{message.from.name}</span>
@@ -3756,7 +3760,7 @@ function MessageView({
                           </span>
                         </dd>
 
-                        <dt className="text-foreground/70 whitespace-nowrap">المستلم:</dt>
+                        <dt className="text-foreground/70 whitespace-nowrap">{tr("المستلم:")}</dt>
                         <dd className="min-w-0 break-all">
                           <span dir="ltr" style={{ unicodeBidi: "isolate" }}>
                             {message.to.length > 0
@@ -3767,7 +3771,7 @@ function MessageView({
 
                         {message.cc && message.cc.length > 0 && (
                           <>
-                            <dt className="text-foreground/70 whitespace-nowrap">نسخة:</dt>
+                            <dt className="text-foreground/70 whitespace-nowrap">{tr("نسخة:")}</dt>
                             <dd className="min-w-0 break-all">
                               <span dir="ltr" style={{ unicodeBidi: "isolate" }}>
                                 {message.cc.map((c) => c.email).join(", ")}
@@ -3776,12 +3780,12 @@ function MessageView({
                           </>
                         )}
 
-                        <dt className="text-foreground/70 whitespace-nowrap">التاريخ:</dt>
+                        <dt className="text-foreground/70 whitespace-nowrap">{tr("التاريخ:")}</dt>
                         <dd className="min-w-0">{fullDate}</dd>
 
                         {message.mailedBy && (
                           <>
-                            <dt className="text-foreground/70 whitespace-nowrap">الخادم:</dt>
+                            <dt className="text-foreground/70 whitespace-nowrap">{tr("الخادم:")}</dt>
                             <dd className="min-w-0 break-all">
                               <span dir="ltr" style={{ unicodeBidi: "isolate" }}>
                                 {message.mailedBy}
@@ -3791,7 +3795,7 @@ function MessageView({
                         )}
                         {message.signedBy && (
                           <>
-                            <dt className="text-foreground/70 whitespace-nowrap">التوقيع:</dt>
+                            <dt className="text-foreground/70 whitespace-nowrap">{tr("التوقيع:")}</dt>
                             <dd className="min-w-0 break-all">
                               <span dir="ltr" style={{ unicodeBidi: "isolate" }}>
                                 {message.signedBy}
@@ -3801,7 +3805,7 @@ function MessageView({
                         )}
                         {message.security && (
                           <>
-                            <dt className="text-foreground/70 whitespace-nowrap">الأمان:</dt>
+                            <dt className="text-foreground/70 whitespace-nowrap">{tr("الأمان:")}</dt>
                             <dd className="min-w-0 inline-flex items-center gap-1">
                               {isSecure ? (
                                 <ShieldCheck className="h-3.5 w-3.5 text-emerald-600" />
@@ -3843,19 +3847,19 @@ function MessageView({
                 onClick={onReply}
                 className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-4 py-2 text-sm font-medium hover:bg-muted"
               >
-                <Reply className="h-4 w-4" /> رد
+                <Reply className="h-4 w-4" /> {tr("رد")}
               </button>
               <button
                 onClick={onReplyAll}
                 className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-4 py-2 text-sm font-medium hover:bg-muted"
               >
-                <ReplyAll className="h-4 w-4" /> رد على الكل
+                <ReplyAll className="h-4 w-4" /> {tr("رد على الكل")}
               </button>
               <button
                 onClick={onForward}
                 className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-4 py-2 text-sm font-medium hover:bg-muted"
               >
-                <Forward className="h-4 w-4" /> إعادة توجيه
+                <Forward className="h-4 w-4" /> {tr("إعادة توجيه")}
               </button>
             </div>
           </div>
@@ -3869,7 +3873,7 @@ function EmptyViewer() {
   return (
     <div className="flex h-full flex-col items-center justify-center gap-3 p-8 text-center text-muted-foreground">
       <MailIcon className="h-16 w-16 opacity-30" />
-      <p className="text-sm">اختر رسالة من القائمة لعرضها</p>
+      <p className="text-sm">{tr("اختر رسالة من القائمة لعرضها")}</p>
     </div>
   );
 }
@@ -3881,9 +3885,9 @@ function LoadingViewer({ onBack }: { onBack: () => void }) {
         <button
           onClick={onBack}
           className="flex items-center gap-1.5 rounded-lg p-2 text-sm hover:bg-muted md:hidden"
-          aria-label="رجوع"
+          aria-label={tr("رجوع")}
         >
-          <ChevronLeft className="h-4 w-4" /> رجوع
+          <ChevronLeft className="h-4 w-4" /> {tr("رجوع")}
         </button>
         <div />
       </div>
@@ -4079,7 +4083,7 @@ function RecipientField({
                     ? "bg-muted text-foreground"
                     : "bg-red-500/10 text-red-600 dark:text-red-400"
                 }`}
-                title={r.valid ? r.email : "بريد غير صالح"}
+                title={r.valid ? r.email : tr("بريد غير صالح")}
               >
                 {!r.valid && <AlertTriangle className="h-3 w-3" />}
                 <span className="max-w-[220px] truncate">
@@ -4092,7 +4096,7 @@ function RecipientField({
                     onChange(value.filter((_, idx) => idx !== i));
                   }}
                   className="rounded-full p-0.5 hover:bg-background/60"
-                  aria-label={`إزالة ${r.email}`}
+                  aria-label={tr(`إزالة ${r.email}`)}
                 >
                   <X className="h-3 w-3" />
                 </button>
@@ -4202,8 +4206,8 @@ function RecipientField({
                       setSuggestions((prev) => prev.filter((s) => s.email !== m.email));
                     }}
                     className="rounded p-1 text-muted-foreground opacity-60 hover:bg-background hover:opacity-100"
-                    title="إزالة من الاقتراحات"
-                    aria-label="إزالة من الاقتراحات"
+                    title={tr("إزالة من الاقتراحات")}
+                    aria-label={tr("إزالة من الاقتراحات")}
                   >
                     <X className="h-3.5 w-3.5" />
                   </button>
@@ -4422,8 +4426,9 @@ function Composer({
   const generationRef = useRef<number>(0);
   const savedGenerationRef = useRef<number>(0);
   const isDirtyRef = useRef<boolean>(false);
-  // Kept for the header "تم الحفظ منذ …" UI only — not the dirty source of truth.
+  // Kept for the header "saved just now" UI only — not the dirty source of truth.
   const lastSavedAtRef = useRef<number>(initialDoc?.updatedAt ?? 0);
+
   // Diagnostic: last hard-failure code from the saver (null on success).
   const lastFailCodeRef = useRef<string | null>(null);
   const recomputeDirty = () => {
@@ -5029,11 +5034,11 @@ function Composer({
     let runningCount = totalCount;
     for (const f of incoming) {
       if (runningCount >= COMPOSE_MAX_FILES) {
-        toast.error(`الحد الأقصى ${COMPOSE_MAX_FILES} ملفات`);
+        toast.error(tr(`الحد الأقصى ${COMPOSE_MAX_FILES} ملفات`));
         break;
       }
       if (runningTotal + f.size > COMPOSE_MAX_TOTAL_BYTES) {
-        toast.error(`تجاوزت الحد الكلّي (25MB)`);
+        toast.error(tr(`تجاوزت الحد الكلّي (25MB)`));
         break;
       }
       merged.push(f);
@@ -5071,17 +5076,17 @@ function Composer({
   }
 
   function promptLink() {
-    const url = window.prompt("رابط URL (يبدأ بـ https://):", "https://");
+    const url = window.prompt(tr("رابط URL (يبدأ بـ https://):"), "https://");
     if (!url) return;
     try {
       const u = new URL(url);
       if (!/^https?:$/.test(u.protocol)) {
-        toast.error("رابط غير مدعوم");
+        toast.error(tr("رابط غير مدعوم"));
         return;
       }
       exec("createLink", u.toString());
     } catch {
-      toast.error("رابط غير صالح");
+      toast.error(tr("رابط غير صالح"));
     }
   }
 
@@ -5195,17 +5200,17 @@ function Composer({
     exec("insertHorizontalRule");
   }
   function promptImage() {
-    const url = window.prompt("رابط الصورة (https://):", "https://");
+    const url = window.prompt(tr("رابط الصورة (https://):"), "https://");
     if (!url) return;
     try {
       const u = new URL(url);
       if (!/^https?:$/.test(u.protocol)) {
-        toast.error("رابط صورة غير مدعوم");
+        toast.error(tr("رابط صورة غير مدعوم"));
         return;
       }
       insertHtmlAtCursor(`<img src="${u.toString()}" alt="" style="max-width:100%;height:auto" />`);
     } catch {
-      toast.error("رابط غير صالح");
+      toast.error(tr("رابط غير صالح"));
     }
   }
 
@@ -5249,12 +5254,12 @@ function Composer({
       try {
         const resolved = await resolveExistingAsFiles();
         if (resolved === null) {
-          toast.error("تعذّر تحميل مرفق من المسودة الأصلية");
+          toast.error(tr("تعذّر تحميل مرفق من المسودة الأصلية"));
           return;
         }
         keptFiles = resolved;
       } catch {
-        toast.error("تعذّر تحميل مرفق من المسودة الأصلية");
+        toast.error(tr("تعذّر تحميل مرفق من المسودة الأصلية"));
         return;
       }
 
@@ -5283,7 +5288,7 @@ function Composer({
       });
 
       if (!result.ok) {
-        toast.error(result.error || "فشل إرسال الرسالة");
+        toast.error(result.error || tr("فشل إرسال الرسالة"));
         return;
       }
       // Clear draft on successful send: local wipe + best-effort server delete,
@@ -5344,11 +5349,11 @@ function Composer({
       } catch {
         /* noop — never fail the send */
       }
-      toast.success("تم إرسال الرسالة");
+      toast.success(tr("تم إرسال الرسالة"));
       onClose();
       onSent();
     } catch (err: any) {
-      toast.error(err?.message || "فشل إرسال الرسالة");
+      toast.error(err?.message || tr("فشل إرسال الرسالة"));
     } finally {
       setSending(false);
       setProgress(0);
@@ -5357,16 +5362,16 @@ function Composer({
 
   async function handleSend() {
     if (to.length === 0) {
-      toast.error("أضف مستلماً واحداً على الأقل");
+      toast.error(tr("أضف مستلماً واحداً على الأقل"));
       return;
     }
     const invalid = [...to, ...cc, ...bcc].filter((r) => !r.valid);
     if (invalid.length > 0) {
-      toast.error(`عنوان بريد غير صالح: ${invalid[0].email}`);
+      toast.error(tr(`عنوان بريد غير صالح: ${invalid[0].email}`));
       return;
     }
     if (!subject.trim()) {
-      const ok = window.confirm("لا يوجد موضوع. هل ترغب في الإرسال على أي حال؟");
+      const ok = window.confirm(tr("لا يوجد موضوع. هل ترغب في الإرسال على أي حال؟"));
       if (!ok) return;
     }
     // Attachment-mention detector
@@ -5374,7 +5379,7 @@ function Composer({
     const text = stripHtml(html).toLowerCase();
     const mentionsAttach = /(attach|attached|attachment|مرفق|مرفقات|المرفق)/.test(text);
     if (mentionsAttach && files.length === 0) {
-      const ok = window.confirm("ذكرت مرفقاً لكن لم تُضِف أي ملف. هل تريد الإرسال دون مرفق؟");
+      const ok = window.confirm(tr("ذكرت مرفقاً لكن لم تُضِف أي ملف. هل تريد الإرسال دون مرفق؟"));
       if (!ok) return;
     }
     await performSend();
@@ -5407,13 +5412,13 @@ function Composer({
       : "";
     switch (saveStatus) {
       case "saving":
-        return "جارٍ الحفظ…";
+        return tr("جارٍ الحفظ…");
       case "saved":
-        return t ? `تم الحفظ ${t}` : "تم الحفظ";
+        return t ? tr(`تم الحفظ ${t}`) : tr("تم الحفظ");
       case "saved-local":
-        return t ? `محفوظة محلياً ${t}` : "محفوظة محلياً";
+        return t ? tr(`محفوظة محلياً ${t}`) : tr("محفوظة محلياً");
       case "failed":
-        return "تعذّر الحفظ";
+        return tr("تعذّر الحفظ");
       default:
         return "";
     }
@@ -5449,7 +5454,7 @@ function Composer({
         filesCount: filesRef.current.length,
       });
       if (isEmpty) {
-        toast.info("لا يوجد محتوى للحفظ");
+        toast.info(tr("لا يوجد محتوى للحفظ"));
         return "empty";
       }
       const snapshot: DraftSnapshot = { to, cc, bcc, subject, html, showCc, showBcc };
@@ -5462,23 +5467,23 @@ function Composer({
       });
       if (!persisted) {
         setSaveStatus("failed");
-        toast.error("تعذّر حفظ المسودّة");
+        toast.error(tr("تعذّر حفظ المسودّة"));
         return "failed";
       }
       const genAtRequest = generationRef.current;
       await saverRef.current?.requestSave(snapshot, serverRefRef.current, genAtRequest);
       const st = saverRef.current?.getStatus();
       if (st === "saved") {
-        toast.success("تم حفظ المسودّة");
+        toast.success(tr("تم حفظ المسودّة"));
         return "saved_server";
       }
       if (st === "saved-local") {
-        toast.success("تم حفظ المسودّة محلياً");
+        toast.success(tr("تم حفظ المسودّة محلياً"));
         return "saved_local";
       }
       // Hard failure — do NOT show a "success" toast.
       toast.error(
-        `تعذّر حفظ المسودّة على الخادم — حاول لاحقاً (${lastFailCodeRef.current ?? "UNKNOWN"})`,
+        tr(`تعذّر حفظ المسودّة على الخادم — حاول لاحقاً (${lastFailCodeRef.current ?? "UNKNOWN"})`),
       );
       return "failed";
     } finally {
@@ -5491,7 +5496,7 @@ function Composer({
       ref={containerRef}
       className={containerClass}
       role="dialog"
-      aria-label="إنشاء رسالة"
+      aria-label={tr("إنشاء رسالة")}
       tabIndex={-1}
       onDragOver={(e) => {
         if (e.dataTransfer.types.includes("Files")) {
@@ -5516,7 +5521,7 @@ function Composer({
           </span>
           <div className="min-w-0">
             <p className="truncate text-sm font-semibold text-foreground">
-              {subject || "رسالة جديدة"}
+              {subject || tr("رسالة جديدة")}
             </p>
             <p className="truncate text-[11px] text-muted-foreground">
               {session.account.email_address}
@@ -5528,8 +5533,8 @@ function Composer({
           <button
             onClick={() => void requestClose()}
             className="rounded-lg p-2 text-muted-foreground transition hover:bg-muted hover:text-foreground"
-            title="إغلاق (Esc)"
-            aria-label="إغلاق"
+            title={tr("إغلاق (Esc)")}
+            aria-label={tr("إغلاق")}
           >
             <X className="h-4 w-4" />
           </button>
@@ -5541,7 +5546,7 @@ function Composer({
         <div className="mx-auto flex w-full max-w-none flex-col gap-4 px-3 py-4 sm:px-6 sm:py-5">
           {/* Recipients */}
           <RecipientField
-            label="المرسل له"
+            label={tr("المرسل له")}
             value={to}
             onChange={setTo}
             autoFocus
@@ -5555,7 +5560,7 @@ function Composer({
                     onClick={() => setShowCc(true)}
                     className="inline-flex h-7 items-center justify-center rounded-md px-2.5 text-[12px] font-medium text-muted-foreground transition hover:bg-muted/70 hover:text-primary"
                   >
-                    نسخة إلى
+                    {tr("نسخة إلى")}
                   </button>
                 )}
                 {!showBcc && (
@@ -5564,7 +5569,7 @@ function Composer({
                     onClick={() => setShowBcc(true)}
                     className="inline-flex h-7 items-center justify-center rounded-md px-2.5 text-[12px] font-medium text-muted-foreground transition hover:bg-muted/70 hover:text-primary"
                   >
-                    نسخة مخفية إلى
+                    {tr("نسخة مخفية إلى")}
                   </button>
                 )}
               </div>
@@ -5572,7 +5577,7 @@ function Composer({
           />
           {showCc && (
             <RecipientField
-              label="نسخة إلى"
+              label={tr("نسخة إلى")}
               value={cc}
               onChange={setCc}
               getSuggestions={suggestFor}
@@ -5581,7 +5586,7 @@ function Composer({
           )}
           {showBcc && (
             <RecipientField
-              label="نسخة مخفية إلى"
+              label={tr("نسخة مخفية إلى")}
               value={bcc}
               onChange={setBcc}
               getSuggestions={suggestFor}
@@ -5591,11 +5596,11 @@ function Composer({
 
           {/* Subject */}
           <div className="flex flex-col gap-1.5">
-            <label className="text-sm font-medium text-foreground">الموضوع</label>
+            <label className="text-sm font-medium text-foreground">{tr("الموضوع")}</label>
             <input
               value={subject}
               onChange={(e) => setSubject(e.target.value)}
-              placeholder="اكتب موضوع الرسالة"
+              placeholder={tr("اكتب موضوع الرسالة")}
               className="w-full rounded-lg border border-input bg-background px-4 py-2.5 text-sm outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20"
             />
           </div>
@@ -5603,11 +5608,11 @@ function Composer({
           {/* Editor */}
           <div className="flex flex-col gap-1.5">
             <div className="flex items-center justify-between gap-2">
-              <label className="text-sm font-medium text-foreground">نص الرسالة</label>
+              <label className="text-sm font-medium text-foreground">{tr("نص الرسالة")}</label>
               <div className="flex items-center gap-1">
                 <button
                   type="button"
-                  title={plainMode ? "الوضع المنسّق" : "الوضع النصّي"}
+                  title={plainMode ? tr("الوضع المنسّق") : tr("الوضع النصّي")}
                   onClick={() => setPlainMode((v) => !v)}
                   className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
                 >
@@ -5617,77 +5622,77 @@ function Composer({
                   <PopoverTrigger asChild>
                     <button
                       type="button"
-                      title="خيارات متقدمة"
-                      aria-label="خيارات متقدمة"
+                      title={tr("خيارات متقدمة")}
+                      aria-label={tr("خيارات متقدمة")}
                       onMouseDown={(e) => e.preventDefault()}
                       className="inline-flex h-7 items-center gap-1 rounded-md px-1.5 text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
                     >
                       <MoreVertical className="h-3.5 w-3.5" />
-                      <span>متقدم</span>
+                      <span>{tr("متقدم")}</span>
                     </button>
                   </PopoverTrigger>
                   <PopoverContent align="end" className="w-auto p-2">
                     <div className="grid grid-cols-6 gap-0.5">
                       <ToolbarButton
-                        title="يتوسطه خط"
+                        title={tr("يتوسطه خط")}
                         active={fmtState.strikeThrough}
                         onMouseDown={() => exec("strikeThrough")}
                       >
                         <Strikethrough className="h-3.5 w-3.5" />
                       </ToolbarButton>
                       <ToolbarButton
-                        title="مرتفع"
+                        title={tr("مرتفع")}
                         active={fmtState.superscript}
                         onMouseDown={() => exec("superscript")}
                       >
                         <Superscript className="h-3.5 w-3.5" />
                       </ToolbarButton>
                       <ToolbarButton
-                        title="منخفض"
+                        title={tr("منخفض")}
                         active={fmtState.subscript}
                         onMouseDown={() => exec("subscript")}
                       >
                         <Subscript className="h-3.5 w-3.5" />
                       </ToolbarButton>
                       <ToolbarButton
-                        title="ضبط"
+                        title={tr("ضبط")}
                         active={fmtState.justifyFull}
                         onMouseDown={() => exec("justifyFull")}
                       >
                         <AlignJustify className="h-3.5 w-3.5" />
                       </ToolbarButton>
                       <ToolbarButton
-                        title="زيادة المسافة البادئة"
+                        title={tr("زيادة المسافة البادئة")}
                         onMouseDown={() => exec("indent")}
                       >
                         <Indent className="h-3.5 w-3.5" />
                       </ToolbarButton>
                       <ToolbarButton
-                        title="تقليل المسافة البادئة"
+                        title={tr("تقليل المسافة البادئة")}
                         onMouseDown={() => exec("outdent")}
                       >
                         <Outdent className="h-3.5 w-3.5" />
                       </ToolbarButton>
                       <ToolbarButton
-                        title="اقتباس"
+                        title={tr("اقتباس")}
                         active={fmtState.blockquote}
                         onMouseDown={() => exec("formatBlock", "blockquote")}
                       >
                         <Quote className="h-3.5 w-3.5" />
                       </ToolbarButton>
-                      <ToolbarButton title="إدراج صورة" onMouseDown={promptImage}>
+                      <ToolbarButton title={tr("إدراج صورة")} onMouseDown={promptImage}>
                         <ImageIcon className="h-3.5 w-3.5" />
                       </ToolbarButton>
-                      <ToolbarButton title="خط أفقي" onMouseDown={insertHR}>
+                      <ToolbarButton title={tr("خط أفقي")} onMouseDown={insertHR}>
                         <Minus className="h-3.5 w-3.5" />
                       </ToolbarButton>
                       <ToolbarButton
-                        title="تبديل اتجاه النص RTL/LTR"
+                        title={tr("تبديل اتجاه النص RTL/LTR")}
                         onMouseDown={toggleEditorDirection}
                       >
                         <ArrowLeftRight className="h-3.5 w-3.5" />
                       </ToolbarButton>
-                      <ToolbarButton title="إزالة التنسيق" onMouseDown={() => exec("removeFormat")}>
+                      <ToolbarButton title={tr("إزالة التنسيق")} onMouseDown={() => exec("removeFormat")}>
                         <Eraser className="h-3.5 w-3.5" />
                       </ToolbarButton>
                     </div>
@@ -5700,9 +5705,9 @@ function Composer({
                 <div className="flex flex-wrap items-center gap-0.5 border-b border-border/70 bg-muted/30 px-2 py-1.5">
                   {/* Font family */}
                   <ToolbarSelect
-                    title="الخط"
-                    ariaLabel="الخط"
-                    placeholder="الخط"
+                    title={tr("الخط")}
+                    ariaLabel={tr("الخط")}
+                    placeholder={tr("الخط")}
                     value={fontFamily}
                     onChange={(v) => {
                       setFontFamily(v);
@@ -5724,9 +5729,9 @@ function Composer({
                   />
                   {/* Font size */}
                   <ToolbarSelect
-                    title="حجم الخط"
-                    ariaLabel="حجم الخط"
-                    placeholder="الحجم"
+                    title={tr("حجم الخط")}
+                    ariaLabel={tr("حجم الخط")}
+                    placeholder={tr("الحجم")}
                     value={fontSize}
                     onChange={(v) => {
                       setFontSize(v);
@@ -5747,9 +5752,9 @@ function Composer({
                   />
                   {/* Paragraph */}
                   <ToolbarSelect
-                    title="نمط الفقرة"
-                    ariaLabel="نمط الفقرة"
-                    placeholder="الفقرة"
+                    title={tr("نمط الفقرة")}
+                    ariaLabel={tr("نمط الفقرة")}
+                    placeholder={tr("الفقرة")}
                     value={blockFmt}
                     onChange={(v) => {
                       setBlockFmt(v);
@@ -5757,29 +5762,29 @@ function Composer({
                     }}
                     className="min-w-[6rem]"
                     options={[
-                      { value: "p", label: "نص عادي" },
-                      { value: "h1", label: "عنوان 1" },
-                      { value: "h2", label: "عنوان 2" },
-                      { value: "h3", label: "عنوان 3" },
-                      { value: "pre", label: "كود" },
+                      { value: "p", label: tr("نص عادي") },
+                      { value: "h1", label: tr("عنوان 1") },
+                      { value: "h2", label: tr("عنوان 2") },
+                      { value: "h3", label: tr("عنوان 3") },
+                      { value: "pre", label: tr("كود") },
                     ]}
                   />
                   <ToolbarButton
-                    title="عريض (Ctrl+B)"
+                    title={tr("عريض (Ctrl+B)")}
                     active={fmtState.bold}
                     onMouseDown={() => exec("bold")}
                   >
                     <Bold className="h-3.5 w-3.5" />
                   </ToolbarButton>
                   <ToolbarButton
-                    title="مائل (Ctrl+I)"
+                    title={tr("مائل (Ctrl+I)")}
                     active={fmtState.italic}
                     onMouseDown={() => exec("italic")}
                   >
                     <Italic className="h-3.5 w-3.5" />
                   </ToolbarButton>
                   <ToolbarButton
-                    title="تسطير (Ctrl+U)"
+                    title={tr("تسطير (Ctrl+U)")}
                     active={fmtState.underline}
                     onMouseDown={() => exec("underline")}
                   >
@@ -5787,7 +5792,7 @@ function Composer({
                   </ToolbarButton>
                   {/* Colors */}
                   <label
-                    title="لون النص"
+                    title={tr("لون النص")}
                     className="relative inline-flex h-7 w-7 cursor-pointer items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
                     onMouseDown={(e) => e.preventDefault()}
                   >
@@ -5799,7 +5804,7 @@ function Composer({
                     />
                   </label>
                   <label
-                    title="لون الخلفية"
+                    title={tr("لون الخلفية")}
                     className="relative inline-flex h-7 w-7 cursor-pointer items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
                     onMouseDown={(e) => e.preventDefault()}
                   >
@@ -5812,21 +5817,21 @@ function Composer({
                   </label>
                   {/* Alignment */}
                   <ToolbarButton
-                    title="محاذاة يمين"
+                    title={tr("محاذاة يمين")}
                     active={fmtState.justifyRight}
                     onMouseDown={() => exec("justifyRight")}
                   >
                     <AlignRight className="h-3.5 w-3.5" />
                   </ToolbarButton>
                   <ToolbarButton
-                    title="توسيط"
+                    title={tr("توسيط")}
                     active={fmtState.justifyCenter}
                     onMouseDown={() => exec("justifyCenter")}
                   >
                     <AlignCenter className="h-3.5 w-3.5" />
                   </ToolbarButton>
                   <ToolbarButton
-                    title="محاذاة يسار"
+                    title={tr("محاذاة يسار")}
                     active={fmtState.justifyLeft}
                     onMouseDown={() => exec("justifyLeft")}
                   >
@@ -5834,28 +5839,28 @@ function Composer({
                   </ToolbarButton>
                   {/* Lists */}
                   <ToolbarButton
-                    title="قائمة نقطية"
+                    title={tr("قائمة نقطية")}
                     active={fmtState.insertUnorderedList}
                     onMouseDown={() => exec("insertUnorderedList")}
                   >
                     <List className="h-3.5 w-3.5" />
                   </ToolbarButton>
                   <ToolbarButton
-                    title="قائمة مرقمة"
+                    title={tr("قائمة مرقمة")}
                     active={fmtState.insertOrderedList}
                     onMouseDown={() => exec("insertOrderedList")}
                   >
                     <ListOrdered className="h-3.5 w-3.5" />
                   </ToolbarButton>
                   {/* Link */}
-                  <ToolbarButton title="إدراج رابط" onMouseDown={promptLink}>
+                  <ToolbarButton title={tr("إدراج رابط")} onMouseDown={promptLink}>
                     <Link2 className="h-3.5 w-3.5" />
                   </ToolbarButton>
                   {/* Undo / Redo */}
-                  <ToolbarButton title="تراجع (Ctrl+Z)" onMouseDown={() => exec("undo")}>
+                  <ToolbarButton title={tr("تراجع (Ctrl+Z)")} onMouseDown={() => exec("undo")}>
                     <Undo2 className="h-3.5 w-3.5" />
                   </ToolbarButton>
-                  <ToolbarButton title="إعادة (Ctrl+Y)" onMouseDown={() => exec("redo")}>
+                  <ToolbarButton title={tr("إعادة (Ctrl+Y)")} onMouseDown={() => exec("redo")}>
                     <Redo2 className="h-3.5 w-3.5" />
                   </ToolbarButton>
                   {extensions.map((ext) => (
@@ -5889,7 +5894,7 @@ function Composer({
                     }
                   }}
                   rows={16}
-                  placeholder="اكتب رسالتك هنا..."
+                  placeholder={tr("اكتب رسالتك هنا...")}
                   className="min-h-[320px] w-full resize-none bg-transparent px-4 py-3 text-sm outline-none"
                 />
               ) : (
@@ -5899,8 +5904,8 @@ function Composer({
                   suppressContentEditableWarning
                   role="textbox"
                   aria-multiline="true"
-                  aria-label="نص الرسالة"
-                  data-placeholder="اكتب رسالتك هنا..."
+                  aria-label={tr("نص الرسالة")}
+                  data-placeholder={tr("اكتب رسالتك هنا...")}
                   className="composer-editor min-h-[320px] w-full whitespace-pre-wrap break-words px-4 py-3 text-sm outline-none"
                 />
               )}
@@ -5920,7 +5925,7 @@ function Composer({
                     <div
                       key={`kept-${a.id}`}
                       className="group inline-flex items-center gap-2 rounded-lg border border-border bg-card px-2.5 py-1.5 text-xs shadow-soft"
-                      title="مرفق من المسودة الأصلية"
+                      title={tr("مرفق من المسودة الأصلية")}
                     >
                       <span
                         className={`inline-flex h-6 w-6 items-center justify-center rounded-md ${tint}`}
@@ -5937,7 +5942,7 @@ function Composer({
                         onClick={() => removeExistingAttachment(a.id)}
                         disabled={sending}
                         className="rounded p-0.5 opacity-60 hover:bg-muted hover:opacity-100"
-                        aria-label="حذف المرفق"
+                        aria-label={tr("حذف المرفق")}
                       >
                         <X className="h-3.5 w-3.5" />
                       </button>
@@ -5966,7 +5971,7 @@ function Composer({
                         onClick={() => removeFile(i)}
                         disabled={sending}
                         className="rounded p-0.5 opacity-60 hover:bg-muted hover:opacity-100"
-                        aria-label="حذف المرفق"
+                        aria-label={tr("حذف المرفق")}
                       >
                         <X className="h-3.5 w-3.5" />
                       </button>
@@ -5995,10 +6000,10 @@ function Composer({
             onClick={handleSend}
             disabled={sending || to.length === 0}
             className="inline-flex items-center gap-2 rounded-lg bg-brand-gradient px-4 py-2 text-sm font-semibold text-white shadow-brand transition hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-60 sm:px-5 sm:py-2.5"
-            title="إرسال (Ctrl+Enter)"
+            title={tr("إرسال (Ctrl+Enter)")}
           >
             {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-            {sending ? (progress > 0 ? `${progress}%` : "جاري الإرسال") : "إرسال"}
+            {sending ? (progress > 0 ? `${progress}%` : tr("جاري الإرسال")) : tr("إرسال")}
           </button>
           <input
             ref={fileInputRef}
@@ -6012,22 +6017,22 @@ function Composer({
             onClick={() => fileInputRef.current?.click()}
             disabled={sending || totalCount >= COMPOSE_MAX_FILES}
             className="inline-flex items-center gap-1.5 rounded-lg border border-input bg-background px-2.5 py-2 text-xs text-muted-foreground transition hover:bg-muted hover:text-foreground disabled:opacity-40 sm:px-3"
-            aria-label="إرفاق ملف"
-            title="إرفاق ملف"
+            aria-label={tr("إرفاق ملف")}
+            title={tr("إرفاق ملف")}
           >
             <Paperclip className="h-4 w-4" />
-            <span className="hidden sm:inline">إرفاق</span>
+            <span className="hidden sm:inline">{tr("إرفاق")}</span>
           </button>
           <button
             type="button"
             onClick={saveDraftNow}
             disabled={sending}
             className="inline-flex items-center gap-1.5 rounded-lg border border-input bg-background px-2.5 py-2 text-xs text-muted-foreground transition hover:bg-muted hover:text-foreground disabled:opacity-40 sm:px-3"
-            aria-label="حفظ كمسودة"
-            title="حفظ كمسودة"
+            aria-label={tr("حفظ كمسودة")}
+            title={tr("حفظ كمسودة")}
           >
             <FileText className="h-4 w-4" />
-            <span className="hidden sm:inline">حفظ كمسودة</span>
+            <span className="hidden sm:inline">{tr("حفظ كمسودة")}</span>
           </button>
         </div>
         <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground sm:gap-3">
@@ -6039,7 +6044,7 @@ function Composer({
             onClick={() => void requestClose()}
             className="rounded-lg border border-input bg-background px-3 py-2 text-xs text-muted-foreground transition hover:border-primary hover:text-foreground"
           >
-            إلغاء
+            {tr("إلغاء")}
           </button>
         </div>
       </div>
@@ -6047,7 +6052,7 @@ function Composer({
       {dragging && (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-primary/5 backdrop-blur-sm">
           <div className="rounded-lg border-2 border-dashed border-primary/60 bg-card px-6 py-3 text-sm font-medium shadow-float">
-            أفلت الملفات هنا لإرفاقها
+            {tr("أفلت الملفات هنا لإرفاقها")}
           </div>
         </div>
       )}
@@ -6063,9 +6068,9 @@ function Composer({
       >
         <AlertDialogContent className="sm:max-w-md">
           <AlertDialogHeader className="text-center sm:text-right">
-            <AlertDialogTitle>لديك تغييرات غير محفوظة</AlertDialogTitle>
+            <AlertDialogTitle>{tr("لديك تغييرات غير محفوظة")}</AlertDialogTitle>
             <AlertDialogDescription>
-              هل تريد حفظ الرسالة كمسودّة قبل المغادرة؟
+              {tr("هل تريد حفظ الرسالة كمسودّة قبل المغادرة؟")}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter className="gap-2 sm:justify-start">
@@ -6077,7 +6082,7 @@ function Composer({
               }}
               className="inline-flex h-10 items-center justify-center rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground transition hover:bg-primary/90"
             >
-              حفظ كمسودّة
+              {tr("حفظ كمسودّة")}
             </button>
             <button
               type="button"
@@ -6087,7 +6092,7 @@ function Composer({
               }}
               className="inline-flex h-10 items-center justify-center rounded-md border border-destructive/40 bg-background px-4 text-sm font-medium text-destructive transition hover:bg-destructive/10"
             >
-              بدون حفظ
+              {tr("بدون حفظ")}
             </button>
             <button
               type="button"
@@ -6097,7 +6102,7 @@ function Composer({
               }}
               className="inline-flex h-10 items-center justify-center rounded-md border border-input bg-background px-4 text-sm font-medium text-muted-foreground transition hover:bg-muted"
             >
-              إلغاء
+              {tr("إلغاء")}
             </button>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -6193,12 +6198,12 @@ function AttachmentCard({
   async function fetchBlob(): Promise<Blob | null> {
     const session = getMailSession();
     if (!session) {
-      toast.error("انتهت الجلسة");
+      toast.error(tr("انتهت الجلسة"));
       return null;
     }
     const parsed = parseMessageId(message.id);
     if (!parsed || !attachment.part) {
-      toast.error("لا يمكن تحديد المرفق");
+      toast.error(tr("لا يمكن تحديد المرفق"));
       return null;
     }
     const res = await fetch("/api/mail-attachment", {
@@ -6279,8 +6284,8 @@ function AttachmentCard({
               type="button"
               onClick={handlePreview}
               disabled={!canDownload || busy !== null}
-              title="معاينة"
-              aria-label="معاينة"
+              title={tr("معاينة")}
+              aria-label={tr("معاينة")}
               className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-background text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50 sm:h-8 sm:w-8"
             >
               {busy === "preview" ? (
@@ -6294,8 +6299,8 @@ function AttachmentCard({
             type="button"
             onClick={handleDownload}
             disabled={!canDownload || busy !== null}
-            title={canDownload ? "تنزيل" : "غير متاح"}
-            aria-label="تنزيل"
+            title={canDownload ? tr("تنزيل") : tr("غير متاح")}
+            aria-label={tr("تنزيل")}
             className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-background text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50 sm:h-8 sm:w-8"
           >
             {busy === "download" ? (
@@ -6323,13 +6328,13 @@ function AttachmentCard({
                 }}
                 className="inline-flex items-center gap-1.5 rounded-full border border-white/20 bg-white/10 px-3 py-1.5 text-xs font-medium hover:bg-white/20"
               >
-                <Download className="h-3.5 w-3.5" /> تنزيل
+                <Download className="h-3.5 w-3.5" /> {tr("تنزيل")}
               </button>
               <button
                 type="button"
                 onClick={() => setPreviewUrl(null)}
                 className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/20 bg-white/10 hover:bg-white/20"
-                title="إغلاق"
+                title={tr("إغلاق")}
               >
                 <X className="h-4 w-4" />
               </button>

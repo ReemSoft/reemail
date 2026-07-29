@@ -1,3 +1,5 @@
+import { tr } from "@/i18n";
+import { LanguageSwitcher } from "@/components/language-switcher";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import {
   Mail,
@@ -17,7 +19,7 @@ export const Route = createFileRoute("/")({
       {
         name: "description",
         content:
-          "افتح أي بريد إلكتروني بأداء عالٍ وسرعة البرق. منصة SaaS للشركات مع تخصيص كامل بالشعار والألوان لكل عميل.",
+          tr("افتح أي بريد إلكتروني بأداء عالٍ وسرعة البرق. منصة SaaS للشركات مع تخصيص كامل بالشعار والألوان لكل عميل."),
       },
       { property: "og:title", content: "MailMaestro — منصة SaaS للبريد المؤسسي متعدد الشركات" },
       {
@@ -43,27 +45,28 @@ function Landing() {
           </Link>
           <nav className="hidden items-center gap-8 md:flex">
             <a href="#features" className="text-sm text-muted-foreground hover:text-foreground">
-              المزايا
+              {tr("المزايا")}
             </a>
             <a href="#how" className="text-sm text-muted-foreground hover:text-foreground">
-              كيف يعمل
+              {tr("كيف يعمل")}
             </a>
             <a href="#pricing" className="text-sm text-muted-foreground hover:text-foreground">
-              الأسعار
+              {tr("الأسعار")}
             </a>
           </nav>
           <div className="flex items-center gap-2">
+            <LanguageSwitcher />
             <Link
               to="/login"
               className="hidden rounded-lg px-4 py-2 text-sm font-medium text-foreground hover:bg-muted sm:inline-block"
             >
-              تسجيل الدخول
+              {tr("تسجيل الدخول")}
             </Link>
             <Link
               to="/company"
               className="inline-flex items-center gap-1.5 rounded-lg bg-brand-gradient px-4 py-2 text-sm font-semibold text-white shadow-soft transition hover:shadow-elevated"
             >
-              ابدأ مجاناً
+              {tr("ابدأ مجاناً")}
               <ArrowLeft className="h-4 w-4" />
             </Link>
           </div>
@@ -82,43 +85,42 @@ function Landing() {
         <div className="mx-auto max-w-4xl text-center animate-in-up">
           <div className="mb-6 inline-flex items-center gap-2 rounded-full border border-border bg-card/60 px-4 py-1.5 text-xs font-medium text-muted-foreground shadow-soft">
             <span className="flex h-1.5 w-1.5 rounded-full bg-emerald-500" />
-            منصة SaaS جاهزة لشركتك
+            {tr("منصة SaaS جاهزة لشركتك")}
           </div>
           <h1 className="text-balance text-4xl font-extrabold leading-tight tracking-tight text-foreground sm:text-6xl md:text-7xl">
-            بريدك المؤسسي
+            {tr("بريدك المؤسسي")}
             <br />
             <span className="bg-brand-gradient bg-clip-text text-transparent">
-              بسرعة البرق
+              {tr("بسرعة البرق")}
             </span>
           </h1>
           <p className="mx-auto mt-6 max-w-2xl text-balance text-lg text-muted-foreground sm:text-xl">
-            افتح أي حساب بريد إلكتروني عبر إعداداته البسيطة. لكل شركة شعارها وألوانها،
-            ولكل عميل تجربة استخدام سلسة كأنها من صنع علامتك التجارية.
+            {tr("افتح أي حساب بريد إلكتروني عبر إعداداته البسيطة. لكل شركة شعارها وألوانها، ولكل عميل تجربة استخدام سلسة كأنها من صنع علامتك التجارية.")}
           </p>
           <div className="mt-10 flex flex-col items-center justify-center gap-3 sm:flex-row">
             <Link
               to="/company"
               className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-brand-gradient px-6 py-3.5 text-base font-semibold text-white shadow-brand transition hover:scale-[1.02] sm:w-auto"
             >
-              ابدأ تجربتك المجانية
+              {tr("ابدأ تجربتك المجانية")}
               <ArrowLeft className="h-4 w-4" />
             </Link>
             <Link
               to="/login"
               className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-border bg-card px-6 py-3.5 text-base font-semibold text-foreground shadow-soft transition hover:border-brand-accent sm:w-auto"
             >
-              لدي حساب — دخول
+              {tr("لدي حساب — دخول")}
             </Link>
           </div>
           <div className="mt-6 flex flex-wrap items-center justify-center gap-x-6 gap-y-2 text-sm text-muted-foreground">
             <span className="flex items-center gap-1.5">
-              <CheckCircle2 className="h-4 w-4 text-emerald-500" /> بدون بطاقة ائتمانية
+              <CheckCircle2 className="h-4 w-4 text-emerald-500" /> {tr("بدون بطاقة ائتمانية")}
             </span>
             <span className="flex items-center gap-1.5">
-              <CheckCircle2 className="h-4 w-4 text-emerald-500" /> IMAP/SMTP قياسي
+              <CheckCircle2 className="h-4 w-4 text-emerald-500" /> {tr("IMAP/SMTP قياسي")}
             </span>
             <span className="flex items-center gap-1.5">
-              <CheckCircle2 className="h-4 w-4 text-emerald-500" /> تخصيص كامل بالعلامة
+              <CheckCircle2 className="h-4 w-4 text-emerald-500" /> {tr("تخصيص كامل بالعلامة")}
             </span>
           </div>
         </div>
@@ -133,7 +135,7 @@ function Landing() {
                   className="rounded-xl bg-brand-gradient px-6 py-3 text-white shadow-brand"
                 >
                   <span className="flex items-center gap-2">
-                    <Mail className="h-5 w-5" /> افتح تجربة الواجهة
+                    <Mail className="h-5 w-5" /> {tr("افتح تجربة الواجهة")}
                   </span>
                 </Link>
               </div>
@@ -147,10 +149,10 @@ function Landing() {
         <div className="mx-auto max-w-6xl">
           <div className="mx-auto max-w-2xl text-center">
             <h2 className="text-3xl font-bold tracking-tight sm:text-4xl">
-              كل ما تحتاجه شركتك في مكان واحد
+              {tr("كل ما تحتاجه شركتك في مكان واحد")}
             </h2>
             <p className="mt-4 text-lg text-muted-foreground">
-              منصة كاملة للشركات لتقديم بريد إلكتروني احترافي لعملائها
+              {tr("منصة كاملة للشركات لتقديم بريد إلكتروني احترافي لعملائها")}
             </p>
           </div>
 
@@ -159,32 +161,32 @@ function Landing() {
               {
                 icon: Zap,
                 title: "أداء سرعة البرق",
-                desc: "واجهة محسّنة تحمّل صندوق الوارد فوراً مع كاش ذكي وتحديثات فورية.",
+                desc: tr("واجهة محسّنة تحمّل صندوق الوارد فوراً مع كاش ذكي وتحديثات فورية."),
               },
               {
                 icon: Palette,
                 title: "تخصيص كامل بالعلامة",
-                desc: "شعارك، ألوانك، اسم التطبيق — كل شركة تظهر كتطبيق مصمّم خصيصاً لها.",
+                desc: tr("شعارك، ألوانك، اسم التطبيق — كل شركة تظهر كتطبيق مصمّم خصيصاً لها."),
               },
               {
                 icon: Shield,
                 title: "أمان مؤسسي",
-                desc: "تشفير AES-GCM لكل كلمات المرور، عزل تام بين بيانات الشركات.",
+                desc: tr("تشفير AES-GCM لكل كلمات المرور، عزل تام بين بيانات الشركات."),
               },
               {
                 icon: Users,
                 title: "متعدد المستخدمين",
-                desc: "لوحة تحكم لكل شركة لإدارة عملائها وحساباتهم بسهولة.",
+                desc: tr("لوحة تحكم لكل شركة لإدارة عملائها وحساباتهم بسهولة."),
               },
               {
                 icon: Mail,
                 title: "IMAP/SMTP قياسي",
-                desc: "يعمل مع أي خادم بريد: Gmail، Outlook، cPanel، خوادم مخصصة.",
+                desc: tr("يعمل مع أي خادم بريد: Gmail، Outlook، cPanel، خوادم مخصصة."),
               },
               {
                 icon: Cloud,
                 title: "متجاوب لكل الشاشات",
-                desc: "تجربة مثالية على الموبايل والتابلت والديسكتوب.",
+                desc: tr("تجربة مثالية على الموبايل والتابلت والديسكتوب."),
               },
             ].map((f) => (
               <div
@@ -206,16 +208,16 @@ function Landing() {
       <section id="pricing" className="px-4 py-24">
         <div className="mx-auto max-w-3xl rounded-3xl bg-brand-gradient p-10 text-center shadow-brand sm:p-16">
           <h2 className="text-3xl font-bold tracking-tight text-white sm:text-4xl">
-            جاهز لتقديم بريد إلكتروني احترافي لعملائك؟
+            {tr("جاهز لتقديم بريد إلكتروني احترافي لعملائك؟")}
           </h2>
           <p className="mt-4 text-lg text-white/85">
-            سجّل الآن وابدأ خلال دقائق — بدون بطاقة ائتمانية.
+            {tr("سجّل الآن وابدأ خلال دقائق — بدون بطاقة ائتمانية.")}
           </p>
           <Link
             to="/company"
             className="mt-8 inline-flex items-center gap-2 rounded-xl bg-white px-6 py-3.5 text-base font-semibold text-foreground shadow-elevated transition hover:scale-[1.02]"
           >
-            ابدأ الآن مجاناً
+            {tr("ابدأ الآن مجاناً")}
             <ArrowLeft className="h-4 w-4" />
           </Link>
         </div>
@@ -226,10 +228,10 @@ function Landing() {
           <span>© {new Date().getFullYear()} MailMaestro. جميع الحقوق محفوظة.</span>
           <div className="flex gap-6">
             <a href="#" className="hover:text-foreground">
-              الخصوصية
+              {tr("الخصوصية")}
             </a>
             <a href="#" className="hover:text-foreground">
-              الشروط
+              {tr("الشروط")}
             </a>
           </div>
         </div>

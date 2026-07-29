@@ -1,3 +1,5 @@
+import { tr } from "@/i18n";
+import { LanguageSwitcher } from "@/components/language-switcher";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { Mail, ArrowLeft, Loader2, Lock } from "lucide-react";
@@ -53,10 +55,10 @@ function LoginPage() {
         mailSessionToken: result.mailSessionToken,
         mailSessionTokenExpiresAt: result.mailSessionTokenExpiresAt,
       });
-      toast.success("تم فتح البريد ✨");
+      toast.success(tr("تم فتح البريد ✨"));
       navigate({ to: "/mail" });
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "بيانات الدخول غير صحيحة";
+      const msg = err instanceof Error ? err.message : tr("بيانات الدخول غير صحيحة");
       toast.error(msg);
     } finally {
       setLoading(false);
@@ -83,12 +85,12 @@ function LoginPage() {
           </Link>
           <div>
             <h2 className="text-4xl font-bold leading-tight">
-              افتح بريدك
+              {tr("افتح بريدك")}
               <br />
-              بسرعة البرق ⚡
+              {tr("بسرعة البرق ⚡")}
             </h2>
             <p className="mt-4 text-lg text-white/85">
-              أدخل بريدك وكلمة مروره فقط — لا حاجة لأي حساب إضافي.
+              {tr("أدخل بريدك وكلمة مروره فقط — لا حاجة لأي حساب إضافي.")}
             </p>
           </div>
           <p className="text-sm text-white/70">© {new Date().getFullYear()} MailMaestro</p>
@@ -101,22 +103,23 @@ function LoginPage() {
             to="/"
             className="mb-8 inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"
           >
-            <ArrowLeft className="h-4 w-4" /> العودة
+            <ArrowLeft className="h-4 w-4" /> {tr("العودة")}
           </Link>
+
+          <div className="mb-6"><LanguageSwitcher /></div>
 
           <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-brand-gradient/10 text-brand-accent">
             <Lock className="h-6 w-6" />
           </div>
-          <h1 className="text-3xl font-bold tracking-tight">افتح بريدك</h1>
+          <h1 className="text-3xl font-bold tracking-tight">{tr("افتح بريدك")}</h1>
           <p className="mt-2 text-muted-foreground">
-            استخدم عنوان بريدك وكلمة مروره الحقيقية. كلمة المرور تُستخدم فقط في هذه الجلسة ولا
-            تُخزَّن.
+            {tr("استخدم عنوان بريدك وكلمة مروره الحقيقية. كلمة المرور تُستخدم فقط في هذه الجلسة ولا تُخزَّن.")}
           </p>
 
           <form onSubmit={handleSubmit} className="mt-8 space-y-4">
             <div>
               <label className="mb-1.5 block text-sm font-medium text-foreground">
-                البريد الإلكتروني
+                {tr("البريد الإلكتروني")}
               </label>
               <input
                 type="email"
@@ -131,7 +134,7 @@ function LoginPage() {
             </div>
             <div>
               <label className="mb-1.5 block text-sm font-medium text-foreground">
-                كلمة مرور البريد
+                {tr("كلمة مرور البريد")}
               </label>
               <input
                 type="password"
@@ -156,12 +159,12 @@ function LoginPage() {
           </form>
 
           <div className="mt-8 rounded-xl border border-border bg-card p-4 text-center text-sm">
-            <p className="text-muted-foreground">هل أنت صاحب شركة؟</p>
+            <p className="text-muted-foreground">{tr("هل أنت صاحب شركة؟")}</p>
             <Link
               to="/company"
               className="mt-1 inline-block font-semibold text-primary hover:underline"
             >
-              سجّل شركتك أو ادخل إلى لوحة التحكم ←
+              {tr("سجّل شركتك أو ادخل إلى لوحة التحكم ←")}
             </Link>
           </div>
         </div>
