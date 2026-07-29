@@ -53,84 +53,83 @@ function sanitizeComposerHtml(html: string): string {
  */
 function EmailBodyFrame({ html, className }: { html: string; className?: string }) {
   const ref = useRef<HTMLIFrameElement | null>(null);
-  const [height, setHeight] = useState<number>(200);
+  const frameId = useMemo(
+    () => `mm-frame-${Math.random().toString(36).slice(2)}`,
+    [],
+  );
+  const [height, setHeight] = useState<number>(60);
 
   const srcDoc = useMemo(() => {
+    // Inline script runs inside opaque-origin sandbox: no access to parent DOM,
+    // no cookies, no storage — only postMessage. Same isolation model as Gmail.
+    const measureScript = `
+      (function(){
+        var last=0;
+        function send(){
+          try{
+            var b=document.body, d=document.documentElement;
+            var h=Math.max(
+              b?b.scrollHeight:0, b?b.offsetHeight:0,
+              d?d.scrollHeight:0, d?d.offsetHeight:0
+            );
+            if(h && Math.abs(h-last)>1){
+              last=h;
+              parent.postMessage({__mm:'h', id:${JSON.stringify(frameId)}, h:h}, '*');
+            }
+          }catch(e){}
+        }
+        // Initial + after full load (fonts/images).
+        if(document.readyState==='complete') send();
+        else window.addEventListener('load', send);
+        window.addEventListener('DOMContentLoaded', send);
+        // Image load fallbacks.
+        Array.prototype.forEach.call(document.images||[], function(img){
+          if(!img.complete){ img.addEventListener('load', send); img.addEventListener('error', send); }
+        });
+        // Native observer — cheap, runs inside the iframe only.
+        try{
+          if(window.ResizeObserver){
+            var ro=new ResizeObserver(send);
+            ro.observe(document.documentElement);
+            if(document.body) ro.observe(document.body);
+          }
+        }catch(e){}
+      })();
+    `;
     const base = `
       <base target="_blank">
       <style>
         html,body{margin:0;padding:0;background:transparent;color:#111;
           font-family:'IBM Plex Sans Arabic',system-ui,-apple-system,Segoe UI,sans-serif;
-          font-size:14px;line-height:1.6;word-wrap:break-word;overflow-wrap:anywhere;}
+          font-size:14px;line-height:1.6;word-wrap:break-word;overflow-wrap:anywhere;
+          overflow:hidden;}
         img,video{max-width:100%;height:auto;border-radius:6px;}
         table{max-width:100%;}
         a{color:#2563eb;}
         blockquote{border-inline-start:3px solid #e5e7eb;margin:8px 0;padding:4px 12px;color:#4b5563;}
         pre,code{white-space:pre-wrap;word-break:break-word;}
       </style>`;
-    return `<!doctype html><html><head><meta charset="utf-8">${base}</head><body>${html}</body></html>`;
-  }, [html]);
+    return `<!doctype html><html><head><meta charset="utf-8">${base}</head><body>${html}<script>${measureScript}<\/script></body></html>`;
+  }, [html, frameId]);
 
-  const handleLoad = useCallback(() => {
-    const iframe = ref.current;
-    if (!iframe) return;
-    const doc = iframe.contentDocument;
-    if (!doc?.body) return;
-
-    const measure = () => {
-      try {
-        const h = Math.max(
-          doc.body.scrollHeight,
-          doc.documentElement?.scrollHeight ?? 0,
-        );
-        if (h > 0) setHeight((prev) => (Math.abs(prev - (h + 8)) > 1 ? h + 8 : prev));
-      } catch { /* ignore */ }
-    };
-
-    measure();
-
-    // Re-measure after each image loads (common cause of underestimated height).
-    const imgs = Array.from(doc.images || []);
-    imgs.forEach((img) => {
-      if (!img.complete) {
-        img.addEventListener("load", measure, { once: true });
-        img.addEventListener("error", measure, { once: true });
-      }
-    });
-
-    // Observe body size changes (web fonts, late CSS, dynamic content).
-    let ro: ResizeObserver | null = null;
-    try {
-      const RO = (iframe.contentWindow as any)?.ResizeObserver || (window as any).ResizeObserver;
-      if (RO) {
-        ro = new RO(() => measure());
-        ro!.observe(doc.documentElement);
-        ro!.observe(doc.body);
-      }
-    } catch { /* ignore */ }
-
-    // Safety net: a few delayed measures for late layout.
-    const t1 = setTimeout(measure, 150);
-    const t2 = setTimeout(measure, 600);
-    const t3 = setTimeout(measure, 1500);
-
-    (iframe as any)._cleanup = () => {
-      clearTimeout(t1); clearTimeout(t2); clearTimeout(t3);
-      try { ro?.disconnect(); } catch { /* ignore */ }
-    };
-  }, []);
-
-  useEffect(() => () => {
-    try { (ref.current as any)?._cleanup?.(); } catch { /* ignore */ }
-  }, []);
+  useEffect(() => {
+    function onMsg(e: MessageEvent) {
+      const d = e.data as any;
+      if (!d || d.__mm !== "h" || d.id !== frameId) return;
+      const h = Number(d.h);
+      if (!Number.isFinite(h) || h <= 0) return;
+      setHeight((prev) => (Math.abs(prev - (h + 4)) > 1 ? h + 4 : prev));
+    }
+    window.addEventListener("message", onMsg);
+    return () => window.removeEventListener("message", onMsg);
+  }, [frameId]);
 
   return (
     <iframe
       ref={ref}
       title="email-body"
       srcDoc={srcDoc}
-      onLoad={handleLoad}
-      sandbox="allow-popups allow-popups-to-escape-sandbox"
+      sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
       scrolling="no"
       className={className}
       style={{ width: "100%", height, border: 0, display: "block", overflow: "hidden" }}
