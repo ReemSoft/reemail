@@ -9,7 +9,21 @@ import {
   buildEmailSrcDoc,
   isValidHeightPayload,
   randomToken,
+  hasRemoteImages,
 } from "../email-viewer-security";
+
+// Extract the img-src directive from a built srcDoc's CSP meta.
+function extractImgSrc(doc: string): string {
+  const m = doc.match(/Content-Security-Policy"\s+content="([^"]+)"/);
+  if (!m) throw new Error("CSP meta not found");
+  const csp = m[1];
+  const dir = csp
+    .split(";")
+    .map((s) => s.trim())
+    .find((s) => s.startsWith("img-src "));
+  if (!dir) throw new Error("img-src directive missing");
+  return dir;
+}
 
 describe("sanitizeAndHardenEmailHtml — dangerous tags/attrs", () => {
   it("strips <script>, on* handlers, javascript: hrefs", () => {
@@ -136,12 +150,19 @@ describe("buildEmailSrcDoc — CSP + measurement contract", () => {
     expect(doc).toMatch(/object-src 'none'/);
     expect(doc).toMatch(/base-uri 'none'/);
     expect(doc).toMatch(/form-action 'none'/);
-    expect(doc).toMatch(/img-src data: blob:/);
     expect(doc).toMatch(/script-src 'nonce-abc123'/);
     expect(doc).not.toMatch(/unsafe-eval/);
     // No wildcard image / connect sources.
     expect(doc).not.toMatch(/img-src[^;]*\*/);
     expect(doc).not.toMatch(/connect-src[^;]*\*/);
+  });
+
+  it("default img-src blocks all remote images (only data:/blob:)", () => {
+    const dir = extractImgSrc(doc);
+    expect(dir).toBe("img-src data: blob:");
+    // Strict: no remote schemes appear anywhere in the directive.
+    expect(dir).not.toMatch(/\bhttps?:/);
+    expect(dir).not.toMatch(/\*/);
   });
 
   it("nonces the measurement script tag", () => {
@@ -169,6 +190,52 @@ describe("buildEmailSrcDoc — CSP + measurement contract", () => {
       parentOrigin: "https://x",
     });
     expect(evil).not.toMatch(/<\/script><script>alert/);
+  });
+});
+
+describe("buildEmailSrcDoc — remote image privacy gate", () => {
+  const opts = {
+    html: `<img src="https://tracker.example/pixel.gif">`,
+    nonce: "n1",
+    channelId: "c1",
+    parentOrigin: "https://app.example.com",
+  };
+
+  it("default srcDoc allows neither https: nor http: images", () => {
+    const dir = extractImgSrc(buildEmailSrcDoc(opts));
+    expect(dir).toBe("img-src data: blob:");
+    expect(dir).not.toMatch(/\bhttps:/);
+    expect(dir).not.toMatch(/\bhttp:/);
+  });
+
+  it("after explicit consent, allows https: only — http: stays blocked", () => {
+    const dir = extractImgSrc(buildEmailSrcDoc({ ...opts, allowRemoteImages: true }));
+    expect(dir).toBe("img-src data: blob: https:");
+    expect(dir).toMatch(/\bhttps:/);
+    // http: never appears as a standalone scheme token in the directive.
+    expect(dir.split(/\s+/)).not.toContain("http:");
+  });
+
+  it("does not embed remote image URLs into the CSP itself (no allowlist leaks)", () => {
+    const doc = buildEmailSrcDoc(opts);
+    // The remote host must not appear in CSP or the head — only inside body <img>.
+    const head = doc.split("</head>")[0];
+    expect(head).not.toMatch(/tracker\.example/);
+  });
+});
+
+describe("hasRemoteImages", () => {
+  it("detects http/https/protocol-relative <img src>", () => {
+    expect(hasRemoteImages(`<img src="https://x/y.png">`)).toBe(true);
+    expect(hasRemoteImages(`<img src="http://x/y.png">`)).toBe(true);
+    expect(hasRemoteImages(`<img src="//x/y.png">`)).toBe(true);
+  });
+
+  it("ignores inline (data:/cid:) images and empty input", () => {
+    expect(hasRemoteImages(`<img src="data:image/png;base64,AAAA">`)).toBe(false);
+    expect(hasRemoteImages(`<img src="cid:abc">`)).toBe(false);
+    expect(hasRemoteImages("")).toBe(false);
+    expect(hasRemoteImages("<p>no images</p>")).toBe(false);
   });
 });
 

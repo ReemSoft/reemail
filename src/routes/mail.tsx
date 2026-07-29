@@ -7,6 +7,7 @@ import {
   buildEmailSrcDoc,
   isValidHeightPayload,
   randomToken,
+  hasRemoteImages,
 } from "@/lib/email-viewer-security";
 
 // Kept as a thin wrapper — the heavy lifting (DOMPurify + CSS url()/@import
@@ -40,21 +41,31 @@ function EmailBodyFrame({ html, className }: { html: string; className?: string 
   const nonce = useMemo(() => randomToken(12), []);
   const channelId = useMemo(() => `mm-${randomToken(12)}`, []);
   const [height, setHeight] = useState<number>(60);
+  const [allowRemoteImages, setAllowRemoteImages] = useState(false);
+
+  // Reset consent whenever the message body changes (per-message opt-in only).
+  useEffect(() => {
+    setAllowRemoteImages(false);
+    setHeight(60);
+  }, [html]);
 
   const parentOrigin = useMemo(
     () => (typeof window !== "undefined" ? window.location.origin : "null"),
     [],
   );
 
+  const showBanner = useMemo(
+    () => !allowRemoteImages && hasRemoteImages(html),
+    [html, allowRemoteImages],
+  );
+
   const srcDoc = useMemo(
-    () => buildEmailSrcDoc({ html, nonce, channelId, parentOrigin }),
-    [html, nonce, channelId, parentOrigin],
+    () => buildEmailSrcDoc({ html, nonce, channelId, parentOrigin, allowRemoteImages }),
+    [html, nonce, channelId, parentOrigin, allowRemoteImages],
   );
 
   useEffect(() => {
     function onMsg(e: MessageEvent) {
-      // Sandbox without allow-same-origin ⇒ event.origin is the literal
-      // string "null". Reject anything else.
       if (e.origin !== "null") return;
       if (!ref.current || e.source !== ref.current.contentWindow) return;
       if (!isValidHeightPayload(e.data, channelId)) return;
@@ -66,16 +77,32 @@ function EmailBodyFrame({ html, className }: { html: string; className?: string 
   }, [channelId]);
 
   return (
-    <iframe
-      ref={ref}
-      title="email-body"
-      srcDoc={srcDoc}
-      sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
-      referrerPolicy="no-referrer"
-      scrolling="no"
-      className={className}
-      style={{ width: "100%", height, border: 0, display: "block", overflow: "hidden" }}
-    />
+    <div className={className}>
+      {showBanner && (
+        <div
+          role="status"
+          className="mb-2 flex flex-wrap items-center justify-between gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900"
+        >
+          <span>تم حظر الصور الخارجية لحماية خصوصيتك</span>
+          <button
+            type="button"
+            onClick={() => setAllowRemoteImages(true)}
+            className="rounded border border-amber-300 bg-white px-2 py-1 text-xs font-medium text-amber-900 hover:bg-amber-100"
+          >
+            عرض الصور
+          </button>
+        </div>
+      )}
+      <iframe
+        ref={ref}
+        title="email-body"
+        srcDoc={srcDoc}
+        sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
+        referrerPolicy="no-referrer"
+        scrolling="no"
+        style={{ width: "100%", height, border: 0, display: "block", overflow: "hidden" }}
+      />
+    </div>
   );
 }
 
