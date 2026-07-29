@@ -54,6 +54,7 @@ function Landing() {
             </a>
           </nav>
           <div className="flex items-center gap-2">
+            <LanguageSwitcher />
             <Link
               to="/login"
               className="hidden rounded-lg px-4 py-2 text-sm font-medium text-foreground hover:bg-muted sm:inline-block"
