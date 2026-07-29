@@ -10,9 +10,14 @@ import DOMPurify from "dompurify";
 // links to open in a new tab without leaking the referrer.
 function sanitizeEmailHtml(html: string): string {
   if (!html) return "";
+  // Allow <style> and inline style="..." so incoming emails keep their real
+  // design (Gmail/GitHub/newsletters ship inline CSS + <style>). Isolation
+  // and script safety are enforced by rendering inside a sandboxed <iframe>
+  // via EmailBodyFrame — DOMPurify still strips script/iframe/on*= handlers
+  // and javascript: URLs, so allowing style is safe here.
   const clean = DOMPurify.sanitize(html, {
-    FORBID_TAGS: ["script", "iframe", "object", "embed", "form", "link", "meta", "base", "style"],
-    FORBID_ATTR: ["style", "srcdoc", "formaction"],
+    FORBID_TAGS: ["script", "iframe", "object", "embed", "form", "link", "meta", "base"],
+    FORBID_ATTR: ["srcdoc", "formaction"],
     ALLOW_DATA_ATTR: false,
   });
   // Best-effort target hardening — DOMPurify already blocks javascript: URLs.
