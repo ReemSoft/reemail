@@ -150,12 +150,19 @@ describe("buildEmailSrcDoc — CSP + measurement contract", () => {
     expect(doc).toMatch(/object-src 'none'/);
     expect(doc).toMatch(/base-uri 'none'/);
     expect(doc).toMatch(/form-action 'none'/);
-    expect(doc).toMatch(/img-src data: blob:/);
     expect(doc).toMatch(/script-src 'nonce-abc123'/);
     expect(doc).not.toMatch(/unsafe-eval/);
     // No wildcard image / connect sources.
     expect(doc).not.toMatch(/img-src[^;]*\*/);
     expect(doc).not.toMatch(/connect-src[^;]*\*/);
+  });
+
+  it("default img-src blocks all remote images (only data:/blob:)", () => {
+    const dir = extractImgSrc(doc);
+    expect(dir).toBe("img-src data: blob:");
+    // Strict: no remote schemes appear anywhere in the directive.
+    expect(dir).not.toMatch(/\bhttps?:/);
+    expect(dir).not.toMatch(/\*/);
   });
 
   it("nonces the measurement script tag", () => {
