@@ -35,6 +35,72 @@ function sanitizeComposerHtml(html: string): string {
   });
 }
 
+/**
+ * EmailBodyFrame — renders sanitized email HTML inside a sandboxed iframe.
+ *
+ * Why: real-world emails ship inline CSS + <style> blocks (Gmail, GitHub,
+ * newsletters). Rendering them directly in the app DOM either strips the
+ * design (if we forbid style) or leaks the email's CSS into the app shell
+ * (if we allow it). Gmail/Outlook/Roundcube all render inside an iframe —
+ * we do the same.
+ *
+ * Safety: sandbox has NO allow-scripts, so JS in the body cannot run even
+ * if it slipped past DOMPurify. Links open in a new top-level tab via
+ * allow-popups-to-escape-sandbox + our target="_blank" rewrite.
+ *
+ * Performance: single iframe per open message, height set once after load
+ * from body.scrollHeight — no polling, no ResizeObserver on the parent.
+ */
+function EmailBodyFrame({ html, className }: { html: string; className?: string }) {
+  const ref = useRef<HTMLIFrameElement | null>(null);
+  const [height, setHeight] = useState<number>(200);
+
+  const srcDoc = useMemo(() => {
+    const base = `
+      <base target="_blank">
+      <style>
+        html,body{margin:0;padding:0;background:transparent;color:#111;
+          font-family:'IBM Plex Sans Arabic',system-ui,-apple-system,Segoe UI,sans-serif;
+          font-size:14px;line-height:1.6;word-wrap:break-word;overflow-wrap:anywhere;}
+        img,video{max-width:100%;height:auto;border-radius:6px;}
+        table{max-width:100%;}
+        a{color:#2563eb;}
+        blockquote{border-inline-start:3px solid #e5e7eb;margin:8px 0;padding:4px 12px;color:#4b5563;}
+        pre,code{white-space:pre-wrap;word-break:break-word;}
+      </style>`;
+    return `<!doctype html><html><head><meta charset="utf-8">${base}</head><body>${html}</body></html>`;
+  }, [html]);
+
+  const handleLoad = useCallback(() => {
+    const iframe = ref.current;
+    if (!iframe) return;
+    try {
+      const doc = iframe.contentDocument;
+      if (!doc?.body) return;
+      // Measure once. Use scrollHeight of documentElement/body max.
+      const h = Math.max(
+        doc.body.scrollHeight,
+        doc.documentElement?.scrollHeight ?? 0,
+      );
+      if (h > 0) setHeight(h + 8);
+    } catch {
+      /* cross-origin should not happen with srcDoc; ignore */
+    }
+  }, []);
+
+  return (
+    <iframe
+      ref={ref}
+      title="email-body"
+      srcDoc={srcDoc}
+      onLoad={handleLoad}
+      sandbox="allow-popups allow-popups-to-escape-sandbox"
+      className={className}
+      style={{ width: "100%", height, border: 0, display: "block" }}
+    />
+  );
+}
+
 import {
   Inbox,
   Star,
