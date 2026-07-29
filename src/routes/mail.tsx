@@ -3500,6 +3500,7 @@ function MessageView({
   onRestore: () => void;
   onPrint: () => void;
 }) {
+  const { dir: uiDir } = useLanguage();
   const [detailsOpen, setDetailsOpen] = useState(false);
   const recipientsAll = [
     ...message.to.map((t) => ({ ...t, kind: "to" as const })),
