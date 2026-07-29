@@ -44,6 +44,8 @@
         "date-fns": "^4.1.0",
         "dompurify": "^3.4.12",
         "embla-carousel-react": "^8.6.0",
+        "i18next": "^26.3.6",
+        "i18next-browser-languagedetector": "^8.2.1",
         "input-otp": "^1.4.2",
         "jose": "^6.2.4",
         "lucide-react": "^0.575.0",
@@ -51,6 +53,7 @@
         "react-day-picker": "^9.14.0",
         "react-dom": "^19.2.0",
         "react-hook-form": "^7.71.2",
+        "react-i18next": "^17.0.11",
         "react-resizable-panels": "^4.6.5",
         "react-virtuoso": "^4.18.11",
         "recharts": "^2.15.4",
@@ -908,7 +911,13 @@
 
     "html-encoding-sniffer": ["html-encoding-sniffer@6.0.0", "https://europe-west1-npm.pkg.dev/lovable-core-prod/sandbox-npm-cache/html-encoding-sniffer/-/html-encoding-sniffer-6.0.0.tgz", { "dependencies": { "@exodus/bytes": "^1.6.0" } }, "sha512-CV9TW3Y3f8/wT0BRFc1/KAVQ3TUHiXmaAb6VW9vtiMFf7SLoMd1PdAc4W3KFOFETBJUb90KatHqlsZMWV+R9Gg=="],
 
+    "html-parse-stringify": ["html-parse-stringify@4.0.1", "https://europe-west1-npm.pkg.dev/lovable-core-prod/sandbox-npm-cache/html-parse-stringify/-/html-parse-stringify-4.0.1.tgz", {}, "sha512-0zHsZJrK7S3K2aucXWL6ycoYJ/iNtIcFHC/nYQgFklPtrv5LpJctIiSCroWZWeuoXvuyFdzp6KzjJQ+OT5MfFw=="],
+
     "httpxy": ["httpxy@0.5.3", "", {}, "sha512-SMS9V6Sn7VWaS11lYhoAr0ceoaiolTWf4jYdJn0NJhCdKMu9R2H9Fh0LBDWBHQF6HRLI1PmaePYsjanSpE5PEw=="],
+
+    "i18next": ["i18next@26.3.6", "https://europe-west1-npm.pkg.dev/lovable-core-prod/sandbox-npm-cache/i18next/-/i18next-26.3.6.tgz", { "peerDependencies": { "typescript": "^5 || ^6 || ^7" }, "optionalPeers": ["typescript"] }, "sha512-Bu5Z2nAXgfVyM8xvW3jk9EKRIuX37PudsrBViThNFx7CR7aaYTpP01cxNB/E4c4UUzTDiAZRstEhsRfPOL/8xA=="],
+
+    "i18next-browser-languagedetector": ["i18next-browser-languagedetector@8.2.1", "https://europe-west1-npm.pkg.dev/lovable-core-prod/sandbox-npm-cache/i18next-browser-languagedetector/-/i18next-browser-languagedetector-8.2.1.tgz", { "dependencies": { "@babel/runtime": "^7.23.2" } }, "sha512-bZg8+4bdmaOiApD7N7BPT9W8MLZG+nPTOFlLiJiT8uzKXFjhxw4v2ierCXOwB5sFDMtuA5G4kgYZ0AznZxQ/cw=="],
 
     "iceberg-js": ["iceberg-js@0.8.1", "https://europe-west1-npm.pkg.dev/lovable-core-prod/sandbox-npm-cache/iceberg-js/-/iceberg-js-0.8.1.tgz", {}, "sha512-1dhVQZXhcHje7798IVM+xoo/1ZdVfzOMIc8/rgVSijRK38EDqOJoGula9N/8ZI5RD8QTxNQtK/Gozpr+qUqRRA=="],
 
@@ -1063,6 +1072,8 @@
     "react-dom": ["react-dom@19.2.5", "", { "dependencies": { "scheduler": "^0.27.0" }, "peerDependencies": { "react": "^19.2.5" } }, "sha512-J5bAZz+DXMMwW/wV3xzKke59Af6CHY7G4uYLN1OvBcKEsWOs4pQExj86BBKamxl/Ik5bx9whOrvBlSDfWzgSag=="],
 
     "react-hook-form": ["react-hook-form@7.73.1", "", { "peerDependencies": { "react": "^16.8.0 || ^17 || ^18 || ^19" } }, "sha512-VAfVYOPcx3piiEVQy95vyFmBwbVUsP/AUIN+mpFG8h11yshDd444nn0VyfaGWSRnhOLVgiDu7HIuBtAIzxn9dA=="],
+
+    "react-i18next": ["react-i18next@17.0.11", "https://europe-west1-npm.pkg.dev/lovable-core-prod/sandbox-npm-cache/react-i18next/-/react-i18next-17.0.11.tgz", { "dependencies": { "@babel/runtime": "^7.29.2", "html-parse-stringify": "^4.0.1", "use-sync-external-store": "^1.6.0" }, "peerDependencies": { "i18next": ">= 26.2.0", "react": ">= 16.8.0", "typescript": "^5 || ^6 || ^7" }, "optionalPeers": ["typescript"] }, "sha512-cDtkXgxjuFTWUH6V+aQn1Ve5vDiUztCNPWW5GtSHDccsgRXO1nE6QFWCEmc1KAutrb3OUv87wFShJL5RhUwPXg=="],
 
     "react-is": ["react-is@18.3.1", "", {}, "sha512-/LLMVyas0ljjAtoYiPqYiL8VWXzUUdThrmU5+n20DZv+a+ClRoevUzw5JxU+Ieh5/c87ytoTBV9G1FiKfNJdmg=="],
 
