@@ -2955,7 +2955,9 @@ function MailApp() {
         {/* Sidebar */}
         <aside
           className={`fixed inset-y-0 start-0 top-14 z-30 w-64 shrink-0 transform border-e border-border bg-sidebar transition-transform lg:relative lg:top-0 lg:translate-x-0 ${
-            sidebarOpen ? "translate-x-0" : "rtl:translate-x-full ltr:-translate-x-full lg:translate-x-0"
+            sidebarOpen
+              ? "translate-x-0"
+              : `${uiDir === "rtl" ? "translate-x-full" : "-translate-x-full"} lg:translate-x-0`
           }`}
         >
           <div className="p-4">
