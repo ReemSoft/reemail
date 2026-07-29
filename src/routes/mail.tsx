@@ -2827,7 +2827,7 @@ function MailApp() {
               <X className="h-3.5 w-3.5" />
             </button>
           )}
-          <DropdownMenu dir="rtl">
+          <DropdownMenu dir={uiDir}>
             <DropdownMenuTrigger asChild>
               <button
                 className={`flex shrink-0 items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium transition ${
@@ -3051,7 +3051,7 @@ function MailApp() {
               <div className="flex-1" />
               {bulkBusy && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />}
               {selection.size > 0 && (
-                <DropdownMenu dir="rtl">
+                <DropdownMenu dir={uiDir}>
                   <DropdownMenuTrigger asChild>
                     <button
                       disabled={bulkBusy}
@@ -3167,7 +3167,7 @@ function MailApp() {
                   {selectMode ? tr("إلغاء") : tr("تحديد")}
                 </button>
                 {!inDeepSearch && (
-                  <DropdownMenu dir="rtl">
+                  <DropdownMenu dir={uiDir}>
                     <DropdownMenuTrigger asChild>
                       <button
                         className="flex items-center gap-1 rounded px-2 py-1.5 text-xs font-medium text-foreground hover:bg-muted"
