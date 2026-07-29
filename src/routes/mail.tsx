@@ -3748,12 +3748,11 @@ function MessageView({
               </div>
             </div>
 
-            <article
-              className="prose prose-sm mt-6 max-w-none break-words text-foreground prose-a:text-brand-accent prose-img:rounded-lg"
-              dangerouslySetInnerHTML={{
-                __html: sanitizeEmailHtml(message.body || message.preview || ""),
-              }}
+            <EmailBodyFrame
+              html={sanitizeEmailHtml(message.body || message.preview || "")}
+              className="mt-6"
             />
+
 
             {message.attachments && message.attachments.length > 0 && (
               <div className="mt-6">
