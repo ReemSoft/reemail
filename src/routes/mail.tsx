@@ -1374,6 +1374,7 @@ function useMailData(session: MailSession | null) {
 
 function MailApp() {
   const navigate = useNavigate();
+  const { dir: uiDir } = useLanguage();
   const { confirm } = useConfirm();
   const [session, setSession] = useState<MailSession | null | undefined>(undefined);
   const [selectedId, setSelectedId] = useState<string | null>(null);
