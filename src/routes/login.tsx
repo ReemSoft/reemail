@@ -1,4 +1,5 @@
 import { tr } from "@/i18n";
+import { LanguageSwitcher } from "@/components/language-switcher";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { Mail, ArrowLeft, Loader2, Lock } from "lucide-react";
@@ -104,6 +105,8 @@ function LoginPage() {
           >
             <ArrowLeft className="h-4 w-4" /> {tr("العودة")}
           </Link>
+
+          <div className="mb-6"><LanguageSwitcher /></div>
 
           <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-brand-gradient/10 text-brand-accent">
             <Lock className="h-6 w-6" />

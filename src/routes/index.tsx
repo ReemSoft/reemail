@@ -1,4 +1,5 @@
 import { tr } from "@/i18n";
+import { LanguageSwitcher } from "@/components/language-switcher";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import {
   Mail,
