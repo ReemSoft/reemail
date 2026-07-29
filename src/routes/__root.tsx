@@ -136,13 +136,17 @@ function RootShell({ children }: { children: ReactNode }) {
 function RootComponent() {
   const { queryClient } = Route.useRouteContext();
   // Mount the language sync so <html lang/dir> reflect the current language.
-  useLanguage();
+  // Keying the subtree with `lang` guarantees every component re-renders
+  // instantly when the user toggles AR↔EN — no full page reload required.
+  const { lang } = useLanguage();
 
   return (
     <QueryClientProvider client={queryClient}>
       <ConfirmProvider>
         {/* Required: nested routes render here. Removing <Outlet /> breaks all child routes. */}
-        <Outlet />
+        <div key={lang} className="contents">
+          <Outlet />
+        </div>
         <Toaster />
       </ConfirmProvider>
     </QueryClientProvider>
