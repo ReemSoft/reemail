@@ -9,7 +9,21 @@ import {
   buildEmailSrcDoc,
   isValidHeightPayload,
   randomToken,
+  hasRemoteImages,
 } from "../email-viewer-security";
+
+// Extract the img-src directive from a built srcDoc's CSP meta.
+function extractImgSrc(doc: string): string {
+  const m = doc.match(/Content-Security-Policy"\s+content="([^"]+)"/);
+  if (!m) throw new Error("CSP meta not found");
+  const csp = m[1];
+  const dir = csp
+    .split(";")
+    .map((s) => s.trim())
+    .find((s) => s.startsWith("img-src "));
+  if (!dir) throw new Error("img-src directive missing");
+  return dir;
+}
 
 describe("sanitizeAndHardenEmailHtml — dangerous tags/attrs", () => {
   it("strips <script>, on* handlers, javascript: hrefs", () => {
