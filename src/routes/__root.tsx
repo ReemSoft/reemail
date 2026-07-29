@@ -10,6 +10,8 @@ import {
 import { useEffect, type ReactNode } from "react";
 import { Toaster } from "@/components/ui/sonner";
 import { ConfirmProvider } from "@/components/ui/confirm-provider";
+import "@/i18n"; // side-effect init: registers i18next + browser detector
+import { useLanguage } from "@/hooks/use-language";
 
 import appCss from "../styles.css?url";
 import { reportLovableError } from "../lib/lovable-error-reporting";
