@@ -186,7 +186,7 @@ function SignInForm() {
       </p>
       <form onSubmit={handleSubmit} className="mt-8 space-y-4">
         <Field
-          label=tr("البريد الإلكتروني")
+          label={tr("البريد الإلكتروني")}
           type="email"
           value={email}
           onChange={setEmail}
@@ -194,7 +194,7 @@ function SignInForm() {
           required
         />
         <Field
-          label=tr("كلمة المرور")
+          label={tr("كلمة المرور")}
           type="password"
           value={password}
           onChange={setPassword}
@@ -274,15 +274,15 @@ function RegisterCompanyForm({ onDone }: { onDone: () => void }) {
       </p>
       <form onSubmit={handleSubmit} className="mt-8 space-y-4">
         <Field
-          label=tr("اسم الشركة")
+          label={tr("اسم الشركة")}
           type="text"
           value={companyName}
           onChange={handleNameChange}
-          placeholder=tr("مثال: MailMaestro")
+          placeholder={tr("مثال: MailMaestro")}
           required
         />
         <Field
-          label=tr("معرّف الشركة (بالإنجليزية)")
+          label={tr("معرّف الشركة (بالإنجليزية)")}
           type="text"
           value={companySlug}
           onChange={(v) =>
@@ -295,15 +295,15 @@ function RegisterCompanyForm({ onDone }: { onDone: () => void }) {
           ltr
         />
         <Field
-          label=tr("اسمك الكامل")
+          label={tr("اسمك الكامل")}
           type="text"
           value={fullName}
           onChange={setFullName}
-          placeholder=tr("محمد أحمد")
+          placeholder={tr("محمد أحمد")}
           required
         />
         <Field
-          label=tr("بريدك الإلكتروني")
+          label={tr("بريدك الإلكتروني")}
           type="email"
           value={email}
           onChange={setEmail}
@@ -311,11 +311,11 @@ function RegisterCompanyForm({ onDone }: { onDone: () => void }) {
           required
         />
         <Field
-          label=tr("كلمة المرور")
+          label={tr("كلمة المرور")}
           type="password"
           value={password}
           onChange={setPassword}
-          placeholder=tr("6 أحرف على الأقل")
+          placeholder={tr("6 أحرف على الأقل")}
           minLength={6}
           required
         />

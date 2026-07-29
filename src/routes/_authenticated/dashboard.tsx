@@ -231,7 +231,7 @@ function CompanyDashboard() {
             <button
               onClick={handleLogout}
               className="inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium text-muted-foreground transition hover:bg-destructive hover:text-destructive-foreground"
-              title=tr("تسجيل الخروج")
+              title={tr("تسجيل الخروج")}
             >
               <LogOut className="h-4 w-4" />
               <span className="hidden sm:inline">{tr("خروج")}</span>
@@ -309,36 +309,36 @@ function BrandingTab({
       </p>
 
       <div className="mt-6 space-y-5">
-        <Field label=tr("اسم الشركة")>
+        <Field label={tr("اسم الشركة")}>
           <input
             value={company.name}
             onChange={(e) => setCompany({ ...company, name: e.target.value })}
             className="w-full rounded-lg border border-input bg-background px-4 py-2.5 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
           />
         </Field>
-        <Field label=tr("اسم التطبيق المُخصّص")>
+        <Field label={tr("اسم التطبيق المُخصّص")}>
           <input
             value={company.app_name ?? ""}
             onChange={(e) => setCompany({ ...company, app_name: e.target.value })}
-            placeholder=tr("مثال: Aramco Mail")
+            placeholder={tr("مثال: Aramco Mail")}
             className="w-full rounded-lg border border-input bg-background px-4 py-2.5 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
           />
         </Field>
 
         <div className="grid gap-4 sm:grid-cols-2">
           <ColorInput
-            label=tr("اللون الأساسي")
+            label={tr("اللون الأساسي")}
             value={company.brand_primary}
             onChange={(v) => setCompany({ ...company, brand_primary: v })}
           />
           <ColorInput
-            label=tr("لون التمييز")
+            label={tr("لون التمييز")}
             value={company.brand_accent}
             onChange={(v) => setCompany({ ...company, brand_accent: v })}
           />
         </div>
 
-        <Field label=tr("شعار الشركة")>
+        <Field label={tr("شعار الشركة")}>
           <div className="flex items-center gap-4">
             <div className="flex h-20 w-20 items-center justify-center rounded-2xl border-2 border-dashed border-border bg-muted/30">
               {company.logo_url ? (
@@ -354,7 +354,7 @@ function BrandingTab({
             <input
               value={company.logo_url ?? ""}
               onChange={(e) => setCompany({ ...company, logo_url: e.target.value })}
-              placeholder=tr("https://... رابط الشعار")
+              placeholder={tr("https://... رابط الشعار")}
               className="flex-1 rounded-lg border border-input bg-background px-4 py-2.5 text-sm outline-none focus:border-primary"
               dir="ltr"
             />
@@ -548,7 +548,7 @@ function AccountsTab({
                   <button
                     onClick={() => startEdit(a)}
                     className="rounded-md p-2 text-muted-foreground hover:bg-primary/10 hover:text-primary"
-                    title=tr("تعديل")
+                    title={tr("تعديل")}
                   >
                     <Pencil className="h-4 w-4" />
                   </button>
@@ -556,7 +556,7 @@ function AccountsTab({
                     onClick={() => handleDelete(a.id)}
                     disabled={busyId === a.id}
                     className="rounded-md p-2 text-muted-foreground hover:bg-destructive/10 hover:text-destructive disabled:opacity-50"
-                    title=tr("حذف")
+                    title={tr("حذف")}
                   >
                     {busyId === a.id ? (
                       <Loader2 className="h-4 w-4 animate-spin" />
@@ -597,7 +597,7 @@ function AccountsTab({
             </div>
 
             <div className="grid gap-4 sm:grid-cols-2">
-              <Field label=tr("البريد الإلكتروني")>
+              <Field label={tr("البريد الإلكتروني")}>
                 <input
                   required
                   type="email"
@@ -609,7 +609,7 @@ function AccountsTab({
                   className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary"
                 />
               </Field>
-              <Field label=tr("اسم العرض (اختياري)")>
+              <Field label={tr("اسم العرض (اختياري)")}>
                 <input
                   value={form.display_name}
                   onChange={(e) => setForm({ ...form, display_name: e.target.value })}
@@ -863,7 +863,7 @@ function DomainsTab({
                 <button
                   onClick={() => startEdit(d)}
                   className="rounded-md p-2 text-muted-foreground hover:bg-primary/10 hover:text-primary"
-                  title=tr("تعديل")
+                  title={tr("تعديل")}
                 >
                   <Pencil className="h-4 w-4" />
                 </button>
@@ -871,7 +871,7 @@ function DomainsTab({
                   onClick={() => handleDelete(d.id)}
                   disabled={busyId === d.id}
                   className="rounded-md p-2 text-muted-foreground hover:bg-destructive/10 hover:text-destructive disabled:opacity-50"
-                  title=tr("حذف")
+                  title={tr("حذف")}
                 >
                   {busyId === d.id ? (
                     <Loader2 className="h-4 w-4 animate-spin" />
@@ -907,7 +907,7 @@ function DomainsTab({
               </div>
             </div>
 
-            <Field label=tr("الدومين")>
+            <Field label={tr("الدومين")}>
               <input
                 required
                 dir="ltr"

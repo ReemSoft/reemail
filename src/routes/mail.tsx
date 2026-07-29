@@ -2777,7 +2777,7 @@ function MailApp() {
         <button
           onClick={() => setSidebarOpen((s) => !s)}
           className="rounded-lg p-2 hover:bg-muted lg:hidden"
-          aria-label=tr("القائمة")
+          aria-label={tr("القائمة")}
         >
           <Menu className="h-5 w-5" />
         </button>
@@ -2817,8 +2817,8 @@ function MailApp() {
             <button
               onClick={() => setQuery("")}
               className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
-              title=tr("مسح")
-              aria-label=tr("مسح")
+              title={tr("مسح")}
+              aria-label={tr("مسح")}
             >
               <X className="h-3.5 w-3.5" />
             </button>
@@ -2831,7 +2831,7 @@ function MailApp() {
                     ? "bg-primary/10 text-primary hover:bg-primary/15"
                     : "text-muted-foreground hover:bg-muted"
                 }`}
-                title=tr("خيارات البحث")
+                title={tr("خيارات البحث")}
               >
                 {searchMode === "deep" ? (
                   <Globe className="h-3.5 w-3.5" />
@@ -2914,7 +2914,7 @@ function MailApp() {
             onClick={refresh}
             disabled={refreshing}
             className="hidden items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm font-medium text-muted-foreground transition hover:bg-muted hover:text-foreground disabled:opacity-70 sm:inline-flex"
-            title=tr("تحديث البريد")
+            title={tr("تحديث البريد")}
           >
             <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin text-primary" : ""}`} />
             <span className="hidden lg:inline">{refreshing ? tr("جاري التحديث...") : tr("تحديث")}</span>
@@ -2923,14 +2923,14 @@ function MailApp() {
             onClick={refresh}
             disabled={refreshing}
             className="rounded-lg p-2 hover:bg-muted disabled:opacity-70 sm:hidden"
-            aria-label=tr("تحديث")
+            aria-label={tr("تحديث")}
           >
             <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin text-primary" : ""}`} />
           </button>
           <button
             onClick={handleSignOut}
             className="hidden items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm font-medium text-muted-foreground hover:bg-destructive/10 hover:text-destructive sm:inline-flex"
-            title=tr("تسجيل الخروج")
+            title={tr("تسجيل الخروج")}
           >
             <LogOut className="h-4 w-4" />
             <span className="hidden lg:inline">{tr("خروج")}</span>
@@ -2938,7 +2938,7 @@ function MailApp() {
           <button
             onClick={handleSignOut}
             className="rounded-lg p-2 hover:bg-muted sm:hidden"
-            aria-label=tr("خروج")
+            aria-label={tr("خروج")}
           >
             <LogOut className="h-4 w-4" />
           </button>
@@ -3050,7 +3050,7 @@ function MailApp() {
                     <button
                       disabled={bulkBusy}
                       className="flex items-center gap-1.5 rounded px-2.5 py-1.5 text-xs font-medium text-foreground transition hover:bg-muted disabled:opacity-50"
-                      title=tr("إجراءات")
+                      title={tr("إجراءات")}
                     >
                       <MoreVertical className="h-4 w-4" />
                       <span>{tr("إجراءات")}</span>
@@ -3114,7 +3114,7 @@ function MailApp() {
                 onClick={toggleSelectMode}
                 disabled={bulkBusy}
                 className="rounded px-2 py-1.5 text-xs font-medium text-muted-foreground transition hover:bg-muted hover:text-foreground disabled:opacity-50"
-                title=tr("إلغاء التحديد")
+                title={tr("إلغاء التحديد")}
               >
                 {tr("إلغاء")}
               </button>
@@ -3127,7 +3127,7 @@ function MailApp() {
                     onClick={toggleSelectAllVisible}
                     disabled={filteredMessages.length === 0}
                     className="flex h-9 w-9 shrink-0 items-center justify-center rounded hover:bg-muted disabled:opacity-40"
-                    title=tr("تحديد الكل")
+                    title={tr("تحديد الكل")}
                   >
                     <Square className="h-5 w-5 text-muted-foreground" />
                   </button>
@@ -3165,7 +3165,7 @@ function MailApp() {
                     <DropdownMenuTrigger asChild>
                       <button
                         className="flex items-center gap-1 rounded px-2 py-1.5 text-xs font-medium text-foreground hover:bg-muted"
-                        title=tr("ترتيب العرض")
+                        title={tr("ترتيب العرض")}
                       >
                         <ArrowUpDown className="h-3.5 w-3.5" />
                         <span>{tr("ترتيب")}</span>
@@ -3569,22 +3569,22 @@ function MessageView({
         <button
           onClick={onBack}
           className="flex items-center gap-1.5 rounded-lg p-2 text-sm hover:bg-muted md:hidden"
-          aria-label=tr("رجوع")
+          aria-label={tr("رجوع")}
         >
           <ChevronLeft className="h-4 w-4" /> {tr("رجوع")}
         </button>
         <div className="hidden gap-1 md:flex">
-          <button onClick={onReply} className="rounded-lg p-2 hover:bg-muted" title=tr("رد")>
+          <button onClick={onReply} className="rounded-lg p-2 hover:bg-muted" title={tr("رد")}>
             <Reply className="h-4 w-4" />
           </button>
           <button
             onClick={onReplyAll}
             className="rounded-lg p-2 hover:bg-muted"
-            title=tr("رد على الكل")
+            title={tr("رد على الكل")}
           >
             <ReplyAll className="h-4 w-4" />
           </button>
-          <button onClick={onForward} className="rounded-lg p-2 hover:bg-muted" title=tr("إعادة توجيه")>
+          <button onClick={onForward} className="rounded-lg p-2 hover:bg-muted" title={tr("إعادة توجيه")}>
             <Forward className="h-4 w-4" />
           </button>
           <div className="mx-1 h-6 w-px bg-border" />
@@ -3592,34 +3592,34 @@ function MessageView({
             <button
               onClick={onRestore}
               className="rounded-lg p-2 hover:bg-muted"
-              title=tr("استعادة إلى المجلد الأصلي")
+              title={tr("استعادة إلى المجلد الأصلي")}
             >
               <ArchiveRestore className="h-4 w-4" />
             </button>
           )}
 
           {canArchive && (
-            <button onClick={onArchive} className="rounded-lg p-2 hover:bg-muted" title=tr("أرشفة")>
+            <button onClick={onArchive} className="rounded-lg p-2 hover:bg-muted" title={tr("أرشفة")}>
               <Archive className="h-4 w-4" />
             </button>
           )}
-          <button onClick={onSpam} className="rounded-lg p-2 hover:bg-muted" title=tr("مزعج")>
+          <button onClick={onSpam} className="rounded-lg p-2 hover:bg-muted" title={tr("مزعج")}>
             <AlertOctagon className="h-4 w-4" />
           </button>
           <button
             onClick={onMarkUnread}
             className="rounded-lg p-2 hover:bg-muted"
-            title=tr("تعليم كغير مقروءة")
+            title={tr("تعليم كغير مقروءة")}
           >
             <MailOpen className="h-4 w-4" />
           </button>
-          <button onClick={printMessage} className="rounded-lg p-2 hover:bg-muted" title=tr("طباعة")>
+          <button onClick={printMessage} className="rounded-lg p-2 hover:bg-muted" title={tr("طباعة")}>
             <Printer className="h-4 w-4" />
           </button>
           <button
             onClick={copyEmail}
             className="rounded-lg p-2 hover:bg-muted"
-            title=tr("نسخ عنوان المرسل")
+            title={tr("نسخ عنوان المرسل")}
           >
             <Copy className="h-4 w-4" />
           </button>
@@ -3634,7 +3634,7 @@ function MessageView({
         </div>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <button className="rounded-lg p-2 hover:bg-muted" aria-label=tr("خيارات أكثر")>
+            <button className="rounded-lg p-2 hover:bg-muted" aria-label={tr("خيارات أكثر")}>
               <MoreVertical className="h-4 w-4" />
             </button>
           </DropdownMenuTrigger>
@@ -3732,7 +3732,7 @@ function MessageView({
                     onClick={() => setDetailsOpen((v) => !v)}
                     aria-expanded={detailsOpen}
                     className="inline-flex max-w-full items-center gap-1 rounded hover:text-foreground"
-                    title=tr("تفاصيل الرسالة")
+                    title={tr("تفاصيل الرسالة")}
                   >
                     <span className="truncate">
                       <span className="text-foreground/70">{tr("إلى")} </span>
@@ -3882,7 +3882,7 @@ function LoadingViewer({ onBack }: { onBack: () => void }) {
         <button
           onClick={onBack}
           className="flex items-center gap-1.5 rounded-lg p-2 text-sm hover:bg-muted md:hidden"
-          aria-label=tr("رجوع")
+          aria-label={tr("رجوع")}
         >
           <ChevronLeft className="h-4 w-4" /> {tr("رجوع")}
         </button>
@@ -4203,8 +4203,8 @@ function RecipientField({
                       setSuggestions((prev) => prev.filter((s) => s.email !== m.email));
                     }}
                     className="rounded p-1 text-muted-foreground opacity-60 hover:bg-background hover:opacity-100"
-                    title=tr("إزالة من الاقتراحات")
-                    aria-label=tr("إزالة من الاقتراحات")
+                    title={tr("إزالة من الاقتراحات")}
+                    aria-label={tr("إزالة من الاقتراحات")}
                   >
                     <X className="h-3.5 w-3.5" />
                   </button>
@@ -5492,7 +5492,7 @@ function Composer({
       ref={containerRef}
       className={containerClass}
       role="dialog"
-      aria-label=tr("إنشاء رسالة")
+      aria-label={tr("إنشاء رسالة")}
       tabIndex={-1}
       onDragOver={(e) => {
         if (e.dataTransfer.types.includes("Files")) {
@@ -5529,8 +5529,8 @@ function Composer({
           <button
             onClick={() => void requestClose()}
             className="rounded-lg p-2 text-muted-foreground transition hover:bg-muted hover:text-foreground"
-            title=tr("إغلاق (Esc)")
-            aria-label=tr("إغلاق")
+            title={tr("إغلاق (Esc)")}
+            aria-label={tr("إغلاق")}
           >
             <X className="h-4 w-4" />
           </button>
@@ -5542,7 +5542,7 @@ function Composer({
         <div className="mx-auto flex w-full max-w-none flex-col gap-4 px-3 py-4 sm:px-6 sm:py-5">
           {/* Recipients */}
           <RecipientField
-            label=tr("المرسل له")
+            label={tr("المرسل له")}
             value={to}
             onChange={setTo}
             autoFocus
@@ -5573,7 +5573,7 @@ function Composer({
           />
           {showCc && (
             <RecipientField
-              label=tr("نسخة إلى")
+              label={tr("نسخة إلى")}
               value={cc}
               onChange={setCc}
               getSuggestions={suggestFor}
@@ -5582,7 +5582,7 @@ function Composer({
           )}
           {showBcc && (
             <RecipientField
-              label=tr("نسخة مخفية إلى")
+              label={tr("نسخة مخفية إلى")}
               value={bcc}
               onChange={setBcc}
               getSuggestions={suggestFor}
@@ -5596,7 +5596,7 @@ function Composer({
             <input
               value={subject}
               onChange={(e) => setSubject(e.target.value)}
-              placeholder=tr("اكتب موضوع الرسالة")
+              placeholder={tr("اكتب موضوع الرسالة")}
               className="w-full rounded-lg border border-input bg-background px-4 py-2.5 text-sm outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20"
             />
           </div>
@@ -5618,8 +5618,8 @@ function Composer({
                   <PopoverTrigger asChild>
                     <button
                       type="button"
-                      title=tr("خيارات متقدمة")
-                      aria-label=tr("خيارات متقدمة")
+                      title={tr("خيارات متقدمة")}
+                      aria-label={tr("خيارات متقدمة")}
                       onMouseDown={(e) => e.preventDefault()}
                       className="inline-flex h-7 items-center gap-1 rounded-md px-1.5 text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
                     >
@@ -5630,65 +5630,65 @@ function Composer({
                   <PopoverContent align="end" className="w-auto p-2">
                     <div className="grid grid-cols-6 gap-0.5">
                       <ToolbarButton
-                        title=tr("يتوسطه خط")
+                        title={tr("يتوسطه خط")}
                         active={fmtState.strikeThrough}
                         onMouseDown={() => exec("strikeThrough")}
                       >
                         <Strikethrough className="h-3.5 w-3.5" />
                       </ToolbarButton>
                       <ToolbarButton
-                        title=tr("مرتفع")
+                        title={tr("مرتفع")}
                         active={fmtState.superscript}
                         onMouseDown={() => exec("superscript")}
                       >
                         <Superscript className="h-3.5 w-3.5" />
                       </ToolbarButton>
                       <ToolbarButton
-                        title=tr("منخفض")
+                        title={tr("منخفض")}
                         active={fmtState.subscript}
                         onMouseDown={() => exec("subscript")}
                       >
                         <Subscript className="h-3.5 w-3.5" />
                       </ToolbarButton>
                       <ToolbarButton
-                        title=tr("ضبط")
+                        title={tr("ضبط")}
                         active={fmtState.justifyFull}
                         onMouseDown={() => exec("justifyFull")}
                       >
                         <AlignJustify className="h-3.5 w-3.5" />
                       </ToolbarButton>
                       <ToolbarButton
-                        title=tr("زيادة المسافة البادئة")
+                        title={tr("زيادة المسافة البادئة")}
                         onMouseDown={() => exec("indent")}
                       >
                         <Indent className="h-3.5 w-3.5" />
                       </ToolbarButton>
                       <ToolbarButton
-                        title=tr("تقليل المسافة البادئة")
+                        title={tr("تقليل المسافة البادئة")}
                         onMouseDown={() => exec("outdent")}
                       >
                         <Outdent className="h-3.5 w-3.5" />
                       </ToolbarButton>
                       <ToolbarButton
-                        title=tr("اقتباس")
+                        title={tr("اقتباس")}
                         active={fmtState.blockquote}
                         onMouseDown={() => exec("formatBlock", "blockquote")}
                       >
                         <Quote className="h-3.5 w-3.5" />
                       </ToolbarButton>
-                      <ToolbarButton title=tr("إدراج صورة") onMouseDown={promptImage}>
+                      <ToolbarButton title={tr("إدراج صورة")} onMouseDown={promptImage}>
                         <ImageIcon className="h-3.5 w-3.5" />
                       </ToolbarButton>
-                      <ToolbarButton title=tr("خط أفقي") onMouseDown={insertHR}>
+                      <ToolbarButton title={tr("خط أفقي")} onMouseDown={insertHR}>
                         <Minus className="h-3.5 w-3.5" />
                       </ToolbarButton>
                       <ToolbarButton
-                        title=tr("تبديل اتجاه النص RTL/LTR")
+                        title={tr("تبديل اتجاه النص RTL/LTR")}
                         onMouseDown={toggleEditorDirection}
                       >
                         <ArrowLeftRight className="h-3.5 w-3.5" />
                       </ToolbarButton>
-                      <ToolbarButton title=tr("إزالة التنسيق") onMouseDown={() => exec("removeFormat")}>
+                      <ToolbarButton title={tr("إزالة التنسيق")} onMouseDown={() => exec("removeFormat")}>
                         <Eraser className="h-3.5 w-3.5" />
                       </ToolbarButton>
                     </div>
@@ -5701,9 +5701,9 @@ function Composer({
                 <div className="flex flex-wrap items-center gap-0.5 border-b border-border/70 bg-muted/30 px-2 py-1.5">
                   {/* Font family */}
                   <ToolbarSelect
-                    title=tr("الخط")
-                    ariaLabel=tr("الخط")
-                    placeholder=tr("الخط")
+                    title={tr("الخط")}
+                    ariaLabel={tr("الخط")}
+                    placeholder={tr("الخط")}
                     value={fontFamily}
                     onChange={(v) => {
                       setFontFamily(v);
@@ -5725,9 +5725,9 @@ function Composer({
                   />
                   {/* Font size */}
                   <ToolbarSelect
-                    title=tr("حجم الخط")
-                    ariaLabel=tr("حجم الخط")
-                    placeholder=tr("الحجم")
+                    title={tr("حجم الخط")}
+                    ariaLabel={tr("حجم الخط")}
+                    placeholder={tr("الحجم")}
                     value={fontSize}
                     onChange={(v) => {
                       setFontSize(v);
@@ -5748,9 +5748,9 @@ function Composer({
                   />
                   {/* Paragraph */}
                   <ToolbarSelect
-                    title=tr("نمط الفقرة")
-                    ariaLabel=tr("نمط الفقرة")
-                    placeholder=tr("الفقرة")
+                    title={tr("نمط الفقرة")}
+                    ariaLabel={tr("نمط الفقرة")}
+                    placeholder={tr("الفقرة")}
                     value={blockFmt}
                     onChange={(v) => {
                       setBlockFmt(v);
@@ -5766,21 +5766,21 @@ function Composer({
                     ]}
                   />
                   <ToolbarButton
-                    title=tr("عريض (Ctrl+B)")
+                    title={tr("عريض (Ctrl+B)")}
                     active={fmtState.bold}
                     onMouseDown={() => exec("bold")}
                   >
                     <Bold className="h-3.5 w-3.5" />
                   </ToolbarButton>
                   <ToolbarButton
-                    title=tr("مائل (Ctrl+I)")
+                    title={tr("مائل (Ctrl+I)")}
                     active={fmtState.italic}
                     onMouseDown={() => exec("italic")}
                   >
                     <Italic className="h-3.5 w-3.5" />
                   </ToolbarButton>
                   <ToolbarButton
-                    title=tr("تسطير (Ctrl+U)")
+                    title={tr("تسطير (Ctrl+U)")}
                     active={fmtState.underline}
                     onMouseDown={() => exec("underline")}
                   >
@@ -5788,7 +5788,7 @@ function Composer({
                   </ToolbarButton>
                   {/* Colors */}
                   <label
-                    title=tr("لون النص")
+                    title={tr("لون النص")}
                     className="relative inline-flex h-7 w-7 cursor-pointer items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
                     onMouseDown={(e) => e.preventDefault()}
                   >
@@ -5800,7 +5800,7 @@ function Composer({
                     />
                   </label>
                   <label
-                    title=tr("لون الخلفية")
+                    title={tr("لون الخلفية")}
                     className="relative inline-flex h-7 w-7 cursor-pointer items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
                     onMouseDown={(e) => e.preventDefault()}
                   >
@@ -5813,21 +5813,21 @@ function Composer({
                   </label>
                   {/* Alignment */}
                   <ToolbarButton
-                    title=tr("محاذاة يمين")
+                    title={tr("محاذاة يمين")}
                     active={fmtState.justifyRight}
                     onMouseDown={() => exec("justifyRight")}
                   >
                     <AlignRight className="h-3.5 w-3.5" />
                   </ToolbarButton>
                   <ToolbarButton
-                    title=tr("توسيط")
+                    title={tr("توسيط")}
                     active={fmtState.justifyCenter}
                     onMouseDown={() => exec("justifyCenter")}
                   >
                     <AlignCenter className="h-3.5 w-3.5" />
                   </ToolbarButton>
                   <ToolbarButton
-                    title=tr("محاذاة يسار")
+                    title={tr("محاذاة يسار")}
                     active={fmtState.justifyLeft}
                     onMouseDown={() => exec("justifyLeft")}
                   >
@@ -5835,28 +5835,28 @@ function Composer({
                   </ToolbarButton>
                   {/* Lists */}
                   <ToolbarButton
-                    title=tr("قائمة نقطية")
+                    title={tr("قائمة نقطية")}
                     active={fmtState.insertUnorderedList}
                     onMouseDown={() => exec("insertUnorderedList")}
                   >
                     <List className="h-3.5 w-3.5" />
                   </ToolbarButton>
                   <ToolbarButton
-                    title=tr("قائمة مرقمة")
+                    title={tr("قائمة مرقمة")}
                     active={fmtState.insertOrderedList}
                     onMouseDown={() => exec("insertOrderedList")}
                   >
                     <ListOrdered className="h-3.5 w-3.5" />
                   </ToolbarButton>
                   {/* Link */}
-                  <ToolbarButton title=tr("إدراج رابط") onMouseDown={promptLink}>
+                  <ToolbarButton title={tr("إدراج رابط")} onMouseDown={promptLink}>
                     <Link2 className="h-3.5 w-3.5" />
                   </ToolbarButton>
                   {/* Undo / Redo */}
-                  <ToolbarButton title=tr("تراجع (Ctrl+Z)") onMouseDown={() => exec("undo")}>
+                  <ToolbarButton title={tr("تراجع (Ctrl+Z)")} onMouseDown={() => exec("undo")}>
                     <Undo2 className="h-3.5 w-3.5" />
                   </ToolbarButton>
-                  <ToolbarButton title=tr("إعادة (Ctrl+Y)") onMouseDown={() => exec("redo")}>
+                  <ToolbarButton title={tr("إعادة (Ctrl+Y)")} onMouseDown={() => exec("redo")}>
                     <Redo2 className="h-3.5 w-3.5" />
                   </ToolbarButton>
                   {extensions.map((ext) => (
@@ -5890,7 +5890,7 @@ function Composer({
                     }
                   }}
                   rows={16}
-                  placeholder=tr("اكتب رسالتك هنا...")
+                  placeholder={tr("اكتب رسالتك هنا...")}
                   className="min-h-[320px] w-full resize-none bg-transparent px-4 py-3 text-sm outline-none"
                 />
               ) : (
@@ -5900,8 +5900,8 @@ function Composer({
                   suppressContentEditableWarning
                   role="textbox"
                   aria-multiline="true"
-                  aria-label=tr("نص الرسالة")
-                  data-placeholder=tr("اكتب رسالتك هنا...")
+                  aria-label={tr("نص الرسالة")}
+                  data-placeholder={tr("اكتب رسالتك هنا...")}
                   className="composer-editor min-h-[320px] w-full whitespace-pre-wrap break-words px-4 py-3 text-sm outline-none"
                 />
               )}
@@ -5921,7 +5921,7 @@ function Composer({
                     <div
                       key={`kept-${a.id}`}
                       className="group inline-flex items-center gap-2 rounded-lg border border-border bg-card px-2.5 py-1.5 text-xs shadow-soft"
-                      title=tr("مرفق من المسودة الأصلية")
+                      title={tr("مرفق من المسودة الأصلية")}
                     >
                       <span
                         className={`inline-flex h-6 w-6 items-center justify-center rounded-md ${tint}`}
@@ -5938,7 +5938,7 @@ function Composer({
                         onClick={() => removeExistingAttachment(a.id)}
                         disabled={sending}
                         className="rounded p-0.5 opacity-60 hover:bg-muted hover:opacity-100"
-                        aria-label=tr("حذف المرفق")
+                        aria-label={tr("حذف المرفق")}
                       >
                         <X className="h-3.5 w-3.5" />
                       </button>
@@ -5967,7 +5967,7 @@ function Composer({
                         onClick={() => removeFile(i)}
                         disabled={sending}
                         className="rounded p-0.5 opacity-60 hover:bg-muted hover:opacity-100"
-                        aria-label=tr("حذف المرفق")
+                        aria-label={tr("حذف المرفق")}
                       >
                         <X className="h-3.5 w-3.5" />
                       </button>
@@ -5996,7 +5996,7 @@ function Composer({
             onClick={handleSend}
             disabled={sending || to.length === 0}
             className="inline-flex items-center gap-2 rounded-lg bg-brand-gradient px-4 py-2 text-sm font-semibold text-white shadow-brand transition hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-60 sm:px-5 sm:py-2.5"
-            title=tr("إرسال (Ctrl+Enter)")
+            title={tr("إرسال (Ctrl+Enter)")}
           >
             {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
             {sending ? (progress > 0 ? `${progress}%` : tr("جاري الإرسال")) : tr("إرسال")}
@@ -6013,8 +6013,8 @@ function Composer({
             onClick={() => fileInputRef.current?.click()}
             disabled={sending || totalCount >= COMPOSE_MAX_FILES}
             className="inline-flex items-center gap-1.5 rounded-lg border border-input bg-background px-2.5 py-2 text-xs text-muted-foreground transition hover:bg-muted hover:text-foreground disabled:opacity-40 sm:px-3"
-            aria-label=tr("إرفاق ملف")
-            title=tr("إرفاق ملف")
+            aria-label={tr("إرفاق ملف")}
+            title={tr("إرفاق ملف")}
           >
             <Paperclip className="h-4 w-4" />
             <span className="hidden sm:inline">{tr("إرفاق")}</span>
@@ -6024,8 +6024,8 @@ function Composer({
             onClick={saveDraftNow}
             disabled={sending}
             className="inline-flex items-center gap-1.5 rounded-lg border border-input bg-background px-2.5 py-2 text-xs text-muted-foreground transition hover:bg-muted hover:text-foreground disabled:opacity-40 sm:px-3"
-            aria-label=tr("حفظ كمسودة")
-            title=tr("حفظ كمسودة")
+            aria-label={tr("حفظ كمسودة")}
+            title={tr("حفظ كمسودة")}
           >
             <FileText className="h-4 w-4" />
             <span className="hidden sm:inline">{tr("حفظ كمسودة")}</span>
@@ -6280,8 +6280,8 @@ function AttachmentCard({
               type="button"
               onClick={handlePreview}
               disabled={!canDownload || busy !== null}
-              title=tr("معاينة")
-              aria-label=tr("معاينة")
+              title={tr("معاينة")}
+              aria-label={tr("معاينة")}
               className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-background text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50 sm:h-8 sm:w-8"
             >
               {busy === "preview" ? (
@@ -6296,7 +6296,7 @@ function AttachmentCard({
             onClick={handleDownload}
             disabled={!canDownload || busy !== null}
             title={canDownload ? tr("تنزيل") : tr("غير متاح")}
-            aria-label=tr("تنزيل")
+            aria-label={tr("تنزيل")}
             className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-background text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50 sm:h-8 sm:w-8"
           >
             {busy === "download" ? (
@@ -6330,7 +6330,7 @@ function AttachmentCard({
                 type="button"
                 onClick={() => setPreviewUrl(null)}
                 className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/20 bg-white/10 hover:bg-white/20"
-                title=tr("إغلاق")
+                title={tr("إغلاق")}
               >
                 <X className="h-4 w-4" />
               </button>
