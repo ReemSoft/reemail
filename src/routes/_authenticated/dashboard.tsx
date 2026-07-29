@@ -1,4 +1,5 @@
 import { tr } from "@/i18n";
+import { LanguageSwitcher } from "@/components/language-switcher";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useState } from "react";
 import {
@@ -224,10 +225,11 @@ function CompanyDashboard() {
                   ) : (
                     <Save className="h-4 w-4" />
                   )}
-                  حفظ
+                  {tr("حفظ")}
                 </button>
               </div>
             )}
+            <LanguageSwitcher />
             <button
               onClick={handleLogout}
               className="inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium text-muted-foreground transition hover:bg-destructive hover:text-destructive-foreground"
