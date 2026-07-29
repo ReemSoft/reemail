@@ -2990,14 +2990,14 @@ function MailApp() {
                       setSelectedMessage(null);
                       setSidebarOpen(false);
                     }}
-                    className={`mb-0.5 flex w-full items-center gap-3 rounded-r-full rounded-l-md px-4 py-2.5 text-sm transition ${
+                    className={`mb-0.5 flex w-full items-center gap-3 rounded-s-full rounded-e-md px-4 py-2.5 text-sm transition ${
                       active
                         ? "bg-sidebar-hover font-semibold text-foreground"
                         : "text-sidebar-foreground hover:bg-sidebar-hover/60"
                     }`}
                   >
                     <Icon className={`h-4 w-4 ${active ? "text-primary" : ""}`} />
-                    <span className="flex-1 text-right">{meta.label}</span>
+                    <span className="flex-1 text-start">{tr(meta.label)}</span>
                     {total > 0 && (
                       <span
                         className={`rounded-full px-1.5 text-[11px] font-bold ${
