@@ -1,5 +1,5 @@
 /**
- * @vitest-environment happy-dom
+ * @vitest-environment jsdom
  *
  * Contract tests for the hardened email viewer security helpers.
  */
