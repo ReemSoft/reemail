@@ -7,6 +7,7 @@ import {
   buildEmailSrcDoc,
   isValidHeightPayload,
   randomToken,
+  hasRemoteImages,
 } from "@/lib/email-viewer-security";
 
 // Kept as a thin wrapper — the heavy lifting (DOMPurify + CSS url()/@import
