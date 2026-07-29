@@ -1,9 +1,9 @@
+import { tr } from "@/i18n";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { Virtuoso } from "react-virtuoso";
 import DOMPurify from "dompurify";
 import {
-import { tr } from "@/i18n";
   sanitizeAndHardenEmailHtml,
   buildEmailSrcDoc,
   isValidHeightPayload,
@@ -3499,7 +3499,7 @@ function MessageView({
     ...message.to.map((t) => ({ ...t, kind: "to" as const })),
     ...(message.cc || []).map((c) => ({ ...c, kind: "cc" as const })),
   ];
-  const toSummary = recipientsAll.length > 0 ? recipientsAll.map((r) => r.email).join(tr("، ")) : "—";
+  const toSummary = recipientsAll.length > 0 ? recipientsAll.map((r) => r.email).join(tr("،")) : "—";
 
   const fullDate = new Date(message.date).toLocaleString("ar", {
     dateStyle: "full",

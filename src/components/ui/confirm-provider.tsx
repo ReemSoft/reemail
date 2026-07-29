@@ -1,7 +1,7 @@
+import { tr } from "@/i18n";
 import * as React from "react";
 import { createContext, useContext, useState, useCallback } from "react";
 import {
-import { tr } from "@/i18n";
   AlertDialog,
   AlertDialogAction,
   AlertDialogCancel,

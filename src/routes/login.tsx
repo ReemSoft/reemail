@@ -1,3 +1,4 @@
+import { tr } from "@/i18n";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { Mail, ArrowLeft, Loader2, Lock } from "lucide-react";
@@ -5,7 +6,6 @@ import { toast } from "sonner";
 import { useServerFn } from "@tanstack/react-start";
 import { clientLogin } from "@/lib/client-mail.functions";
 import { saveMailSession, getMailSession } from "@/lib/mail-session";
-import { tr } from "@/i18n";
 
 export const Route = createFileRoute("/login")({
   head: () => ({
@@ -110,8 +110,7 @@ function LoginPage() {
           </div>
           <h1 className="text-3xl font-bold tracking-tight">{tr("افتح بريدك")}</h1>
           <p className="mt-2 text-muted-foreground">
-            {tr("استخدم عنوان بريدك وكلمة مروره الحقيقية. كلمة المرور تُستخدم فقط في هذه الجلسة ولا
-            تُخزَّن.")}
+            {tr("استخدم عنوان بريدك وكلمة مروره الحقيقية. كلمة المرور تُستخدم فقط في هذه الجلسة ولا تُخزَّن.")}
           </p>
 
           <form onSubmit={handleSubmit} className="mt-8 space-y-4">

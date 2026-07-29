@@ -1,3 +1,4 @@
+import { tr } from "@/i18n";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { Mail, ArrowLeft, Loader2, Building2, LogIn } from "lucide-react";
@@ -5,7 +6,6 @@ import { supabase } from "@/integrations/supabase/client";
 import { useServerFn } from "@tanstack/react-start";
 import { registerCompanyAdmin } from "@/lib/admin-signup.functions";
 import { toast } from "sonner";
-import { tr } from "@/i18n";
 
 export const Route = createFileRoute("/company")({
   head: () => ({

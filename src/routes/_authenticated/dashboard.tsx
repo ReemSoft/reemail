@@ -1,7 +1,7 @@
+import { tr } from "@/i18n";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useState } from "react";
 import {
-import { tr } from "@/i18n";
   ArrowLeft,
   Palette,
   Mail as MailIcon,

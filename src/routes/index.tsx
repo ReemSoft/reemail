@@ -1,6 +1,6 @@
+import { tr } from "@/i18n";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import {
-import { tr } from "@/i18n";
   Mail,
   Zap,
   Shield,
@@ -93,8 +93,7 @@ function Landing() {
             </span>
           </h1>
           <p className="mx-auto mt-6 max-w-2xl text-balance text-lg text-muted-foreground sm:text-xl">
-            {tr("افتح أي حساب بريد إلكتروني عبر إعداداته البسيطة. لكل شركة شعارها وألوانها،
-            ولكل عميل تجربة استخدام سلسة كأنها من صنع علامتك التجارية.")}
+            {tr("افتح أي حساب بريد إلكتروني عبر إعداداته البسيطة. لكل شركة شعارها وألوانها، ولكل عميل تجربة استخدام سلسة كأنها من صنع علامتك التجارية.")}
           </p>
           <div className="mt-10 flex flex-col items-center justify-center gap-3 sm:flex-row">
             <Link
