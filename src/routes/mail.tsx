@@ -275,6 +275,7 @@ import {
 } from "@/lib/mail-mock";
 import type { MailFolder, MailMessage } from "@/lib/mail-types";
 import { clearMailSession, getMailSession, type MailSession } from "@/lib/mail-session";
+import { useMailServerFn, useMailSessionRenewal } from "@/hooks/use-mail-session-renewal";
 import {
   hydrateContactSuggestions,
   recordSentRecipients,
@@ -683,10 +684,10 @@ type SortOption = "date-desc" | "date-asc" | "unread-first" | "starred-first";
 type SourceKind = "index" | "bridge" | "mock";
 
 function useMailData(session: MailSession | null) {
-  const getCounts = useServerFn(bridgeGetFolderCounts);
-  const getMessages = useServerFn(bridgeGetMessages);
-  const listIndex = useServerFn(indexListMessages);
-  const listIndexCounts = useServerFn(indexListFolderCounts);
+  const getCounts = useMailServerFn(bridgeGetFolderCounts);
+  const getMessages = useMailServerFn(bridgeGetMessages);
+  const listIndex = useMailServerFn(indexListMessages);
+  const listIndexCounts = useMailServerFn(indexListFolderCounts);
   const [folder, setFolder] = useState<MailFolder>("inbox");
   const [sort, setSort] = useState<SortOption>("date-desc");
   const [counts, setCounts] = useState<
@@ -1466,17 +1467,17 @@ function MailApp() {
     });
   }, [rawRefresh]);
 
-  const getOne = useServerFn(bridgeGetMessage);
-  const cleanupGhost = useServerFn(tombstoneGhostMessage);
+  const getOne = useMailServerFn(bridgeGetMessage);
+  const cleanupGhost = useMailServerFn(tombstoneGhostMessage);
 
-  const markRead = useServerFn(bridgeMarkRead);
-  const star = useServerFn(bridgeStar);
-  const updateFlag = useServerFn(indexUpdateFlag);
-  const move = useServerFn(bridgeMove);
-  const deleteFn = useServerFn(bridgeDelete);
-  const moveIndex = useServerFn(indexMoveMessage);
-  const deleteIndex = useServerFn(indexDeleteMessage);
-  const searchFn = useServerFn(bridgeSearch);
+  const markRead = useMailServerFn(bridgeMarkRead);
+  const star = useMailServerFn(bridgeStar);
+  const updateFlag = useMailServerFn(indexUpdateFlag);
+  const move = useMailServerFn(bridgeMove);
+  const deleteFn = useMailServerFn(bridgeDelete);
+  const moveIndex = useMailServerFn(indexMoveMessage);
+  const deleteIndex = useMailServerFn(indexDeleteMessage);
+  const searchFn = useMailServerFn(bridgeSearch);
 
   // Preferred path for \Seen / \Flagged mutations:
   //   session has mailSessionToken → indexUpdateFlag (IMAP + Local Index
@@ -4316,9 +4317,9 @@ function Composer({
   // Draft storage keying is owned by mail-draft-lifecycle (v3 + auto-migration).
 
   // ----- Address book (contact suggestions) — local IDB, hydrated once -----
-  const hydrateSuggestions = useServerFn(hydrateContactSuggestions);
-  const recordSuggestions = useServerFn(recordSentRecipients);
-  const hideSuggestion = useServerFn(hideContactSuggestion);
+  const hydrateSuggestions = useMailServerFn(hydrateContactSuggestions);
+  const recordSuggestions = useMailServerFn(recordSentRecipients);
+  const hideSuggestion = useMailServerFn(hideContactSuggestion);
   const companyId = session.account.company_id;
   const accountId = session.account.id;
   const lastScopeRef = useRef<string | null>(null);
@@ -4452,8 +4453,8 @@ function Composer({
   } | null>(null);
 
   // ----- Server-side draft saver (bridge APPEND) + pending-delete queue -----
-  const bridgeSaveDraftFn = useServerFn(bridgeSaveDraft);
-  const bridgeDeleteDraftFn = useServerFn(bridgeDeleteDraft);
+  const bridgeSaveDraftFn = useMailServerFn(bridgeSaveDraft);
+  const bridgeDeleteDraftFn = useMailServerFn(bridgeDeleteDraft);
 
   const pendingQueueRef = useRef<PendingDeleteQueue | null>(null);
   if (!pendingQueueRef.current && typeof window !== "undefined") {
