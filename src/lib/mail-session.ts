@@ -60,3 +60,19 @@ export function clearMailSession() {
   // Wipes password + token together.
   sessionStorage.removeItem(KEY);
 }
+
+/**
+ * Replaces ONLY the token pair after a silent renewal. Keeps the password and
+ * account/company payload untouched. No-op when there is no live session.
+ */
+export function updateMailSessionToken(token: string, expiresAt: number): MailSession | null {
+  const current = getMailSession();
+  if (!current) return null;
+  const next: MailSession = {
+    ...current,
+    mailSessionToken: token,
+    mailSessionTokenExpiresAt: expiresAt,
+  };
+  saveMailSession(next);
+  return next;
+}
