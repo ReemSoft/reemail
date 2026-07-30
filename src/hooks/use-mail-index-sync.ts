@@ -15,9 +15,9 @@
 //     `flagsNeedReconcile` is true, OR the last reconcile is older than
 //     `reconcileMs`, OR no reconcile has ever run.
 import { useCallback, useEffect, useRef } from "react";
-import { useServerFn } from "@tanstack/react-start";
 import { runMailSync, type RunMailSyncResult } from "@/lib/mail-sync.functions";
 import type { MailSession } from "@/lib/mail-session";
+import { useMailServerFn } from "@/hooks/use-mail-session-renewal";
 
 const DEFAULT_INCREMENTAL_MS = 45_000;
 const DEFAULT_RECONCILE_MS = 5 * 60_000;
@@ -70,7 +70,7 @@ export function useMailIndexSync(args: UseMailIndexSyncArgs): UseMailIndexSyncHa
     enabled = true,
   } = args;
 
-  const sync = useServerFn(runMailSync);
+  const sync = useMailServerFn(runMailSync);
 
   const inflightRef = useRef<Promise<unknown> | null>(null);
   const didInitialRef = useRef<boolean>(indexed);

@@ -1724,6 +1724,17 @@ function MailApp() {
     setSession(s);
   }, [navigate]);
 
+  // Silent Mail Session renewal: keeps the short-lived token fresh in the
+  // background so an expired session never surfaces as a "connection" error.
+  // Only when renewal itself fails (wrong/changed password) do we sign out.
+  useMailSessionRenewal({
+    onExpired: () => {
+      clearMailSession();
+      toast.error(tr("انتهت جلسة البريد. يرجى تسجيل الدخول مجدداً."));
+      navigate({ to: "/login" });
+    },
+  });
+
   // Clear message cache when switching folders (memory hygiene)
   useEffect(() => {
     messageCache.current.clear();
