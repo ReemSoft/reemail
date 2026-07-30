@@ -88,4 +88,46 @@ export async function verifyMailSessionToken(token: string): Promise<MailSession
   return payload as unknown as MailSessionClaims;
 }
 
-export const __test__ = { ISS, AUD, VER, TTL_SECONDS };
+/** Renewal window: an expired token may still be used to *renew* (with a valid
+ * password) for up to 30 days after it was issued. Beyond that the user must
+ * sign in again. */
+const RENEWAL_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
+
+/**
+ * Verifies the token SIGNATURE and all identity claims but tolerates `exp`
+ * being in the past. Used ONLY by the renewal path, which additionally
+ * re-verifies the live IMAP password before issuing a fresh token.
+ */
+export async function verifyMailSessionTokenAllowExpired(
+  token: string,
+): Promise<MailSessionClaims> {
+  const { payload, protectedHeader } = await jwtVerify(token, getSecretKey(), {
+    issuer: ISS,
+    audience: AUD,
+    algorithms: ["HS256"],
+    // Evaluate the token as if "now" were its issuance instant: signature and
+    // every other claim is still enforced, only expiry is neutralised.
+    currentDate: new Date(0),
+  });
+
+  if (protectedHeader.alg !== "HS256") throw new Error("Invalid algorithm");
+  if (payload.ver !== VER) throw new Error("Invalid token version");
+
+  const sub = typeof payload.sub === "string" ? payload.sub : "";
+  const cid = typeof payload.cid === "string" ? payload.cid : "";
+  const em = typeof payload.em === "string" ? payload.em : "";
+  const iat = typeof payload.iat === "number" ? payload.iat : 0;
+  if (!UUID_RE.test(sub)) throw new Error("Invalid sub");
+  if (!UUID_RE.test(cid)) throw new Error("Invalid cid");
+  if (!em || !em.includes("@") || em !== em.toLowerCase().trim()) {
+    throw new Error("Invalid em");
+  }
+  if (!iat || Math.floor(Date.now() / 1000) - iat > RENEWAL_MAX_AGE_SECONDS) {
+    throw new Error("Token too old to renew");
+  }
+
+  return payload as unknown as MailSessionClaims;
+}
+
+export const __test__ = { ISS, AUD, VER, TTL_SECONDS, RENEWAL_MAX_AGE_SECONDS };
+
