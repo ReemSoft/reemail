@@ -15,16 +15,16 @@ import {
 export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
-      { title: "MailMaestro — منصة SaaS للبريد المؤسسي متعدد الشركات" },
+      { title: "MailMaestro | بريد الكتروني بسرعة البرق" },
       {
         name: "description",
         content:
           tr("افتح أي بريد إلكتروني بأداء عالٍ وسرعة البرق. منصة SaaS للشركات مع تخصيص كامل بالشعار والألوان لكل عميل."),
       },
-      { property: "og:title", content: "MailMaestro — منصة SaaS للبريد المؤسسي متعدد الشركات" },
+      { property: "og:title", content: "MailMaestro | بريد الكتروني بسرعة البرق" },
       {
         property: "og:description",
-        content: "افتح أي بريد إلكتروني بأداء عالٍ وسرعة البرق. منصة SaaS للشركات مع تخصيص كامل بالشعار والألوان لكل عميل.",
+        content: "تصفح بريدك الالكتروني بأمان و أداء عالٍ. منصة للشركات مع تخصيص كامل بهوية الشركة.",
       },
     ],
   }),

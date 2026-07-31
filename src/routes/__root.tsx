@@ -82,28 +82,27 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
-      { title: "MailMaestro — منصة SaaS للبريد المؤسسي متعدد الشركات" },
+      { title: "MailMaestro | بريد الكتروني بسرعة البرق" },
       {
         name: "description",
         content:
-          "افتح أي بريد إلكتروني بأداء عالٍ وسرعة البرق. منصة SaaS للشركات مع تخصيص كامل بالشعار والألوان لكل عميل.",
+          "تصفح بريدك الالكتروني بأمان و أداء عالٍ. منصة للشركات مع تخصيص كامل بهوية الشركة.",
       },
       { name: "author", content: "MailMaestro" },
-      { property: "og:title", content: "MailMaestro — منصة SaaS للبريد المؤسسي متعدد الشركات" },
+      { property: "og:title", content: "MailMaestro | بريد الكتروني بسرعة البرق" },
       {
         property: "og:description",
-        content: "افتح أي بريد إلكتروني بأداء عالٍ وسرعة البرق. منصة SaaS للشركات مع تخصيص كامل بالشعار والألوان لكل عميل.",
+        content: "تصفح بريدك الالكتروني بأمان و أداء عالٍ. منصة للشركات مع تخصيص كامل بهوية الشركة.",
       },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },
-      { name: "twitter:title", content: "MailMaestro — منصة SaaS للبريد المؤسسي متعدد الشركات" },
-      { name: "twitter:description", content: "افتح أي بريد إلكتروني بأداء عالٍ وسرعة البرق. منصة SaaS للشركات مع تخصيص كامل بالشعار والألوان لكل عميل." },
-      { property: "og:image", content: "https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/55b3c81e-cddc-4ed5-bef1-c1b02f3f74ad/id-preview-60e9961f--da2f05fb-8851-4f2f-9914-d1405b6cdf1d.lovable.app-1784894941024.png" },
-      { name: "twitter:image", content: "https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/55b3c81e-cddc-4ed5-bef1-c1b02f3f74ad/id-preview-60e9961f--da2f05fb-8851-4f2f-9914-d1405b6cdf1d.lovable.app-1784894941024.png" },
+      { name: "twitter:title", content: "MailMaestro | بريد الكتروني بسرعة البرق" },
+      { name: "twitter:description", content: "تصفح بريدك الالكتروني بأمان و أداء عالٍ. منصة للشركات مع تخصيص كامل بهوية الشركة." },
+      { property: "og:image", content: "https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/1e61eff7-a26a-4a6a-a737-1dba1b729b5c/id-preview-4ee59209--da2f05fb-8851-4f2f-9914-d1405b6cdf1d.lovable.app-1785492766332.png" },
+      { name: "twitter:image", content: "https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/1e61eff7-a26a-4a6a-a737-1dba1b729b5c/id-preview-4ee59209--da2f05fb-8851-4f2f-9914-d1405b6cdf1d.lovable.app-1785492766332.png" },
     ],
     links: [
       { rel: "stylesheet", href: appCss },
-      { rel: "icon", href: "/favicon.ico", type: "image/x-icon" },
       { rel: "preconnect", href: "https://fonts.googleapis.com" },
       { rel: "preconnect", href: "https://fonts.gstatic.com", crossOrigin: "" },
       {
