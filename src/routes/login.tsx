@@ -2,7 +2,9 @@ import { tr } from "@/i18n";
 import { LanguageSwitcher } from "@/components/language-switcher";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
-import { Mail, ArrowLeft, Loader2, Lock } from "lucide-react";
+import { Loader2, Lock } from "lucide-react";
+import { BrandLogo } from "@/components/brand-logo";
+import { ArrowBackward } from "@/components/ui/directional-icon";
 import { toast } from "sonner";
 import { useServerFn } from "@tanstack/react-start";
 import { clientLogin } from "@/lib/client-mail.functions";
@@ -78,9 +80,7 @@ function LoginPage() {
         />
         <div className="relative flex h-full flex-col justify-between p-12 text-white">
           <Link to="/" className="flex items-center gap-2.5">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white/15 backdrop-blur">
-              <Mail className="h-5 w-5" />
-            </div>
+            <BrandLogo className="h-10 w-10 rounded-xl" />
             <span className="text-xl font-bold">MailMaestro</span>
           </Link>
           <div>
@@ -103,7 +103,7 @@ function LoginPage() {
             to="/"
             className="mb-8 inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"
           >
-            <ArrowLeft className="h-4 w-4" /> {tr("العودة")}
+            <ArrowBackward className="h-4 w-4" /> {tr("العودة")}
           </Link>
 
           <div className="mb-6"><LanguageSwitcher /></div>

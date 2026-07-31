@@ -2,15 +2,16 @@ import { tr } from "@/i18n";
 import { LanguageSwitcher } from "@/components/language-switcher";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import {
-  Mail,
   Zap,
   Shield,
   Palette,
   Users,
   Cloud,
-  ArrowLeft,
   CheckCircle2,
+  Mail,
 } from "lucide-react";
+import { BrandLogo } from "@/components/brand-logo";
+import { ArrowForward } from "@/components/ui/directional-icon";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -38,9 +39,7 @@ function Landing() {
       <header className="sticky top-0 z-40 border-b border-border/60 glass">
         <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 sm:px-6">
           <Link to="/" className="flex items-center gap-2.5">
-            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-brand-gradient shadow-brand">
-              <Mail className="h-5 w-5 text-white" />
-            </div>
+            <BrandLogo className="h-9 w-9 rounded-xl shadow-brand" />
             <span className="text-lg font-bold tracking-tight">MailMaestro</span>
           </Link>
           <nav className="hidden items-center gap-8 md:flex">
@@ -67,7 +66,7 @@ function Landing() {
               className="inline-flex items-center gap-1.5 rounded-lg bg-brand-gradient px-4 py-2 text-sm font-semibold text-white shadow-soft transition hover:shadow-elevated"
             >
               {tr("ابدأ مجاناً")}
-              <ArrowLeft className="h-4 w-4" />
+              <ArrowForward className="h-4 w-4" />
             </Link>
           </div>
         </div>
@@ -103,7 +102,7 @@ function Landing() {
               className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-brand-gradient px-6 py-3.5 text-base font-semibold text-white shadow-brand transition hover:scale-[1.02] sm:w-auto"
             >
               {tr("ابدأ تجربتك المجانية")}
-              <ArrowLeft className="h-4 w-4" />
+              <ArrowForward className="h-4 w-4" />
             </Link>
             <Link
               to="/login"
@@ -218,7 +217,7 @@ function Landing() {
             className="mt-8 inline-flex items-center gap-2 rounded-xl bg-white px-6 py-3.5 text-base font-semibold text-foreground shadow-elevated transition hover:scale-[1.02]"
           >
             {tr("ابدأ الآن مجاناً")}
-            <ArrowLeft className="h-4 w-4" />
+            <ArrowForward className="h-4 w-4" />
           </Link>
         </div>
       </section>
