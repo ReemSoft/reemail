@@ -274,6 +274,8 @@ import {
   getMessage as getMockMessage,
 } from "@/lib/mail-mock";
 import type { MailFolder, MailMessage } from "@/lib/mail-types";
+import { buildEmailHtmlDocument, htmlToPlainText } from "@/lib/mail-compose-html";
+
 import { clearMailSession, getMailSession, type MailSession } from "@/lib/mail-session";
 import { useMailServerFn, useMailSessionRenewal } from "@/hooks/use-mail-session-renewal";
 import {
@@ -5251,8 +5253,15 @@ function Composer({
     setSending(true);
     setProgress(0);
     try {
-      const bodyHtml = sanitizeComposerHtml(editorRef.current?.innerHTML ?? "");
-      const bodyText = stripHtml(bodyHtml);
+      const fragment = sanitizeComposerHtml(editorRef.current?.innerHTML ?? "");
+      // Recipients don't get the app stylesheet: carry every bit of spacing /
+      // list / typography formatting inline in a standalone email document.
+      const editorDir =
+        (editorRef.current?.getAttribute("dir") as "rtl" | "ltr" | null) ??
+        (document?.documentElement?.dir === "ltr" ? "ltr" : "rtl");
+      const bodyHtml = buildEmailHtmlDocument(fragment, { dir: editorDir });
+      const bodyText = htmlToPlainText(fragment);
+
 
       const payload = {
         mailSessionToken: session.mailSessionToken ?? "",
