@@ -1,3 +1,5 @@
+import { BrandLogo } from "@/components/brand-logo";
+import { ChevronBackward } from "@/components/ui/directional-icon";
 import { tr } from "@/i18n";
 import { LanguageSwitcher } from "@/components/language-switcher";
 import { useLanguage } from "@/hooks/use-language";
@@ -122,14 +124,12 @@ import {
   X,
   Pencil,
   Paperclip,
-  ArrowLeft,
   RefreshCw,
   MoreVertical,
   MoreHorizontal,
   LogOut,
   Mail as MailIcon,
   Loader2,
-  ChevronLeft,
   ChevronDown,
   Reply,
   ReplyAll,
@@ -2808,9 +2808,7 @@ function MailApp() {
               className="h-8 w-8 rounded-lg object-cover"
             />
           ) : (
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-brand-gradient text-white">
-              <MailIcon className="h-4 w-4" />
-            </div>
+            <BrandLogo className="h-8 w-8 rounded-lg" />
           )}
           <span className="hidden text-base font-bold sm:inline">{brandName}</span>
         </Link>
@@ -3594,7 +3592,7 @@ function MessageView({
           className="flex items-center gap-1.5 rounded-lg p-2 text-sm hover:bg-muted md:hidden"
           aria-label={tr("رجوع")}
         >
-          <ChevronLeft className="h-4 w-4" /> {tr("رجوع")}
+          <ChevronBackward className="h-4 w-4" /> {tr("رجوع")}
         </button>
         <div className="hidden gap-1 md:flex">
           <button onClick={onReply} className="rounded-lg p-2 hover:bg-muted" title={tr("رد")}>
@@ -3907,7 +3905,7 @@ function LoadingViewer({ onBack }: { onBack: () => void }) {
           className="flex items-center gap-1.5 rounded-lg p-2 text-sm hover:bg-muted md:hidden"
           aria-label={tr("رجوع")}
         >
-          <ChevronLeft className="h-4 w-4" /> {tr("رجوع")}
+          <ChevronBackward className="h-4 w-4" /> {tr("رجوع")}
         </button>
         <div />
       </div>

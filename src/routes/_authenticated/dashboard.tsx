@@ -1,9 +1,9 @@
+import { ArrowBackward } from "@/components/ui/directional-icon";
 import { tr } from "@/i18n";
 import { LanguageSwitcher } from "@/components/language-switcher";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useState } from "react";
 import {
-  ArrowLeft,
   Palette,
   Mail as MailIcon,
   Upload,
@@ -204,7 +204,7 @@ function CompanyDashboard() {
         <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-4">
           <div className="flex items-center gap-3">
             <Link to="/mail" className="rounded-lg p-2 hover:bg-muted">
-              <ArrowLeft className="h-4 w-4" />
+              <ArrowBackward className="h-4 w-4" />
             </Link>
             <h1 className="text-lg font-bold">{tr("لوحة تحكم الشركة")}</h1>
           </div>
