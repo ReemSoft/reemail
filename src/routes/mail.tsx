@@ -2832,6 +2832,8 @@ function MailApp() {
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
+            onFocus={() => setSearchFocused(true)}
+            onBlur={() => setSearchFocused(false)}
             placeholder={searchMode === "deep" ? tr("بحث شامل على السيرفر…") : tr("ابحث في البريد...")}
             className="w-full bg-transparent px-1 text-sm outline-none placeholder:text-muted-foreground"
           />
