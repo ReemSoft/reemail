@@ -829,6 +829,12 @@ function useMailData(session: MailSession | null) {
   });
   const [folderPaths, setFolderPaths] = useState<Partial<Record<MailFolder, string>>>({});
   const [messages, setMessages] = useState<MailMessage[]>([]);
+  // Mirror of `messages` for callbacks that must read the latest list without
+  // being re-created on every list change (body-cache merge on open).
+  const messagesRef = useRef<MailMessage[]>([]);
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(false);
