@@ -2957,7 +2957,9 @@ function MailApp() {
             <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin text-primary" : ""}`} />
             <span className="hidden lg:inline">{refreshing ? tr("جاري التحديث...") : tr("تحديث")}</span>
           </button>
-          <LanguageSwitcher className="hidden sm:inline-flex" />
+          <div className="hidden sm:block">
+            <LanguageSwitcher />
+          </div>
           <button
             onClick={handleSignOut}
             className="hidden items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm font-medium text-muted-foreground hover:bg-destructive/10 hover:text-destructive sm:inline-flex"
