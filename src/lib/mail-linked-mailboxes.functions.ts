@@ -378,17 +378,39 @@ export const unlinkMailbox = createServerFn({ method: "POST" })
       return { ok: false, message: "INVALID_TOKEN" };
     }
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-    const { error } = await supabaseAdmin
+    if (data.linkedAccountId === claims.sub) {
+      return { ok: false, message: "لا يمكن إلغاء ربط الصندوق الحالي." };
+    }
+    // The caller must already be in the same group as the target.
+    const { data: membership } = await supabaseAdmin
       .from("mail_account_links")
-      .delete()
+      .select("id")
       .eq("owner_account_id", claims.sub)
       .eq("company_id", claims.cid)
-      .eq("linked_account_id", data.linkedAccountId);
-    if (error) {
-      console.error("[linked-mailboxes] unlink failed", { code: error.code });
+      .eq("linked_account_id", data.linkedAccountId)
+      .maybeSingle();
+    if (!membership) return { ok: false, message: "هذا الصندوق غير مرتبط بحسابك." };
+
+    // Mesh cleanup: drop every edge that touches the removed mailbox inside
+    // this company, so no other member keeps a stale link to it.
+    const [{ error: e1 }, { error: e2 }] = await Promise.all([
+      supabaseAdmin
+        .from("mail_account_links")
+        .delete()
+        .eq("company_id", claims.cid)
+        .eq("owner_account_id", data.linkedAccountId),
+      supabaseAdmin
+        .from("mail_account_links")
+        .delete()
+        .eq("company_id", claims.cid)
+        .eq("linked_account_id", data.linkedAccountId),
+    ]);
+    if (e1 || e2) {
+      console.error("[linked-mailboxes] unlink failed", { code: (e1 ?? e2)?.code });
       return { ok: false, message: "تعذر إلغاء الربط." };
     }
     return { ok: true };
+
   });
 
 /**
