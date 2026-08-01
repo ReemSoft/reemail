@@ -105,7 +105,7 @@ export function buildEmailHtmlDocument(
     `<html dir="${dir}">`,
     '<head><meta charset="utf-8">',
     '<meta name="viewport" content="width=device-width,initial-scale=1"></head>',
-    '<body style="margin:0;padding:0;background:#ffffff">',
+    '<body style="margin:0;padding:0">',
     `<div dir="${dir}" style="${EMAIL_BODY_STYLE};text-align:${align}">`,
     body,
     "</div></body></html>",
