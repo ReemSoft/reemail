@@ -70,6 +70,12 @@ export interface SwitchedMailbox {
   } | null;
   mailSessionToken: string;
   mailSessionTokenExpiresAt: number;
+  /**
+   * Present only on the instant-switch path so the tab can keep driving the
+   * bridge with the same in-memory session model. Never persisted anywhere
+   * except this tab's sessionStorage.
+   */
+  password?: string;
 }
 
 export const listLinkedMailboxes = createServerFn({ method: "POST" })
