@@ -1853,7 +1853,7 @@ function MailApp() {
       inflight.current.set(id, p);
       return p;
     },
-    [session, getOne, applyPendingOne, currentAccountId, cleanupGhost],
+    [session, openMsg, applyPendingOne, currentAccountId, cleanupGhost],
   );
 
   // Prefetch on hover/focus/touch was REMOVED on purpose: every request is
