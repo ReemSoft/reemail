@@ -193,40 +193,60 @@ function useInlineResolvedHtml(message: MailMessage, html: string): string {
       const session = getMailSession();
       const parsed = parseMessageId(message.id);
       if (!session || !parsed) return;
-      let out = html;
-      let changed = false;
-      for (const p of parts) {
-        if (cancelled) return;
-        try {
-          const res = await fetch("/api/mail-attachment", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              mailSessionToken: session.mailSessionToken ?? "",
-              password: session.password,
-              folder: parsed.folder,
-              uid: parsed.uid,
-              part: p.part,
-            }),
-          });
-          if (!res.ok) continue;
-          const blob = await res.blob();
-          const dataUri = await new Promise<string>((resolve, reject) => {
-            const fr = new FileReader();
-            fr.onload = () => resolve(String(fr.result || ""));
-            fr.onerror = () => reject(fr.error);
-            fr.readAsDataURL(blob);
-          });
-          if (!dataUri.startsWith("data:")) continue;
-          const esc = p.cid.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-          out = out.replace(new RegExp(`cid:${esc}`, "gi"), dataUri);
-          changed = true;
-        } catch {
-          /* leave the original cid: reference untouched */
+
+      // Bounded parallelism: inline images used to be fetched strictly one
+      // after another, so a mail with several embedded logos showed broken
+      // images for seconds. The text body is already painted at this point,
+      // so this never delays opening the message.
+      const CONCURRENCY = 3;
+      const queue = [...parts];
+      const results: { cid: string; dataUri: string }[] = [];
+
+      async function worker() {
+        for (;;) {
+          const p = queue.shift();
+          if (!p || cancelled) return;
+          try {
+            const res = await fetch("/api/mail-attachment", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                mailSessionToken: session!.mailSessionToken ?? "",
+                password: session!.password,
+                folder: parsed!.folder,
+                uid: parsed!.uid,
+                part: p.part,
+              }),
+            });
+            if (!res.ok) continue;
+            const blob = await res.blob();
+            const dataUri = await new Promise<string>((resolve, reject) => {
+              const fr = new FileReader();
+              fr.onload = () => resolve(String(fr.result || ""));
+              fr.onerror = () => reject(fr.error);
+              fr.readAsDataURL(blob);
+            });
+            if (!dataUri.startsWith("data:")) continue;
+            results.push({ cid: p.cid, dataUri });
+          } catch {
+            /* leave the original cid: reference untouched */
+          }
         }
       }
-      if (!cancelled && changed) setResolved(out);
+
+      await Promise.all(
+        Array.from({ length: Math.min(CONCURRENCY, parts.length) }, () => worker()),
+      );
+      if (cancelled || !results.length) return;
+
+      let out = html;
+      for (const r of results) {
+        const esc = r.cid.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        out = out.replace(new RegExp(`cid:${esc}`, "gi"), r.dataUri);
+      }
+      setResolved(out);
     })();
+
 
     return () => {
       cancelled = true;
