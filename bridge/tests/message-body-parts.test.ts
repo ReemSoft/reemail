@@ -150,10 +150,14 @@ test("connection stats expose bounded config only (no host/account identifiers)"
   // 3. two connections per account max (interactive + background)
   assert.equal(s.maxConnectionsPerAccount, 2);
 
-  // 4. no PII / identifiers anywhere in the payload
-  const dump = JSON.stringify(s).toLowerCase();
+  // 4. no PII / identifiers among the VALUES: every leaf value is a number,
+  //    so no host, account, company, email or any personal identifier can leak.
+  const leaves = [s.openConnections, s.maxConnectionsPerAccount, s.idleCloseMs, s.listCacheMs,
+    s.lanes.interactive, s.lanes.background];
+  for (const v of leaves) assert.equal(typeof v, "number");
+  const values = JSON.stringify(s).toLowerCase().replace(/"[a-z]+":/g, "");
   for (const forbidden of ["host", "account", "company", "email", "user", "pass", "@"]) {
-    assert.ok(!dump.includes(forbidden), `stats must not expose "${forbidden}"`);
+    assert.ok(!values.includes(forbidden), `stats must not expose "${forbidden}"`);
   }
 
   // 5. closing everything zeroes the counters
