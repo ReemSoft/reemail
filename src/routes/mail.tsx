@@ -151,6 +151,90 @@ function ThreadedEmailBody({ html, className }: { html: string; className?: stri
   );
 }
 
+/**
+ * useInlineResolvedHtml — resolves oversized inline (cid:) images.
+ *
+ * The bridge embeds small inline images as data URIs while it downloads the
+ * body. Anything above the configured limit is reported in
+ * `message.inlineParts` instead, and streamed here lazily through the
+ * protected /api/mail-attachment route so the image renders instead of
+ * breaking. The sandboxed viewer has an opaque origin, so a parent-origin
+ * blob: URL is unreachable inside it — the fetched bytes are converted to a
+ * data URI, exactly like the bridge-side inline path.
+ */
+function useInlineResolvedHtml(message: MailMessage, html: string): string {
+  const [resolved, setResolved] = useState(html);
+
+  useEffect(() => {
+    setResolved(html);
+    const parts = message.inlineParts;
+    if (!parts?.length || !html) return;
+    let cancelled = false;
+
+    (async () => {
+      const session = getMailSession();
+      const parsed = parseMessageId(message.id);
+      if (!session || !parsed) return;
+      let out = html;
+      let changed = false;
+      for (const p of parts) {
+        if (cancelled) return;
+        try {
+          const res = await fetch("/api/mail-attachment", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              mailSessionToken: session.mailSessionToken ?? "",
+              password: session.password,
+              folder: parsed.folder,
+              uid: parsed.uid,
+              part: p.part,
+            }),
+          });
+          if (!res.ok) continue;
+          const blob = await res.blob();
+          const dataUri = await new Promise<string>((resolve, reject) => {
+            const fr = new FileReader();
+            fr.onload = () => resolve(String(fr.result || ""));
+            fr.onerror = () => reject(fr.error);
+            fr.readAsDataURL(blob);
+          });
+          if (!dataUri.startsWith("data:")) continue;
+          const esc = p.cid.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+          out = out.replace(new RegExp(`cid:${esc}`, "gi"), dataUri);
+          changed = true;
+        } catch {
+          /* leave the original cid: reference untouched */
+        }
+      }
+      if (!cancelled && changed) setResolved(out);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [message.id, message.inlineParts, html]);
+
+  return resolved;
+}
+
+/** Body renderer that first resolves any deferred inline images. */
+function MessageBody({
+  message,
+  html,
+  className,
+}: {
+  message: MailMessage;
+  html: string;
+  className?: string;
+}) {
+  const resolved = useInlineResolvedHtml(message, html);
+  return <ThreadedEmailBody html={resolved} className={className} />;
+}
+
+
+
+
 
 
 import {
@@ -3909,7 +3993,8 @@ function MessageView({
               </div>
             </div>
 
-            <ThreadedEmailBody
+            <MessageBody
+              message={message}
               html={sanitizeEmailHtml(message.body || message.preview || "")}
               className="mt-6"
             />

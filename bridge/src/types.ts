@@ -57,6 +57,12 @@ export interface MailMessage {
    * when opening a drafts folder message for edit.
    */
   uidValidity?: string;
+  /**
+   * Inline (cid:) images that were too large to embed as data URIs. The
+   * client resolves them through the protected attachment route instead of
+   * rendering a broken image. Threshold: INLINE_CID_MAX_BYTES (bridge env).
+   */
+  inlineParts?: { cid: string; part: string; mimeType: string; size: number }[];
 }
 
 export interface FolderCount {
