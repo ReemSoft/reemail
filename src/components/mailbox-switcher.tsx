@@ -197,6 +197,9 @@ export function MailboxSwitcher({ session }: Props) {
   }
 
   const atCap = linked.length >= max;
+  // Email addresses stay LTR internally, but must align to the reading start
+  // of the current language (right in Arabic, left in English).
+  const addrAlign = dir === "rtl" ? "text-end" : "text-start";
 
   return (
     <>
@@ -207,7 +210,7 @@ export function MailboxSwitcher({ session }: Props) {
             title={session.account.email_address}
           >
             <Mail className="h-3.5 w-3.5 shrink-0" />
-            <span className="truncate" dir="ltr">
+            <span className={`truncate ${dir === "rtl" ? "text-end" : "text-start"}`} dir="ltr">
               {session.account.email_address}
             </span>
             <ChevronDown className="h-3.5 w-3.5 shrink-0" />
@@ -222,7 +225,7 @@ export function MailboxSwitcher({ session }: Props) {
             onSelect={(e) => e.preventDefault()}
           >
             <Mail className="h-4 w-4 shrink-0 text-primary" />
-            <span className="min-w-0 flex-1 truncate text-start text-xs" dir="ltr">
+            <span className={`min-w-0 flex-1 truncate text-xs ${addrAlign}`} dir="ltr">
               {session.account.email_address}
             </span>
             <Check className="h-4 w-4 shrink-0 text-primary" />
@@ -240,7 +243,7 @@ export function MailboxSwitcher({ session }: Props) {
                 }}
               >
                 <Mail className="h-4 w-4 shrink-0 text-muted-foreground" />
-                <span className="min-w-0 flex-1 truncate text-start text-xs" dir="ltr">
+                <span className={`min-w-0 flex-1 truncate text-xs ${addrAlign}`} dir="ltr">
                   {m.emailAddress}
                 </span>
                 <button
