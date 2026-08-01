@@ -2932,9 +2932,9 @@ function MailApp() {
         </div>
 
         <div className="ms-auto flex shrink-0 items-center gap-1.5">
-          {/* Mobile-only actions — collapse smoothly while the search field is focused */}
+          {/* Mobile + tablet actions — collapse smoothly while the search field is focused */}
           <div
-            className={`flex items-center gap-0.5 overflow-hidden transition-all duration-300 ease-out sm:hidden ${
+            className={`flex items-center gap-0.5 overflow-hidden transition-all duration-300 ease-out lg:hidden ${
               searchFocused || searchDropdownOpen ? "max-w-0 opacity-0" : "max-w-[6rem] opacity-100"
             }`}
           >
@@ -2949,31 +2949,32 @@ function MailApp() {
             <MailboxSwitcher session={session} compact />
           </div>
 
-          <div className="hidden md:block">
+          <div className="hidden lg:block">
             <MailboxSwitcher session={session} />
           </div>
 
           <button
             onClick={refresh}
             disabled={refreshing}
-            className="hidden items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm font-medium text-muted-foreground transition hover:bg-muted hover:text-foreground disabled:opacity-70 sm:inline-flex"
+            className="hidden items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm font-medium text-muted-foreground transition hover:bg-muted hover:text-foreground disabled:opacity-70 lg:inline-flex"
             title={tr("تحديث البريد")}
           >
             <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin text-primary" : ""}`} />
             <span className="hidden lg:inline">{refreshing ? tr("جاري التحديث...") : tr("تحديث")}</span>
           </button>
-          <div className="hidden sm:block">
+          <div className="hidden lg:block">
             <LanguageSwitcher />
           </div>
           <button
             onClick={handleSignOut}
-            className="hidden items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm font-medium text-muted-foreground hover:bg-destructive/10 hover:text-destructive sm:inline-flex"
+            className="hidden items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm font-medium text-muted-foreground hover:bg-destructive/10 hover:text-destructive lg:inline-flex"
             title={tr("تسجيل الخروج")}
           >
             <LogOut className="h-4 w-4" />
             <span className="hidden lg:inline">{tr("خروج")}</span>
           </button>
         </div>
+
 
       </header>
 
