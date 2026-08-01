@@ -3034,6 +3034,20 @@ function MailApp() {
                 );
               })}
           </nav>
+
+          {/* Mobile-only footer: language + sign out live here instead of the top bar */}
+          <div className="mt-auto border-t border-border p-3 sm:hidden">
+            <div className="flex items-center justify-between gap-2">
+              <LanguageSwitcher />
+              <button
+                onClick={handleSignOut}
+                className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm font-medium text-muted-foreground transition hover:bg-destructive/10 hover:text-destructive"
+              >
+                <LogOut className="h-4 w-4" />
+                <span>{tr("خروج")}</span>
+              </button>
+            </div>
+          </div>
         </aside>
 
         {sidebarOpen && (
