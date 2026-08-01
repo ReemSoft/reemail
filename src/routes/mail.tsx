@@ -1611,9 +1611,10 @@ function MailApp() {
   }, [messages]);
 
   // Background body warming.
-  // Fires only when the folder finished loading and the tab is visible, after
-  // an idle delay, and always on the bridge's `background` IMAP lane so it can
-  // never sit in front of a user click. One bounded batch per folder visit.
+  // Runs on the bridge's `background` IMAP lane (never in front of a click)
+  // and keeps looping bounded batches until the recent window is fully
+  // cached, so a click almost always lands on a cache HIT. Cancelled on
+  // folder/account change, tab hide, or unmount.
   const warmedRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     if (!session?.mailSessionToken) return;
@@ -1621,18 +1622,30 @@ function MailApp() {
     if (folder === "drafts") return;
     const stamp = `${session.account.id}|${folder}`;
     if (warmedRef.current.has(stamp)) return;
-    const t = window.setTimeout(() => {
+    let cancelled = false;
+    const token = session.mailSessionToken ?? "";
+    const password = session.password;
+    const t = window.setTimeout(async () => {
       if (document.visibilityState !== "visible") return;
       warmedRef.current.add(stamp);
-      void warmBodies({
-        data: {
-          mailSessionToken: session.mailSessionToken ?? "",
-          password: session.password,
-          folder,
-        },
-      }).catch(() => undefined);
-    }, 2500);
-    return () => window.clearTimeout(t);
+      // Hard bound: at most 40 bounded batches per folder visit.
+      for (let i = 0; i < 40; i++) {
+        if (cancelled || document.visibilityState !== "visible") return;
+        let res: { ok: boolean; warmed: number; remaining: number };
+        try {
+          res = await warmBodies({ data: { mailSessionToken: token, password, folder } });
+        } catch {
+          return;
+        }
+        if (!res.ok || res.remaining <= 0 || res.warmed === 0) return;
+        // Breather so the interactive lane always wins a race.
+        await new Promise((r) => window.setTimeout(r, 250));
+      }
+    }, 600);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(t);
+    };
   }, [session, folder, loading, messages.length, warmBodies]);
 
 
