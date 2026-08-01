@@ -1,6 +1,6 @@
 import { BrandLogo } from "@/components/brand-logo";
 import { ChevronBackward } from "@/components/ui/directional-icon";
-import { tr } from "@/i18n";
+import { tr, trf, getCurrentLang } from "@/i18n";
 import { LanguageSwitcher } from "@/components/language-switcher";
 import { useLanguage } from "@/hooks/use-language";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
