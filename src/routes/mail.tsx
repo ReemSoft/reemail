@@ -170,6 +170,13 @@ function ThreadedEmailBody({ html, className }: { html: string; className?: stri
 }
 
 /**
+ * Session-scoped cache of already-resolved inline images.
+ * Key: `${messageId}|${cid}` → data URI. Re-opening a message (or switching
+ * back to it) reuses the bytes instead of re-streaming them from IMAP.
+ */
+const inlineImageCache = new Map<string, string>();
+
+/**
  * useInlineResolvedHtml — resolves oversized inline (cid:) images.
  *
  * The bridge embeds small inline images as data URIs while it downloads the
@@ -179,14 +186,42 @@ function ThreadedEmailBody({ html, className }: { html: string; className?: stri
  * breaking. The sandboxed viewer has an opaque origin, so a parent-origin
  * blob: URL is unreachable inside it — the fetched bytes are converted to a
  * data URI, exactly like the bridge-side inline path.
+ *
+ * Rendering is PROGRESSIVE: every image is swapped into the HTML the moment
+ * its own bytes arrive, so one slow attachment can never hold back the ones
+ * that already finished. The message text itself is painted before any of
+ * this starts, so open latency is unaffected.
  */
 function useInlineResolvedHtml(message: MailMessage, html: string): string {
   const [resolved, setResolved] = useState(html);
 
   useEffect(() => {
-    setResolved(html);
     const parts = message.inlineParts;
+
+    // Apply anything already cached synchronously, before the first paint of
+    // this body, so re-opens show inline images instantly.
+    const applyAll = (base: string, pairs: { cid: string; dataUri: string }[]) => {
+      let out = base;
+      for (const r of pairs) {
+        const esc = r.cid.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        out = out.replace(new RegExp(`cid:${esc}`, "gi"), r.dataUri);
+      }
+      return out;
+    };
+
+    const cachedPairs = (parts ?? [])
+      .map((p) => {
+        const hit = inlineImageCache.get(`${message.id}|${p.cid}`);
+        return hit ? { cid: p.cid, dataUri: hit } : null;
+      })
+      .filter(Boolean) as { cid: string; dataUri: string }[];
+
+    setResolved(cachedPairs.length ? applyAll(html, cachedPairs) : html);
+
     if (!parts?.length || !html) return;
+    const pending = parts.filter((p) => !inlineImageCache.has(`${message.id}|${p.cid}`));
+    if (!pending.length) return;
+
     let cancelled = false;
 
     (async () => {
@@ -196,11 +231,9 @@ function useInlineResolvedHtml(message: MailMessage, html: string): string {
 
       // Bounded parallelism: inline images used to be fetched strictly one
       // after another, so a mail with several embedded logos showed broken
-      // images for seconds. The text body is already painted at this point,
-      // so this never delays opening the message.
-      const CONCURRENCY = 3;
-      const queue = [...parts];
-      const results: { cid: string; dataUri: string }[] = [];
+      // images for seconds.
+      const CONCURRENCY = 4;
+      const queue = [...pending];
 
       async function worker() {
         for (;;) {
@@ -227,7 +260,11 @@ function useInlineResolvedHtml(message: MailMessage, html: string): string {
               fr.readAsDataURL(blob);
             });
             if (!dataUri.startsWith("data:")) continue;
-            results.push({ cid: p.cid, dataUri });
+            inlineImageCache.set(`${message.id}|${p.cid}`, dataUri);
+            if (cancelled) return;
+            // Progressive swap: this image appears immediately, without
+            // waiting for its slower siblings.
+            setResolved((prev) => applyAll(prev, [{ cid: p.cid, dataUri }]));
           } catch {
             /* leave the original cid: reference untouched */
           }
@@ -235,18 +272,9 @@ function useInlineResolvedHtml(message: MailMessage, html: string): string {
       }
 
       await Promise.all(
-        Array.from({ length: Math.min(CONCURRENCY, parts.length) }, () => worker()),
+        Array.from({ length: Math.min(CONCURRENCY, pending.length) }, () => worker()),
       );
-      if (cancelled || !results.length) return;
-
-      let out = html;
-      for (const r of results) {
-        const esc = r.cid.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-        out = out.replace(new RegExp(`cid:${esc}`, "gi"), r.dataUri);
-      }
-      setResolved(out);
     })();
-
 
     return () => {
       cancelled = true;
@@ -255,6 +283,7 @@ function useInlineResolvedHtml(message: MailMessage, html: string): string {
 
   return resolved;
 }
+
 
 /** Body renderer that first resolves any deferred inline images. */
 function MessageBody({
