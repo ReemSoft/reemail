@@ -20,6 +20,7 @@ import {
   searchMessages,
   downloadAttachment,
 } from "./imap.js";
+import { closeAllImapConnections } from "./imap-connection.js";
 import { sendMessage } from "./smtp.js";
 import {
   DraftSavePayloadSchema,
@@ -736,6 +737,16 @@ app.post("/api/sync/reconcile", requireKey, imapGate("background"), async (req, 
 });
 
 const HOST = process.env.HOST || "127.0.0.1";
+
+// Close the reusable per-account IMAP connections cleanly on shutdown.
+for (const sig of ["SIGTERM", "SIGINT"] as const) {
+  process.once(sig, () => {
+    closeAllImapConnections()
+      .catch(() => {})
+      .finally(() => process.exit(0));
+  });
+}
+
 app.listen(PORT, HOST, () => {
   console.log(`[bridge] MailMaestro Bridge running on ${HOST}:${PORT}`);
   // Best-effort sweep of stale uploads from a previous crashed run.
