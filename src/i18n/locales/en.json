@@ -419,5 +419,6 @@
   "تعذر التحقق من عدد الصناديق المرتبطة.": "Could not check the number of linked mailboxes.",
   "تعذر حفظ إعدادات هذا البريد.": "Could not save this mailbox's settings.",
   "تعذر تجهيز هوية هذا البريد.": "Could not prepare this mailbox's identity.",
-  "تعذر التحقق من هذا البريد الآن.": "Could not verify this mailbox right now."
+  "تعذر التحقق من هذا البريد الآن.": "Could not verify this mailbox right now.",
+  "لا يمكن ربط أكثر من 5 صناديق بريد إضافية.": "You cannot link more than 5 additional mailboxes."
 }

@@ -153,7 +153,7 @@ export const linkMailbox = createServerFn({ method: "POST" })
       if ((count ?? 0) >= MAX_LINKED_MAILBOXES) {
         return {
           ok: false,
-          message: `لا يمكن ربط أكثر من ${MAX_LINKED_MAILBOXES} صناديق بريد إضافية.`,
+          message: "لا يمكن ربط أكثر من 5 صناديق بريد إضافية.",
         };
       }
 
