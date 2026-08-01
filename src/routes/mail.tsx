@@ -96,15 +96,28 @@ function EmailBodyFrame({ html, className }: { html: string; className?: string 
           className="mb-2 flex flex-wrap items-center justify-between gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900"
         >
           <span>{tr("تم حظر الصور الخارجية لحماية خصوصيتك")}</span>
-          <button
-            type="button"
-            onClick={() => setAllowRemoteImages(true)}
-            className="rounded border border-amber-300 bg-white px-2 py-1 text-xs font-medium text-amber-900 hover:bg-amber-100"
-          >
-            {tr("عرض الصور")}
-          </button>
+          <span className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setAllowRemoteImages(true)}
+              className="rounded border border-amber-300 bg-white px-2 py-1 text-xs font-medium text-amber-900 hover:bg-amber-100"
+            >
+              {tr("عرض الصور")}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setAlwaysShowRemoteImages(true);
+                setAllowRemoteImages(true);
+              }}
+              className="rounded border border-amber-300 bg-white px-2 py-1 text-xs font-medium text-amber-900 hover:bg-amber-100"
+            >
+              {tr("عرض الصور دائماً")}
+            </button>
+          </span>
         </div>
       )}
+
       <iframe
         ref={ref}
         title="email-body"
