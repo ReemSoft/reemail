@@ -92,9 +92,12 @@ export function getMailSession(): MailSession | null {
 
 export function clearMailSession() {
   if (typeof window === "undefined") return;
-  // Wipes password + token together.
+  // Wipes password + token together — for the active mailbox AND every
+  // linked mailbox signed in during this tab.
   sessionStorage.removeItem(KEY);
+  sessionStorage.removeItem(POOL_KEY);
 }
+
 
 /**
  * Replaces ONLY the token pair after a silent renewal. Keeps the password and
