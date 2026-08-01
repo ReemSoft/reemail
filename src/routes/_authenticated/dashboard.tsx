@@ -381,10 +381,12 @@ const IMAP_PRESETS = [
 
 function AccountsTab({
   accounts,
+  domains,
   companyId,
   onChange,
 }: {
   accounts: MailAccount[];
+  domains: EmailDomain[];
   companyId: string;
   onChange: () => Promise<void> | void;
 }) {
@@ -396,6 +398,7 @@ function AccountsTab({
   const emptyForm = {
     display_name: "",
     email_address: "",
+    source_domain_id: "",
     imap_host: "",
     imap_port: 993,
     imap_secure: true,
@@ -404,43 +407,79 @@ function AccountsTab({
     smtp_secure: true,
   };
   const [form, setForm] = useState(emptyForm);
+  const [useCustom, setUseCustom] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
   function closeModal() {
     setOpen(false);
     setEditingId(null);
     setForm(emptyForm);
+    setUseCustom(false);
+  }
+
+  /** Auto-selects the matching domain template while typing the address. */
+  function onEmailChange(value: string) {
+    const domainPart = value.split("@")[1]?.trim().toLowerCase() ?? "";
+    if (useCustom || form.source_domain_id) {
+      setForm({ ...form, email_address: value });
+      return;
+    }
+    const match = domains.find((d) => d.domain.toLowerCase() === domainPart);
+    setForm({ ...form, email_address: value, source_domain_id: match?.id ?? "" });
   }
 
   function startEdit(account: MailAccount) {
+    const custom = !!account.imap_host;
     setEditingId(account.id);
+    setUseCustom(custom);
     setForm({
       display_name: account.display_name || "",
       email_address: account.email_address,
-      imap_host: account.imap_host,
-      imap_port: account.imap_port,
-      imap_secure: account.imap_secure,
-      smtp_host: account.smtp_host,
-      smtp_port: account.smtp_port,
-      smtp_secure: account.smtp_secure,
+      source_domain_id: account.source_domain_id || "",
+      imap_host: account.imap_host || "",
+      imap_port: account.imap_port ?? 993,
+      imap_secure: account.imap_secure ?? true,
+      smtp_host: account.smtp_host || "",
+      smtp_port: account.smtp_port ?? 465,
+      smtp_secure: account.smtp_secure ?? true,
     });
     setOpen(true);
   }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+
+    if (!useCustom && !form.source_domain_id) {
+      return toast.error(tr("اختر قالب دومين أو فعّل الإعدادات المخصّصة."));
+    }
+
     setSubmitting(true);
 
-    const basePayload = {
-      display_name: form.display_name || null,
-      email_address: form.email_address,
-      imap_host: form.imap_host,
-      imap_port: form.imap_port,
-      imap_secure: form.imap_secure,
-      smtp_host: form.smtp_host,
-      smtp_port: form.smtp_port,
-      smtp_secure: form.smtp_secure,
-    };
+    // Domain template mode → leave server fields NULL so the account always
+    // inherits the current domain settings (single source of truth).
+    const basePayload = useCustom
+      ? {
+          display_name: form.display_name || null,
+          email_address: form.email_address,
+          source_domain_id: null,
+          imap_host: form.imap_host,
+          imap_port: form.imap_port,
+          imap_secure: form.imap_secure,
+          smtp_host: form.smtp_host,
+          smtp_port: form.smtp_port,
+          smtp_secure: form.smtp_secure,
+        }
+      : {
+          display_name: form.display_name || null,
+          email_address: form.email_address,
+          source_domain_id: form.source_domain_id,
+          imap_host: null,
+          imap_port: null,
+          imap_secure: null,
+          smtp_host: null,
+          smtp_port: null,
+          smtp_secure: null,
+        };
 
     if (editingId) {
       const { error } = await supabase
