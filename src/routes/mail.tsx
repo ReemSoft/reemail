@@ -1404,6 +1404,8 @@ function MailApp() {
   }
   const [refreshing, setRefreshing] = useState(false);
   const [searchMode, setSearchMode] = useState<"quick" | "deep">("quick");
+  // Mobile-only: expand the search field in place and hide the trailing icons.
+  const [searchFocused, setSearchFocused] = useState(false);
   const [deepIncludeBody, setDeepIncludeBody] = useState(false);
   const [deepResults, setDeepResults] = useState<MailMessage[] | null>(null);
   const [deepLoading, setDeepLoading] = useState(false);
