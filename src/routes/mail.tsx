@@ -2927,6 +2927,23 @@ function MailApp() {
         </div>
 
         <div className="ms-auto flex shrink-0 items-center gap-1.5">
+          {/* Mobile-only actions — collapse smoothly while the search field is focused */}
+          <div
+            className={`flex items-center gap-0.5 overflow-hidden transition-all duration-300 ease-out sm:hidden ${
+              searchFocused ? "max-w-0 opacity-0" : "max-w-[6rem] opacity-100"
+            }`}
+          >
+            <button
+              onClick={refresh}
+              disabled={refreshing}
+              className="shrink-0 rounded-lg p-2 hover:bg-muted disabled:opacity-70"
+              aria-label={tr("تحديث")}
+            >
+              <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin text-primary" : ""}`} />
+            </button>
+            <MailboxSwitcher session={session} compact />
+          </div>
+
           <div className="hidden md:block">
             <MailboxSwitcher session={session} />
           </div>
@@ -2940,17 +2957,8 @@ function MailApp() {
             <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin text-primary" : ""}`} />
             <span className="hidden lg:inline">{refreshing ? tr("جاري التحديث...") : tr("تحديث")}</span>
           </button>
+          <LanguageSwitcher className="hidden sm:inline-flex" />
           <button
-            onClick={refresh}
-            disabled={refreshing}
-            className="rounded-lg p-2 hover:bg-muted disabled:opacity-70 sm:hidden"
-            aria-label={tr("تحديث")}
-          >
-            <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin text-primary" : ""}`} />
-          </button>
-          <LanguageSwitcher />
-          <button
-
             onClick={handleSignOut}
             className="hidden items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm font-medium text-muted-foreground hover:bg-destructive/10 hover:text-destructive sm:inline-flex"
             title={tr("تسجيل الخروج")}
@@ -2958,14 +2966,8 @@ function MailApp() {
             <LogOut className="h-4 w-4" />
             <span className="hidden lg:inline">{tr("خروج")}</span>
           </button>
-          <button
-            onClick={handleSignOut}
-            className="rounded-lg p-2 hover:bg-muted sm:hidden"
-            aria-label={tr("خروج")}
-          >
-            <LogOut className="h-4 w-4" />
-          </button>
         </div>
+
       </header>
 
       <div className="relative flex flex-1 overflow-hidden">
