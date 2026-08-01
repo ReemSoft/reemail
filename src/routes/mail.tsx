@@ -113,6 +113,46 @@ function EmailBodyFrame({ html, className }: { html: string; className?: string 
   );
 }
 
+/**
+ * ThreadedEmailBody — renders the newest part of a message on its own and
+ * collapses the quoted history behind a "•••" toggle (Gmail behaviour), so a
+ * long back-and-forth thread reads as distinct turns instead of one wall.
+ */
+function ThreadedEmailBody({ html, className }: { html: string; className?: string }) {
+  const { latest, quoted } = useMemo(() => splitQuotedHtml(html), [html]);
+  const [expanded, setExpanded] = useState(false);
+
+  useEffect(() => {
+    setExpanded(false);
+  }, [html]);
+
+  if (!quoted) return <EmailBodyFrame html={html} className={className} />;
+
+  return (
+    <div className={className}>
+      <EmailBodyFrame html={latest} />
+      <div className="mt-3">
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          aria-expanded={expanded}
+          className="inline-flex items-center gap-2 rounded-md border border-border bg-muted/60 px-2.5 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted"
+        >
+          <span className="tracking-widest leading-none">•••</span>
+          <span>{expanded ? tr("إخفاء الرسائل السابقة") : tr("عرض الرسائل السابقة")}</span>
+        </button>
+        {expanded && (
+          <div className="mt-3 rounded-lg border border-border bg-muted/30 ps-3 pe-2 py-2 border-s-2 border-s-primary/40">
+            <EmailBodyFrame html={quoted} />
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+
+
 import {
   Inbox,
   Star,
