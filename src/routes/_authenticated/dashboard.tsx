@@ -248,7 +248,7 @@ function CompanyDashboard() {
           {[
             { id: "branding", label: tr("العلامة التجارية"), icon: Palette },
             { id: "accounts", label: tr("حسابات البريد"), icon: MailIcon, count: accounts.length },
-            { id: "domains", label: tr("دومينات مشتركة"), icon: Globe, count: domains.length },
+            { id: "domains", label: tr("قوالب الدومين"), icon: Globe, count: domains.length },
           ].map((t) => (
             <button
               key={t.id}
