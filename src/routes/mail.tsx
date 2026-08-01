@@ -3323,7 +3323,7 @@ function MailApp() {
 
         {/* Message viewer */}
         <div
-          className={`flex-1 overflow-hidden bg-surface ${
+          className={`flex-1 overflow-hidden bg-background ${
             compose || selectedMessage || (selectedId && reading) ? "flex" : "hidden md:flex"
           } flex-col`}
         >
