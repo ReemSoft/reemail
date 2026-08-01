@@ -263,3 +263,33 @@ export function randomToken(bytes = 16): string {
   }
   return Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
 }
+
+// ---- Remote image consent (persisted preference) ---------------------------
+
+/**
+ * Users kept seeing "no images" on legitimate mail because remote images are
+ * blocked per message and the consent was forgotten on every open. Gmail /
+ * Outlook solve this with a remembered "always display external images"
+ * preference — same model here.
+ *
+ * Purely client-side: it only widens the iframe CSP `img-src` to `https:`.
+ * No extra request, no server work, zero impact on message open latency.
+ */
+const REMOTE_IMAGES_PREF_KEY = "mm.remoteImages.always";
+
+export function getAlwaysShowRemoteImages(): boolean {
+  try {
+    return globalThis.localStorage?.getItem(REMOTE_IMAGES_PREF_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+export function setAlwaysShowRemoteImages(value: boolean): void {
+  try {
+    if (value) globalThis.localStorage?.setItem(REMOTE_IMAGES_PREF_KEY, "1");
+    else globalThis.localStorage?.removeItem(REMOTE_IMAGES_PREF_KEY);
+  } catch {
+    /* storage unavailable — fall back to per-message consent */
+  }
+}
