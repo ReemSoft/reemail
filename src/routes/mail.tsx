@@ -3909,7 +3909,7 @@ function MessageView({
               </div>
             </div>
 
-            <EmailBodyFrame
+            <ThreadedEmailBody
               html={sanitizeEmailHtml(message.body || message.preview || "")}
               className="mt-6"
             />
