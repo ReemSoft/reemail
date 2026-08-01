@@ -829,9 +829,9 @@ function DomainsTab({
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-xl font-bold">{tr("دومينات مشتركة")}</h2>
+          <h2 className="text-xl font-bold">{tr("قوالب الدومين")}</h2>
           <p className="text-sm text-muted-foreground">
-            {tr("أضف إعدادات IMAP/SMTP للدومين مرة واحدة، وأي بريد على نفس الدومين يعمل تلقائياً بدون إضافة كل حساب على حدة.")}
+            {tr("أضف إعدادات IMAP/SMTP للدومين مرة واحدة، ثم اربط بها إيميلاتك بدون إعادة إدخالها. إضافة الدومين وحدها لا تسمح بدخول أي بريد غير مُضاف.")}
           </p>
         </div>
         <button
