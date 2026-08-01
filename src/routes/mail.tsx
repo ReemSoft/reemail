@@ -13,7 +13,10 @@ import {
   isValidHeightPayload,
   randomToken,
   hasRemoteImages,
+  getAlwaysShowRemoteImages,
+  setAlwaysShowRemoteImages,
 } from "@/lib/email-viewer-security";
+
 import { buildReplyQuoteHtml, buildForwardQuoteHtml } from "@/lib/mail-quote";
 import { splitQuotedHtml } from "@/lib/mail-thread-split";
 
