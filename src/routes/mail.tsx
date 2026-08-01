@@ -277,6 +277,8 @@ import type { MailFolder, MailMessage } from "@/lib/mail-types";
 import { buildEmailHtmlDocument, htmlToPlainText } from "@/lib/mail-compose-html";
 
 import { clearMailSession, getMailSession, type MailSession } from "@/lib/mail-session";
+import { MailboxSwitcher } from "@/components/mailbox-switcher";
+
 import { useMailServerFn, useMailSessionRenewal } from "@/hooks/use-mail-session-renewal";
 import {
   hydrateContactSuggestions,
