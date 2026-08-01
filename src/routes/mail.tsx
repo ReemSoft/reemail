@@ -3019,7 +3019,7 @@ function MailApp() {
                       setSelectedMessage(null);
                       setSidebarOpen(false);
                     }}
-                    className={`mb-0.5 flex w-full items-center gap-3 rounded-s-full rounded-e-md px-4 py-2.5 text-sm transition ${
+                    className={`mb-0.5 flex w-full items-center gap-3 rounded-e-full rounded-s-md px-4 py-2.5 text-sm transition ${
                       active
                         ? "bg-sidebar-hover font-semibold text-foreground"
                         : "text-sidebar-foreground hover:bg-sidebar-hover/60"
