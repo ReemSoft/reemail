@@ -398,34 +398,36 @@ export const unlinkMailbox = createServerFn({ method: "POST" })
       return { ok: false, message: "لا يمكن إلغاء ربط الصندوق الحالي." };
     }
     // The caller must already be in the same group as the target.
-    const { data: membership } = await supabaseAdmin
-      .from("mail_account_links")
-      .select("id")
-      .eq("owner_account_id", claims.sub)
-      .eq("company_id", claims.cid)
-      .eq("linked_account_id", data.linkedAccountId)
-      .maybeSingle();
-    if (!membership) return { ok: false, message: "هذا الصندوق غير مرتبط بحسابك." };
-
-    // Mesh cleanup: drop every edge that touches the removed mailbox inside
-    // this company, so no other member keeps a stale link to it.
-    const [{ error: e1 }, { error: e2 }] = await Promise.all([
+    const [{ data: self }, { data: target }] = await Promise.all([
       supabaseAdmin
-        .from("mail_account_links")
-        .delete()
+        .from("mail_accounts")
+        .select("mailbox_group_id")
+        .eq("id", claims.sub)
         .eq("company_id", claims.cid)
-        .eq("owner_account_id", data.linkedAccountId),
+        .maybeSingle(),
       supabaseAdmin
-        .from("mail_account_links")
-        .delete()
+        .from("mail_accounts")
+        .select("mailbox_group_id")
+        .eq("id", data.linkedAccountId)
         .eq("company_id", claims.cid)
-        .eq("linked_account_id", data.linkedAccountId),
+        .maybeSingle(),
     ]);
-    if (e1 || e2) {
-      console.error("[linked-mailboxes] unlink failed", { code: (e1 ?? e2)?.code });
+    if (!self || !target || self.mailbox_group_id !== target.mailbox_group_id) {
+      return { ok: false, message: "هذا الصندوق غير مرتبط بحسابك." };
+    }
+
+    // Removing a mailbox simply moves it to a fresh group of its own.
+    const { error: splitErr } = await supabaseAdmin
+      .from("mail_accounts")
+      .update({ mailbox_group_id: crypto.randomUUID() })
+      .eq("company_id", claims.cid)
+      .eq("id", data.linkedAccountId);
+    if (splitErr) {
+      console.error("[linked-mailboxes] unlink failed", { code: splitErr.code });
       return { ok: false, message: "تعذر إلغاء الربط." };
     }
     return { ok: true };
+
 
   });
 
