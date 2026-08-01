@@ -46,6 +46,15 @@ export function tr(key: string): string {
   return i18n.t(key) as string;
 }
 
+/**
+ * Interpolating translator: `trf("تم نقل {{n}} رسالة", { n: 3 })`.
+ * Keeps dynamic strings translatable (a template literal can never match a key).
+ */
+export function trf(key: string, vars: Record<string, string | number>): string {
+  return i18n.t(key, vars) as string;
+}
+
+
 export function getCurrentLang(): SupportedLang {
   const lng = (i18n.resolvedLanguage || i18n.language || "ar").slice(0, 2);
   return (SUPPORTED_LANGS as readonly string[]).includes(lng) ? (lng as SupportedLang) : "ar";

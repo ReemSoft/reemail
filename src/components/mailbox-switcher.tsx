@@ -102,7 +102,7 @@ export function MailboxSwitcher({ session }: Props) {
         data: { mailSessionToken: token, targetAccountId: target.accountId, password: pwd },
       });
       if (!res.ok) {
-        toast.error(res.message);
+        toast.error(tr(res.message));
         return;
       }
       activate({
@@ -144,7 +144,7 @@ export function MailboxSwitcher({ session }: Props) {
         },
       });
       if (!res.ok) {
-        toast.error(res.message);
+        toast.error(tr(res.message));
         return;
       }
       toast.success(tr("تم ربط صندوق البريد."));
@@ -172,7 +172,7 @@ export function MailboxSwitcher({ session }: Props) {
         data: { mailSessionToken: token, linkedAccountId: target.accountId },
       });
       if (!res.ok) {
-        toast.error(res.message ?? tr("تعذر إلغاء الربط."));
+        toast.error(tr(res.message ?? "تعذر إلغاء الربط."));
         return;
       }
       removePooledMailbox(target.accountId);

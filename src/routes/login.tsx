@@ -46,7 +46,7 @@ function LoginPage() {
     try {
       const result = await login({ data: { email, password } });
       if (!result.ok) {
-        toast.error(result.message);
+        toast.error(tr(result.message ?? "تعذر تسجيل الدخول."));
         return;
       }
 

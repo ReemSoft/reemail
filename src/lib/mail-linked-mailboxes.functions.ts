@@ -153,7 +153,7 @@ export const linkMailbox = createServerFn({ method: "POST" })
       if ((count ?? 0) >= MAX_LINKED_MAILBOXES) {
         return {
           ok: false,
-          message: `لا يمكن ربط أكثر من ${MAX_LINKED_MAILBOXES} صناديق بريد إضافية.`,
+          message: "لا يمكن ربط أكثر من 5 صناديق بريد إضافية.",
         };
       }
 
@@ -300,19 +300,36 @@ export const linkMailbox = createServerFn({ method: "POST" })
         console.error("[linked-mailboxes] credential persistence failed");
       }
 
-      // Record the link (idempotent).
-      const { error: linkErr } = await supabaseAdmin.from("mail_account_links").upsert(
-        {
-          owner_account_id: claims.sub,
-          linked_account_id: identity.id,
-          company_id: claims.cid,
-        },
-        { onConflict: "owner_account_id,linked_account_id" },
+      // Record the link as a symmetric MESH: every mailbox of the group is
+      // linked to every other one, so switching to a newly added mailbox still
+      // shows (and can switch back to) the whole group — no re-login needed.
+      const { data: groupRows } = await supabaseAdmin
+        .from("mail_account_links")
+        .select("linked_account_id")
+        .eq("owner_account_id", claims.sub)
+        .eq("company_id", claims.cid);
+      const members = Array.from(
+        new Set<string>([
+          claims.sub,
+          ...(groupRows ?? []).map((r) => r.linked_account_id as string),
+          identity.id,
+        ]),
       );
+      const pairs: { owner_account_id: string; linked_account_id: string; company_id: string }[] = [];
+      for (const a of members) {
+        for (const b of members) {
+          if (a === b) continue;
+          pairs.push({ owner_account_id: a, linked_account_id: b, company_id: claims.cid });
+        }
+      }
+      const { error: linkErr } = await supabaseAdmin
+        .from("mail_account_links")
+        .upsert(pairs, { onConflict: "owner_account_id,linked_account_id" });
       if (linkErr) {
         console.error("[linked-mailboxes] link insert failed", { code: linkErr.code });
         return { ok: false, message: "تعذر ربط صندوق البريد." };
       }
+
 
       const { issueMailSessionToken } = await import("@/lib/mail-token.server");
       const tokenInfo = await issueMailSessionToken({
@@ -361,17 +378,39 @@ export const unlinkMailbox = createServerFn({ method: "POST" })
       return { ok: false, message: "INVALID_TOKEN" };
     }
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-    const { error } = await supabaseAdmin
+    if (data.linkedAccountId === claims.sub) {
+      return { ok: false, message: "لا يمكن إلغاء ربط الصندوق الحالي." };
+    }
+    // The caller must already be in the same group as the target.
+    const { data: membership } = await supabaseAdmin
       .from("mail_account_links")
-      .delete()
+      .select("id")
       .eq("owner_account_id", claims.sub)
       .eq("company_id", claims.cid)
-      .eq("linked_account_id", data.linkedAccountId);
-    if (error) {
-      console.error("[linked-mailboxes] unlink failed", { code: error.code });
+      .eq("linked_account_id", data.linkedAccountId)
+      .maybeSingle();
+    if (!membership) return { ok: false, message: "هذا الصندوق غير مرتبط بحسابك." };
+
+    // Mesh cleanup: drop every edge that touches the removed mailbox inside
+    // this company, so no other member keeps a stale link to it.
+    const [{ error: e1 }, { error: e2 }] = await Promise.all([
+      supabaseAdmin
+        .from("mail_account_links")
+        .delete()
+        .eq("company_id", claims.cid)
+        .eq("owner_account_id", data.linkedAccountId),
+      supabaseAdmin
+        .from("mail_account_links")
+        .delete()
+        .eq("company_id", claims.cid)
+        .eq("linked_account_id", data.linkedAccountId),
+    ]);
+    if (e1 || e2) {
+      console.error("[linked-mailboxes] unlink failed", { code: (e1 ?? e2)?.code });
       return { ok: false, message: "تعذر إلغاء الربط." };
     }
     return { ok: true };
+
   });
 
 /**
