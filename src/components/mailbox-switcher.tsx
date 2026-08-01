@@ -230,39 +230,35 @@ export function MailboxSwitcher({ session }: Props) {
             </span>
             <Check className="h-4 w-4 shrink-0 text-primary" />
           </DropdownMenuItem>
-          <DropdownMenuSeparator className="mx-1 my-1" />
           {linked
             .filter((m) => m.accountId !== session.account.id)
-            .map((m, idx, arr) => (
-              <div key={m.accountId}>
-                <DropdownMenuItem
-                  disabled={busy}
-                  className="group mx-1 my-1 flex cursor-pointer items-center gap-2 rounded-md px-3 py-2.5 hover:bg-accent focus:bg-accent"
-                  onSelect={(e) => {
-                    e.preventDefault();
-                    void doSwitch(m);
+            .map((m) => (
+              <DropdownMenuItem
+                key={m.accountId}
+                disabled={busy}
+                className="group mx-1 my-1 flex cursor-pointer items-center gap-2 rounded-md px-3 py-2.5 hover:bg-accent focus:bg-accent"
+                onSelect={(e) => {
+                  e.preventDefault();
+                  void doSwitch(m);
+                }}
+              >
+                <Mail className="h-4 w-4 shrink-0 text-muted-foreground" />
+                <span className={`min-w-0 flex-1 truncate text-xs ${addrAlign}`} dir="ltr">
+                  {m.emailAddress}
+                </span>
+                <button
+                  type="button"
+                  aria-label={tr("إلغاء الربط")}
+                  className="shrink-0 opacity-0 transition group-hover:opacity-100 focus:opacity-100"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void doUnlink(m);
                   }}
                 >
-                  <Mail className="h-4 w-4 shrink-0 text-muted-foreground" />
-                  <span className={`min-w-0 flex-1 truncate text-xs ${addrAlign}`} dir="ltr">
-                    {m.emailAddress}
-                  </span>
-                  <button
-                    type="button"
-                    aria-label={tr("إلغاء الربط")}
-                    className="shrink-0 opacity-0 transition group-hover:opacity-100 focus:opacity-100"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      void doUnlink(m);
-                    }}
-                  >
-                    <Trash2 className="h-3.5 w-3.5 text-destructive" />
-                  </button>
-                </DropdownMenuItem>
-                {idx < arr.length - 1 && <DropdownMenuSeparator className="mx-1 my-1" />}
-              </div>
+                  <Trash2 className="h-3.5 w-3.5 text-destructive" />
+                </button>
+              </DropdownMenuItem>
             ))}
-          <DropdownMenuSeparator className="mx-1 my-1" />
           <DropdownMenuItem
             disabled={atCap || busy}
             className="mx-1 my-1 flex cursor-pointer items-center gap-2 rounded-md px-3 py-2.5 hover:bg-accent focus:bg-accent"
