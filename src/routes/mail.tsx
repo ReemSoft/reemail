@@ -3041,8 +3041,8 @@ function MailApp() {
               })}
           </nav>
 
-          {/* Mobile-only footer: language + sign out live here instead of the top bar */}
-          <div className="mt-auto border-t border-border p-3 sm:hidden">
+          {/* Mobile + tablet footer: language + sign out live here instead of the top bar */}
+          <div className="mt-auto border-t border-border p-3 lg:hidden">
             <div className="flex items-center justify-between gap-2">
               <LanguageSwitcher />
               <button
