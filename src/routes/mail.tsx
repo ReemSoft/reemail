@@ -14,6 +14,8 @@ import {
   randomToken,
   hasRemoteImages,
 } from "@/lib/email-viewer-security";
+import { buildReplyQuoteHtml, buildForwardQuoteHtml } from "@/lib/mail-quote";
+import { splitQuotedHtml } from "@/lib/mail-thread-split";
 
 // Kept as a thin wrapper — the heavy lifting (DOMPurify + CSS url()/@import
 // stripping + anchor hardening) lives in `@/lib/email-viewer-security` and is
@@ -110,6 +112,46 @@ function EmailBodyFrame({ html, className }: { html: string; className?: string 
     </div>
   );
 }
+
+/**
+ * ThreadedEmailBody — renders the newest part of a message on its own and
+ * collapses the quoted history behind a "•••" toggle (Gmail behaviour), so a
+ * long back-and-forth thread reads as distinct turns instead of one wall.
+ */
+function ThreadedEmailBody({ html, className }: { html: string; className?: string }) {
+  const { latest, quoted } = useMemo(() => splitQuotedHtml(html), [html]);
+  const [expanded, setExpanded] = useState(false);
+
+  useEffect(() => {
+    setExpanded(false);
+  }, [html]);
+
+  if (!quoted) return <EmailBodyFrame html={html} className={className} />;
+
+  return (
+    <div className={className}>
+      <EmailBodyFrame html={latest} />
+      <div className="mt-3">
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          aria-expanded={expanded}
+          className="inline-flex items-center gap-2 rounded-md border border-border bg-muted/60 px-2.5 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted"
+        >
+          <span className="tracking-widest leading-none">•••</span>
+          <span>{expanded ? tr("إخفاء الرسائل السابقة") : tr("عرض الرسائل السابقة")}</span>
+        </button>
+        {expanded && (
+          <div className="mt-3 rounded-lg border border-border bg-muted/30 ps-3 pe-2 py-2 border-s-2 border-s-primary/40">
+            <EmailBodyFrame html={quoted} />
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+
 
 import {
   Inbox,
@@ -593,23 +635,6 @@ function stripHtml(html: string): string {
   return tmp.textContent || tmp.innerText || "";
 }
 
-function quoteBody(message: MailMessage): string {
-  const src = stripHtml(message.body || message.preview || "");
-  const dateStr = new Date(message.date).toLocaleString("ar", {
-    dateStyle: "medium",
-    timeStyle: "short",
-  });
-  const from = message.from.name
-    ? `${message.from.name} <${message.from.email}>`
-    : message.from.email;
-  const header = `\n\n\nOn ${dateStr}, ${from} wrote:\n`;
-  const quoted = src
-    .split("\n")
-    .map((l) => `> ${l}`)
-    .join("\n");
-  return header + quoted;
-}
-
 function buildReply(message: MailMessage, myEmail: string, all: boolean): ComposeInitial {
   const subject = message.subject.startsWith("Re:") ? message.subject : `Re: ${message.subject}`;
   const to = message.from.email;
@@ -623,20 +648,32 @@ function buildReply(message: MailMessage, myEmail: string, all: boolean): Compos
     );
     cc = Array.from(new Set(others)).join(", ");
   }
-  return { to, cc, subject, body: quoteBody(message) };
+  const body = buildReplyQuoteHtml(
+    sanitizeEmailHtml(message.body || message.preview || ""),
+    { from: message.from, date: message.date },
+    getCurrentLang(),
+    tr("كتب:"),
+  );
+  return { to, cc, subject, body, bodyIsHtml: true };
 }
 
 function buildForward(message: MailMessage): ComposeInitial {
   const subject = message.subject.startsWith("Fwd:") ? message.subject : `Fwd: ${message.subject}`;
-  const header =
-    `\n\n---------- Forwarded message ----------\n` +
-    `From: ${message.from.name} <${message.from.email}>\n` +
-    `Date: ${new Date(message.date).toLocaleString(getCurrentLang())}\n` +
-    `Subject: ${message.subject}\n` +
-    `To: ${message.to.map((t) => t.email).join(", ")}\n\n` +
-    stripHtml(message.body || message.preview || "");
-  return { to: "", subject, body: header };
+  const body = buildForwardQuoteHtml(
+    sanitizeEmailHtml(message.body || message.preview || ""),
+    { from: message.from, to: message.to, subject: message.subject, date: message.date },
+    getCurrentLang(),
+    {
+      header: `---------- ${tr("رسالة معاد توجيهها")} ----------`,
+      from: `${tr("من:")}`,
+      date: `${tr("التاريخ:")}`,
+      subject: `${tr("الموضوع:")}`,
+      to: `${tr("إلى:")}`,
+    },
+  );
+  return { to: "", subject, body, bodyIsHtml: true };
 }
+
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -3872,7 +3909,7 @@ function MessageView({
               </div>
             </div>
 
-            <EmailBodyFrame
+            <ThreadedEmailBody
               html={sanitizeEmailHtml(message.body || message.preview || "")}
               className="mt-6"
             />
