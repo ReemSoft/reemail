@@ -456,32 +456,66 @@ export const switchMailbox = createServerFn({ method: "POST" })
         return { ok: false, message: "إعدادات هذا الصندوق غير مكتملة." };
       }
 
-      const bridgeUrl = process.env.MAIL_BRIDGE_URL;
-      const bridgeKey = process.env.MAIL_BRIDGE_SECRET;
-      if (!bridgeUrl || !bridgeKey) return { ok: false, message: "خادم البريد غير مهيأ." };
-      try {
-        const res = await fetch(`${bridgeUrl.replace(/\/$/, "")}/api/verify`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "X-Bridge-Key": bridgeKey },
-          body: JSON.stringify({
-            account: {
-              email_address: cfg.emailAddress,
-              display_name: cfg.displayName,
-              imap_host: cfg.imapHost,
-              imap_port: cfg.imapPort,
-              imap_secure: cfg.imapSecure,
-              smtp_host: cfg.smtpHost,
-              smtp_port: cfg.smtpPort,
-              smtp_secure: cfg.smtpSecure,
-            },
-            password: data.password,
-          }),
-        });
-        const json = (await res.json().catch(() => ({}))) as { ok?: boolean };
-        if (!res.ok || !json.ok) return { ok: false, message: "كلمة المرور غير صحيحة." };
-      } catch {
-        return { ok: false, message: "تعذر الاتصال بخادم البريد." };
+      // Instant path: no password from the browser → use the credentials that
+      // were already verified (and encrypted) when this mailbox was linked.
+      // Nothing new is exposed: the caller already proved membership in this
+      // mailbox group with a signed mail session token.
+      let effectivePassword = data.password;
+      if (!effectivePassword) {
+        try {
+          const { loadDecryptedPasswordForAccount } = await import("@/lib/mail-credentials.server");
+          effectivePassword = await loadDecryptedPasswordForAccount(
+            supabaseAdmin,
+            cfg.accountId,
+            cfg.companyId,
+          );
+        } catch {
+          // No stored credentials → the UI falls back to asking once.
+          return { ok: false, message: "CREDENTIALS_PENDING" };
+        }
+      } else {
+        // Explicit password → re-verify it against the real IMAP server.
+        const bridgeUrl = process.env.MAIL_BRIDGE_URL;
+        const bridgeKey = process.env.MAIL_BRIDGE_SECRET;
+        if (!bridgeUrl || !bridgeKey) return { ok: false, message: "خادم البريد غير مهيأ." };
+        try {
+          const res = await fetch(`${bridgeUrl.replace(/\/$/, "")}/api/verify`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "X-Bridge-Key": bridgeKey },
+            body: JSON.stringify({
+              account: {
+                email_address: cfg.emailAddress,
+                display_name: cfg.displayName,
+                imap_host: cfg.imapHost,
+                imap_port: cfg.imapPort,
+                imap_secure: cfg.imapSecure,
+                smtp_host: cfg.smtpHost,
+                smtp_port: cfg.smtpPort,
+                smtp_secure: cfg.smtpSecure,
+              },
+              password: effectivePassword,
+            }),
+          });
+          const json = (await res.json().catch(() => ({}))) as { ok?: boolean };
+          if (!res.ok || !json.ok) return { ok: false, message: "كلمة المرور غير صحيحة." };
+        } catch {
+          return { ok: false, message: "تعذر الاتصال بخادم البريد." };
+        }
+        try {
+          const { persistCredentialsAfterSuccessfulVerify } = await import(
+            "@/lib/mail-credentials.server"
+          );
+          await persistCredentialsAfterSuccessfulVerify(
+            supabaseAdmin,
+            cfg.accountId,
+            cfg.companyId,
+            effectivePassword,
+          );
+        } catch {
+          console.error("[linked-mailboxes] switch credential refresh failed");
+        }
       }
+
 
       const { issueMailSessionToken } = await import("@/lib/mail-token.server");
       const tokenInfo = await issueMailSessionToken({
