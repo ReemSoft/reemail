@@ -1,13 +1,34 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import {
+import type { MailSession } from "@/lib/mail-session";
+
+// Node's ESM has no window; polyfill before importing module under test.
+class MemStorage {
+  private m = new Map<string, string>();
+  getItem(k: string) {
+    return this.m.has(k) ? this.m.get(k)! : null;
+  }
+  setItem(k: string, v: string) {
+    this.m.set(k, v);
+  }
+  removeItem(k: string) {
+    this.m.delete(k);
+  }
+  clear() {
+    this.m.clear();
+  }
+}
+(globalThis as any).window = globalThis;
+(globalThis as any).sessionStorage = new MemStorage();
+
+const {
   clearMailSession,
   getMailSession,
   listPooledMailboxes,
   removePooledMailbox,
   saveMailSession,
   setActiveMailbox,
-  type MailSession,
-} from "@/lib/mail-session";
+} = await import("@/lib/mail-session");
+
 
 function mk(id: string, email: string): MailSession {
   return {
