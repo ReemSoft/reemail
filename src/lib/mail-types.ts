@@ -58,6 +58,13 @@ export interface MailMessage {
    * a Drafts folder message for edit.
    */
   uidValidity?: string;
+  /**
+   * Inline (cid:) images the bridge did not embed as data URIs because they
+   * exceeded the configured inline size limit. The viewer streams them
+   * through the protected /api/mail-attachment route instead of rendering a
+   * broken image.
+   */
+  inlineParts?: { cid: string; part: string; mimeType: string; size: number }[];
 }
 
 export interface FolderCount {
