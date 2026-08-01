@@ -593,23 +593,6 @@ function stripHtml(html: string): string {
   return tmp.textContent || tmp.innerText || "";
 }
 
-function quoteBody(message: MailMessage): string {
-  const src = stripHtml(message.body || message.preview || "");
-  const dateStr = new Date(message.date).toLocaleString("ar", {
-    dateStyle: "medium",
-    timeStyle: "short",
-  });
-  const from = message.from.name
-    ? `${message.from.name} <${message.from.email}>`
-    : message.from.email;
-  const header = `\n\n\nOn ${dateStr}, ${from} wrote:\n`;
-  const quoted = src
-    .split("\n")
-    .map((l) => `> ${l}`)
-    .join("\n");
-  return header + quoted;
-}
-
 function buildReply(message: MailMessage, myEmail: string, all: boolean): ComposeInitial {
   const subject = message.subject.startsWith("Re:") ? message.subject : `Re: ${message.subject}`;
   const to = message.from.email;
@@ -623,20 +606,32 @@ function buildReply(message: MailMessage, myEmail: string, all: boolean): Compos
     );
     cc = Array.from(new Set(others)).join(", ");
   }
-  return { to, cc, subject, body: quoteBody(message) };
+  const body = buildReplyQuoteHtml(
+    sanitizeEmailHtml(message.body || message.preview || ""),
+    { from: message.from, date: message.date },
+    getCurrentLang(),
+    tr("كتب:"),
+  );
+  return { to, cc, subject, body, bodyIsHtml: true };
 }
 
 function buildForward(message: MailMessage): ComposeInitial {
   const subject = message.subject.startsWith("Fwd:") ? message.subject : `Fwd: ${message.subject}`;
-  const header =
-    `\n\n---------- Forwarded message ----------\n` +
-    `From: ${message.from.name} <${message.from.email}>\n` +
-    `Date: ${new Date(message.date).toLocaleString(getCurrentLang())}\n` +
-    `Subject: ${message.subject}\n` +
-    `To: ${message.to.map((t) => t.email).join(", ")}\n\n` +
-    stripHtml(message.body || message.preview || "");
-  return { to: "", subject, body: header };
+  const body = buildForwardQuoteHtml(
+    sanitizeEmailHtml(message.body || message.preview || ""),
+    { from: message.from, to: message.to, subject: message.subject, date: message.date },
+    getCurrentLang(),
+    {
+      header: `---------- ${tr("رسالة معاد توجيهها")} ----------`,
+      from: `${tr("من:")}`,
+      date: `${tr("التاريخ:")}`,
+      subject: `${tr("الموضوع:")}`,
+      to: `${tr("إلى:")}`,
+    },
+  );
+  return { to: "", subject, body, bodyIsHtml: true };
 }
+
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
