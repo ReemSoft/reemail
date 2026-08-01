@@ -49,7 +49,7 @@ export function ConfirmProvider({ children }: { children: React.ReactNode }) {
       setRequest({
         id: Date.now(),
         resolve,
-        title: "تأكيد",
+        title: tr("تأكيد"),
         description: tr("هل أنت متأكد؟"),
         confirmLabel: tr("تأكيد"),
         cancelLabel: tr("إلغاء"),

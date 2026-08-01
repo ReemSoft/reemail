@@ -507,7 +507,7 @@ function AccountsTab({
 
   async function handleDelete(id: string) {
     const confirmed = await confirm({
-      title: "حذف الحساب",
+      title: tr("حذف الحساب"),
       description: tr("هل أنت متأكد من حذف هذا الحساب؟ لا يمكن التراجع عن هذا الإجراء."),
       confirmLabel: tr("حذف"),
       cancelLabel: tr("إلغاء"),
@@ -872,7 +872,7 @@ function DomainsTab({
 
   async function handleDelete(id: string) {
     const confirmed = await confirm({
-      title: "حذف إعدادات الدومين",
+      title: tr("حذف إعدادات الدومين"),
       description: tr("هل أنت متأكد من حذف إعدادات هذا الدومين؟ لا يمكن التراجع عن هذا الإجراء."),
       confirmLabel: tr("حذف"),
       cancelLabel: tr("إلغاء"),
