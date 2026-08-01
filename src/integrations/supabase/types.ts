@@ -312,6 +312,74 @@ export type Database = {
           },
         ]
       }
+      mail_message_body_cache: {
+        Row: {
+          account_id: string
+          body_html: string | null
+          body_text: string | null
+          byte_size: number
+          cache_version: number
+          cached_at: string
+          canonical: string
+          company_id: string
+          created_at: string
+          id: string
+          inline_parts: Json
+          last_accessed_at: string
+          oversize: boolean
+          preview: string | null
+          uid: number
+          uid_validity: number
+          updated_at: string
+        }
+        Insert: {
+          account_id: string
+          body_html?: string | null
+          body_text?: string | null
+          byte_size?: number
+          cache_version?: number
+          cached_at?: string
+          canonical: string
+          company_id: string
+          created_at?: string
+          id?: string
+          inline_parts?: Json
+          last_accessed_at?: string
+          oversize?: boolean
+          preview?: string | null
+          uid: number
+          uid_validity: number
+          updated_at?: string
+        }
+        Update: {
+          account_id?: string
+          body_html?: string | null
+          body_text?: string | null
+          byte_size?: number
+          cache_version?: number
+          cached_at?: string
+          canonical?: string
+          company_id?: string
+          created_at?: string
+          id?: string
+          inline_parts?: Json
+          last_accessed_at?: string
+          oversize?: boolean
+          preview?: string | null
+          uid?: number
+          uid_validity?: number
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "mail_message_body_cache_account_company_fk"
+            columns: ["account_id", "company_id"]
+            isOneToOne: false
+            referencedRelation: "mail_accounts"
+            referencedColumns: ["id", "company_id"]
+          },
+        ]
+      }
       mail_messages: {
         Row: {
           account_id: string
