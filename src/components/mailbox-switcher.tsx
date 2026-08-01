@@ -216,12 +216,12 @@ export function MailboxSwitcher({ session }: Props) {
             <ChevronDown className="h-3.5 w-3.5 shrink-0" />
           </button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-80 p-2">
-          <DropdownMenuLabel className="px-2 pb-2 text-start text-xs text-muted-foreground">
+        <DropdownMenuContent align="end" className="w-80 p-1.5">
+          <DropdownMenuLabel className="px-2 pb-1.5 text-start text-xs text-muted-foreground">
             {tr("صناديق البريد")}
           </DropdownMenuLabel>
           <DropdownMenuItem
-            className="mx-1 my-1 flex cursor-default items-center gap-2 rounded-md bg-accent/50 px-3 py-2.5"
+            className="mx-1 flex cursor-default items-center gap-2 rounded-md bg-accent/50 px-2 py-1.5"
             onSelect={(e) => e.preventDefault()}
           >
             <Mail className="h-4 w-4 shrink-0 text-primary" />
@@ -236,7 +236,7 @@ export function MailboxSwitcher({ session }: Props) {
               <DropdownMenuItem
                 key={m.accountId}
                 disabled={busy}
-                className="group mx-1 my-1 flex cursor-pointer items-center gap-2 rounded-md px-3 py-2.5 hover:bg-accent focus:bg-accent"
+                className="group mx-1 flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 hover:bg-accent focus:bg-accent"
                 onSelect={(e) => {
                   e.preventDefault();
                   void doSwitch(m);
@@ -259,9 +259,10 @@ export function MailboxSwitcher({ session }: Props) {
                 </button>
               </DropdownMenuItem>
             ))}
+          <DropdownMenuSeparator className="mx-1 my-1" />
           <DropdownMenuItem
             disabled={atCap || busy}
-            className="mx-1 my-1 flex cursor-pointer items-center gap-2 rounded-md px-3 py-2.5 hover:bg-accent focus:bg-accent"
+            className="mx-1 flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 hover:bg-accent focus:bg-accent"
             onSelect={(e) => {
               e.preventDefault();
               if (!atCap) setAddOpen(true);
