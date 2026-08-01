@@ -106,6 +106,58 @@ export type Database = {
           },
         ]
       }
+      mail_account_links: {
+        Row: {
+          company_id: string
+          created_at: string
+          id: string
+          label: string | null
+          linked_account_id: string
+          owner_account_id: string
+          updated_at: string
+        }
+        Insert: {
+          company_id: string
+          created_at?: string
+          id?: string
+          label?: string | null
+          linked_account_id: string
+          owner_account_id: string
+          updated_at?: string
+        }
+        Update: {
+          company_id?: string
+          created_at?: string
+          id?: string
+          label?: string | null
+          linked_account_id?: string
+          owner_account_id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "mail_account_links_company_id_fkey"
+            columns: ["company_id"]
+            isOneToOne: false
+            referencedRelation: "companies"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "mail_account_links_linked_account_id_fkey"
+            columns: ["linked_account_id"]
+            isOneToOne: false
+            referencedRelation: "mail_accounts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "mail_account_links_owner_account_id_fkey"
+            columns: ["owner_account_id"]
+            isOneToOne: false
+            referencedRelation: "mail_accounts"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       mail_accounts: {
         Row: {
           company_id: string

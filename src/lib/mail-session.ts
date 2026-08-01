@@ -34,11 +34,46 @@ export interface MailSession {
 }
 
 const KEY = "mailmaestro.mail.session";
+/** Phase B: pool of mailboxes signed in during this tab (active + linked). */
+const POOL_KEY = "mailmaestro.mail.mailboxes";
 
 export function saveMailSession(session: MailSession) {
   if (typeof window === "undefined") return;
   sessionStorage.setItem(KEY, JSON.stringify(session));
+  upsertPooledMailbox(session);
 }
+
+/** All mailboxes whose password is available in this tab. */
+export function listPooledMailboxes(): MailSession[] {
+  if (typeof window === "undefined") return [];
+  const raw = sessionStorage.getItem(POOL_KEY);
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as MailSession[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function upsertPooledMailbox(session: MailSession) {
+  if (typeof window === "undefined") return;
+  const pool = listPooledMailboxes().filter((s) => s.account.id !== session.account.id);
+  pool.push(session);
+  sessionStorage.setItem(POOL_KEY, JSON.stringify(pool));
+}
+
+export function removePooledMailbox(accountId: string) {
+  if (typeof window === "undefined") return;
+  const pool = listPooledMailboxes().filter((s) => s.account.id !== accountId);
+  sessionStorage.setItem(POOL_KEY, JSON.stringify(pool));
+}
+
+/** Makes `session` the active mailbox (and keeps it in the pool). */
+export function setActiveMailbox(session: MailSession) {
+  saveMailSession(session);
+}
+
 
 export function getMailSession(): MailSession | null {
   if (typeof window === "undefined") return null;
@@ -57,9 +92,12 @@ export function getMailSession(): MailSession | null {
 
 export function clearMailSession() {
   if (typeof window === "undefined") return;
-  // Wipes password + token together.
+  // Wipes password + token together — for the active mailbox AND every
+  // linked mailbox signed in during this tab.
   sessionStorage.removeItem(KEY);
+  sessionStorage.removeItem(POOL_KEY);
 }
+
 
 /**
  * Replaces ONLY the token pair after a silent renewal. Keeps the password and

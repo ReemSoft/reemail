@@ -277,6 +277,8 @@ import type { MailFolder, MailMessage } from "@/lib/mail-types";
 import { buildEmailHtmlDocument, htmlToPlainText } from "@/lib/mail-compose-html";
 
 import { clearMailSession, getMailSession, type MailSession } from "@/lib/mail-session";
+import { MailboxSwitcher } from "@/components/mailbox-switcher";
+
 import { useMailServerFn, useMailSessionRenewal } from "@/hooks/use-mail-session-renewal";
 import {
   hydrateContactSuggestions,
@@ -2919,13 +2921,10 @@ function MailApp() {
         </div>
 
         <div className="ms-auto flex shrink-0 items-center gap-1.5">
-          <div
-            className="hidden max-w-[200px] truncate rounded-lg bg-muted/60 px-3 py-1.5 text-xs text-muted-foreground md:inline-block"
-            dir="ltr"
-            title={session.account.email_address}
-          >
-            {session.account.email_address}
+          <div className="hidden md:block">
+            <MailboxSwitcher session={session} />
           </div>
+
           <button
             onClick={refresh}
             disabled={refreshing}
