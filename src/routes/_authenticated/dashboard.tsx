@@ -38,12 +38,13 @@ interface MailAccount {
   id: string;
   email_address: string;
   display_name: string | null;
-  imap_host: string;
-  imap_port: number;
-  imap_secure: boolean;
-  smtp_host: string;
-  smtp_port: number;
-  smtp_secure: boolean;
+  imap_host: string | null;
+  imap_port: number | null;
+  imap_secure: boolean | null;
+  smtp_host: string | null;
+  smtp_port: number | null;
+  smtp_secure: boolean | null;
+  source_domain_id: string | null;
   is_default: boolean;
 }
 
