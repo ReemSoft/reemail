@@ -94,34 +94,36 @@ export const listLinkedMailboxes = createServerFn({ method: "POST" })
         return { ok: false, message: "INVALID_TOKEN" };
       }
       const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-      const { data: rows, error } = await supabaseAdmin
-        .from("mail_account_links")
-        .select("linked_account_id, mail_accounts!mail_account_links_linked_account_id_fkey(id, email_address, display_name)")
-        .eq("owner_account_id", claims.sub)
+      const { data: self, error: selfErr } = await supabaseAdmin
+        .from("mail_accounts")
+        .select("mailbox_group_id")
+        .eq("id", claims.sub)
         .eq("company_id", claims.cid)
+        .maybeSingle();
+      if (selfErr || !self) {
+        console.error("[linked-mailboxes] self lookup failed", { code: selfErr?.code });
+        return { ok: false, message: "تعذر تحميل الصناديق المرتبطة." };
+      }
+      const { data: rows, error } = await supabaseAdmin
+        .from("mail_accounts")
+        .select("id, email_address, display_name")
+        .eq("company_id", claims.cid)
+        .eq("mailbox_group_id", self.mailbox_group_id)
+        .neq("id", claims.sub)
         .order("created_at", { ascending: true });
       if (error) {
         console.error("[linked-mailboxes] list failed", { code: error.code });
         return { ok: false, message: "تعذر تحميل الصناديق المرتبطة." };
       }
-      const mailboxes: LinkedMailboxSummary[] = (rows ?? [])
-        .map((r) => {
-          const acc = r.mail_accounts as unknown as {
-            id: string;
-            email_address: string;
-            display_name: string | null;
-          } | null;
-          if (!acc) return null;
-          return {
-            accountId: acc.id,
-            emailAddress: acc.email_address,
-            displayName: acc.display_name ?? null,
-          };
-        })
-        .filter((x): x is LinkedMailboxSummary => x !== null);
+      const mailboxes: LinkedMailboxSummary[] = (rows ?? []).map((acc) => ({
+        accountId: acc.id,
+        emailAddress: acc.email_address,
+        displayName: acc.display_name ?? null,
+      }));
       return { ok: true, mailboxes, max: MAX_LINKED_MAILBOXES };
     },
   );
+
 
 export const linkMailbox = createServerFn({ method: "POST" })
   .inputValidator((v: z.input<typeof LinkSchema>) => LinkSchema.parse(v))
@@ -147,12 +149,26 @@ export const linkMailbox = createServerFn({ method: "POST" })
         return { ok: false, message: "هذا هو صندوق البريد الحالي." };
       }
 
-      // Cap check.
+      // Resolve the caller's mailbox group (the single source of truth).
+      const { data: self, error: selfErr } = await supabaseAdmin
+        .from("mail_accounts")
+        .select("mailbox_group_id")
+        .eq("id", claims.sub)
+        .eq("company_id", claims.cid)
+        .maybeSingle();
+      if (selfErr || !self) {
+        console.error("[linked-mailboxes] self lookup failed", { code: selfErr?.code });
+        return { ok: false, message: "تعذر التحقق من صندوق البريد الحالي." };
+      }
+      const groupId = self.mailbox_group_id;
+
+      // Cap check: group size (excluding the caller) must stay under the max.
       const { count, error: countErr } = await supabaseAdmin
-        .from("mail_account_links")
+        .from("mail_accounts")
         .select("id", { count: "exact", head: true })
-        .eq("owner_account_id", claims.sub)
-        .eq("company_id", claims.cid);
+        .eq("company_id", claims.cid)
+        .eq("mailbox_group_id", groupId)
+        .neq("id", claims.sub);
       if (countErr) {
         console.error("[linked-mailboxes] count failed", { code: countErr.code });
         return { ok: false, message: "تعذر التحقق من عدد الصناديق المرتبطة." };
@@ -163,6 +179,7 @@ export const linkMailbox = createServerFn({ method: "POST" })
           message: "لا يمكن ربط أكثر من 5 صناديق بريد إضافية.",
         };
       }
+
 
       // Resolve connection settings BEFORE verifying.
       const { data: existing, error: existingErr } = await supabaseAdmin
@@ -307,35 +324,27 @@ export const linkMailbox = createServerFn({ method: "POST" })
         console.error("[linked-mailboxes] credential persistence failed");
       }
 
-      // Record the link as a symmetric MESH: every mailbox of the group is
-      // linked to every other one, so switching to a newly added mailbox still
-      // shows (and can switch back to) the whole group — no re-login needed.
-      const { data: groupRows } = await supabaseAdmin
-        .from("mail_account_links")
-        .select("linked_account_id")
-        .eq("owner_account_id", claims.sub)
-        .eq("company_id", claims.cid);
-      const members = Array.from(
-        new Set<string>([
-          claims.sub,
-          ...(groupRows ?? []).map((r) => r.linked_account_id as string),
-          identity.id,
-        ]),
-      );
-      const pairs: { owner_account_id: string; linked_account_id: string; company_id: string }[] = [];
-      for (const a of members) {
-        for (const b of members) {
-          if (a === b) continue;
-          pairs.push({ owner_account_id: a, linked_account_id: b, company_id: claims.cid });
+      // Join the target mailbox (and everything already grouped with it) into
+      // the caller's group. Group membership is symmetric by construction, so
+      // every member sees every other member — no pairwise edges to maintain.
+      const { data: target } = await supabaseAdmin
+        .from("mail_accounts")
+        .select("mailbox_group_id")
+        .eq("id", identity.id)
+        .eq("company_id", claims.cid)
+        .maybeSingle();
+      if (target && target.mailbox_group_id !== groupId) {
+        const { error: mergeErr } = await supabaseAdmin
+          .from("mail_accounts")
+          .update({ mailbox_group_id: groupId })
+          .eq("company_id", claims.cid)
+          .eq("mailbox_group_id", target.mailbox_group_id);
+        if (mergeErr) {
+          console.error("[linked-mailboxes] group merge failed", { code: mergeErr.code });
+          return { ok: false, message: "تعذر ربط صندوق البريد." };
         }
       }
-      const { error: linkErr } = await supabaseAdmin
-        .from("mail_account_links")
-        .upsert(pairs, { onConflict: "owner_account_id,linked_account_id" });
-      if (linkErr) {
-        console.error("[linked-mailboxes] link insert failed", { code: linkErr.code });
-        return { ok: false, message: "تعذر ربط صندوق البريد." };
-      }
+
 
 
       const { issueMailSessionToken } = await import("@/lib/mail-token.server");
@@ -389,34 +398,36 @@ export const unlinkMailbox = createServerFn({ method: "POST" })
       return { ok: false, message: "لا يمكن إلغاء ربط الصندوق الحالي." };
     }
     // The caller must already be in the same group as the target.
-    const { data: membership } = await supabaseAdmin
-      .from("mail_account_links")
-      .select("id")
-      .eq("owner_account_id", claims.sub)
-      .eq("company_id", claims.cid)
-      .eq("linked_account_id", data.linkedAccountId)
-      .maybeSingle();
-    if (!membership) return { ok: false, message: "هذا الصندوق غير مرتبط بحسابك." };
-
-    // Mesh cleanup: drop every edge that touches the removed mailbox inside
-    // this company, so no other member keeps a stale link to it.
-    const [{ error: e1 }, { error: e2 }] = await Promise.all([
+    const [{ data: self }, { data: target }] = await Promise.all([
       supabaseAdmin
-        .from("mail_account_links")
-        .delete()
+        .from("mail_accounts")
+        .select("mailbox_group_id")
+        .eq("id", claims.sub)
         .eq("company_id", claims.cid)
-        .eq("owner_account_id", data.linkedAccountId),
+        .maybeSingle(),
       supabaseAdmin
-        .from("mail_account_links")
-        .delete()
+        .from("mail_accounts")
+        .select("mailbox_group_id")
+        .eq("id", data.linkedAccountId)
         .eq("company_id", claims.cid)
-        .eq("linked_account_id", data.linkedAccountId),
+        .maybeSingle(),
     ]);
-    if (e1 || e2) {
-      console.error("[linked-mailboxes] unlink failed", { code: (e1 ?? e2)?.code });
+    if (!self || !target || self.mailbox_group_id !== target.mailbox_group_id) {
+      return { ok: false, message: "هذا الصندوق غير مرتبط بحسابك." };
+    }
+
+    // Removing a mailbox simply moves it to a fresh group of its own.
+    const { error: splitErr } = await supabaseAdmin
+      .from("mail_accounts")
+      .update({ mailbox_group_id: crypto.randomUUID() })
+      .eq("company_id", claims.cid)
+      .eq("id", data.linkedAccountId);
+    if (splitErr) {
+      console.error("[linked-mailboxes] unlink failed", { code: splitErr.code });
       return { ok: false, message: "تعذر إلغاء الربط." };
     }
     return { ok: true };
+
 
   });
 
@@ -440,19 +451,29 @@ export const switchMailbox = createServerFn({ method: "POST" })
       const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
 
       if (data.targetAccountId !== claims.sub) {
-        const { data: link, error } = await supabaseAdmin
-          .from("mail_account_links")
-          .select("id")
-          .eq("owner_account_id", claims.sub)
-          .eq("company_id", claims.cid)
-          .eq("linked_account_id", data.targetAccountId)
-          .maybeSingle();
+        const [{ data: self, error }, { data: target }] = await Promise.all([
+          supabaseAdmin
+            .from("mail_accounts")
+            .select("mailbox_group_id")
+            .eq("id", claims.sub)
+            .eq("company_id", claims.cid)
+            .maybeSingle(),
+          supabaseAdmin
+            .from("mail_accounts")
+            .select("mailbox_group_id")
+            .eq("id", data.targetAccountId)
+            .eq("company_id", claims.cid)
+            .maybeSingle(),
+        ]);
         if (error) {
           console.error("[linked-mailboxes] switch lookup failed", { code: error.code });
           return { ok: false, message: "تعذر تبديل صندوق البريد." };
         }
-        if (!link) return { ok: false, message: "هذا الصندوق غير مرتبط بحسابك." };
+        if (!self || !target || self.mailbox_group_id !== target.mailbox_group_id) {
+          return { ok: false, message: "هذا الصندوق غير مرتبط بحسابك." };
+        }
       }
+
 
       const { resolveMailConfigForAccount } = await import("@/lib/mail-config.server");
       let cfg;
