@@ -2852,7 +2852,7 @@ function MailApp() {
               <X className="h-3.5 w-3.5" />
             </button>
           )}
-          <DropdownMenu dir={uiDir}>
+          <DropdownMenu dir={uiDir} onOpenChange={setSearchDropdownOpen}>
             <DropdownMenuTrigger asChild>
               <button
                 className={`flex shrink-0 items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium transition ${
