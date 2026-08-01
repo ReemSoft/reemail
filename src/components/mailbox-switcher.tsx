@@ -225,7 +225,7 @@ export function MailboxSwitcher({ session }: Props) {
             onSelect={(e) => e.preventDefault()}
           >
             <Mail className="h-4 w-4 shrink-0 text-primary" />
-            <span className="min-w-0 flex-1 truncate text-start text-xs" dir="ltr">
+            <span className={`min-w-0 flex-1 truncate text-xs ${addrAlign}`} dir="ltr">
               {session.account.email_address}
             </span>
             <Check className="h-4 w-4 shrink-0 text-primary" />
@@ -243,7 +243,7 @@ export function MailboxSwitcher({ session }: Props) {
                 }}
               >
                 <Mail className="h-4 w-4 shrink-0 text-muted-foreground" />
-                <span className="min-w-0 flex-1 truncate text-start text-xs" dir="ltr">
+                <span className={`min-w-0 flex-1 truncate text-xs ${addrAlign}`} dir="ltr">
                   {m.emailAddress}
                 </span>
                 <button
