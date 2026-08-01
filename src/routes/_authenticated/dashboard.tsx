@@ -539,13 +539,24 @@ function AccountsTab({
                       )}
                     </div>
                     <p className="mt-0.5 truncate text-xs text-muted-foreground">
-                      <span dir="ltr" className="mx-1">
-                        IMAP {a.imap_host}:{a.imap_port}
-                      </span>
-                      ·
-                      <span dir="ltr" className="mx-1">
-                        SMTP {a.smtp_host}:{a.smtp_port}
-                      </span>
+                      {a.imap_host ? (
+                        <>
+                          <span dir="ltr" className="mx-1">
+                            IMAP {a.imap_host}:{a.imap_port}
+                          </span>
+                          ·
+                          <span dir="ltr" className="mx-1">
+                            SMTP {a.smtp_host}:{a.smtp_port}
+                          </span>
+                        </>
+                      ) : (
+                        <span>
+                          {tr("يرث إعدادات قالب الدومين")}
+                          {a.source_domain_id
+                            ? ` @${domains.find((d) => d.id === a.source_domain_id)?.domain ?? ""}`
+                            : ""}
+                        </span>
+                      )}
                     </p>
                   </div>
                   <button
