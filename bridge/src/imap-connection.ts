@@ -1,0 +1,228 @@
+/**
+ * MAILMAESTRO_IMAP_SINGLE_CONNECTION
+ *
+ * ONE reusable IMAP connection per active account (NOT a pool, NOT a
+ * connection per folder). Standard behaviour of desktop mail clients:
+ *
+ *   * the TCP + TLS + LOGIN handshake happens once per account, then every
+ *     subsequent request rides the same authenticated session
+ *   * requests are serialized per account with `getMailboxLock`
+ *   * the connection is closed with `logout()` after 5 minutes of idleness
+ *   * a single transparent reconnect + retry when the socket is dead
+ *   * the LIST response is cached for 5 minutes per account
+ *
+ * Nothing here changes any API contract: callers still hand us an account +
+ * password and get an ImapFlow client with the requested mailbox locked.
+ */
+import { ImapFlow, type ListResponse } from "imapflow";
+import type { MailAccount } from "./types.js";
+import { makeImapClient } from "./imap.js";
+
+const IDLE_CLOSE_MS = Number(process.env.IMAP_CONN_IDLE_MS || 5 * 60_000);
+const LIST_CACHE_MS = Number(process.env.IMAP_LIST_CACHE_MS || 5 * 60_000);
+
+export const TIMING_ENABLED = /^(1|true|yes|on)$/i.test(process.env.MAIL_BRIDGE_TIMING || "");
+
+interface Entry {
+  client: ImapFlow;
+  /** Serializes every operation that runs on this shared connection. */
+  chain: Promise<unknown>;
+  idleTimer?: NodeJS.Timeout;
+  mailboxes?: { at: number; value: ListResponse[] };
+  /** Credential fingerprint — a password change forces a fresh connection. */
+  fingerprint: string;
+}
+
+const entries = new Map<string, Entry>();
+const pending = new Map<string, Promise<Entry>>();
+
+/** Account identity key. Host + user only — never logged. */
+function keyFor(account: MailAccount): string {
+  return `${account.imap_host.toLowerCase().trim()}:${account.imap_port}:${account.email_address.toLowerCase().trim()}`;
+}
+
+function fingerprintFor(account: MailAccount, password: string): string {
+  // Cheap non-reversible-enough marker so a rotated password invalidates the
+  // cached session. Never exposed anywhere.
+  let h = 0;
+  const s = `${account.imap_secure}|${password}`;
+  for (let i = 0; i < s.length; i++) h = (Math.imul(31, h) + s.charCodeAt(i)) | 0;
+  return String(h);
+}
+
+function armIdleTimer(key: string, entry: Entry) {
+  if (entry.idleTimer) clearTimeout(entry.idleTimer);
+  entry.idleTimer = setTimeout(() => {
+    if (entries.get(key) === entry) entries.delete(key);
+    entry.client.logout().catch(() => {});
+  }, IDLE_CLOSE_MS);
+  entry.idleTimer.unref?.();
+}
+
+function dropEntry(key: string, entry: Entry) {
+  if (entries.get(key) === entry) entries.delete(key);
+  if (entry.idleTimer) clearTimeout(entry.idleTimer);
+  entry.client.logout().catch(() => {
+    try {
+      entry.client.close();
+    } catch {
+      /* already gone */
+    }
+  });
+}
+
+async function openEntry(key: string, account: MailAccount, password: string): Promise<Entry> {
+  const existing = pending.get(key);
+  if (existing) return existing;
+  const p = (async () => {
+    const client = makeImapClient(account, password);
+    const t0 = Date.now();
+    await client.connect();
+    if (TIMING_ENABLED) console.log(`[imap-timing] connect ${Date.now() - t0}ms`);
+    const entry: Entry = {
+      client,
+      chain: Promise.resolve(),
+      fingerprint: fingerprintFor(account, password),
+    };
+    const onGone = () => {
+      if (entries.get(key) === entry) entries.delete(key);
+    };
+    client.on("close", onGone);
+    client.on("error", onGone);
+    entries.set(key, entry);
+    armIdleTimer(key, entry);
+    return entry;
+  })();
+  pending.set(key, p);
+  try {
+    return await p;
+  } finally {
+    pending.delete(key);
+  }
+}
+
+async function getEntry(account: MailAccount, password: string): Promise<Entry> {
+  const key = keyFor(account);
+  const fp = fingerprintFor(account, password);
+  const cached = entries.get(key);
+  if (cached) {
+    if (cached.fingerprint !== fp || !cached.client.usable) {
+      dropEntry(key, cached);
+    } else {
+      armIdleTimer(key, cached);
+      return cached;
+    }
+  }
+  return openEntry(key, account, password);
+}
+
+/** Cached LIST per account (5 min). Invalidated on reconnect. */
+export async function getMailboxesCached(
+  account: MailAccount,
+  password: string,
+): Promise<ListResponse[]> {
+  const entry = await getEntry(account, password);
+  const now = Date.now();
+  if (entry.mailboxes && now - entry.mailboxes.at < LIST_CACHE_MS) return entry.mailboxes.value;
+  const t0 = Date.now();
+  const value = await entry.client.list();
+  if (TIMING_ENABLED) console.log(`[imap-timing] list ${Date.now() - t0}ms`);
+  entry.mailboxes = { at: Date.now(), value };
+  return value;
+}
+
+export function invalidateMailboxCache(account: MailAccount) {
+  const e = entries.get(keyFor(account));
+  if (e) e.mailboxes = undefined;
+}
+
+function isConnectionError(err: unknown): boolean {
+  const msg = String((err as any)?.message || err || "").toLowerCase();
+  const code = String((err as any)?.code || "").toUpperCase();
+  return (
+    code === "NOCONNECTION" ||
+    code === "ECONNRESET" ||
+    code === "EPIPE" ||
+    code === "ETIMEDOUT" ||
+    code === "ECONNREFUSED" ||
+    msg.includes("connection not available") ||
+    msg.includes("connection closed") ||
+    msg.includes("socket") ||
+    msg.includes("not connected")
+  );
+}
+
+/**
+ * Runs `fn` on the shared per-account connection with `path` locked.
+ * Operations on the same account are serialized (IMAP is single-command).
+ * One transparent reconnect + retry when the socket died.
+ */
+export async function withAccountMailbox<T>(
+  account: MailAccount,
+  password: string,
+  path: string,
+  fn: (client: ImapFlow) => Promise<T>,
+): Promise<T> {
+  const key = keyFor(account);
+
+  const runOnce = async (): Promise<T> => {
+    const entry = await getEntry(account, password);
+    // Serialize per connection: chain onto the previous operation.
+    const run = entry.chain.then(
+      async () => {
+        const tLock = Date.now();
+        const lock = await entry.client.getMailboxLock(path);
+        if (TIMING_ENABLED) console.log(`[imap-timing] select ${Date.now() - tLock}ms`);
+        try {
+          return await fn(entry.client);
+        } finally {
+          lock.release();
+          armIdleTimer(key, entry);
+        }
+      },
+      async () => {
+        // Previous op failed — the chain must not stay rejected.
+        const e2 = await getEntry(account, password);
+        const lock = await e2.client.getMailboxLock(path);
+        try {
+          return await fn(e2.client);
+        } finally {
+          lock.release();
+          armIdleTimer(key, e2);
+        }
+      },
+    );
+    entry.chain = run.catch(() => undefined);
+    return run;
+  };
+
+  try {
+    return await runOnce();
+  } catch (err) {
+    if (!isConnectionError(err)) throw err;
+    const stale = entries.get(key);
+    if (stale) dropEntry(key, stale);
+    return runOnce();
+  }
+}
+
+/** Closes every open connection (SIGTERM / SIGINT / tests). */
+export async function closeAllImapConnections(): Promise<void> {
+  const all = [...entries.entries()];
+  entries.clear();
+  await Promise.all(
+    all.map(async ([, e]) => {
+      if (e.idleTimer) clearTimeout(e.idleTimer);
+      await e.client.logout().catch(() => {});
+    }),
+  );
+}
+
+/** Bounded, PII-free stats for /api/health style surfaces. */
+export function imapConnectionStats() {
+  return {
+    openConnections: entries.size,
+    idleCloseMs: IDLE_CLOSE_MS,
+    listCacheMs: LIST_CACHE_MS,
+  };
+}
