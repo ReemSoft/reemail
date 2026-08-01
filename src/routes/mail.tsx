@@ -631,7 +631,7 @@ function buildForward(message: MailMessage): ComposeInitial {
   const header =
     `\n\n---------- Forwarded message ----------\n` +
     `From: ${message.from.name} <${message.from.email}>\n` +
-    `Date: ${new Date(message.date).toLocaleString("ar")}\n` +
+    `Date: ${new Date(message.date).toLocaleString(getCurrentLang())}\n` +
     `Subject: ${message.subject}\n` +
     `To: ${message.to.map((t) => t.email).join(", ")}\n\n` +
     stripHtml(message.body || message.preview || "");
@@ -2265,7 +2265,7 @@ function MailApp() {
         confirmHideRow(id);
         confirmPendingMove(id);
         const label = FOLDER_META[target as MailFolder]?.label || target;
-        toast.success(tr(`تم استعادة الرسالة إلى ${tr(label)}`));
+        toast.success(trf("تم استعادة الرسالة إلى {{folder}}", { folder: tr(label) }));
       } catch (err: any) {
         unhideRow(id);
         rollbackPendingMove(id);
@@ -2487,9 +2487,9 @@ function MailApp() {
         setSelectedId(prevSelectedId);
         setSelectedMessage(prevSelected);
       }
-      toast.error(tr(`فشل نقل ${failedIds.length} من ${ids.length} رسالة`));
+      toast.error(trf("فشل نقل {{failed}} من {{total}} رسالة", { failed: failedIds.length, total: ids.length }));
     } else {
-      toast.success(tr(`تم نقل ${ids.length} رسالة`));
+      toast.success(trf("تم نقل {{count}} رسالة", { count: ids.length }));
     }
   }
 
@@ -2500,8 +2500,8 @@ function MailApp() {
     const confirmed = await confirm({
       title: isTrash ? tr("حذف نهائي") : tr("نقل إلى المهملات"),
       description: isTrash
-        ? tr(`هل أنت متأكد من حذف ${ids.length} رسالة نهائياً؟ لا يمكن التراجع عن هذا الإجراء.`)
-        : tr(`هل أنت متأكد من نقل ${ids.length} رسالة إلى المهملات؟`),
+        ? trf("هل أنت متأكد من حذف {{count}} رسالة نهائياً؟ لا يمكن التراجع عن هذا الإجراء.", { count: ids.length })
+        : trf("هل أنت متأكد من نقل {{count}} رسالة إلى المهملات؟", { count: ids.length }),
       confirmLabel: isTrash ? tr("حذف") : tr("نقل"),
       cancelLabel: tr("إلغاء"),
       variant: isTrash ? "destructive" : "default",
@@ -2626,12 +2626,14 @@ function MailApp() {
       }
       toast.error(
         isTrash
-          ? tr(`فشل حذف ${failedIds.length} من ${ids.length} رسالة`)
-          : tr(`فشل نقل ${failedIds.length} من ${ids.length} رسالة إلى المهملات`),
+          ? trf("فشل حذف {{failed}} من {{total}} رسالة", { failed: failedIds.length, total: ids.length })
+          : trf("فشل نقل {{failed}} من {{total}} رسالة إلى المهملات", { failed: failedIds.length, total: ids.length }),
       );
     } else {
       toast.success(
-        isTrash ? tr(`تم حذف ${ids.length} رسالة`) : tr(`تم نقل ${ids.length} رسالة إلى المهملات`),
+        isTrash
+          ? trf("تم حذف {{count}} رسالة", { count: ids.length })
+          : trf("تم نقل {{count}} رسالة إلى المهملات", { count: ids.length }),
       );
     }
   }
@@ -2718,9 +2720,9 @@ function MailApp() {
         setSelectedId(prevSelectedId);
         setSelectedMessage(prevSelected);
       }
-      toast.error(tr(`فشل استعادة ${failedIds.length} من ${ids.length} رسالة`));
+      toast.error(trf("فشل استعادة {{failed}} من {{total}} رسالة", { failed: failedIds.length, total: ids.length }));
     } else {
-      toast.success(tr(`تم استعادة ${ids.length} رسالة`));
+      toast.success(trf("تم استعادة {{count}} رسالة", { count: ids.length }));
     }
   }
 
@@ -2740,8 +2742,8 @@ function MailApp() {
       await mutateFlag(parsed.folder, parsed.uid, "seen", false);
     });
     setBulkBusy(false);
-    if (failed > 0) toast.error(tr(`فشل تعليم ${failed} رسالة`));
-    else toast.success(tr(`تم تعليم ${ids.length} رسالة كغير مقروءة`));
+    if (failed > 0) toast.error(trf("فشل تعليم {{count}} رسالة", { count: failed }));
+    else toast.success(trf("تم تعليم {{count}} رسالة كغير مقروءة", { count: ids.length }));
     loadCountsSoft();
   }
 
@@ -3059,7 +3061,9 @@ function MailApp() {
                 )}
               </button>
               <span className="font-semibold text-foreground">
-                {selection.size > 0 ? tr(`${selection.size} محددة`) : tr("اختر الرسائل")}
+                {selection.size > 0
+                  ? trf("{{count}} محددة", { count: selection.size })
+                  : tr("اختر الرسائل")}
               </span>
               <div className="flex-1" />
               {bulkBusy && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />}
@@ -3156,14 +3160,14 @@ function MailApp() {
                     <span className="flex items-center gap-1.5">
                       <Globe className="h-3.5 w-3.5 text-primary" />
                       <span>
-                        نتائج السيرفر · {filteredMessages.length}
+                        {tr("نتائج السيرفر")} · {filteredMessages.length}
                         {deepIncludeBody && (
                           <span className="ms-1 text-[10px] text-primary/70">{tr("(يشمل المحتوى)")}</span>
                         )}
                       </span>
                     </span>
                   ) : (
-                    <>المعروضة · {filteredMessages.length}</>
+                    <>{tr("المعروضة")} · {filteredMessages.length}</>
                   )}
                 </span>
               </div>
@@ -3557,10 +3561,10 @@ function MessageView({
     const to = esc(message.to.map((t) => t.email).join(", "));
     const cc =
       message.cc && message.cc.length > 0 ? esc(message.cc.map((c) => c.email).join(", ")) : "";
-    const date = esc(new Date(message.date).toLocaleString("ar"));
+    const date = esc(new Date(message.date).toLocaleString(getCurrentLang()));
     const body = message.body ? sanitizeEmailHtml(message.body) : esc(message.preview);
     win.document
-      .write(`<!doctype html><html dir="rtl" lang="ar"><head><meta charset="utf-8"><title>${subject}</title>
+      .write(`<!doctype html><html dir="${getCurrentLang() === "ar" ? "rtl" : "ltr"}" lang="${getCurrentLang()}"><head><meta charset="utf-8"><title>${subject}</title>
 <style>
   body{font-family:'IBM Plex Sans Arabic',system-ui,sans-serif;color:#111;padding:24px;line-height:1.6}
   h1{font-size:20px;margin:0 0 16px}
@@ -3572,10 +3576,10 @@ function MessageView({
 </style></head><body>
 <h1>${subject}</h1>
 <div class="meta">
-  <div><strong>{tr("المرسل:")}</strong> ${fromName} &lt;${fromEmail}&gt;</div>
-  <div><strong>{tr("المستلم:")}</strong> <span dir="ltr">${to}</span></div>
-  ${cc ? tr(`<div><strong>{tr("نسخة:")}</strong> <span dir="ltr">${cc}</span></div>`) : ""}
-  <div><strong>{tr("التاريخ:")}</strong> ${date}</div>
+  <div><strong>${tr("المرسل:")}</strong> ${fromName} &lt;${fromEmail}&gt;</div>
+  <div><strong>${tr("المستلم:")}</strong> <span dir="ltr">${to}</span></div>
+  ${cc ? `<div><strong>${tr("نسخة:")}</strong> <span dir="ltr">${cc}</span></div>` : ""}
+  <div><strong>${tr("التاريخ:")}</strong> ${date}</div>
 </div>
 <div class="body">${body}</div>
 <script>window.onload=function(){setTimeout(function(){window.print();},300);};<\/script>
@@ -3741,7 +3745,7 @@ function MessageView({
                   </div>
                   <span
                     className="shrink-0 whitespace-nowrap text-xs text-muted-foreground"
-                    title={new Date(message.date).toLocaleString("ar")}
+                    title={new Date(message.date).toLocaleString(getCurrentLang())}
                   >
                     {formatDate(message.date)}
                   </span>
@@ -3849,7 +3853,7 @@ function MessageView({
             {message.attachments && message.attachments.length > 0 && (
               <div className="mt-6">
                 <p className="mb-2 text-xs font-semibold text-muted-foreground">
-                  المرفقات ({message.attachments.length})
+                  {tr("المرفقات")} ({message.attachments.length})
                 </p>
                 <div className="grid gap-2 sm:grid-cols-2">
                   {message.attachments.map((a) => (
@@ -4113,7 +4117,7 @@ function RecipientField({
                     onChange(value.filter((_, idx) => idx !== i));
                   }}
                   className="rounded-full p-0.5 hover:bg-background/60"
-                  aria-label={tr(`إزالة ${r.email}`)}
+                  aria-label={trf("إزالة {{email}}", { email: r.email })}
                 >
                   <X className="h-3 w-3" />
                 </button>
@@ -5051,11 +5055,11 @@ function Composer({
     let runningCount = totalCount;
     for (const f of incoming) {
       if (runningCount >= COMPOSE_MAX_FILES) {
-        toast.error(tr(`الحد الأقصى ${COMPOSE_MAX_FILES} ملفات`));
+        toast.error(trf("الحد الأقصى {{count}} ملفات", { count: COMPOSE_MAX_FILES }));
         break;
       }
       if (runningTotal + f.size > COMPOSE_MAX_TOTAL_BYTES) {
-        toast.error(tr(`تجاوزت الحد الكلّي (25MB)`));
+        toast.error(tr("تجاوزت الحد الكلّي (25MB)"));
         break;
       }
       merged.push(f);
@@ -5391,7 +5395,7 @@ function Composer({
     }
     const invalid = [...to, ...cc, ...bcc].filter((r) => !r.valid);
     if (invalid.length > 0) {
-      toast.error(tr(`عنوان بريد غير صالح: ${invalid[0].email}`));
+      toast.error(trf("عنوان بريد غير صالح: {{email}}", { email: invalid[0].email }));
       return;
     }
     if (!subject.trim()) {
@@ -5438,9 +5442,9 @@ function Composer({
       case "saving":
         return tr("جارٍ الحفظ…");
       case "saved":
-        return t ? tr(`تم الحفظ ${t}`) : tr("تم الحفظ");
+        return t ? trf("تم الحفظ {{time}}", { time: t }) : tr("تم الحفظ");
       case "saved-local":
-        return t ? tr(`محفوظة محلياً ${t}`) : tr("محفوظة محلياً");
+        return t ? trf("محفوظة محلياً {{time}}", { time: t }) : tr("محفوظة محلياً");
       case "failed":
         return tr("تعذّر الحفظ");
       default:
@@ -5507,7 +5511,9 @@ function Composer({
       }
       // Hard failure — do NOT show a "success" toast.
       toast.error(
-        tr(`تعذّر حفظ المسودّة على الخادم — حاول لاحقاً (${lastFailCodeRef.current ?? "UNKNOWN"})`),
+        trf("تعذّر حفظ المسودّة على الخادم — حاول لاحقاً ({{code}})", {
+          code: lastFailCodeRef.current ?? "UNKNOWN",
+        }),
       );
       return "failed";
     } finally {
@@ -5940,7 +5946,7 @@ function Composer({
           {(existingKept.length > 0 || files.length > 0) && (
             <div className="flex flex-col gap-1.5">
               <label className="text-sm font-medium text-foreground">
-                المرفقات · {formatBytes(totalBytes)} / 25 MB
+                {tr("المرفقات")} · {formatBytes(totalBytes)} / 25 MB
               </label>
               <div className="flex flex-wrap gap-2 rounded-lg border border-dashed border-border bg-background/50 p-3">
                 {existingKept.map((a) => {
@@ -6062,7 +6068,7 @@ function Composer({
         <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground sm:gap-3">
           <span className="sm:hidden">{savedLabel}</span>
           {(to.length > 0 || cc.length > 0 || bcc.length > 0) && (
-            <span>{to.length + cc.length + bcc.length} مستلم</span>
+            <span>{trf("{{count}} مستلم", { count: to.length + cc.length + bcc.length })}</span>
           )}
           <button
             onClick={() => void requestClose()}
@@ -6243,7 +6249,7 @@ function AttachmentCard({
     });
     if (!res.ok) {
       const msg = await res.text().catch(() => "");
-      toast.error(`تعذّر تنزيل المرفق${msg ? `: ${msg.slice(0, 100)}` : ""}`);
+      toast.error(tr("تعذّر تنزيل المرفق") + (msg ? `: ${msg.slice(0, 100)}` : ""));
       return null;
     }
     return await res.blob();
