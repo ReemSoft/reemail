@@ -313,9 +313,6 @@ export async function getMessages(
   }
 }
 
-/** Max bytes of an inline (cid:) image we embed as a data URI. Configurable. */
-const INLINE_CID_MAX_BYTES = Number(process.env.INLINE_CID_MAX_BYTES || 262_144);
-
 export interface TextPartPick {
   part: string;
   type: string;
@@ -416,10 +413,9 @@ export async function downloadPartBuffer(
  *   * fetches envelope + flags + bodyStructure + headers, then downloads ONLY
  *     the text/html (or text/plain) part — attachments stay on the server and
  *     keep using the existing protected /api/attachment path
- *   * inline images are downloaded only when the HTML actually references
- *     their cid and they fit under INLINE_CID_MAX_BYTES; larger ones are
- *     reported in `inlineParts` so the client can stream them through the
- *     protected attachment route instead of breaking the image
+ *   * inline (cid:) images are NEVER downloaded here — they are reported as
+ *     `inlineParts` metadata and streamed lazily by the browser through the
+ *     protected attachment route after the text has painted
  *
  * All FETCH/download commands use BODY.PEEK, so opening a message still does
  * NOT change its \Seen flag — read state stays driven by the explicit

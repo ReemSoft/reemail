@@ -197,14 +197,29 @@ app.post("/api/messages", requireKey, imapGate("interactive"), async (req, res) 
   }
 });
 
-app.post("/api/message", requireKey, imapGate("interactive"), async (req, res) => {
+const OpenMessagePayloadSchema = MessagePayloadSchema.extend({
+  lane: z.enum(["interactive", "background"]).optional().default("interactive"),
+});
+
+/**
+ * Lane-aware gate: a background body-warm request must never consume an
+ * interactive permit (and must never queue ahead of a user click).
+ */
+const messageGate: express.RequestHandler = (req, res, next) => {
+  const lane = (req.body as { lane?: string } | undefined)?.lane;
+  const gate = lane === "background" ? imapGate("background") : imapGate("interactive");
+  return gate(req, res, next);
+};
+
+app.post("/api/message", requireKey, messageGate, async (req, res) => {
   try {
-    const payload = MessagePayloadSchema.parse(req.body);
+    const payload = OpenMessagePayloadSchema.parse(req.body);
     const message = await getMessageBody(
       payload.account as MailAccount,
       payload.password,
       payload.folder,
       payload.uid,
+      payload.lane,
     );
     if (!message) {
       return res.status(404).json({ ok: false, error: "Message not found" });
