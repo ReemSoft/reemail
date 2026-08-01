@@ -279,6 +279,7 @@ function CompanyDashboard() {
           {tab === "accounts" && (
             <AccountsTab
               accounts={accounts}
+              domains={domains}
               companyId={company.id}
               onChange={load}
             />
