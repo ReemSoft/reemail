@@ -149,12 +149,26 @@ export const linkMailbox = createServerFn({ method: "POST" })
         return { ok: false, message: "هذا هو صندوق البريد الحالي." };
       }
 
-      // Cap check.
+      // Resolve the caller's mailbox group (the single source of truth).
+      const { data: self, error: selfErr } = await supabaseAdmin
+        .from("mail_accounts")
+        .select("mailbox_group_id")
+        .eq("id", claims.sub)
+        .eq("company_id", claims.cid)
+        .maybeSingle();
+      if (selfErr || !self) {
+        console.error("[linked-mailboxes] self lookup failed", { code: selfErr?.code });
+        return { ok: false, message: "تعذر التحقق من صندوق البريد الحالي." };
+      }
+      const groupId = self.mailbox_group_id;
+
+      // Cap check: group size (excluding the caller) must stay under the max.
       const { count, error: countErr } = await supabaseAdmin
-        .from("mail_account_links")
+        .from("mail_accounts")
         .select("id", { count: "exact", head: true })
-        .eq("owner_account_id", claims.sub)
-        .eq("company_id", claims.cid);
+        .eq("company_id", claims.cid)
+        .eq("mailbox_group_id", groupId)
+        .neq("id", claims.sub);
       if (countErr) {
         console.error("[linked-mailboxes] count failed", { code: countErr.code });
         return { ok: false, message: "تعذر التحقق من عدد الصناديق المرتبطة." };
@@ -165,6 +179,7 @@ export const linkMailbox = createServerFn({ method: "POST" })
           message: "لا يمكن ربط أكثر من 5 صناديق بريد إضافية.",
         };
       }
+
 
       // Resolve connection settings BEFORE verifying.
       const { data: existing, error: existingErr } = await supabaseAdmin
