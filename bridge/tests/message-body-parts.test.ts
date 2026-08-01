@@ -126,10 +126,40 @@ test("inline image parts remain discoverable with their cid + part number", () =
 
 test("connection stats expose bounded config only (no host/account identifiers)", async () => {
   const s = imapConnectionStats();
+
+  // 1. exactly the five expected keys
+  assert.deepEqual(Object.keys(s).sort(), [
+    "idleCloseMs",
+    "lanes",
+    "listCacheMs",
+    "maxConnectionsPerAccount",
+    "openConnections",
+  ]);
+  assert.deepEqual(Object.keys(s.lanes).sort(), ["background", "interactive"]);
+
   assert.equal(typeof s.openConnections, "number");
   assert.ok(s.idleCloseMs > 0);
   assert.ok(s.listCacheMs > 0);
-  assert.equal(Object.keys(s).length, 3);
+
+  // 2. lane counters are non-negative numbers
+  for (const v of [s.lanes.interactive, s.lanes.background]) {
+    assert.equal(typeof v, "number");
+    assert.ok(Number.isFinite(v) && v >= 0);
+  }
+
+  // 3. two connections per account max (interactive + background)
+  assert.equal(s.maxConnectionsPerAccount, 2);
+
+  // 4. no PII / identifiers anywhere in the payload
+  const dump = JSON.stringify(s).toLowerCase();
+  for (const forbidden of ["host", "account", "company", "email", "user", "pass", "@"]) {
+    assert.ok(!dump.includes(forbidden), `stats must not expose "${forbidden}"`);
+  }
+
+  // 5. closing everything zeroes the counters
   await closeAllImapConnections(); // no-op when nothing is open
-  assert.equal(imapConnectionStats().openConnections, 0);
+  const after = imapConnectionStats();
+  assert.equal(after.openConnections, 0);
+  assert.equal(after.lanes.interactive, 0);
+  assert.equal(after.lanes.background, 0);
 });
