@@ -333,7 +333,7 @@ import { useCompanyTheme } from "@/hooks/use-company-theme";
 import {
   bridgeGetFolderCounts,
   bridgeGetMessages,
-  bridgeGetMessage,
+  
   bridgeMarkRead,
   bridgeStar,
   bridgeMove,
