@@ -300,19 +300,36 @@ export const linkMailbox = createServerFn({ method: "POST" })
         console.error("[linked-mailboxes] credential persistence failed");
       }
 
-      // Record the link (idempotent).
-      const { error: linkErr } = await supabaseAdmin.from("mail_account_links").upsert(
-        {
-          owner_account_id: claims.sub,
-          linked_account_id: identity.id,
-          company_id: claims.cid,
-        },
-        { onConflict: "owner_account_id,linked_account_id" },
+      // Record the link as a symmetric MESH: every mailbox of the group is
+      // linked to every other one, so switching to a newly added mailbox still
+      // shows (and can switch back to) the whole group — no re-login needed.
+      const { data: groupRows } = await supabaseAdmin
+        .from("mail_account_links")
+        .select("linked_account_id")
+        .eq("owner_account_id", claims.sub)
+        .eq("company_id", claims.cid);
+      const members = Array.from(
+        new Set<string>([
+          claims.sub,
+          ...(groupRows ?? []).map((r) => r.linked_account_id as string),
+          identity.id,
+        ]),
       );
+      const pairs: { owner_account_id: string; linked_account_id: string; company_id: string }[] = [];
+      for (const a of members) {
+        for (const b of members) {
+          if (a === b) continue;
+          pairs.push({ owner_account_id: a, linked_account_id: b, company_id: claims.cid });
+        }
+      }
+      const { error: linkErr } = await supabaseAdmin
+        .from("mail_account_links")
+        .upsert(pairs, { onConflict: "owner_account_id,linked_account_id" });
       if (linkErr) {
         console.error("[linked-mailboxes] link insert failed", { code: linkErr.code });
         return { ok: false, message: "تعذر ربط صندوق البريد." };
       }
+
 
       const { issueMailSessionToken } = await import("@/lib/mail-token.server");
       const tokenInfo = await issueMailSessionToken({
