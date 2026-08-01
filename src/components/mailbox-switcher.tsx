@@ -237,7 +237,7 @@ export function MailboxSwitcher({ session }: Props) {
               <div key={m.accountId}>
                 <DropdownMenuItem
                   disabled={busy}
-                  className="mx-1 my-1 flex cursor-pointer items-center gap-2 rounded-md px-3 py-2.5 hover:bg-accent focus:bg-accent"
+                  className="group mx-1 my-1 flex cursor-pointer items-center gap-2 rounded-md px-3 py-2.5 hover:bg-accent focus:bg-accent"
                   onSelect={(e) => {
                     e.preventDefault();
                     void doSwitch(m);
