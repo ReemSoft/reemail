@@ -1775,16 +1775,36 @@ function MailApp() {
       if (existing) return existing;
       const parsed = parseMessageId(id);
       if (!parsed) return Promise.resolve(null);
-      const p = getOne({
+      // Envelope row from the list: a cache HIT only ships the body, so the
+      // headers/flags are merged from the row the user clicked. Without a
+      // base row we force a full live fetch (allowCache: false).
+      const base = messagesRef.current.find((m) => m.id === id) ?? null;
+      const p = openMsg({
         data: {
           mailSessionToken: session.mailSessionToken ?? "",
           password: session.password,
           folder: parsed.folder,
           uid: parsed.uid,
+          allowCache: base != null,
         },
       })
         .then((result) => {
-          if (result.ok && result.message) {
+          const merged: MailMessage | null =
+            result.ok && result.source === "cache" && base
+              ? {
+                  ...base,
+                  body: result.body.bodyHtml,
+                  preview: result.body.preview || base.preview,
+                  inlineParts: result.body.inlineParts,
+                  attachments: result.body.attachments,
+                  hasAttachments:
+                    result.body.attachments.length > 0 ? true : base.hasAttachments,
+                  uidValidity: base.uidValidity ?? result.body.uidValidity,
+                }
+              : result.ok && result.source === "imap"
+                ? result.message
+                : null;
+          if (merged) {
             // Batch A / Fix #2: re-check the overlay AFTER the fetch. The
             // user may have moved this row during the round-trip; writing
             // it into messageCache would let it re-appear.
@@ -1794,7 +1814,7 @@ function MailApp() {
             }
             // Patch through pending overrides so a slow fetch response cannot
             // overwrite an in-flight optimistic star/read the user just set.
-            const patched = applyPendingOne(result.message);
+            const patched = applyPendingOne(merged);
             messageCache.current.set(id, patched);
             return patched;
           }
