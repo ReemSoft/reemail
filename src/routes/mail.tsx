@@ -1597,8 +1597,17 @@ function MailApp() {
     });
   }, [rawRefresh]);
 
-  const getOne = useMailServerFn(bridgeGetMessage);
+  // Cache-first open: Postgres body cache → (miss) bridge interactive lane.
+  const openMsg = useMailServerFn(openMailMessage);
+  const warmBodies = useMailServerFn(warmMessageBodies);
   const cleanupGhost = useMailServerFn(tombstoneGhostMessage);
+
+  // Mirror of `messages` so the open path can merge a cached body into the
+  // clicked row without re-creating the callback on every list change.
+  const messagesRef = useRef<MailMessage[]>([]);
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
 
   const markRead = useMailServerFn(bridgeMarkRead);
   const star = useMailServerFn(bridgeStar);
