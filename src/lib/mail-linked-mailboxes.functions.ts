@@ -33,7 +33,8 @@ const LinkSchema = TokenSchema.extend({
 
 const SwitchSchema = TokenSchema.extend({
   targetAccountId: z.string().uuid(),
-  password: z.string().min(1).max(1024),
+  /** Optional: omitted for the instant path (server uses stored credentials). */
+  password: z.string().min(1).max(1024).optional(),
 });
 
 const UnlinkSchema = TokenSchema.extend({
