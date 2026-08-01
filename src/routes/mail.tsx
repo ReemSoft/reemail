@@ -2819,7 +2819,11 @@ function MailApp() {
           <span className="hidden text-base font-bold sm:inline">{brandName}</span>
         </Link>
 
-        <div className="mx-2 flex flex-1 items-center gap-1 rounded-xl bg-muted/70 pe-1 ps-3 py-1.5 transition focus-within:bg-card focus-within:shadow-elevated sm:mx-4 sm:max-w-xl">
+        <div
+          className="mx-2 flex flex-1 items-center gap-1 rounded-xl bg-muted/70 pe-1 ps-3 py-1.5 transition focus-within:bg-card focus-within:shadow-elevated sm:mx-4 sm:max-w-xl"
+          onFocus={() => setSearchFocused(true)}
+          onBlur={() => setSearchFocused(false)}
+        >
           {searchMode === "deep" ? (
             deepLoading ? (
               <Loader2 className="h-4 w-4 shrink-0 animate-spin text-primary" />
@@ -2832,8 +2836,6 @@ function MailApp() {
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            onFocus={() => setSearchFocused(true)}
-            onBlur={() => setSearchFocused(false)}
             placeholder={searchMode === "deep" ? tr("بحث شامل على السيرفر…") : tr("ابحث في البريد...")}
             className="w-full bg-transparent px-1 text-sm outline-none placeholder:text-muted-foreground"
           />
