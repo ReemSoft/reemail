@@ -315,6 +315,7 @@ export type Database = {
       mail_message_body_cache: {
         Row: {
           account_id: string
+          attachments: Json
           body_html: string | null
           body_text: string | null
           byte_size: number
@@ -334,6 +335,7 @@ export type Database = {
         }
         Insert: {
           account_id: string
+          attachments?: Json
           body_html?: string | null
           body_text?: string | null
           byte_size?: number
@@ -353,6 +355,7 @@ export type Database = {
         }
         Update: {
           account_id?: string
+          attachments?: Json
           body_html?: string | null
           body_text?: string | null
           byte_size?: number
