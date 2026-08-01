@@ -95,14 +95,19 @@ function dropEntry(key: string, entry: Entry) {
   });
 }
 
-async function openEntry(key: string, account: MailAccount, password: string): Promise<Entry> {
+async function openEntry(
+  key: string,
+  account: MailAccount,
+  password: string,
+  lane: ImapLane = "interactive",
+): Promise<Entry> {
   const existing = pending.get(key);
   if (existing) return existing;
   const p = (async () => {
     const client = makeImapClient(account, password);
     const t0 = Date.now();
     await client.connect();
-    if (TIMING_ENABLED) console.log(`[imap-timing] connect ${Date.now() - t0}ms`);
+    if (TIMING_ENABLED) console.log(`[imap-timing] lane=${lane} connect ${Date.now() - t0}ms`);
     const entry: Entry = {
       client,
       chain: Promise.resolve(),
@@ -141,7 +146,7 @@ async function getEntry(
       return cached;
     }
   }
-  return openEntry(key, account, password);
+  return openEntry(key, account, password, lane);
 }
 
 /** Cached LIST per account (5 min). Invalidated on reconnect. */
@@ -266,8 +271,15 @@ export async function closeAllImapConnections(): Promise<void> {
 
 /** Bounded, PII-free stats for /api/health style surfaces. */
 export function imapConnectionStats() {
+  const lanes = { interactive: 0, background: 0 };
+  for (const k of entries.keys()) {
+    if (k.startsWith("background|")) lanes.background++;
+    else lanes.interactive++;
+  }
   return {
     openConnections: entries.size,
+    lanes,
+    maxConnectionsPerAccount: 2,
     idleCloseMs: IDLE_CLOSE_MS,
     listCacheMs: LIST_CACHE_MS,
   };
