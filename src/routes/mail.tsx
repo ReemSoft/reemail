@@ -1826,18 +1826,12 @@ function MailApp() {
     [session, getOne, applyPendingOne, currentAccountId, cleanupGhost],
   );
 
-  const prefetchMessage = useCallback(
-    (id: string) => {
-      // Batch A / Fix #2: never trigger a prefetch for a row already
-      // suppressed by the pending-move overlay.
-      const accountId = currentAccountId;
-      if (accountId && isMessageSuppressed(pendingMovesRef.current, accountId, id)) return;
-      if (!messageCache.current.has(id) && !inflight.current.has(id)) {
-        void fetchMessage(id);
-      }
-    },
-    [fetchMessage, currentAccountId],
-  );
+  // Prefetch on hover/focus/touch was REMOVED on purpose: every request is
+  // serialized on the single per-account IMAP connection, so hovering a list
+  // queued dozens of downloads ahead of the actual click (head-of-line
+  // blocking). A message is fetched on click only.
+
+
 
   useCompanyTheme(
     session?.company
