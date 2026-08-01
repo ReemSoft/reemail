@@ -37,9 +37,11 @@ import {
 
 interface Props {
   session: MailSession;
+  /** Icon-only trigger (mobile top bar). */
+  compact?: boolean;
 }
 
-export function MailboxSwitcher({ session }: Props) {
+export function MailboxSwitcher({ session, compact = false }: Props) {
   const { dir } = useLanguage();
   const listFn = useServerFn(listLinkedMailboxes);
   const linkFn = useServerFn(linkMailbox);
