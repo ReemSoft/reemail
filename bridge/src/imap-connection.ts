@@ -16,7 +16,22 @@
  */
 import { ImapFlow, type ListResponse } from "imapflow";
 import type { MailAccount } from "./types.js";
-import { makeImapClient } from "./imap.js";
+
+const IMAP_TIMEOUT_MS = 30_000;
+
+/** Local client factory (kept here to avoid a cycle with imap.ts). */
+function makeImapClient(account: MailAccount, password: string) {
+  return new ImapFlow({
+    host: account.imap_host,
+    port: account.imap_port,
+    secure: account.imap_secure,
+    auth: { user: account.email_address, pass: password },
+    logger: false,
+    connectionTimeout: IMAP_TIMEOUT_MS,
+    greetingTimeout: IMAP_TIMEOUT_MS,
+    socketTimeout: IMAP_TIMEOUT_MS,
+  });
+}
 
 const IDLE_CLOSE_MS = Number(process.env.IMAP_CONN_IDLE_MS || 5 * 60_000);
 const LIST_CACHE_MS = Number(process.env.IMAP_LIST_CACHE_MS || 5 * 60_000);
