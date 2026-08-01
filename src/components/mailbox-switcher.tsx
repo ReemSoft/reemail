@@ -92,23 +92,35 @@ export function MailboxSwitcher({ session }: Props) {
     setBusy(true);
     try {
       const pooled = listPooledMailboxes().find((m) => m.account.id === target.accountId);
+      // Instant path: pooled password if present, otherwise the server uses the
+      // credentials already verified when this mailbox was linked.
       const pwd = password ?? pooled?.password;
-      if (!pwd) {
-        setAskFor(target);
-        setAskPassword("");
-        return;
-      }
       const res = await switchFn({
-        data: { mailSessionToken: token, targetAccountId: target.accountId, password: pwd },
+        data: {
+          mailSessionToken: token,
+          targetAccountId: target.accountId,
+          ...(pwd ? { password: pwd } : {}),
+        },
       });
       if (!res.ok) {
+        if (res.message === "CREDENTIALS_PENDING") {
+          setAskFor(target);
+          setAskPassword("");
+          return;
+        }
         toast.error(tr(res.message));
+        return;
+      }
+      const effective = pwd ?? res.mailbox.password;
+      if (!effective) {
+        setAskFor(target);
+        setAskPassword("");
         return;
       }
       activate({
         account: res.mailbox.account,
         company: res.mailbox.company,
-        password: pwd,
+        password: effective,
         mailSessionToken: res.mailbox.mailSessionToken,
         mailSessionTokenExpiresAt: res.mailbox.mailSessionTokenExpiresAt,
       });
@@ -118,6 +130,7 @@ export function MailboxSwitcher({ session }: Props) {
       setBusy(false);
     }
   }
+
 
   async function doAdd() {
     if (!addEmail.includes("@") || addPassword.length < 1) {
@@ -200,32 +213,40 @@ export function MailboxSwitcher({ session }: Props) {
             <ChevronDown className="h-3.5 w-3.5 shrink-0" />
           </button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-72">
-          <DropdownMenuLabel>{tr("صناديق البريد")}</DropdownMenuLabel>
-          <DropdownMenuItem className="cursor-default gap-2" onSelect={(e) => e.preventDefault()}>
-            <Check className="h-4 w-4 text-primary" />
-            <span className="truncate text-xs" dir="ltr">
+        <DropdownMenuContent align="end" className="w-80 p-1">
+          <DropdownMenuLabel className="text-start text-xs text-muted-foreground">
+            {tr("صناديق البريد")}
+          </DropdownMenuLabel>
+          <DropdownMenuItem
+            className="flex cursor-default items-center gap-2 rounded-md bg-accent/50"
+            onSelect={(e) => e.preventDefault()}
+          >
+            <Mail className="h-4 w-4 shrink-0 text-primary" />
+            <span className="min-w-0 flex-1 truncate text-start text-xs" dir="ltr">
               {session.account.email_address}
             </span>
+            <Check className="h-4 w-4 shrink-0 text-primary" />
           </DropdownMenuItem>
           {linked
             .filter((m) => m.accountId !== session.account.id)
             .map((m) => (
               <DropdownMenuItem
                 key={m.accountId}
-                className="group cursor-pointer gap-2"
+                disabled={busy}
+                className="group flex cursor-pointer items-center gap-2 rounded-md hover:bg-accent focus:bg-accent"
                 onSelect={(e) => {
                   e.preventDefault();
                   void doSwitch(m);
                 }}
               >
-                <Mail className="h-4 w-4 text-muted-foreground" />
-                <span className="flex-1 truncate text-xs" dir="ltr">
+                <Mail className="h-4 w-4 shrink-0 text-muted-foreground" />
+                <span className="min-w-0 flex-1 truncate text-start text-xs" dir="ltr">
                   {m.emailAddress}
                 </span>
                 <button
+                  type="button"
                   aria-label={tr("إلغاء الربط")}
-                  className="opacity-0 transition group-hover:opacity-100"
+                  className="shrink-0 opacity-0 transition group-hover:opacity-100 focus:opacity-100"
                   onClick={(e) => {
                     e.stopPropagation();
                     void doUnlink(m);
@@ -238,17 +259,18 @@ export function MailboxSwitcher({ session }: Props) {
           <DropdownMenuSeparator />
           <DropdownMenuItem
             disabled={atCap || busy}
-            className="cursor-pointer gap-2"
+            className="flex cursor-pointer items-center gap-2 rounded-md hover:bg-accent focus:bg-accent"
             onSelect={(e) => {
               e.preventDefault();
               if (!atCap) setAddOpen(true);
             }}
           >
-            <Plus className="h-4 w-4" />
-            <span className="text-xs">
+            <Plus className="h-4 w-4 shrink-0" />
+            <span className="min-w-0 flex-1 truncate text-start text-xs">
               {atCap ? tr("بلغت الحد الأقصى للصناديق المرتبطة") : tr("إضافة صندوق بريد")}
             </span>
           </DropdownMenuItem>
+
         </DropdownMenuContent>
       </DropdownMenu>
 
