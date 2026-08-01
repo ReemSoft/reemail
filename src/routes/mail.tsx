@@ -1404,6 +1404,8 @@ function MailApp() {
   }
   const [refreshing, setRefreshing] = useState(false);
   const [searchMode, setSearchMode] = useState<"quick" | "deep">("quick");
+  // Mobile-only: expand the search field in place and hide the trailing icons.
+  const [searchFocused, setSearchFocused] = useState(false);
   const [deepIncludeBody, setDeepIncludeBody] = useState(false);
   const [deepResults, setDeepResults] = useState<MailMessage[] | null>(null);
   const [deepLoading, setDeepLoading] = useState(false);
@@ -2830,6 +2832,8 @@ function MailApp() {
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
+            onFocus={() => setSearchFocused(true)}
+            onBlur={() => setSearchFocused(false)}
             placeholder={searchMode === "deep" ? tr("بحث شامل على السيرفر…") : tr("ابحث في البريد...")}
             className="w-full bg-transparent px-1 text-sm outline-none placeholder:text-muted-foreground"
           />
@@ -2923,6 +2927,23 @@ function MailApp() {
         </div>
 
         <div className="ms-auto flex shrink-0 items-center gap-1.5">
+          {/* Mobile-only actions — collapse smoothly while the search field is focused */}
+          <div
+            className={`flex items-center gap-0.5 overflow-hidden transition-all duration-300 ease-out sm:hidden ${
+              searchFocused ? "max-w-0 opacity-0" : "max-w-[6rem] opacity-100"
+            }`}
+          >
+            <button
+              onClick={refresh}
+              disabled={refreshing}
+              className="shrink-0 rounded-lg p-2 hover:bg-muted disabled:opacity-70"
+              aria-label={tr("تحديث")}
+            >
+              <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin text-primary" : ""}`} />
+            </button>
+            <MailboxSwitcher session={session} compact />
+          </div>
+
           <div className="hidden md:block">
             <MailboxSwitcher session={session} />
           </div>
@@ -2936,17 +2957,10 @@ function MailApp() {
             <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin text-primary" : ""}`} />
             <span className="hidden lg:inline">{refreshing ? tr("جاري التحديث...") : tr("تحديث")}</span>
           </button>
+          <div className="hidden sm:block">
+            <LanguageSwitcher />
+          </div>
           <button
-            onClick={refresh}
-            disabled={refreshing}
-            className="rounded-lg p-2 hover:bg-muted disabled:opacity-70 sm:hidden"
-            aria-label={tr("تحديث")}
-          >
-            <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin text-primary" : ""}`} />
-          </button>
-          <LanguageSwitcher />
-          <button
-
             onClick={handleSignOut}
             className="hidden items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm font-medium text-muted-foreground hover:bg-destructive/10 hover:text-destructive sm:inline-flex"
             title={tr("تسجيل الخروج")}
@@ -2954,20 +2968,14 @@ function MailApp() {
             <LogOut className="h-4 w-4" />
             <span className="hidden lg:inline">{tr("خروج")}</span>
           </button>
-          <button
-            onClick={handleSignOut}
-            className="rounded-lg p-2 hover:bg-muted sm:hidden"
-            aria-label={tr("خروج")}
-          >
-            <LogOut className="h-4 w-4" />
-          </button>
         </div>
+
       </header>
 
       <div className="relative flex flex-1 overflow-hidden">
         {/* Sidebar */}
         <aside
-          className={`fixed inset-y-0 start-0 top-14 z-30 w-64 shrink-0 transform border-e border-border bg-sidebar transition-transform lg:relative lg:top-0 lg:translate-x-0 ${
+          className={`fixed inset-y-0 start-0 top-14 z-30 flex w-64 shrink-0 transform flex-col border-e border-border bg-sidebar transition-transform lg:relative lg:top-0 lg:translate-x-0 ${
             sidebarOpen
               ? "translate-x-0"
               : `${uiDir === "rtl" ? "translate-x-full" : "-translate-x-full"} lg:translate-x-0`
@@ -3026,6 +3034,20 @@ function MailApp() {
                 );
               })}
           </nav>
+
+          {/* Mobile-only footer: language + sign out live here instead of the top bar */}
+          <div className="mt-auto border-t border-border p-3 sm:hidden">
+            <div className="flex items-center justify-between gap-2">
+              <LanguageSwitcher />
+              <button
+                onClick={handleSignOut}
+                className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm font-medium text-muted-foreground transition hover:bg-destructive/10 hover:text-destructive"
+              >
+                <LogOut className="h-4 w-4" />
+                <span>{tr("خروج")}</span>
+              </button>
+            </div>
+          </div>
         </aside>
 
         {sidebarOpen && (
