@@ -333,7 +333,7 @@ import { useCompanyTheme } from "@/hooks/use-company-theme";
 import {
   bridgeGetFolderCounts,
   bridgeGetMessages,
-  bridgeGetMessage,
+  
   bridgeMarkRead,
   bridgeStar,
   bridgeMove,
@@ -342,6 +342,7 @@ import {
   bridgeSaveDraft,
   bridgeDeleteDraft,
 } from "@/lib/mail-bridge.functions";
+import { openMailMessage, warmMessageBodies } from "@/lib/mail-message-open.functions";
 import {
   readDraftDoc,
   writeDraftDoc,
@@ -1597,8 +1598,44 @@ function MailApp() {
     });
   }, [rawRefresh]);
 
-  const getOne = useMailServerFn(bridgeGetMessage);
+  // Cache-first open: Postgres body cache → (miss) bridge interactive lane.
+  const openMsg = useMailServerFn(openMailMessage);
+  const warmBodies = useMailServerFn(warmMessageBodies);
   const cleanupGhost = useMailServerFn(tombstoneGhostMessage);
+
+  // Mirror of `messages` so the open path can merge a cached body into the
+  // clicked row without re-creating the callback on every list change.
+  const messagesRef = useRef<MailMessage[]>([]);
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
+
+  // Background body warming.
+  // Fires only when the folder finished loading and the tab is visible, after
+  // an idle delay, and always on the bridge's `background` IMAP lane so it can
+  // never sit in front of a user click. One bounded batch per folder visit.
+  const warmedRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!session?.mailSessionToken) return;
+    if (loading || messages.length === 0) return;
+    if (folder === "drafts") return;
+    const stamp = `${session.account.id}|${folder}`;
+    if (warmedRef.current.has(stamp)) return;
+    const t = window.setTimeout(() => {
+      if (document.visibilityState !== "visible") return;
+      warmedRef.current.add(stamp);
+      void warmBodies({
+        data: {
+          mailSessionToken: session.mailSessionToken ?? "",
+          password: session.password,
+          folder,
+        },
+      }).catch(() => undefined);
+    }, 2500);
+    return () => window.clearTimeout(t);
+  }, [session, folder, loading, messages.length, warmBodies]);
+
+
 
   const markRead = useMailServerFn(bridgeMarkRead);
   const star = useMailServerFn(bridgeStar);
@@ -1769,16 +1806,36 @@ function MailApp() {
       if (existing) return existing;
       const parsed = parseMessageId(id);
       if (!parsed) return Promise.resolve(null);
-      const p = getOne({
+      // Envelope row from the list: a cache HIT only ships the body, so the
+      // headers/flags are merged from the row the user clicked. Without a
+      // base row we force a full live fetch (allowCache: false).
+      const base = messagesRef.current.find((m) => m.id === id) ?? null;
+      const p = openMsg({
         data: {
           mailSessionToken: session.mailSessionToken ?? "",
           password: session.password,
           folder: parsed.folder,
           uid: parsed.uid,
+          allowCache: base != null,
         },
       })
         .then((result) => {
-          if (result.ok && result.message) {
+          const merged: MailMessage | null =
+            result.ok && result.source === "cache" && base
+              ? {
+                  ...base,
+                  body: result.body.bodyHtml,
+                  preview: result.body.preview || base.preview,
+                  inlineParts: result.body.inlineParts,
+                  attachments: result.body.attachments,
+                  hasAttachments:
+                    result.body.attachments.length > 0 ? true : base.hasAttachments,
+                  uidValidity: base.uidValidity ?? result.body.uidValidity,
+                }
+              : result.ok && result.source === "imap"
+                ? result.message
+                : null;
+          if (merged) {
             // Batch A / Fix #2: re-check the overlay AFTER the fetch. The
             // user may have moved this row during the round-trip; writing
             // it into messageCache would let it re-appear.
@@ -1788,7 +1845,7 @@ function MailApp() {
             }
             // Patch through pending overrides so a slow fetch response cannot
             // overwrite an in-flight optimistic star/read the user just set.
-            const patched = applyPendingOne(result.message);
+            const patched = applyPendingOne(merged);
             messageCache.current.set(id, patched);
             return patched;
           }
@@ -1823,7 +1880,7 @@ function MailApp() {
       inflight.current.set(id, p);
       return p;
     },
-    [session, getOne, applyPendingOne, currentAccountId, cleanupGhost],
+    [session, openMsg, applyPendingOne, currentAccountId, cleanupGhost],
   );
 
   // Prefetch on hover/focus/touch was REMOVED on purpose: every request is

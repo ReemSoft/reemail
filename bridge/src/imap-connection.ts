@@ -51,9 +51,18 @@ interface Entry {
 const entries = new Map<string, Entry>();
 const pending = new Map<string, Promise<Entry>>();
 
-/** Account identity key. Host + user only — never logged. */
-function keyFor(account: MailAccount): string {
-  return `${account.imap_host.toLowerCase().trim()}:${account.imap_port}:${account.email_address.toLowerCase().trim()}`;
+/**
+ * Connection lanes. At most TWO connections per active account:
+ *   * interactive — everything the user started (opening a message, flags…)
+ *   * background  — sync + body-cache warming
+ * Each lane serializes its own commands, but the background lane NEVER
+ * enters the interactive chain, so a warm-up can not delay a click.
+ */
+export type ImapLane = "interactive" | "background";
+
+/** Account identity key. Host + user + lane only — never logged. */
+function keyFor(account: MailAccount, lane: ImapLane = "interactive"): string {
+  return `${lane}|${account.imap_host.toLowerCase().trim()}:${account.imap_port}:${account.email_address.toLowerCase().trim()}`;
 }
 
 function fingerprintFor(account: MailAccount, password: string): string {
@@ -86,14 +95,19 @@ function dropEntry(key: string, entry: Entry) {
   });
 }
 
-async function openEntry(key: string, account: MailAccount, password: string): Promise<Entry> {
+async function openEntry(
+  key: string,
+  account: MailAccount,
+  password: string,
+  lane: ImapLane = "interactive",
+): Promise<Entry> {
   const existing = pending.get(key);
   if (existing) return existing;
   const p = (async () => {
     const client = makeImapClient(account, password);
     const t0 = Date.now();
     await client.connect();
-    if (TIMING_ENABLED) console.log(`[imap-timing] connect ${Date.now() - t0}ms`);
+    if (TIMING_ENABLED) console.log(`[imap-timing] lane=${lane} connect ${Date.now() - t0}ms`);
     const entry: Entry = {
       client,
       chain: Promise.resolve(),
@@ -116,8 +130,12 @@ async function openEntry(key: string, account: MailAccount, password: string): P
   }
 }
 
-async function getEntry(account: MailAccount, password: string): Promise<Entry> {
-  const key = keyFor(account);
+async function getEntry(
+  account: MailAccount,
+  password: string,
+  lane: ImapLane = "interactive",
+): Promise<Entry> {
+  const key = keyFor(account, lane);
   const fp = fingerprintFor(account, password);
   const cached = entries.get(key);
   if (cached) {
@@ -128,37 +146,43 @@ async function getEntry(account: MailAccount, password: string): Promise<Entry> 
       return cached;
     }
   }
-  return openEntry(key, account, password);
+  return openEntry(key, account, password, lane);
 }
 
 /** Cached LIST per account (5 min). Invalidated on reconnect. */
 export async function getMailboxesCached(
   account: MailAccount,
   password: string,
+  lane: ImapLane = "interactive",
 ): Promise<ListResponse[]> {
-  const entry = await getEntry(account, password);
+  const entry = await getEntry(account, password, lane);
   const now = Date.now();
   if (entry.mailboxes && now - entry.mailboxes.at < LIST_CACHE_MS) return entry.mailboxes.value;
   const t0 = Date.now();
   const value = await entry.client.list();
-  if (TIMING_ENABLED) console.log(`[imap-timing] list ${Date.now() - t0}ms`);
+  if (TIMING_ENABLED) console.log(`[imap-timing] lane=${lane} list ${Date.now() - t0}ms`);
   entry.mailboxes = { at: Date.now(), value };
   return value;
 }
 
 export function invalidateMailboxCache(account: MailAccount) {
-  const e = entries.get(keyFor(account));
-  if (e) e.mailboxes = undefined;
+  for (const lane of ["interactive", "background"] as ImapLane[]) {
+    const e = entries.get(keyFor(account, lane));
+    if (e) e.mailboxes = undefined;
+  }
 }
 
 /**
  * Drops the cached connection for an account (poisoned socket: a body stream
  * errored or was destroyed mid-literal). The next request reconnects cleanly.
  */
-export function dropAccountConnection(account: MailAccount): void {
-  const key = keyFor(account);
-  const e = entries.get(key);
-  if (e) dropEntry(key, e);
+export function dropAccountConnection(account: MailAccount, lane?: ImapLane): void {
+  const lanes: ImapLane[] = lane ? [lane] : ["interactive", "background"];
+  for (const l of lanes) {
+    const key = keyFor(account, l);
+    const e = entries.get(key);
+    if (e) dropEntry(key, e);
+  }
 }
 
 function isConnectionError(err: unknown): boolean {
@@ -187,17 +211,19 @@ export async function withAccountMailbox<T>(
   password: string,
   path: string,
   fn: (client: ImapFlow) => Promise<T>,
+  lane: ImapLane = "interactive",
 ): Promise<T> {
-  const key = keyFor(account);
+  const key = keyFor(account, lane);
 
   const runOnce = async (): Promise<T> => {
-    const entry = await getEntry(account, password);
+    const entry = await getEntry(account, password, lane);
     // Serialize per connection: chain onto the previous operation.
     const run = entry.chain.then(
       async () => {
         const tLock = Date.now();
         const lock = await entry.client.getMailboxLock(path);
-        if (TIMING_ENABLED) console.log(`[imap-timing] select ${Date.now() - tLock}ms`);
+        if (TIMING_ENABLED)
+          console.log(`[imap-timing] lane=${lane} select ${Date.now() - tLock}ms`);
         try {
           return await fn(entry.client);
         } finally {
@@ -207,7 +233,7 @@ export async function withAccountMailbox<T>(
       },
       async () => {
         // Previous op failed — the chain must not stay rejected.
-        const e2 = await getEntry(account, password);
+        const e2 = await getEntry(account, password, lane);
         const lock = await e2.client.getMailboxLock(path);
         try {
           return await fn(e2.client);
@@ -245,8 +271,15 @@ export async function closeAllImapConnections(): Promise<void> {
 
 /** Bounded, PII-free stats for /api/health style surfaces. */
 export function imapConnectionStats() {
+  const lanes = { interactive: 0, background: 0 };
+  for (const k of entries.keys()) {
+    if (k.startsWith("background|")) lanes.background++;
+    else lanes.interactive++;
+  }
   return {
     openConnections: entries.size,
+    lanes,
+    maxConnectionsPerAccount: 2,
     idleCloseMs: IDLE_CLOSE_MS,
     listCacheMs: LIST_CACHE_MS,
   };

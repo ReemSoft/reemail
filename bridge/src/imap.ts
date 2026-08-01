@@ -7,6 +7,7 @@ import {
   withAccountMailbox,
   dropAccountConnection,
   TIMING_ENABLED,
+  type ImapLane,
 } from "./imap-connection.js";
 
 const IMAP_TIMEOUT_MS = 30_000;
@@ -312,9 +313,6 @@ export async function getMessages(
   }
 }
 
-/** Max bytes of an inline (cid:) image we embed as a data URI. Configurable. */
-const INLINE_CID_MAX_BYTES = Number(process.env.INLINE_CID_MAX_BYTES || 262_144);
-
 export interface TextPartPick {
   part: string;
   type: string;
@@ -415,10 +413,9 @@ export async function downloadPartBuffer(
  *   * fetches envelope + flags + bodyStructure + headers, then downloads ONLY
  *     the text/html (or text/plain) part — attachments stay on the server and
  *     keep using the existing protected /api/attachment path
- *   * inline images are downloaded only when the HTML actually references
- *     their cid and they fit under INLINE_CID_MAX_BYTES; larger ones are
- *     reported in `inlineParts` so the client can stream them through the
- *     protected attachment route instead of breaking the image
+ *   * inline (cid:) images are NEVER downloaded here — they are reported as
+ *     `inlineParts` metadata and streamed lazily by the browser through the
+ *     protected attachment route after the text has painted
  *
  * All FETCH/download commands use BODY.PEEK, so opening a message still does
  * NOT change its \Seen flag — read state stays driven by the explicit
@@ -429,12 +426,14 @@ export async function getMessageBody(
   password: string,
   folder: MailFolder,
   uid: number,
+  lane: ImapLane = "interactive",
 ): Promise<MailMessage | null> {
-  const mailboxes = await getMailboxesCached(account, password);
+  const mailboxes = await getMailboxesCached(account, password, lane);
   const path = resolveFolderPath(mailboxes, folder);
   if (!path) return null;
 
-  return withAccountMailbox(account, password, path, async (client) => {
+  const tOpen = Date.now();
+  const result = await withAccountMailbox(account, password, path, async (client) => {
     const tFetch = Date.now();
     const msg = await client.fetchOne(
       uid.toString(),
@@ -449,7 +448,8 @@ export async function getMessageBody(
       { uid: true },
     );
     if (!msg) return null;
-    if (TIMING_ENABLED) console.log(`[imap-timing] fetch-meta ${Date.now() - tFetch}ms`);
+    if (TIMING_ENABLED)
+      console.log(`[imap-timing] lane=${lane} fetch-meta ${Date.now() - tFetch}ms`);
 
     // Headers only — cheap, and keeps From/To/Subject/DKIM extraction and the
     // X-MailMaestro-Draft-ID lookup byte-identical to the previous behaviour.
@@ -476,7 +476,7 @@ export async function getMessageBody(
     if (pick) {
       const tBody = Date.now();
       const got = await downloadPartBuffer(client, uid, pick.part, 5 * 1024 * 1024, () =>
-        dropAccountConnection(account),
+        dropAccountConnection(account, lane),
       );
       if (got) {
         bodyBytes = got.buf.length;
@@ -498,13 +498,17 @@ export async function getMessageBody(
         }
       }
       if (TIMING_ENABLED)
-        console.log(`[imap-timing] fetch-body ${Date.now() - tBody}ms ${bodyBytes}B`);
+        console.log(`[imap-timing] lane=${lane} fetch-body ${Date.now() - tBody}ms ${bodyBytes}B`);
     }
     parsed.body = html;
 
     // ---- inline (cid:) images referenced by THIS html ---------------------
+    // LAZY CID: we NEVER download inline images here. Downloading them
+    // serially before returning the body was the dominant cost of opening a
+    // message. Instead every referenced cid is reported as metadata and the
+    // browser streams it afterwards through the protected attachment route,
+    // so the text of the message paints immediately.
     const structural = collectAttachmentParts(msg.bodyStructure);
-    const inlinedCids = new Set<string>();
     const deferredInline: NonNullable<MailMessage["inlineParts"]> = [];
 
     if (html) {
@@ -517,34 +521,19 @@ export async function getMessageBody(
           (a) => (a.contentId || "").replace(/^<|>$/g, "").toLowerCase() === cid,
         );
         if (!partInfo?.part) continue;
-        const escaped = cid.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-        const re = new RegExp(`cid:${escaped}`, "gi");
-        if ((partInfo.size || 0) > INLINE_CID_MAX_BYTES) {
-          // Too big to inline — hand it to the protected attachment route.
-          deferredInline.push({
-            cid,
-            part: partInfo.part,
-            mimeType: partInfo.mimeType || "application/octet-stream",
-            size: partInfo.size || 0,
-          });
-          continue;
-        }
-        const got = await downloadPartBuffer(client, uid, partInfo.part, INLINE_CID_MAX_BYTES, () =>
-          dropAccountConnection(account),
-        );
-        if (!got || got.buf.length === 0) continue;
-        const dataUri = `data:${partInfo.mimeType || got.meta?.contentType || "application/octet-stream"};base64,${got.buf.toString("base64")}`;
-        html = html.replace(re, dataUri);
-        inlinedCids.add(cid);
+        deferredInline.push({
+          cid,
+          part: partInfo.part,
+          mimeType: partInfo.mimeType || "application/octet-stream",
+          size: partInfo.size || 0,
+        });
       }
-      parsed.body = html;
     }
 
     // ---- attachments: unchanged contract ---------------------------------
     const deferredCids = new Set(deferredInline.map((d) => d.cid));
     const visible = structural.filter((a) => {
       const cid = (a.contentId || "").replace(/^<|>$/g, "").toLowerCase();
-      if (cid && inlinedCids.has(cid)) return false;
       if (cid && deferredCids.has(cid)) return true; // keep it reachable
       if (a.disposition === "inline" && a.contentId) return false;
       return true;
@@ -553,7 +542,11 @@ export async function getMessageBody(
     parsed.hasAttachments = visible.length > 0;
     if (deferredInline.length) parsed.inlineParts = deferredInline;
     return parsed;
-  });
+  }, lane);
+
+  if (TIMING_ENABLED)
+    console.log(`[imap-timing] lane=${lane} message-open ${Date.now() - tOpen}ms`);
+  return result;
 }
 
 /**
