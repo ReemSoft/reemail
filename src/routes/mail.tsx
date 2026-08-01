@@ -3035,7 +3035,7 @@ function MailApp() {
 
         {/* Message list */}
         <div
-          className={`flex w-full flex-col border-l border-border bg-card md:w-96 md:shrink-0 ${
+          className={`flex w-full flex-col border-e border-border bg-card md:w-96 md:shrink-0 ${
             compose || selectedMessage || (selectedId && reading) ? "hidden md:flex" : "flex"
           }`}
         >
@@ -3381,7 +3381,7 @@ function MessageRow({
       onMouseEnter={onPrefetch}
       onFocus={onPrefetch}
       onTouchStart={onPrefetch}
-      className={`group flex w-full cursor-pointer items-start gap-3 border-b border-border/60 px-4 py-3 text-right transition-colors duration-150 hover:bg-muted/50 active:bg-muted active:duration-75 ${
+      className={`group flex w-full cursor-pointer items-start gap-3 border-b border-border/60 px-4 py-3 text-start transition-colors duration-150 hover:bg-muted/50 active:bg-muted active:duration-75 ${
         active ? "bg-accent" : ""
       } ${selected ? "bg-primary/5" : ""} ${!message.read ? "bg-card" : "bg-card/70"}`}
     >
@@ -3770,7 +3770,7 @@ function MessageView({
                         <dt className="text-foreground/70 whitespace-nowrap">{tr("المرسل:")}</dt>
                         <dd className="min-w-0 break-all">
                           {message.from.name ? (
-                            <span className="ml-1">{message.from.name}</span>
+                            <span className="ms-1">{message.from.name}</span>
                           ) : null}
                           <span dir="ltr" className="text-muted-foreground">
                             &lt;{message.from.email || "—"}&gt;
@@ -5577,7 +5577,7 @@ function Composer({
             getSuggestions={suggestFor}
             onHideSuggestion={hideOne}
             rightSlot={
-              <div className="flex shrink-0 flex-wrap items-center gap-1 sm:border-r sm:border-border/60 sm:pr-2 sm:mr-2">
+              <div className="flex shrink-0 flex-wrap items-center gap-1 sm:border-s sm:border-border/60 sm:ps-2 sm:me-2">
                 {!showCc && (
                   <button
                     type="button"
@@ -6091,7 +6091,7 @@ function Composer({
         }}
       >
         <AlertDialogContent className="sm:max-w-md">
-          <AlertDialogHeader className="text-center sm:text-right">
+          <AlertDialogHeader className="text-center sm:text-start">
             <AlertDialogTitle>{tr("لديك تغييرات غير محفوظة")}</AlertDialogTitle>
             <AlertDialogDescription>
               {tr("هل تريد حفظ الرسالة كمسودّة قبل المغادرة؟")}

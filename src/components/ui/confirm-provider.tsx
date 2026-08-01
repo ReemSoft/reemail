@@ -82,7 +82,7 @@ export function ConfirmProvider({ children }: { children: React.ReactNode }) {
       {children}
       <AlertDialog open={!!request} onOpenChange={handleOpenChange}>
         <AlertDialogContent className="sm:max-w-md">
-          <AlertDialogHeader className="text-center sm:text-right">
+          <AlertDialogHeader className="text-center sm:text-start">
             <AlertDialogTitle>{request?.title}</AlertDialogTitle>
             {request?.description ? (
               <AlertDialogDescription>{request.description}</AlertDialogDescription>
