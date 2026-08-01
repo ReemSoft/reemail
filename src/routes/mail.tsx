@@ -1610,6 +1610,33 @@ function MailApp() {
     messagesRef.current = messages;
   }, [messages]);
 
+  // Background body warming.
+  // Fires only when the folder finished loading and the tab is visible, after
+  // an idle delay, and always on the bridge's `background` IMAP lane so it can
+  // never sit in front of a user click. One bounded batch per folder visit.
+  const warmedRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!session?.mailSessionToken) return;
+    if (loading || messages.length === 0) return;
+    if (folder === "drafts") return;
+    const stamp = `${session.account.id}|${folder}`;
+    if (warmedRef.current.has(stamp)) return;
+    const t = window.setTimeout(() => {
+      if (document.visibilityState !== "visible") return;
+      warmedRef.current.add(stamp);
+      void warmBodies({
+        data: {
+          mailSessionToken: session.mailSessionToken ?? "",
+          password: session.password,
+          folder,
+        },
+      }).catch(() => undefined);
+    }, 2500);
+    return () => window.clearTimeout(t);
+  }, [session, folder, loading, messages.length, warmBodies]);
+
+
+
   const markRead = useMailServerFn(bridgeMarkRead);
   const star = useMailServerFn(bridgeStar);
   const updateFlag = useMailServerFn(indexUpdateFlag);
