@@ -92,23 +92,35 @@ export function MailboxSwitcher({ session }: Props) {
     setBusy(true);
     try {
       const pooled = listPooledMailboxes().find((m) => m.account.id === target.accountId);
+      // Instant path: pooled password if present, otherwise the server uses the
+      // credentials already verified when this mailbox was linked.
       const pwd = password ?? pooled?.password;
-      if (!pwd) {
-        setAskFor(target);
-        setAskPassword("");
-        return;
-      }
       const res = await switchFn({
-        data: { mailSessionToken: token, targetAccountId: target.accountId, password: pwd },
+        data: {
+          mailSessionToken: token,
+          targetAccountId: target.accountId,
+          ...(pwd ? { password: pwd } : {}),
+        },
       });
       if (!res.ok) {
+        if (res.message === "CREDENTIALS_PENDING") {
+          setAskFor(target);
+          setAskPassword("");
+          return;
+        }
         toast.error(tr(res.message));
+        return;
+      }
+      const effective = pwd ?? res.mailbox.password;
+      if (!effective) {
+        setAskFor(target);
+        setAskPassword("");
         return;
       }
       activate({
         account: res.mailbox.account,
         company: res.mailbox.company,
-        password: pwd,
+        password: effective,
         mailSessionToken: res.mailbox.mailSessionToken,
         mailSessionTokenExpiresAt: res.mailbox.mailSessionTokenExpiresAt,
       });
@@ -118,6 +130,7 @@ export function MailboxSwitcher({ session }: Props) {
       setBusy(false);
     }
   }
+
 
   async function doAdd() {
     if (!addEmail.includes("@") || addPassword.length < 1) {
