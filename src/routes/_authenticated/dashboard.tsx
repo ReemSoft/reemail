@@ -38,12 +38,13 @@ interface MailAccount {
   id: string;
   email_address: string;
   display_name: string | null;
-  imap_host: string;
-  imap_port: number;
-  imap_secure: boolean;
-  smtp_host: string;
-  smtp_port: number;
-  smtp_secure: boolean;
+  imap_host: string | null;
+  imap_port: number | null;
+  imap_secure: boolean | null;
+  smtp_host: string | null;
+  smtp_port: number | null;
+  smtp_secure: boolean | null;
+  source_domain_id: string | null;
   is_default: boolean;
 }
 
@@ -247,7 +248,7 @@ function CompanyDashboard() {
           {[
             { id: "branding", label: tr("العلامة التجارية"), icon: Palette },
             { id: "accounts", label: tr("حسابات البريد"), icon: MailIcon, count: accounts.length },
-            { id: "domains", label: tr("دومينات مشتركة"), icon: Globe, count: domains.length },
+            { id: "domains", label: tr("قوالب الدومين"), icon: Globe, count: domains.length },
           ].map((t) => (
             <button
               key={t.id}
@@ -278,6 +279,7 @@ function CompanyDashboard() {
           {tab === "accounts" && (
             <AccountsTab
               accounts={accounts}
+              domains={domains}
               companyId={company.id}
               onChange={load}
             />
@@ -380,10 +382,12 @@ const IMAP_PRESETS = [
 
 function AccountsTab({
   accounts,
+  domains,
   companyId,
   onChange,
 }: {
   accounts: MailAccount[];
+  domains: EmailDomain[];
   companyId: string;
   onChange: () => Promise<void> | void;
 }) {
@@ -395,6 +399,7 @@ function AccountsTab({
   const emptyForm = {
     display_name: "",
     email_address: "",
+    source_domain_id: "",
     imap_host: "",
     imap_port: 993,
     imap_secure: true,
@@ -403,43 +408,79 @@ function AccountsTab({
     smtp_secure: true,
   };
   const [form, setForm] = useState(emptyForm);
+  const [useCustom, setUseCustom] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
   function closeModal() {
     setOpen(false);
     setEditingId(null);
     setForm(emptyForm);
+    setUseCustom(false);
+  }
+
+  /** Auto-selects the matching domain template while typing the address. */
+  function onEmailChange(value: string) {
+    const domainPart = value.split("@")[1]?.trim().toLowerCase() ?? "";
+    if (useCustom || form.source_domain_id) {
+      setForm({ ...form, email_address: value });
+      return;
+    }
+    const match = domains.find((d) => d.domain.toLowerCase() === domainPart);
+    setForm({ ...form, email_address: value, source_domain_id: match?.id ?? "" });
   }
 
   function startEdit(account: MailAccount) {
+    const custom = !!account.imap_host;
     setEditingId(account.id);
+    setUseCustom(custom);
     setForm({
       display_name: account.display_name || "",
       email_address: account.email_address,
-      imap_host: account.imap_host,
-      imap_port: account.imap_port,
-      imap_secure: account.imap_secure,
-      smtp_host: account.smtp_host,
-      smtp_port: account.smtp_port,
-      smtp_secure: account.smtp_secure,
+      source_domain_id: account.source_domain_id || "",
+      imap_host: account.imap_host || "",
+      imap_port: account.imap_port ?? 993,
+      imap_secure: account.imap_secure ?? true,
+      smtp_host: account.smtp_host || "",
+      smtp_port: account.smtp_port ?? 465,
+      smtp_secure: account.smtp_secure ?? true,
     });
     setOpen(true);
   }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+
+    if (!useCustom && !form.source_domain_id) {
+      return toast.error(tr("اختر قالب دومين أو فعّل الإعدادات المخصّصة."));
+    }
+
     setSubmitting(true);
 
-    const basePayload = {
-      display_name: form.display_name || null,
-      email_address: form.email_address,
-      imap_host: form.imap_host,
-      imap_port: form.imap_port,
-      imap_secure: form.imap_secure,
-      smtp_host: form.smtp_host,
-      smtp_port: form.smtp_port,
-      smtp_secure: form.smtp_secure,
-    };
+    // Domain template mode → leave server fields NULL so the account always
+    // inherits the current domain settings (single source of truth).
+    const basePayload = useCustom
+      ? {
+          display_name: form.display_name || null,
+          email_address: form.email_address,
+          source_domain_id: null,
+          imap_host: form.imap_host,
+          imap_port: form.imap_port,
+          imap_secure: form.imap_secure,
+          smtp_host: form.smtp_host,
+          smtp_port: form.smtp_port,
+          smtp_secure: form.smtp_secure,
+        }
+      : {
+          display_name: form.display_name || null,
+          email_address: form.email_address,
+          source_domain_id: form.source_domain_id,
+          imap_host: null,
+          imap_port: null,
+          imap_secure: null,
+          smtp_host: null,
+          smtp_port: null,
+          smtp_secure: null,
+        };
 
     if (editingId) {
       const { error } = await supabase
@@ -538,13 +579,24 @@ function AccountsTab({
                       )}
                     </div>
                     <p className="mt-0.5 truncate text-xs text-muted-foreground">
-                      <span dir="ltr" className="mx-1">
-                        IMAP {a.imap_host}:{a.imap_port}
-                      </span>
-                      ·
-                      <span dir="ltr" className="mx-1">
-                        SMTP {a.smtp_host}:{a.smtp_port}
-                      </span>
+                      {a.imap_host ? (
+                        <>
+                          <span dir="ltr" className="mx-1">
+                            IMAP {a.imap_host}:{a.imap_port}
+                          </span>
+                          ·
+                          <span dir="ltr" className="mx-1">
+                            SMTP {a.smtp_host}:{a.smtp_port}
+                          </span>
+                        </>
+                      ) : (
+                        <span>
+                          {tr("يرث إعدادات قالب الدومين")}
+                          {a.source_domain_id
+                            ? ` @${domains.find((d) => d.id === a.source_domain_id)?.domain ?? ""}`
+                            : ""}
+                        </span>
+                      )}
                     </p>
                   </div>
                   <button
@@ -580,24 +632,6 @@ function AccountsTab({
         >
           <form onSubmit={handleSubmit} className="space-y-4">
 
-            <div>
-              <p className="mb-1.5 text-xs font-medium text-muted-foreground">
-                {tr("اختصارات:")}
-              </p>
-              <div className="flex flex-wrap gap-1.5">
-                {IMAP_PRESETS.map((p) => (
-                  <button
-                    type="button"
-                    key={p.name}
-                    onClick={() => applyPreset(p)}
-                    className="rounded-md border border-input bg-background px-2 py-1 text-xs hover:border-primary hover:bg-muted"
-                  >
-                    {p.name}
-                  </button>
-                ))}
-              </div>
-            </div>
-
             <div className="grid gap-4 sm:grid-cols-2">
               <Field label={tr("البريد الإلكتروني")}>
                 <input
@@ -605,9 +639,7 @@ function AccountsTab({
                   type="email"
                   dir="ltr"
                   value={form.email_address}
-                  onChange={(e) =>
-                    setForm({ ...form, email_address: e.target.value })
-                  }
+                  onChange={(e) => onEmailChange(e.target.value)}
                   className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary"
                 />
               </Field>
@@ -620,75 +652,118 @@ function AccountsTab({
               </Field>
             </div>
 
-            <fieldset className="rounded-xl border border-border p-3">
-              <legend className="px-1 text-xs font-semibold text-muted-foreground">
-                {tr("خادم الوارد (IMAP)")}
-              </legend>
-              <div className="grid gap-3 sm:grid-cols-[1fr_100px_auto]">
-                <input
-                  required
-                  placeholder="imap.example.com"
-                  dir="ltr"
-                  value={form.imap_host}
-                  onChange={(e) => setForm({ ...form, imap_host: e.target.value })}
-                  className="rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary"
-                />
-                <input
-                  required
-                  type="number"
-                  value={form.imap_port}
-                  onChange={(e) =>
-                    setForm({ ...form, imap_port: Number(e.target.value) })
+            <Field label={tr("إعدادات السيرفر")}>
+              <select
+                value={useCustom ? "custom" : form.source_domain_id}
+                onChange={(e) => {
+                  if (e.target.value === "custom") {
+                    setUseCustom(true);
+                    setForm({ ...form, source_domain_id: "" });
+                  } else {
+                    setUseCustom(false);
+                    setForm({ ...form, source_domain_id: e.target.value });
                   }
-                  className="rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary"
-                />
-                <label className="flex items-center gap-2 text-xs">
-                  <input
-                    type="checkbox"
-                    checked={form.imap_secure}
-                    onChange={(e) =>
-                      setForm({ ...form, imap_secure: e.target.checked })
-                    }
-                  />
-                  SSL
-                </label>
-              </div>
-            </fieldset>
+                }}
+                className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary"
+              >
+                <option value="">{tr("— اختر قالب دومين —")}</option>
+                {domains.map((d) => (
+                  <option key={d.id} value={d.id}>
+                    @{d.domain}
+                  </option>
+                ))}
+                <option value="custom">{tr("إعدادات مخصّصة لهذا البريد")}</option>
+              </select>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {useCustom
+                  ? tr("سيتم استخدام الإعدادات المُدخلة أدناه لهذا البريد فقط.")
+                  : tr("سيرث هذا البريد إعدادات IMAP/SMTP من قالب الدومين تلقائياً.")}
+              </p>
+            </Field>
 
-            <fieldset className="rounded-xl border border-border p-3">
-              <legend className="px-1 text-xs font-semibold text-muted-foreground">
-                {tr("خادم الصادر (SMTP)")}
-              </legend>
-              <div className="grid gap-3 sm:grid-cols-[1fr_100px_auto]">
-                <input
-                  required
-                  placeholder="smtp.example.com"
-                  dir="ltr"
-                  value={form.smtp_host}
-                  onChange={(e) => setForm({ ...form, smtp_host: e.target.value })}
-                  className="rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary"
-                />
-                <input
-                  required
-                  type="number"
-                  value={form.smtp_port}
-                  onChange={(e) =>
-                    setForm({ ...form, smtp_port: Number(e.target.value) })
-                  }
-                  className="rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary"
-                />
-                <label className="flex items-center gap-2 text-xs">
-                  <input
-                    type="checkbox"
-                    checked={form.smtp_secure}
-                    onChange={(e) =>
-                      setForm({ ...form, smtp_secure: e.target.checked })
-                    }
-                  />
-                  SSL
-                </label>
-              </div>
-            </fieldset>
+            {useCustom && (
+              <>
+                <div>
+                  <p className="mb-1.5 text-xs font-medium text-muted-foreground">
+                    {tr("اختصارات:")}
+                  </p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {IMAP_PRESETS.map((p) => (
+                      <button
+                        type="button"
+                        key={p.name}
+                        onClick={() => applyPreset(p)}
+                        className="rounded-md border border-input bg-background px-2 py-1 text-xs hover:border-primary hover:bg-muted"
+                      >
+                        {p.name}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <fieldset className="rounded-xl border border-border p-3">
+                  <legend className="px-1 text-xs font-semibold text-muted-foreground">
+                    {tr("خادم الوارد (IMAP)")}
+                  </legend>
+                  <div className="grid gap-3 sm:grid-cols-[1fr_100px_auto]">
+                    <input
+                      required
+                      placeholder="imap.example.com"
+                      dir="ltr"
+                      value={form.imap_host}
+                      onChange={(e) => setForm({ ...form, imap_host: e.target.value })}
+                      className="rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary"
+                    />
+                    <input
+                      required
+                      type="number"
+                      value={form.imap_port}
+                      onChange={(e) => setForm({ ...form, imap_port: Number(e.target.value) })}
+                      className="rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary"
+                    />
+                    <label className="flex items-center gap-2 text-xs">
+                      <input
+                        type="checkbox"
+                        checked={form.imap_secure}
+                        onChange={(e) => setForm({ ...form, imap_secure: e.target.checked })}
+                      />
+                      SSL
+                    </label>
+                  </div>
+                </fieldset>
+
+                <fieldset className="rounded-xl border border-border p-3">
+                  <legend className="px-1 text-xs font-semibold text-muted-foreground">
+                    {tr("خادم الصادر (SMTP)")}
+                  </legend>
+                  <div className="grid gap-3 sm:grid-cols-[1fr_100px_auto]">
+                    <input
+                      required
+                      placeholder="smtp.example.com"
+                      dir="ltr"
+                      value={form.smtp_host}
+                      onChange={(e) => setForm({ ...form, smtp_host: e.target.value })}
+                      className="rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary"
+                    />
+                    <input
+                      required
+                      type="number"
+                      value={form.smtp_port}
+                      onChange={(e) => setForm({ ...form, smtp_port: Number(e.target.value) })}
+                      className="rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary"
+                    />
+                    <label className="flex items-center gap-2 text-xs">
+                      <input
+                        type="checkbox"
+                        checked={form.smtp_secure}
+                        onChange={(e) => setForm({ ...form, smtp_secure: e.target.checked })}
+                      />
+                      SSL
+                    </label>
+                  </div>
+                </fieldset>
+              </>
+            )}
 
             <div className="flex justify-end gap-2 pt-2">
               <button
@@ -828,9 +903,9 @@ function DomainsTab({
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-xl font-bold">{tr("دومينات مشتركة")}</h2>
+          <h2 className="text-xl font-bold">{tr("قوالب الدومين")}</h2>
           <p className="text-sm text-muted-foreground">
-            {tr("أضف إعدادات IMAP/SMTP للدومين مرة واحدة، وأي بريد على نفس الدومين يعمل تلقائياً بدون إضافة كل حساب على حدة.")}
+            {tr("أضف إعدادات IMAP/SMTP للدومين مرة واحدة، ثم اربط بها إيميلاتك بدون إعادة إدخالها. إضافة الدومين وحدها لا تسمح بدخول أي بريد غير مُضاف.")}
           </p>
         </div>
         <button
