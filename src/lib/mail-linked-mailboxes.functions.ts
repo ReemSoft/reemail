@@ -554,6 +554,7 @@ export const switchMailbox = createServerFn({ method: "POST" })
           company: company ?? null,
           mailSessionToken: tokenInfo.token,
           mailSessionTokenExpiresAt: tokenInfo.expiresAt,
+          password: effectivePassword,
         },
       };
     },
