@@ -5,6 +5,7 @@ import type { MailAccount, MailFolder, FolderCount, MailMessage, MailAttachment 
 import {
   getMailboxesCached,
   withAccountMailbox,
+  dropAccountConnection,
   TIMING_ENABLED,
 } from "./imap-connection.js";
 
@@ -474,7 +475,9 @@ export async function getMessageBody(
     let html = "";
     if (pick) {
       const tBody = Date.now();
-      const got = await downloadPartBuffer(client, uid, pick.part, 5 * 1024 * 1024);
+      const got = await downloadPartBuffer(client, uid, pick.part, 5 * 1024 * 1024, () =>
+        dropAccountConnection(account),
+      );
       if (got) {
         bodyBytes = got.buf.length;
         const charset =
@@ -526,7 +529,9 @@ export async function getMessageBody(
           });
           continue;
         }
-        const got = await downloadPartBuffer(client, uid, partInfo.part, INLINE_CID_MAX_BYTES);
+        const got = await downloadPartBuffer(client, uid, partInfo.part, INLINE_CID_MAX_BYTES, () =>
+          dropAccountConnection(account),
+        );
         if (!got || got.buf.length === 0) continue;
         const dataUri = `data:${partInfo.mimeType || got.meta?.contentType || "application/octet-stream"};base64,${got.buf.toString("base64")}`;
         html = html.replace(re, dataUri);

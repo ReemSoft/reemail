@@ -3419,7 +3419,6 @@ function MailApp() {
                       if (selectMode) toggleSelect(m.id);
                       else openMessage(m.id);
                     }}
-                    onPrefetch={() => prefetchMessage(m.id)}
                     onToggleStar={(e) => toggleStar(e, m.id)}
                     onToggleRead={(e) => toggleRead(e, m.id)}
                     onToggleSelect={() => toggleSelect(m.id)}
@@ -3504,7 +3503,6 @@ function MessageRow({
   anySelected,
   selectMode,
   onClick,
-  onPrefetch,
   onToggleStar,
   onToggleRead,
   onToggleSelect,
@@ -3515,7 +3513,6 @@ function MessageRow({
   anySelected: boolean;
   selectMode: boolean;
   onClick: () => void;
-  onPrefetch?: () => void;
   onToggleStar: (e: React.MouseEvent) => void;
   onToggleRead: (e: React.MouseEvent) => void;
   onToggleSelect: () => void;
@@ -3531,9 +3528,6 @@ function MessageRow({
           onClick();
         }
       }}
-      onMouseEnter={onPrefetch}
-      onFocus={onPrefetch}
-      onTouchStart={onPrefetch}
       className={`group flex w-full cursor-pointer items-start gap-3 border-b border-border/60 px-4 py-3 text-start transition-colors duration-150 hover:bg-muted/50 active:bg-muted active:duration-75 ${
         active ? "bg-accent" : ""
       } ${selected ? "bg-primary/5" : ""} ${!message.read ? "bg-card" : "bg-card/70"}`}
