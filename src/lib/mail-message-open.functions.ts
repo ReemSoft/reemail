@@ -169,7 +169,7 @@ const WarmSchema = z.object({
  */
 export const warmMessageBodies = createServerFn({ method: "POST" })
   .inputValidator((v: z.input<typeof WarmSchema>) => WarmSchema.parse(v))
-  .handler(async ({ data }): Promise<{ ok: boolean; warmed: number }> => {
+  .handler(async ({ data }): Promise<{ ok: boolean; warmed: number; remaining: number }> => {
     const { resolveBridgeAuth } = await import("@/lib/mail-bridge-auth.server");
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
     const cache = await import("@/lib/mail-body-cache.server");
