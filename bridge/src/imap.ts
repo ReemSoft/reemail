@@ -5,6 +5,7 @@ import type { MailAccount, MailFolder, FolderCount, MailMessage, MailAttachment 
 import {
   getMailboxesCached,
   withAccountMailbox,
+  dropAccountConnection,
   TIMING_ENABLED,
 } from "./imap-connection.js";
 
@@ -365,21 +366,42 @@ function decodeText(buf: Buffer, charset?: string): string {
   }
 }
 
-async function downloadPartBuffer(
+/**
+ * Downloads one body part.
+ *
+ * Truncation is delegated to ImapFlow's own `maxBytes` option: it stops the
+ * literal at the right place AND keeps the IMAP command in a consistent
+ * state. We never `break` out of the stream ourselves — a half-read literal
+ * leaves unread bytes on the shared socket and wedges every later request on
+ * that account ("Failed to open message" until the 30s timeout).
+ *
+ * If the stream errors or is destroyed, the shared per-account connection is
+ * considered poisoned and dropped from the cache, so the next request opens a
+ * clean session instead of reusing a desynchronised one.
+ */
+export async function downloadPartBuffer(
   client: ImapFlow,
   uid: number,
   part: string,
   maxBytes: number,
+  onPoisoned?: () => void,
 ): Promise<{ buf: Buffer; meta: any } | null> {
   const dl = await client.download(String(uid), part, { uid: true, maxBytes });
   if (!dl?.content) return null;
   const chunks: Buffer[] = [];
-  let size = 0;
-  for await (const chunk of dl.content as any) {
-    const b = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-    size += b.length;
-    if (size > maxBytes) break;
-    chunks.push(b);
+  try {
+    // Consume the stream to the end — ImapFlow already caps it at maxBytes.
+    for await (const chunk of dl.content as any) {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    }
+  } catch (err) {
+    try {
+      (dl.content as any)?.destroy?.();
+    } catch {
+      /* already gone */
+    }
+    onPoisoned?.();
+    throw err;
   }
   return { buf: Buffer.concat(chunks), meta: dl.meta };
 }
@@ -453,7 +475,9 @@ export async function getMessageBody(
     let html = "";
     if (pick) {
       const tBody = Date.now();
-      const got = await downloadPartBuffer(client, uid, pick.part, 5 * 1024 * 1024);
+      const got = await downloadPartBuffer(client, uid, pick.part, 5 * 1024 * 1024, () =>
+        dropAccountConnection(account),
+      );
       if (got) {
         bodyBytes = got.buf.length;
         const charset =
@@ -505,7 +529,9 @@ export async function getMessageBody(
           });
           continue;
         }
-        const got = await downloadPartBuffer(client, uid, partInfo.part, INLINE_CID_MAX_BYTES);
+        const got = await downloadPartBuffer(client, uid, partInfo.part, INLINE_CID_MAX_BYTES, () =>
+          dropAccountConnection(account),
+        );
         if (!got || got.buf.length === 0) continue;
         const dataUri = `data:${partInfo.mimeType || got.meta?.contentType || "application/octet-stream"};base64,${got.buf.toString("base64")}`;
         html = html.replace(re, dataUri);

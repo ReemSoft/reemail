@@ -151,6 +151,16 @@ export function invalidateMailboxCache(account: MailAccount) {
   if (e) e.mailboxes = undefined;
 }
 
+/**
+ * Drops the cached connection for an account (poisoned socket: a body stream
+ * errored or was destroyed mid-literal). The next request reconnects cleanly.
+ */
+export function dropAccountConnection(account: MailAccount): void {
+  const key = keyFor(account);
+  const e = entries.get(key);
+  if (e) dropEntry(key, e);
+}
+
 function isConnectionError(err: unknown): boolean {
   const msg = String((err as any)?.message || err || "").toLowerCase();
   const code = String((err as any)?.code || "").toUpperCase();
