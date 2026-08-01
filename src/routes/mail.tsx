@@ -1406,6 +1406,9 @@ function MailApp() {
   const [searchMode, setSearchMode] = useState<"quick" | "deep">("quick");
   // Mobile-only: expand the search field in place and hide the trailing icons.
   const [searchFocused, setSearchFocused] = useState(false);
+  // Keep the search bar expanded while the search-type dropdown is open,
+  // because its content is portaled outside the search container.
+  const [searchDropdownOpen, setSearchDropdownOpen] = useState(false);
   const [deepIncludeBody, setDeepIncludeBody] = useState(false);
   const [deepResults, setDeepResults] = useState<MailMessage[] | null>(null);
   const [deepLoading, setDeepLoading] = useState(false);
@@ -2819,7 +2822,11 @@ function MailApp() {
           <span className="hidden text-base font-bold sm:inline">{brandName}</span>
         </Link>
 
-        <div className="mx-2 flex flex-1 items-center gap-1 rounded-xl bg-muted/70 pe-1 ps-3 py-1.5 transition focus-within:bg-card focus-within:shadow-elevated sm:mx-4 sm:max-w-xl">
+        <div
+          className="mx-2 flex flex-1 items-center gap-1 rounded-xl bg-muted/70 pe-1 ps-3 py-1.5 transition focus-within:bg-card focus-within:shadow-elevated sm:mx-4 sm:max-w-xl"
+          onFocus={() => setSearchFocused(true)}
+          onBlur={() => setSearchFocused(false)}
+        >
           {searchMode === "deep" ? (
             deepLoading ? (
               <Loader2 className="h-4 w-4 shrink-0 animate-spin text-primary" />
@@ -2832,8 +2839,6 @@ function MailApp() {
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            onFocus={() => setSearchFocused(true)}
-            onBlur={() => setSearchFocused(false)}
             placeholder={searchMode === "deep" ? tr("بحث شامل على السيرفر…") : tr("ابحث في البريد...")}
             className="w-full bg-transparent px-1 text-sm outline-none placeholder:text-muted-foreground"
           />
@@ -2847,7 +2852,7 @@ function MailApp() {
               <X className="h-3.5 w-3.5" />
             </button>
           )}
-          <DropdownMenu dir={uiDir}>
+          <DropdownMenu dir={uiDir} onOpenChange={setSearchDropdownOpen}>
             <DropdownMenuTrigger asChild>
               <button
                 className={`flex shrink-0 items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium transition ${
@@ -2930,7 +2935,7 @@ function MailApp() {
           {/* Mobile-only actions — collapse smoothly while the search field is focused */}
           <div
             className={`flex items-center gap-0.5 overflow-hidden transition-all duration-300 ease-out sm:hidden ${
-              searchFocused ? "max-w-0 opacity-0" : "max-w-[6rem] opacity-100"
+              searchFocused || searchDropdownOpen ? "max-w-0 opacity-0" : "max-w-[6rem] opacity-100"
             }`}
           >
             <button
