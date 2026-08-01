@@ -2935,7 +2935,7 @@ function MailApp() {
           {/* Mobile-only actions — collapse smoothly while the search field is focused */}
           <div
             className={`flex items-center gap-0.5 overflow-hidden transition-all duration-300 ease-out sm:hidden ${
-              searchFocused ? "max-w-0 opacity-0" : "max-w-[6rem] opacity-100"
+              searchFocused || searchDropdownOpen ? "max-w-0 opacity-0" : "max-w-[6rem] opacity-100"
             }`}
           >
             <button
