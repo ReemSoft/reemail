@@ -80,33 +80,12 @@ export const clientLogin = createServerFn({ method: "POST" })
       }
     }
 
-    // No account row → synthesize from a registered domain (shared-domain feature).
+    // No account row → access denied. A registered domain is only a settings
+    // template; it never grants login by itself.
     if (!resolved) {
-      if (!domainPart) {
-        return { ok: false as const, message: "بريد غير صالح" };
-      }
-      const defaults = await loadDomainDefaults();
-      if (defaults.length === 0) {
-        return { ok: false as const, message: "هذا البريد غير مُسجّل. تواصل مع شركتك." };
-      }
-      if (defaults.length > 1) {
-        return {
-          ok: false as const,
-          message: "هذا الدومين مُسجّل لدى أكثر من شركة. اطلب من شركتك إضافة بريدك.",
-        };
-      }
-      const d = defaults[0];
-      resolved = {
-        id: `domain:${d.id}`,
-        company_id: d.company_id,
-        email_address: data.email,
-        display_name: null,
-        imap_host: d.imap_host,
-        imap_port: d.imap_port,
-        imap_secure: d.imap_secure,
-        smtp_host: d.smtp_host,
-        smtp_port: d.smtp_port,
-        smtp_secure: d.smtp_secure,
+      return {
+        ok: false as const,
+        message: "هذا البريد غير مُضاف من قِبل شركتك. تواصل مع المشرف.",
       };
     }
 
