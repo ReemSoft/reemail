@@ -451,19 +451,29 @@ export const switchMailbox = createServerFn({ method: "POST" })
       const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
 
       if (data.targetAccountId !== claims.sub) {
-        const { data: link, error } = await supabaseAdmin
-          .from("mail_account_links")
-          .select("id")
-          .eq("owner_account_id", claims.sub)
-          .eq("company_id", claims.cid)
-          .eq("linked_account_id", data.targetAccountId)
-          .maybeSingle();
+        const [{ data: self, error }, { data: target }] = await Promise.all([
+          supabaseAdmin
+            .from("mail_accounts")
+            .select("mailbox_group_id")
+            .eq("id", claims.sub)
+            .eq("company_id", claims.cid)
+            .maybeSingle(),
+          supabaseAdmin
+            .from("mail_accounts")
+            .select("mailbox_group_id")
+            .eq("id", data.targetAccountId)
+            .eq("company_id", claims.cid)
+            .maybeSingle(),
+        ]);
         if (error) {
           console.error("[linked-mailboxes] switch lookup failed", { code: error.code });
           return { ok: false, message: "تعذر تبديل صندوق البريد." };
         }
-        if (!link) return { ok: false, message: "هذا الصندوق غير مرتبط بحسابك." };
+        if (!self || !target || self.mailbox_group_id !== target.mailbox_group_id) {
+          return { ok: false, message: "هذا الصندوق غير مرتبط بحسابك." };
+        }
       }
+
 
       const { resolveMailConfigForAccount } = await import("@/lib/mail-config.server");
       let cfg;
