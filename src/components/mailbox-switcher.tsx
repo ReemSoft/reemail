@@ -207,18 +207,29 @@ export function MailboxSwitcher({ session, compact = false }: Props) {
     <>
       <DropdownMenu dir={dir}>
         <DropdownMenuTrigger asChild>
-          <button
-            className="flex max-w-[220px] items-center gap-1.5 rounded-lg bg-muted/60 px-3 py-1.5 text-xs text-muted-foreground transition hover:bg-muted"
-            title={session.account.email_address}
-          >
-            <Mail className="h-3.5 w-3.5 shrink-0" />
-            <span className={`truncate ${dir === "rtl" ? "text-end" : "text-start"}`} dir="ltr">
-              {session.account.email_address}
-            </span>
-            <ChevronDown className="h-3.5 w-3.5 shrink-0" />
-          </button>
+          {compact ? (
+            <button
+              className="rounded-lg p-2 text-muted-foreground transition hover:bg-muted"
+              title={session.account.email_address}
+              aria-label={tr("صناديق البريد")}
+            >
+              <Mail className="h-4 w-4" />
+            </button>
+          ) : (
+            <button
+              className="flex max-w-[220px] items-center gap-1.5 rounded-lg bg-muted/60 px-3 py-1.5 text-xs text-muted-foreground transition hover:bg-muted"
+              title={session.account.email_address}
+            >
+              <Mail className="h-3.5 w-3.5 shrink-0" />
+              <span className={`truncate ${dir === "rtl" ? "text-end" : "text-start"}`} dir="ltr">
+                {session.account.email_address}
+              </span>
+              <ChevronDown className="h-3.5 w-3.5 shrink-0" />
+            </button>
+          )}
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-80 p-1.5">
+        <DropdownMenuContent align="end" className="w-[min(20rem,calc(100vw-2rem))] p-1.5">
+
           <DropdownMenuLabel className="px-2 pb-1.5 text-start text-xs text-muted-foreground">
             {tr("صناديق البريد")}
           </DropdownMenuLabel>
