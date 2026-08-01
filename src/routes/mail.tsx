@@ -53,11 +53,13 @@ function EmailBodyFrame({ html, className }: { html: string; className?: string 
   const [height, setHeight] = useState<number>(60);
   const [allowRemoteImages, setAllowRemoteImages] = useState(false);
 
-  // Reset consent whenever the message body changes (per-message opt-in only).
+  // Remembered preference ("always show images"). Read after mount so SSR and
+  // the first client render stay identical; costs nothing at open time.
   useEffect(() => {
-    setAllowRemoteImages(false);
+    setAllowRemoteImages(getAlwaysShowRemoteImages());
     setHeight(60);
   }, [html]);
+
 
   const parentOrigin = useMemo(
     () => (typeof window !== "undefined" ? window.location.origin : "null"),
