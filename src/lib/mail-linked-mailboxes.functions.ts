@@ -94,34 +94,36 @@ export const listLinkedMailboxes = createServerFn({ method: "POST" })
         return { ok: false, message: "INVALID_TOKEN" };
       }
       const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-      const { data: rows, error } = await supabaseAdmin
-        .from("mail_account_links")
-        .select("linked_account_id, mail_accounts!mail_account_links_linked_account_id_fkey(id, email_address, display_name)")
-        .eq("owner_account_id", claims.sub)
+      const { data: self, error: selfErr } = await supabaseAdmin
+        .from("mail_accounts")
+        .select("mailbox_group_id")
+        .eq("id", claims.sub)
         .eq("company_id", claims.cid)
+        .maybeSingle();
+      if (selfErr || !self) {
+        console.error("[linked-mailboxes] self lookup failed", { code: selfErr?.code });
+        return { ok: false, message: "تعذر تحميل الصناديق المرتبطة." };
+      }
+      const { data: rows, error } = await supabaseAdmin
+        .from("mail_accounts")
+        .select("id, email_address, display_name")
+        .eq("company_id", claims.cid)
+        .eq("mailbox_group_id", self.mailbox_group_id)
+        .neq("id", claims.sub)
         .order("created_at", { ascending: true });
       if (error) {
         console.error("[linked-mailboxes] list failed", { code: error.code });
         return { ok: false, message: "تعذر تحميل الصناديق المرتبطة." };
       }
-      const mailboxes: LinkedMailboxSummary[] = (rows ?? [])
-        .map((r) => {
-          const acc = r.mail_accounts as unknown as {
-            id: string;
-            email_address: string;
-            display_name: string | null;
-          } | null;
-          if (!acc) return null;
-          return {
-            accountId: acc.id,
-            emailAddress: acc.email_address,
-            displayName: acc.display_name ?? null,
-          };
-        })
-        .filter((x): x is LinkedMailboxSummary => x !== null);
+      const mailboxes: LinkedMailboxSummary[] = (rows ?? []).map((acc) => ({
+        accountId: acc.id,
+        emailAddress: acc.email_address,
+        displayName: acc.display_name ?? null,
+      }));
       return { ok: true, mailboxes, max: MAX_LINKED_MAILBOXES };
     },
   );
+
 
 export const linkMailbox = createServerFn({ method: "POST" })
   .inputValidator((v: z.input<typeof LinkSchema>) => LinkSchema.parse(v))
