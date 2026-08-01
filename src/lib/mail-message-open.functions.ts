@@ -169,15 +169,15 @@ const WarmSchema = z.object({
  */
 export const warmMessageBodies = createServerFn({ method: "POST" })
   .inputValidator((v: z.input<typeof WarmSchema>) => WarmSchema.parse(v))
-  .handler(async ({ data }): Promise<{ ok: boolean; warmed: number }> => {
+  .handler(async ({ data }): Promise<{ ok: boolean; warmed: number; remaining: number }> => {
     const { resolveBridgeAuth } = await import("@/lib/mail-bridge-auth.server");
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
     const cache = await import("@/lib/mail-body-cache.server");
     const { bridgeCallResolved } = await import("@/lib/mail-bridge-call.server");
 
     const auth = await resolveBridgeAuth(data.mailSessionToken);
-    if (!auth.ok) return { ok: false, warmed: 0 };
-    if (!cache.isCacheableFolder(data.folder)) return { ok: true, warmed: 0 };
+    if (!auth.ok) return { ok: false, warmed: 0, remaining: 0 };
+    if (!cache.isCacheableFolder(data.folder)) return { ok: true, warmed: 0, remaining: 0 };
 
     const limits = cache.bodyCacheLimits();
     const folder = await supabaseAdmin
@@ -189,7 +189,7 @@ export const warmMessageBodies = createServerFn({ method: "POST" })
       .limit(1)
       .maybeSingle();
     const folderRow = folder.data as { id: string; uidvalidity: number | null } | null;
-    if (!folderRow?.uidvalidity) return { ok: true, warmed: 0 };
+    if (!folderRow?.uidvalidity) return { ok: true, warmed: 0, remaining: 0 };
 
     const recent = await supabaseAdmin
       .from("mail_messages")
@@ -202,7 +202,7 @@ export const warmMessageBodies = createServerFn({ method: "POST" })
       .order("internal_date", { ascending: false })
       .limit(limits.warmWindow);
     const uids = ((recent.data ?? []) as { uid: number }[]).map((r) => Number(r.uid));
-    if (!uids.length) return { ok: true, warmed: 0 };
+    if (!uids.length) return { ok: true, warmed: 0, remaining: 0 };
 
     const cached = await supabaseAdmin
       .from("mail_message_body_cache")
@@ -215,7 +215,8 @@ export const warmMessageBodies = createServerFn({ method: "POST" })
       .in("uid", uids.slice(0, limits.warmWindow));
     const have = new Set(((cached.data ?? []) as { uid: number }[]).map((r) => Number(r.uid)));
 
-    const todo = uids.filter((u) => !have.has(u)).slice(0, limits.warmBatch);
+    const missing = uids.filter((u) => !have.has(u));
+    const todo = missing.slice(0, limits.warmBatch);
     let warmed = 0;
     // Strictly sequential: one background body at a time per account.
     for (const uid of todo) {
@@ -249,5 +250,5 @@ export const warmMessageBodies = createServerFn({ method: "POST" })
       })
       .catch(() => 0);
 
-    return { ok: true, warmed };
+    return { ok: true, warmed, remaining: Math.max(0, missing.length - todo.length) };
   });
