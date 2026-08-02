@@ -162,6 +162,65 @@ describe("storeCachedBody", () => {
     expect(row["byte_size"]).toBe(byteLength(big));
   });
 
+  it("persists embedded inline images with the body", async () => {
+    const spy = makeUpsertSpy();
+    const db = spy.client;
+    const out = await storeCachedBody(db, {
+      ...KEY,
+      uidValidity: "100",
+      bodyHtml: "<p>hi <img src=\"cid:logo\"></p>",
+      preview: "hi",
+      inlineParts: [],
+      inlineImages: [
+        { cid: "logo", part: "2", mimeType: "image/png", size: 4, dataUri: "data:image/png;base64,AAAA" },
+      ],
+      attachments: [],
+    });
+    expect(out).toBe("stored");
+    const row = spy.upserts[0] as Record<string, unknown>;
+    expect(row["inline_images"]).toHaveLength(1);
+    expect(row["inline_parts"]).toEqual([]);
+  });
+
+  it("demotes oversized inline images to lazy metadata instead of dropping them", async () => {
+    const spy = makeUpsertSpy();
+    const db = spy.client;
+    const out = await storeCachedBody(
+      db,
+      {
+        ...KEY,
+        uidValidity: "100",
+        bodyHtml: "<p>hi</p>",
+        preview: "hi",
+        inlineParts: [],
+        inlineImages: [
+          {
+            cid: "big",
+            part: "3",
+            mimeType: "image/png",
+            size: 999,
+            dataUri: `data:image/png;base64,${"A".repeat(500)}`,
+          },
+        ],
+        attachments: [],
+      },
+      {
+        maxBytes: 512 * 1024,
+        maxAgeDays: 14,
+        maxRowsPerAccount: 100,
+        warmBatch: 5,
+        warmWindow: 100,
+        inlineMaxBytes: 100,
+      },
+    );
+    expect(out).toBe("stored");
+    const row = spy.upserts[0] as Record<string, unknown>;
+    expect(row["inline_images"]).toEqual([]);
+    expect(row["inline_parts"]).toEqual([
+      { cid: "big", part: "3", mimeType: "image/png", size: 999 },
+    ]);
+  });
+
   it("skips an invalid uidvalidity", async () => {
     const spy = { upserts: [] as unknown[] };
     const db = fakeSupabase({}, spy);
