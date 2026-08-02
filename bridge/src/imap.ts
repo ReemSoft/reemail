@@ -503,44 +503,96 @@ export async function getMessageBody(
     parsed.body = html;
 
     // ---- inline (cid:) images referenced by THIS html ---------------------
-    // LAZY CID: we NEVER download inline images here. Downloading them
-    // serially before returning the body was the dominant cost of opening a
-    // message. Instead every referenced cid is reported as metadata and the
-    // browser streams it afterwards through the protected attachment route,
-    // so the text of the message paints immediately.
+    // ROOT MODEL (MAILMAESTRO_INLINE_IMAGES_IN_SESSION):
+    // Inline images are downloaded HERE, on the already-open, already-
+    // authenticated mailbox session, immediately after the display part.
+    // This is the cheapest possible place to get them: no TLS handshake, no
+    // LOGIN, no SELECT, no gate re-queue and no extra HTTP round trip per
+    // image. They travel with the body, so they also land in the server-side
+    // body cache — a cached open renders every embedded logo instantly with
+    // ZERO network calls.
+    //
+    // Budgets keep the open path bounded: anything above them is reported as
+    // `inlineParts` metadata and keeps using the lazy attachment route.
     const structural = collectAttachmentParts(msg.bodyStructure);
     const deferredInline: NonNullable<MailMessage["inlineParts"]> = [];
+    const embedded: NonNullable<MailMessage["inlineImages"]> = [];
 
     if (html) {
       const referenced = new Set<string>();
       for (const m of html.matchAll(/cid:([^"'\s>)\\]+)/gi)) {
         referenced.add(m[1].replace(/^<|>$/g, "").toLowerCase());
       }
+      const candidates: NonNullable<MailMessage["inlineParts"]> = [];
       for (const cid of referenced) {
         const partInfo = structural.find(
           (a) => (a.contentId || "").replace(/^<|>$/g, "").toLowerCase() === cid,
         );
         if (!partInfo?.part) continue;
-        deferredInline.push({
+        candidates.push({
           cid,
           part: partInfo.part,
           mimeType: partInfo.mimeType || "application/octet-stream",
           size: partInfo.size || 0,
         });
       }
+
+      // Smallest first: the visible signature logos win the budget.
+      candidates.sort((a, b) => (a.size || 0) - (b.size || 0));
+
+      const tInline = Date.now();
+      let spent = 0;
+      for (const c of candidates) {
+        const eligible =
+          embedded.length < INLINE_IMAGE_MAX_COUNT &&
+          (c.size || 0) <= INLINE_IMAGE_MAX_BYTES &&
+          spent + (c.size || 0) <= INLINE_IMAGE_TOTAL_BYTES &&
+          /^image\//i.test(c.mimeType);
+        if (!eligible) {
+          deferredInline.push(c);
+          continue;
+        }
+        try {
+          const got = await downloadPartBuffer(client, uid, c.part, INLINE_IMAGE_MAX_BYTES, () =>
+            dropAccountConnection(account, lane),
+          );
+          if (!got || !got.buf.length) {
+            deferredInline.push(c);
+            continue;
+          }
+          spent += got.buf.length;
+          embedded.push({
+            cid: c.cid,
+            mimeType: c.mimeType,
+            dataUri: `data:${c.mimeType};base64,${got.buf.toString("base64")}`,
+          });
+        } catch {
+          // Never let one bad part fail the open — fall back to lazy.
+          deferredInline.push(c);
+        }
+      }
+      if (TIMING_ENABLED && candidates.length)
+        console.log(
+          `[imap-timing] lane=${lane} inline-images ${Date.now() - tInline}ms embedded=${embedded.length} deferred=${deferredInline.length} ${spent}B`,
+        );
     }
 
     // ---- attachments: unchanged contract ---------------------------------
-    const deferredCids = new Set(deferredInline.map((d) => d.cid));
+    const inlineCids = new Set([
+      ...deferredInline.map((d) => d.cid),
+      ...embedded.map((d) => d.cid),
+    ]);
     const visible = structural.filter((a) => {
       const cid = (a.contentId || "").replace(/^<|>$/g, "").toLowerCase();
-      if (cid && deferredCids.has(cid)) return true; // keep it reachable
+      if (cid && inlineCids.has(cid)) return cid ? !embedded.some((e) => e.cid === cid) : true;
       if (a.disposition === "inline" && a.contentId) return false;
       return true;
     });
     parsed.attachments = visible;
     parsed.hasAttachments = visible.length > 0;
     if (deferredInline.length) parsed.inlineParts = deferredInline;
+    if (embedded.length) parsed.inlineImages = embedded;
+
     return parsed;
   }, lane);
 
