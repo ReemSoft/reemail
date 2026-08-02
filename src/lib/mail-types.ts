@@ -58,21 +58,10 @@ export interface MailMessage {
    * a Drafts folder message for edit.
    */
   uidValidity?: string;
-  /**
-   * Inline (cid:) images the bridge did not embed as data URIs because they
-   * exceeded the configured inline size limit. The viewer streams them
-   * through the protected /api/mail-attachment route instead of rendering a
-   * broken image.
-   */
+  /** Referenced CID parts resolved later through one protected batch. */
   inlineParts?: { cid: string; part: string; mimeType: string; size: number }[];
-  /**
-   * Inline (cid:) images already downloaded by the bridge inside the SAME
-   * IMAP session as the body and shipped as data URIs. They render with the
-   * first paint — no extra request, no layout shift — and are persisted with
-   * the body cache so a cached open needs zero network calls.
-   */
+  /** CID image bytes returned by the batch or the existing body cache. */
   inlineImages?: { cid: string; part: string; mimeType: string; size: number; dataUri: string }[];
-
 }
 
 export interface FolderCount {

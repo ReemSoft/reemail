@@ -27,7 +27,6 @@ const INLINE_IMAGE_MAX_BYTES = envInt("INLINE_IMAGE_MAX_BYTES", 256 * 1024);
 const INLINE_IMAGE_TOTAL_BYTES = envInt("INLINE_IMAGE_TOTAL_BYTES", 1024 * 1024);
 const INLINE_IMAGE_MAX_COUNT = envInt("INLINE_IMAGE_MAX_COUNT", 20);
 
-
 const WELL_KNOWN_FOLDERS: Record<MailFolder, string[]> = {
   inbox: ["INBOX"],
   sent: ["Sent", "Sent Items", "Sent Mail", "[Gmail]/Sent Mail", "[Gmail]/Sent"],
@@ -420,6 +419,38 @@ export async function downloadPartBuffer(
   return { buf: Buffer.concat(chunks), meta: dl.meta };
 }
 
+export function selectInlineBatchCandidates(
+  candidates: NonNullable<MailMessage["inlineParts"]>,
+): NonNullable<MailMessage["inlineParts"]> {
+  let totalBytes = 0;
+  return candidates
+    .filter((part) => {
+      if (
+        totalBytes + part.size > INLINE_IMAGE_TOTAL_BYTES ||
+        part.size < 0 ||
+        part.size > INLINE_IMAGE_MAX_BYTES ||
+        !/^image\//i.test(part.mimeType)
+      ) {
+        return false;
+      }
+      totalBytes += part.size;
+      return true;
+    })
+    .slice(0, INLINE_IMAGE_MAX_COUNT);
+}
+
+export function planInlineImagesForOpen(
+  candidates: NonNullable<MailMessage["inlineParts"]>,
+  lane: ImapLane,
+): {
+  deferred: NonNullable<MailMessage["inlineParts"]>;
+  toDownload: NonNullable<MailMessage["inlineParts"]>;
+} {
+  return lane === "interactive"
+    ? { deferred: candidates, toDownload: [] }
+    : { deferred: [], toDownload: candidates };
+}
+
 /**
  * Opens a single message for display.
  *
@@ -429,9 +460,8 @@ export async function downloadPartBuffer(
  *   * fetches envelope + flags + bodyStructure + headers, then downloads ONLY
  *     the text/html (or text/plain) part — attachments stay on the server and
  *     keep using the existing protected /api/attachment path
- *   * inline (cid:) images are NEVER downloaded here — they are reported as
- *     `inlineParts` metadata and streamed lazily by the browser through the
- *     protected attachment route after the text has painted
+ *   * interactive opens return CID metadata only; one protected batch fetches
+ *     their bytes after the text has painted
  *
  * All FETCH/download commands use BODY.PEEK, so opening a message still does
  * NOT change its \Seen flag — read state stays driven by the explicit
@@ -449,176 +479,268 @@ export async function getMessageBody(
   if (!path) return null;
 
   const tOpen = Date.now();
-  const result = await withAccountMailbox(account, password, path, async (client) => {
-    const tFetch = Date.now();
-    const msg = await client.fetchOne(
-      uid.toString(),
-      {
-        uid: true,
-        envelope: true,
-        internalDate: true,
-        flags: true,
-        bodyStructure: true,
-        headers: true,
-      },
-      { uid: true },
-    );
-    if (!msg) return null;
-    if (TIMING_ENABLED)
-      console.log(`[imap-timing] lane=${lane} fetch-meta ${Date.now() - tFetch}ms`);
-
-    // Headers only — cheap, and keeps From/To/Subject/DKIM extraction and the
-    // X-MailMaestro-Draft-ID lookup byte-identical to the previous behaviour.
-    const rawParsed = await simpleParser(msg.headers as Buffer);
-    const parsed = parsedMailToMessage(rawParsed, folder);
-    parsed.id = `${folder}:${uid}`;
-    parsed.threadId = msg.envelope?.messageId || parsed.id;
-    parsed.read = msg.flags?.has("\\Seen") || false;
-    parsed.starred = msg.flags?.has("\\Flagged") || false;
-    parsed.folder = folder;
-    parsed.date = msg.internalDate
-      ? new Date(msg.internalDate).toISOString()
-      : parsed.date;
-
-    const draftIdHeader = headerValue(rawParsed, "X-MailMaestro-Draft-ID").trim();
-    if (draftIdHeader) parsed.draftIdHeader = draftIdHeader;
-    const mb = (client as unknown as { mailbox?: { uidValidity?: unknown } }).mailbox;
-    if (mb?.uidValidity != null) parsed.uidValidity = String(mb.uidValidity);
-
-    // ---- body: download ONLY the display part -----------------------------
-    let bodyBytes = 0;
-    const pick = pickTextPart(msg.bodyStructure);
-    let html = "";
-    if (pick) {
-      const tBody = Date.now();
-      const got = await downloadPartBuffer(client, uid, pick.part, 5 * 1024 * 1024, () =>
-        dropAccountConnection(account, lane),
+  const result = await withAccountMailbox(
+    account,
+    password,
+    path,
+    async (client) => {
+      const tFetch = Date.now();
+      const msg = await client.fetchOne(
+        uid.toString(),
+        {
+          uid: true,
+          envelope: true,
+          internalDate: true,
+          flags: true,
+          bodyStructure: true,
+          headers: true,
+        },
+        { uid: true },
       );
-      if (got) {
-        bodyBytes = got.buf.length;
-        const charset =
-          pick.charset ||
-          /charset="?([\w-]+)"?/i.exec(String(got.meta?.contentType || ""))?.[1] ||
-          (got.meta as any)?.charset;
-        const text = decodeText(got.buf, charset);
-        if (pick.type === "text/html") {
-          html = text;
-        } else {
-          // Reuse mailparser so plain-text → HTML conversion (linkify,
-          // paragraphs) matches exactly what the old full-source path produced.
-          const mini = await simpleParser(
-            `Content-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n${text}`,
-          );
-          html = mini.textAsHtml || mini.text || "";
-          parsed.preview = makePreview(mini.text || rawParsed.subject || "");
-        }
-      }
+      if (!msg) return null;
       if (TIMING_ENABLED)
-        console.log(`[imap-timing] lane=${lane} fetch-body ${Date.now() - tBody}ms ${bodyBytes}B`);
-    }
-    parsed.body = html;
+        console.log(`[imap-timing] lane=${lane} fetch-meta ${Date.now() - tFetch}ms`);
 
-    // ---- inline (cid:) images referenced by THIS html ---------------------
-    // ROOT MODEL (MAILMAESTRO_INLINE_IMAGES_IN_SESSION):
-    // Inline images are downloaded HERE, on the already-open, already-
-    // authenticated mailbox session, immediately after the display part.
-    // This is the cheapest possible place to get them: no TLS handshake, no
-    // LOGIN, no SELECT, no gate re-queue and no extra HTTP round trip per
-    // image. They travel with the body, so they also land in the server-side
-    // body cache — a cached open renders every embedded logo instantly with
-    // ZERO network calls.
-    //
-    // Budgets keep the open path bounded: anything above them is reported as
-    // `inlineParts` metadata and keeps using the lazy attachment route.
-    const structural = collectAttachmentParts(msg.bodyStructure);
-    const deferredInline: NonNullable<MailMessage["inlineParts"]> = [];
-    const embedded: NonNullable<MailMessage["inlineImages"]> = [];
+      // Headers only — cheap, and keeps From/To/Subject/DKIM extraction and the
+      // X-MailMaestro-Draft-ID lookup byte-identical to the previous behaviour.
+      const rawParsed = await simpleParser(msg.headers as Buffer);
+      const parsed = parsedMailToMessage(rawParsed, folder);
+      parsed.id = `${folder}:${uid}`;
+      parsed.threadId = msg.envelope?.messageId || parsed.id;
+      parsed.read = msg.flags?.has("\\Seen") || false;
+      parsed.starred = msg.flags?.has("\\Flagged") || false;
+      parsed.folder = folder;
+      parsed.date = msg.internalDate ? new Date(msg.internalDate).toISOString() : parsed.date;
 
-    if (html) {
-      const referenced = new Set<string>();
-      for (const m of html.matchAll(/cid:([^"'\s>)\\]+)/gi)) {
-        referenced.add(m[1].replace(/^<|>$/g, "").toLowerCase());
-      }
-      const candidates: NonNullable<MailMessage["inlineParts"]> = [];
-      for (const cid of referenced) {
-        const partInfo = structural.find(
-          (a) => (a.contentId || "").replace(/^<|>$/g, "").toLowerCase() === cid,
+      const draftIdHeader = headerValue(rawParsed, "X-MailMaestro-Draft-ID").trim();
+      if (draftIdHeader) parsed.draftIdHeader = draftIdHeader;
+      const mb = (client as unknown as { mailbox?: { uidValidity?: unknown } }).mailbox;
+      if (mb?.uidValidity != null) parsed.uidValidity = String(mb.uidValidity);
+
+      // ---- body: download ONLY the display part -----------------------------
+      let bodyBytes = 0;
+      const pick = pickTextPart(msg.bodyStructure);
+      let html = "";
+      if (pick) {
+        const tBody = Date.now();
+        const got = await downloadPartBuffer(client, uid, pick.part, 5 * 1024 * 1024, () =>
+          dropAccountConnection(account, lane),
         );
-        if (!partInfo?.part) continue;
-        candidates.push({
-          cid,
-          part: partInfo.part,
-          mimeType: partInfo.mimeType || "application/octet-stream",
-          size: partInfo.size || 0,
-        });
-      }
-
-      // Smallest first: the visible signature logos win the budget.
-      candidates.sort((a, b) => (a.size || 0) - (b.size || 0));
-
-      const tInline = Date.now();
-      let spent = 0;
-      for (const c of candidates) {
-        const eligible =
-          embedded.length < INLINE_IMAGE_MAX_COUNT &&
-          (c.size || 0) <= INLINE_IMAGE_MAX_BYTES &&
-          spent + (c.size || 0) <= INLINE_IMAGE_TOTAL_BYTES &&
-          /^image\//i.test(c.mimeType);
-        if (!eligible) {
-          deferredInline.push(c);
-          continue;
+        if (got) {
+          bodyBytes = got.buf.length;
+          const charset =
+            pick.charset ||
+            /charset="?([\w-]+)"?/i.exec(String(got.meta?.contentType || ""))?.[1] ||
+            (got.meta as any)?.charset;
+          const text = decodeText(got.buf, charset);
+          if (pick.type === "text/html") {
+            html = text;
+          } else {
+            // Reuse mailparser so plain-text → HTML conversion (linkify,
+            // paragraphs) matches exactly what the old full-source path produced.
+            const mini = await simpleParser(
+              `Content-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n${text}`,
+            );
+            html = mini.textAsHtml || mini.text || "";
+            parsed.preview = makePreview(mini.text || rawParsed.subject || "");
+          }
         }
-        try {
-          const got = await downloadPartBuffer(client, uid, c.part, INLINE_IMAGE_MAX_BYTES, () =>
-            dropAccountConnection(account, lane),
+        if (TIMING_ENABLED)
+          console.log(
+            `[imap-timing] lane=${lane} fetch-body ${Date.now() - tBody}ms ${bodyBytes}B`,
           );
-          if (!got || !got.buf.length) {
+      }
+      parsed.body = html;
+
+      // ---- inline (cid:) images referenced by THIS html ---------------------
+      // ROOT MODEL (MAILMAESTRO_INLINE_IMAGES_IN_SESSION):
+      // Interactive opens stop at metadata. Background warming retains its
+      // bounded embedding behavior and never runs in the user-facing lane.
+      const structural = collectAttachmentParts(msg.bodyStructure);
+      const deferredInline: NonNullable<MailMessage["inlineParts"]> = [];
+      const embedded: NonNullable<MailMessage["inlineImages"]> = [];
+
+      if (html) {
+        const referenced = new Set<string>();
+        for (const m of html.matchAll(/cid:([^"'\s>)\\]+)/gi)) {
+          referenced.add(m[1].replace(/^<|>$/g, "").toLowerCase());
+        }
+        const candidates: NonNullable<MailMessage["inlineParts"]> = [];
+        for (const cid of referenced) {
+          const partInfo = structural.find(
+            (a) => (a.contentId || "").replace(/^<|>$/g, "").toLowerCase() === cid,
+          );
+          if (!partInfo?.part) continue;
+          candidates.push({
+            cid,
+            part: partInfo.part,
+            mimeType: partInfo.mimeType || "application/octet-stream",
+            size: partInfo.size || 0,
+          });
+        }
+
+        // Smallest first: the visible signature logos win the budget.
+        candidates.sort((a, b) => (a.size || 0) - (b.size || 0));
+        // MAILMAESTRO_BODY_FIRST_SINGLE_BATCH_CID: the interactive open returns
+        // metadata only. CID bytes are fetched after paint by one batch call.
+        const interactiveCandidates = selectInlineBatchCandidates(candidates);
+        const inlinePlan = planInlineImagesForOpen(
+          lane === "interactive" ? interactiveCandidates : candidates,
+          lane,
+        );
+        deferredInline.push(...inlinePlan.deferred);
+
+        const tInline = Date.now();
+        let spent = 0;
+        for (const c of inlinePlan.toDownload) {
+          const eligible =
+            embedded.length < INLINE_IMAGE_MAX_COUNT &&
+            (c.size || 0) <= INLINE_IMAGE_MAX_BYTES &&
+            spent + (c.size || 0) <= INLINE_IMAGE_TOTAL_BYTES &&
+            /^image\//i.test(c.mimeType);
+          if (!eligible) {
             deferredInline.push(c);
             continue;
           }
-          spent += got.buf.length;
-          embedded.push({
-            cid: c.cid,
-            part: c.part,
-            mimeType: c.mimeType,
-            size: got.buf.length,
-            dataUri: `data:${c.mimeType};base64,${got.buf.toString("base64")}`,
-          });
-        } catch {
-          // Never let one bad part fail the open — fall back to lazy.
-          deferredInline.push(c);
+          try {
+            const got = await downloadPartBuffer(client, uid, c.part, INLINE_IMAGE_MAX_BYTES, () =>
+              dropAccountConnection(account, lane),
+            );
+            if (!got || !got.buf.length) {
+              deferredInline.push(c);
+              continue;
+            }
+            spent += got.buf.length;
+            embedded.push({
+              cid: c.cid,
+              part: c.part,
+              mimeType: c.mimeType,
+              size: got.buf.length,
+              dataUri: `data:${c.mimeType};base64,${got.buf.toString("base64")}`,
+            });
+          } catch {
+            // Never let one bad part fail the open — fall back to lazy.
+            deferredInline.push(c);
+          }
         }
+        if (TIMING_ENABLED && candidates.length)
+          console.log(
+            `[imap-timing] lane=${lane} inline-images ${Date.now() - tInline}ms embedded=${embedded.length} deferred=${deferredInline.length} ${spent}B`,
+          );
       }
-      if (TIMING_ENABLED && candidates.length)
-        console.log(
-          `[imap-timing] lane=${lane} inline-images ${Date.now() - tInline}ms embedded=${embedded.length} deferred=${deferredInline.length} ${spent}B`,
-        );
-    }
 
-    // ---- attachments: unchanged contract ---------------------------------
-    // Deferred cids stay reachable (the lazy route still needs them); cids we
-    // already embedded are rendered in the body, so they are not listed twice.
-    const embeddedCids = new Set(embedded.map((d) => d.cid));
-    const deferredCids = new Set(deferredInline.map((d) => d.cid));
-    const visible = structural.filter((a) => {
-      const cid = (a.contentId || "").replace(/^<|>$/g, "").toLowerCase();
-      if (cid && embeddedCids.has(cid)) return false;
-      if (cid && deferredCids.has(cid)) return true;
-      if (a.disposition === "inline" && a.contentId) return false;
-      return true;
-    });
+      // ---- attachments: unchanged contract ---------------------------------
+      // Deferred cids stay reachable (the lazy route still needs them); cids we
+      // already embedded are rendered in the body, so they are not listed twice.
+      const embeddedCids = new Set(embedded.map((d) => d.cid));
+      const deferredCids = new Set(deferredInline.map((d) => d.cid));
+      const visible = structural.filter((a) => {
+        const cid = (a.contentId || "").replace(/^<|>$/g, "").toLowerCase();
+        if (cid && embeddedCids.has(cid)) return false;
+        if (cid && deferredCids.has(cid)) return true;
+        if (a.disposition === "inline" && a.contentId) return false;
+        return true;
+      });
 
-    parsed.attachments = visible;
-    parsed.hasAttachments = visible.length > 0;
-    if (deferredInline.length) parsed.inlineParts = deferredInline;
-    if (embedded.length) parsed.inlineImages = embedded;
+      parsed.attachments = visible;
+      parsed.hasAttachments = visible.length > 0;
+      if (deferredInline.length) parsed.inlineParts = deferredInline;
+      if (embedded.length) parsed.inlineImages = embedded;
 
-    return parsed;
-  }, lane);
+      return parsed;
+    },
+    lane,
+  );
 
   if (TIMING_ENABLED)
     console.log(`[imap-timing] lane=${lane} message-open ${Date.now() - tOpen}ms`);
   return result;
+}
+
+export type InlinePartMetadata = NonNullable<MailMessage["inlineParts"]>[number];
+export type InlineImageData = NonNullable<MailMessage["inlineImages"]>[number];
+
+export interface InlineImageBatchResult {
+  images: InlineImageData[];
+  failedCids: string[];
+}
+
+export async function downloadInlinePartsInMailbox(
+  client: ImapFlow,
+  uid: number,
+  candidates: InlinePartMetadata[],
+): Promise<InlineImageBatchResult> {
+  const images: InlineImageData[] = [];
+  const failedCids: string[] = [];
+  let totalBytes = 0;
+
+  for (const part of candidates) {
+    if (totalBytes + part.size > INLINE_IMAGE_TOTAL_BYTES) {
+      failedCids.push(part.cid);
+      continue;
+    }
+    try {
+      const got = await downloadPartBuffer(client, uid, part.part, INLINE_IMAGE_MAX_BYTES);
+      const mimeType = String(got?.meta?.contentType || part.mimeType).toLowerCase();
+      if (
+        !got?.buf.length ||
+        got.buf.length > INLINE_IMAGE_MAX_BYTES ||
+        totalBytes + got.buf.length > INLINE_IMAGE_TOTAL_BYTES ||
+        !/^image\//i.test(mimeType)
+      ) {
+        failedCids.push(part.cid);
+        continue;
+      }
+      totalBytes += got.buf.length;
+      images.push({
+        cid: part.cid,
+        part: part.part,
+        mimeType,
+        size: got.buf.length,
+        dataUri: `data:${mimeType};base64,${got.buf.toString("base64")}`,
+      });
+    } catch {
+      failedCids.push(part.cid);
+    }
+  }
+
+  return { images, failedCids };
+}
+
+/**
+ * Fetch every eligible CID while holding one mailbox lock on one reused
+ * interactive connection. ImapFlow downloads use BODY.PEEK. One bad part is
+ * isolated and never fails the remaining images.
+ */
+export async function getInlineImagesBatch(
+  account: MailAccount,
+  password: string,
+  folder: MailFolder,
+  uid: number,
+  parts: InlinePartMetadata[],
+): Promise<InlineImageBatchResult> {
+  const candidates = parts
+    .filter(
+      (part) =>
+        /^\d+(?:\.\d+)*$/.test(part.part) &&
+        /^image\//i.test(part.mimeType) &&
+        part.size >= 0 &&
+        part.size <= INLINE_IMAGE_MAX_BYTES,
+    )
+    .slice(0, INLINE_IMAGE_MAX_COUNT);
+  if (!candidates.length) return { images: [], failedCids: [] };
+
+  const mailboxes = await getMailboxesCached(account, password, "interactive");
+  const path = resolveFolderPath(mailboxes, folder);
+  if (!path) return { images: [], failedCids: candidates.map((part) => part.cid) };
+
+  return withAccountMailbox(
+    account,
+    password,
+    path,
+    (client) => downloadInlinePartsInMailbox(client, uid, candidates),
+    "interactive",
+  );
 }
 
 /**

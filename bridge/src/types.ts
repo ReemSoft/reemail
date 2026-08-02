@@ -57,18 +57,10 @@ export interface MailMessage {
    * when opening a drafts folder message for edit.
    */
   uidValidity?: string;
-  /**
-   * Inline (cid:) images outside the embedding budget. The client resolves
-   * them through the protected attachment route instead of rendering a
-   * broken image. Budgets: INLINE_IMAGE_* (bridge env).
-   */
+  /** Referenced CID parts resolved later through one protected batch. */
   inlineParts?: { cid: string; part: string; mimeType: string; size: number }[];
-  /**
-   * Inline (cid:) images downloaded inside the same IMAP session as the body
-   * and shipped as data URIs, so they render with the first paint.
-   */
+  /** CID image bytes returned by the batch or body cache. */
   inlineImages?: { cid: string; part: string; mimeType: string; size: number; dataUri: string }[];
-
 }
 
 export interface FolderCount {
