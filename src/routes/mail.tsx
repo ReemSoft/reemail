@@ -416,6 +416,10 @@ import {
   attachBeforeUnloadGuard,
   isDraftEmpty,
 } from "@/lib/mail-composer-autosave";
+import {
+  createDraftAutosaveRefreshTracker,
+  shouldRefreshDraftsOnFolderEntry,
+} from "@/lib/mail-autosave-refresh";
 import { tombstoneGhostMessage } from "@/lib/mail-ghost-cleanup.functions";
 import { indexListMessages } from "@/lib/mail-index.functions";
 import { indexListFolderCounts } from "@/lib/mail-index-counts.functions";
@@ -1377,6 +1381,18 @@ function useMailData(session: MailSession | null) {
     loadMessages();
   }, [loadMessages]);
 
+  // Drafts is Bridge-authoritative. Refresh its count once when the user
+  // enters the folder; the normal folder-change message load supplies the
+  // matching authoritative list. Autosaves themselves never reach here.
+  const previousFolderForDraftRefreshRef = useRef<MailFolder>(folder);
+  useEffect(() => {
+    const previous = previousFolderForDraftRefreshRef.current;
+    previousFolderForDraftRefreshRef.current = folder;
+    if (shouldRefreshDraftsOnFolderEntry(previous, folder)) {
+      void loadCounts();
+    }
+  }, [folder, loadCounts]);
+
   // Reset to default sort whenever the folder changes (no persistence between refreshes).
   useEffect(() => {
     setSort("date-desc");
@@ -1456,7 +1472,14 @@ function useMailData(session: MailSession | null) {
         await loadCountsFast();
       }
     },
-    onAfterDraftSaved: async () => {
+    onDraftCreated: () => {
+      bumpCountsGen();
+      setCounts((prev) => ({
+        ...prev,
+        drafts: { ...prev.drafts, total: prev.drafts.total + 1 },
+      }));
+    },
+    refreshAfterComposerClose: async () => {
       await loadCounts();
       if (folder === "drafts") await loadMessages();
     },
@@ -1610,7 +1633,8 @@ function MailApp() {
     loadCounts,
     refresh: rawRefresh,
     onAfterSend,
-    onAfterDraftSaved,
+    onDraftCreated,
+    refreshAfterComposerClose,
     setPendingFlagOverride,
     clearPendingFlagOverride,
     hideRow,
@@ -3595,9 +3619,12 @@ function MailApp() {
             <Composer
               session={session}
               initial={compose}
-              onClose={() => setCompose(null)}
+              onClose={({ refreshDrafts }) => {
+                setCompose(null);
+                if (refreshDrafts) void refreshAfterComposerClose();
+              }}
               onSent={onAfterSend}
-              onDraftSaved={onAfterDraftSaved}
+              onDraftCreated={onDraftCreated}
             />
           ) : selectedMessage ? (
             <MessageView
@@ -4626,13 +4653,13 @@ function Composer({
   initial,
   onClose,
   onSent,
-  onDraftSaved,
+  onDraftCreated,
 }: {
   session: MailSession;
   initial?: ComposeInitial | null;
-  onClose: () => void;
+  onClose: (options: { refreshDrafts: boolean }) => void;
   onSent: () => void;
-  onDraftSaved: () => void;
+  onDraftCreated: () => void;
 }) {
   // Draft storage keying is owned by mail-draft-lifecycle (v3 + auto-migration).
 
@@ -4692,6 +4719,14 @@ function Composer({
     return readDraftDoc(window.localStorage, accountEmail);
   }, [initial, accountEmail, isEditMode]);
   const restored = initialDoc?.snapshot ?? null;
+  const autosaveRefreshTrackerRef = useRef<ReturnType<
+    typeof createDraftAutosaveRefreshTracker
+  > | null>(null);
+  if (!autosaveRefreshTrackerRef.current) {
+    autosaveRefreshTrackerRef.current = createDraftAutosaveRefreshTracker(
+      isEditMode || Boolean(initial?.previousRef) || Boolean(initialDoc?.serverRef),
+    );
+  }
 
   const [draftId] = useState<string>(
     () => initial?.editDraftId ?? initialDoc?.draftId ?? newDraftId(),
@@ -4812,25 +4847,6 @@ function Composer({
   const resolveExistingAsFilesRef = useRef<() => Promise<File[] | null>>(async () => []);
 
   const saverRef = useRef<DraftSaver | null>(null);
-  const draftRefreshTimerRef = useRef<number | null>(null);
-
-  useEffect(() => {
-    return () => {
-      if (draftRefreshTimerRef.current !== null) {
-        window.clearTimeout(draftRefreshTimerRef.current);
-        draftRefreshTimerRef.current = null;
-      }
-    };
-  }, []);
-
-  const scheduleDraftRefresh = useCallback(() => {
-    if (typeof window === "undefined") return;
-    if (draftRefreshTimerRef.current !== null) window.clearTimeout(draftRefreshTimerRef.current);
-    draftRefreshTimerRef.current = window.setTimeout(() => {
-      draftRefreshTimerRef.current = null;
-      void onDraftSaved();
-    }, 650);
-  }, [onDraftSaved]);
 
   if (!saverRef.current) {
     saverRef.current = createDraftSaver(draftId, {
@@ -4906,10 +4922,13 @@ function Composer({
           lastSavedAtRef.current = Date.now();
           setSavedAt(lastSavedAtRef.current);
           lastFailCodeRef.current = null;
-          if (status === "saved" && serverRef && typeof window !== "undefined") {
-            serverRefRef.current = serverRef;
-            updateDraftDocServerRef(window.localStorage, accountEmail, draftId, serverRef);
-            scheduleDraftRefresh();
+          if (status === "saved") {
+            const tracked = autosaveRefreshTrackerRef.current!.noteRemoteSave();
+            if (tracked.incrementDraftCount) onDraftCreated();
+            if (serverRef && typeof window !== "undefined") {
+              serverRefRef.current = serverRef;
+              updateDraftDocServerRef(window.localStorage, accountEmail, draftId, serverRef);
+            }
           }
         } else if (status === "failed") {
           // Diagnostic: capture the coarse code so the UI can surface it
@@ -5253,11 +5272,16 @@ function Composer({
   // the existing resolver. Cleared on Cancel / after onClose so a later
   // attempt can start fresh.
   const closeFlowRef = useRef<Promise<boolean> | null>(null);
+  const closeComposer = () => {
+    onClose({
+      refreshDrafts: autosaveRefreshTrackerRef.current?.consumeCloseRefresh() ?? false,
+    });
+  };
   async function requestClose(): Promise<boolean> {
     if (closeFlowRef.current) return closeFlowRef.current;
     const flow = (async (): Promise<boolean> => {
       if (!isDirtyRef.current) {
-        onClose();
+        closeComposer();
         return true;
       }
       const choice = await new Promise<"save" | "discard" | "cancel">((resolve) => {
@@ -5273,7 +5297,7 @@ function Composer({
         // we may close. failed / empty (unexpected here since we were dirty)
         // → keep composer open so nothing is silently lost.
         if (result === "saved_server" || result === "saved_local") {
-          onClose();
+          closeComposer();
           return true;
         }
         return false;
@@ -5317,7 +5341,7 @@ function Composer({
       savedGenerationRef.current = generationRef.current;
       lastSavedAtRef.current = Date.now();
       recomputeDirty();
-      onClose();
+      closeComposer();
       return true;
     })().finally(() => {
       // Release single-flight AFTER the flow settles. On close (onClose
@@ -5331,7 +5355,7 @@ function Composer({
   // Expose a global guard so parent nav actions (folder switch, list click,
   // new-message button) can prompt before tearing the composer down.
   const requestCloseRef = useRef<() => Promise<boolean>>(async () => {
-    onClose();
+    closeComposer();
     return true;
   });
   requestCloseRef.current = requestClose;
@@ -5683,7 +5707,7 @@ function Composer({
         /* noop — never fail the send */
       }
       toast.success(tr("تم إرسال الرسالة"));
-      onClose();
+      onClose({ refreshDrafts: false });
       onSent();
     } catch (err: any) {
       toast.error(err?.message || tr("فشل إرسال الرسالة"));
