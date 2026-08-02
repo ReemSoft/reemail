@@ -163,8 +163,8 @@ describe("storeCachedBody", () => {
   });
 
   it("persists embedded inline images with the body", async () => {
-    const spy = makeUpsertSpy();
-    const db = spy.client;
+    const spy = { upserts: [] as unknown[] };
+    const db = fakeSupabase({}, spy);
     const out = await storeCachedBody(db, {
       ...KEY,
       uidValidity: "100",
@@ -183,8 +183,8 @@ describe("storeCachedBody", () => {
   });
 
   it("demotes oversized inline images to lazy metadata instead of dropping them", async () => {
-    const spy = makeUpsertSpy();
-    const db = spy.client;
+    const spy = { upserts: [] as unknown[] };
+    const db = fakeSupabase({}, spy);
     const out = await storeCachedBody(
       db,
       {
