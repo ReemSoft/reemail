@@ -67,7 +67,7 @@ export interface MailMessage {
    * Inline (cid:) images downloaded inside the same IMAP session as the body
    * and shipped as data URIs, so they render with the first paint.
    */
-  inlineImages?: { cid: string; mimeType: string; dataUri: string }[];
+  inlineImages?: { cid: string; part: string; mimeType: string; size: number; dataUri: string }[];
 
 }
 

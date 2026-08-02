@@ -71,7 +71,7 @@ export interface MailMessage {
    * first paint — no extra request, no layout shift — and are persisted with
    * the body cache so a cached open needs zero network calls.
    */
-  inlineImages?: { cid: string; mimeType: string; dataUri: string }[];
+  inlineImages?: { cid: string; part: string; mimeType: string; size: number; dataUri: string }[];
 
 }
 

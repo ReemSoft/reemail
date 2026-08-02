@@ -579,7 +579,9 @@ export async function getMessageBody(
           spent += got.buf.length;
           embedded.push({
             cid: c.cid,
+            part: c.part,
             mimeType: c.mimeType,
+            size: got.buf.length,
             dataUri: `data:${c.mimeType};base64,${got.buf.toString("base64")}`,
           });
         } catch {
