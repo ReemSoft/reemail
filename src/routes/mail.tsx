@@ -60,7 +60,6 @@ function EmailBodyFrame({ html, className }: { html: string; className?: string 
     setHeight(60);
   }, [html]);
 
-
   const parentOrigin = useMemo(
     () => (typeof window !== "undefined" ? window.location.origin : "null"),
     [],
@@ -174,12 +173,13 @@ function ThreadedEmailBody({ html, className }: { html: string; className?: stri
  * route. Key: `${messageId}|${cid}` → data URI.
  */
 const inlineImageCache = new Map<string, string>();
+const inlineImageFlights = new Map<
+  string,
+  Promise<Awaited<ReturnType<typeof resolveMessageInlineImages>>>
+>();
 
 /** Replaces every `cid:<id>` reference in `base` with its resolved source. */
-function applyInlineSources(
-  base: string,
-  pairs: { cid: string; dataUri: string }[],
-): string {
+function applyInlineSources(base: string, pairs: { cid: string; dataUri: string }[]): string {
   let out = base;
   for (const r of pairs) {
     const esc = r.cid.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -189,22 +189,13 @@ function applyInlineSources(
 }
 
 /**
- * useInlineResolvedHtml — renders inline (cid:) images.
- *
- * Primary path (the normal case): the bridge downloads every referenced
- * inline image inside the SAME IMAP session as the body and ships it as a
- * data URI in `message.inlineImages`. They are substituted synchronously,
- * BEFORE the first paint of the body, so the images appear together with the
- * text — no second request, no progressive pop-in, no iframe re-mount. Those
- * bytes are also persisted with the server-side body cache, so a cached open
- * shows the complete message with zero network calls.
- *
- * Fallback path (rare): images outside the bridge's embedding budget arrive
- * as `inlineParts` metadata and are streamed lazily, with bounded
- * parallelism, through the protected attachment route. The text is already
- * on screen while that happens, so open latency is never affected.
+ * Renders cached CID bytes immediately. Missing bytes are fetched after the
+ * body paints by one protected batch and applied in one state update.
  */
 function useInlineResolvedHtml(message: MailMessage, html: string): string {
+  const resolveInlineImages = useMailServerFn(resolveMessageInlineImages);
+  const accountScope = getMailSession()?.account.id ?? "no-account";
+  const messageKey = `${accountScope}|${message.id}`;
   // Synchronous, pre-paint substitution of everything the server already sent.
   const base = useMemo(() => {
     const embedded = (message.inlineImages ?? []).map((i) => ({
@@ -213,13 +204,13 @@ function useInlineResolvedHtml(message: MailMessage, html: string): string {
     }));
     const cachedLazy = (message.inlineParts ?? [])
       .map((p) => {
-        const hit = inlineImageCache.get(`${message.id}|${p.cid}`);
+        const hit = inlineImageCache.get(`${messageKey}|${p.cid}`);
         return hit ? { cid: p.cid, dataUri: hit } : null;
       })
       .filter(Boolean) as { cid: string; dataUri: string }[];
     const pairs = [...embedded, ...cachedLazy];
     return pairs.length ? applyInlineSources(html, pairs) : html;
-  }, [html, message.id, message.inlineImages, message.inlineParts]);
+  }, [html, message.inlineImages, message.inlineParts, messageKey]);
 
   const [resolved, setResolved] = useState(base);
 
@@ -228,67 +219,58 @@ function useInlineResolvedHtml(message: MailMessage, html: string): string {
 
     const parts = message.inlineParts;
     if (!parts?.length || !base) return;
-    const pending = parts.filter((p) => !inlineImageCache.has(`${message.id}|${p.cid}`));
+    const embeddedCids = new Set(
+      (message.inlineImages ?? []).map((image) => image.cid.toLowerCase()),
+    );
+    const pending = parts.filter(
+      (part) =>
+        !embeddedCids.has(part.cid.toLowerCase()) &&
+        !inlineImageCache.has(`${messageKey}|${part.cid}`),
+    );
     if (!pending.length) return;
 
     let cancelled = false;
 
-    (async () => {
+    void (async () => {
       const session = getMailSession();
       const parsed = parseMessageId(message.id);
       if (!session || !parsed) return;
 
-      const CONCURRENCY = 4;
-      const queue = [...pending];
-
-      async function worker() {
-        for (;;) {
-          const p = queue.shift();
-          if (!p || cancelled) return;
-          try {
-            const res = await fetch("/api/mail-attachment", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                mailSessionToken: session!.mailSessionToken ?? "",
-                password: session!.password,
-                folder: parsed!.folder,
-                uid: parsed!.uid,
-                part: p.part,
-              }),
-            });
-            if (!res.ok) continue;
-            const blob = await res.blob();
-            const dataUri = await new Promise<string>((resolve, reject) => {
-              const fr = new FileReader();
-              fr.onload = () => resolve(String(fr.result || ""));
-              fr.onerror = () => reject(fr.error);
-              fr.readAsDataURL(blob);
-            });
-            if (!dataUri.startsWith("data:")) continue;
-            inlineImageCache.set(`${message.id}|${p.cid}`, dataUri);
-            if (cancelled) return;
-            setResolved((prev) => applyInlineSources(prev, [{ cid: p.cid, dataUri }]));
-          } catch {
-            /* leave the original cid: reference untouched */
-          }
-        }
+      let flight = inlineImageFlights.get(messageKey);
+      if (!flight) {
+        flight = resolveInlineImages({
+          data: {
+            mailSessionToken: session.mailSessionToken ?? "",
+            password: session.password,
+            folder: parsed.folder,
+            uid: parsed.uid,
+            parts,
+          },
+        }).finally(() => inlineImageFlights.delete(messageKey));
+        inlineImageFlights.set(messageKey, flight);
       }
-
-      await Promise.all(
-        Array.from({ length: Math.min(CONCURRENCY, pending.length) }, () => worker()),
-      );
+      const result = await flight;
+      if (!result.ok || cancelled) return;
+      const pairs = result.images.map((image) => ({ cid: image.cid, dataUri: image.dataUri }));
+      for (const pair of pairs) inlineImageCache.set(`${messageKey}|${pair.cid}`, pair.dataUri);
+      // All successful CID substitutions land in one React state update.
+      if (pairs.length) setResolved((current) => applyInlineSources(current, pairs));
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [base, message.id, message.inlineParts]);
+  }, [
+    base,
+    message.id,
+    message.inlineImages,
+    message.inlineParts,
+    messageKey,
+    resolveInlineImages,
+  ]);
 
   return resolved;
 }
-
-
 
 /** Body renderer that first resolves any deferred inline images. */
 function MessageBody({
@@ -303,11 +285,6 @@ function MessageBody({
   const resolved = useInlineResolvedHtml(message, html);
   return <ThreadedEmailBody html={resolved} className={className} />;
 }
-
-
-
-
-
 
 import {
   Inbox,
@@ -405,7 +382,6 @@ import { useCompanyTheme } from "@/hooks/use-company-theme";
 import {
   bridgeGetFolderCounts,
   bridgeGetMessages,
-  
   bridgeMarkRead,
   bridgeStar,
   bridgeMove,
@@ -414,7 +390,11 @@ import {
   bridgeSaveDraft,
   bridgeDeleteDraft,
 } from "@/lib/mail-bridge.functions";
-import { openMailMessage, warmMessageBodies } from "@/lib/mail-message-open.functions";
+import {
+  openMailMessage,
+  resolveMessageInlineImages,
+  warmMessageBodies,
+} from "@/lib/mail-message-open.functions";
 import {
   readDraftDoc,
   writeDraftDoc,
@@ -831,7 +811,6 @@ function buildForward(message: MailMessage): ComposeInitial {
   return { to: "", subject, body, bodyIsHtml: true };
 }
 
-
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
@@ -1158,7 +1137,10 @@ function useMailData(session: MailSession | null) {
           archiveUidValidityRef.current = nextArchiveUV;
           try {
             const authoritative = await getCounts({
-              data: { mailSessionToken: session.mailSessionToken ?? "", password: session.password },
+              data: {
+                mailSessionToken: session.mailSessionToken ?? "",
+                password: session.password,
+              },
             });
             if (countsMutationGen.current !== gen) return;
             if (authoritative.ok) {
@@ -1720,8 +1702,6 @@ function MailApp() {
     };
   }, [session, folder, loading, messages.length, warmBodies]);
 
-
-
   const markRead = useMailServerFn(bridgeMarkRead);
   const star = useMailServerFn(bridgeStar);
   const updateFlag = useMailServerFn(indexUpdateFlag);
@@ -1914,8 +1894,7 @@ function MailApp() {
                   inlineParts: result.body.inlineParts,
                   inlineImages: result.body.inlineImages,
                   attachments: result.body.attachments,
-                  hasAttachments:
-                    result.body.attachments.length > 0 ? true : base.hasAttachments,
+                  hasAttachments: result.body.attachments.length > 0 ? true : base.hasAttachments,
                   uidValidity: base.uidValidity ?? result.body.uidValidity,
                 }
               : result.ok && result.source === "imap"
@@ -1973,8 +1952,6 @@ function MailApp() {
   // serialized on the single per-account IMAP connection, so hovering a list
   // queued dozens of downloads ahead of the actual click (head-of-line
   // blocking). A message is fetched on click only.
-
-
 
   useCompanyTheme(
     session?.company
@@ -2483,7 +2460,9 @@ function MailApp() {
           setSelectedId(id);
           if (prevSelected) setSelectedMessage(prevSelected);
         }
-        toast.error(err?.message || (isTrash ? tr("فشل حذف الرسالة") : tr("فشل نقل الرسالة إلى المهملات")));
+        toast.error(
+          err?.message || (isTrash ? tr("فشل حذف الرسالة") : tr("فشل نقل الرسالة إلى المهملات")),
+        );
       }
     });
   }
@@ -2750,7 +2729,12 @@ function MailApp() {
         setSelectedId(prevSelectedId);
         setSelectedMessage(prevSelected);
       }
-      toast.error(trf("فشل نقل {{failed}} من {{total}} رسالة", { failed: failedIds.length, total: ids.length }));
+      toast.error(
+        trf("فشل نقل {{failed}} من {{total}} رسالة", {
+          failed: failedIds.length,
+          total: ids.length,
+        }),
+      );
     } else {
       toast.success(trf("تم نقل {{count}} رسالة", { count: ids.length }));
     }
@@ -2763,7 +2747,9 @@ function MailApp() {
     const confirmed = await confirm({
       title: isTrash ? tr("حذف نهائي") : tr("نقل إلى المهملات"),
       description: isTrash
-        ? trf("هل أنت متأكد من حذف {{count}} رسالة نهائياً؟ لا يمكن التراجع عن هذا الإجراء.", { count: ids.length })
+        ? trf("هل أنت متأكد من حذف {{count}} رسالة نهائياً؟ لا يمكن التراجع عن هذا الإجراء.", {
+            count: ids.length,
+          })
         : trf("هل أنت متأكد من نقل {{count}} رسالة إلى المهملات؟", { count: ids.length }),
       confirmLabel: isTrash ? tr("حذف") : tr("نقل"),
       cancelLabel: tr("إلغاء"),
@@ -2889,8 +2875,14 @@ function MailApp() {
       }
       toast.error(
         isTrash
-          ? trf("فشل حذف {{failed}} من {{total}} رسالة", { failed: failedIds.length, total: ids.length })
-          : trf("فشل نقل {{failed}} من {{total}} رسالة إلى المهملات", { failed: failedIds.length, total: ids.length }),
+          ? trf("فشل حذف {{failed}} من {{total}} رسالة", {
+              failed: failedIds.length,
+              total: ids.length,
+            })
+          : trf("فشل نقل {{failed}} من {{total}} رسالة إلى المهملات", {
+              failed: failedIds.length,
+              total: ids.length,
+            }),
       );
     } else {
       toast.success(
@@ -2983,7 +2975,12 @@ function MailApp() {
         setSelectedId(prevSelectedId);
         setSelectedMessage(prevSelected);
       }
-      toast.error(trf("فشل استعادة {{failed}} من {{total}} رسالة", { failed: failedIds.length, total: ids.length }));
+      toast.error(
+        trf("فشل استعادة {{failed}} من {{total}} رسالة", {
+          failed: failedIds.length,
+          total: ids.length,
+        }),
+      );
     } else {
       toast.success(trf("تم استعادة {{count}} رسالة", { count: ids.length }));
     }
@@ -3097,7 +3094,9 @@ function MailApp() {
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder={searchMode === "deep" ? tr("بحث شامل على السيرفر…") : tr("ابحث في البريد...")}
+            placeholder={
+              searchMode === "deep" ? tr("بحث شامل على السيرفر…") : tr("ابحث في البريد...")
+            }
             className="w-full bg-transparent px-1 text-sm outline-none placeholder:text-muted-foreground"
           />
           {query && (
@@ -3125,7 +3124,9 @@ function MailApp() {
                 ) : (
                   <Zap className="h-3.5 w-3.5" />
                 )}
-                <span className="hidden sm:inline">{searchMode === "deep" ? tr("شامل") : tr("سريع")}</span>
+                <span className="hidden sm:inline">
+                  {searchMode === "deep" ? tr("شامل") : tr("سريع")}
+                </span>
                 <ChevronDown className="h-3 w-3 opacity-60" />
               </button>
             </DropdownMenuTrigger>
@@ -3218,7 +3219,9 @@ function MailApp() {
             title={tr("تحديث البريد")}
           >
             <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin text-primary" : ""}`} />
-            <span className="hidden lg:inline">{refreshing ? tr("جاري التحديث...") : tr("تحديث")}</span>
+            <span className="hidden lg:inline">
+              {refreshing ? tr("جاري التحديث...") : tr("تحديث")}
+            </span>
           </button>
           <div className="hidden lg:block">
             <LanguageSwitcher />
@@ -3232,8 +3235,6 @@ function MailApp() {
             <span className="hidden lg:inline">{tr("خروج")}</span>
           </button>
         </div>
-
-
       </header>
 
       <div className="relative flex flex-1 overflow-hidden">
@@ -3448,12 +3449,16 @@ function MailApp() {
                       <span>
                         {tr("نتائج السيرفر")} · {filteredMessages.length}
                         {deepIncludeBody && (
-                          <span className="ms-1 text-[10px] text-primary/70">{tr("(يشمل المحتوى)")}</span>
+                          <span className="ms-1 text-[10px] text-primary/70">
+                            {tr("(يشمل المحتوى)")}
+                          </span>
                         )}
                       </span>
                     </span>
                   ) : (
-                    <>{tr("المعروضة")} · {filteredMessages.length}</>
+                    <>
+                      {tr("المعروضة")} · {filteredMessages.length}
+                    </>
                   )}
                 </span>
               </div>
@@ -3524,7 +3529,9 @@ function MailApp() {
                 <MailIcon className="h-10 w-10 opacity-30" />
                 {inDeepSearch ? (
                   <>
-                    <p className="text-sm">{deepError ? deepError : tr("لا توجد نتائج على السيرفر")}</p>
+                    <p className="text-sm">
+                      {deepError ? deepError : tr("لا توجد نتائج على السيرفر")}
+                    </p>
                     {!deepError && !deepIncludeBody && (
                       <p className="text-[11px] text-muted-foreground/70">
                         {tr("جرّب تفعيل «تضمين نص الرسالة» من خيارات البحث")}
@@ -3803,7 +3810,8 @@ function MessageView({
     ...message.to.map((t) => ({ ...t, kind: "to" as const })),
     ...(message.cc || []).map((c) => ({ ...c, kind: "cc" as const })),
   ];
-  const toSummary = recipientsAll.length > 0 ? recipientsAll.map((r) => r.email).join(tr("،")) : "—";
+  const toSummary =
+    recipientsAll.length > 0 ? recipientsAll.map((r) => r.email).join(tr("،")) : "—";
 
   const fullDate = new Date(message.date).toLocaleString("ar", {
     dateStyle: "full",
@@ -3888,7 +3896,11 @@ function MessageView({
           >
             <ReplyAll className="h-4 w-4" />
           </button>
-          <button onClick={onForward} className="rounded-lg p-2 hover:bg-muted" title={tr("إعادة توجيه")}>
+          <button
+            onClick={onForward}
+            className="rounded-lg p-2 hover:bg-muted"
+            title={tr("إعادة توجيه")}
+          >
             <Forward className="h-4 w-4" />
           </button>
           <div className="mx-1 h-6 w-px bg-border" />
@@ -3903,7 +3915,11 @@ function MessageView({
           )}
 
           {canArchive && (
-            <button onClick={onArchive} className="rounded-lg p-2 hover:bg-muted" title={tr("أرشفة")}>
+            <button
+              onClick={onArchive}
+              className="rounded-lg p-2 hover:bg-muted"
+              title={tr("أرشفة")}
+            >
               <Archive className="h-4 w-4" />
             </button>
           )}
@@ -3917,7 +3933,11 @@ function MessageView({
           >
             <MailOpen className="h-4 w-4" />
           </button>
-          <button onClick={printMessage} className="rounded-lg p-2 hover:bg-muted" title={tr("طباعة")}>
+          <button
+            onClick={printMessage}
+            className="rounded-lg p-2 hover:bg-muted"
+            title={tr("طباعة")}
+          >
             <Printer className="h-4 w-4" />
           </button>
           <button
@@ -4086,7 +4106,9 @@ function MessageView({
 
                         {message.mailedBy && (
                           <>
-                            <dt className="text-foreground/70 whitespace-nowrap">{tr("الخادم:")}</dt>
+                            <dt className="text-foreground/70 whitespace-nowrap">
+                              {tr("الخادم:")}
+                            </dt>
                             <dd className="min-w-0 break-all">
                               <span dir="ltr" style={{ unicodeBidi: "isolate" }}>
                                 {message.mailedBy}
@@ -4096,7 +4118,9 @@ function MessageView({
                         )}
                         {message.signedBy && (
                           <>
-                            <dt className="text-foreground/70 whitespace-nowrap">{tr("التوقيع:")}</dt>
+                            <dt className="text-foreground/70 whitespace-nowrap">
+                              {tr("التوقيع:")}
+                            </dt>
                             <dd className="min-w-0 break-all">
                               <span dir="ltr" style={{ unicodeBidi: "isolate" }}>
                                 {message.signedBy}
@@ -4106,7 +4130,9 @@ function MessageView({
                         )}
                         {message.security && (
                           <>
-                            <dt className="text-foreground/70 whitespace-nowrap">{tr("الأمان:")}</dt>
+                            <dt className="text-foreground/70 whitespace-nowrap">
+                              {tr("الأمان:")}
+                            </dt>
                             <dd className="min-w-0 inline-flex items-center gap-1">
                               {isSecure ? (
                                 <ShieldCheck className="h-3.5 w-3.5 text-emerald-600" />
@@ -4129,7 +4155,6 @@ function MessageView({
               html={sanitizeEmailHtml(message.body || message.preview || "")}
               className="mt-6"
             />
-
 
             {message.attachments && message.attachments.length > 0 && (
               <div className="mt-6">
@@ -5544,7 +5569,6 @@ function Composer({
       const bodyHtml = buildEmailHtmlDocument(fragment, { dir: editorDir });
       const bodyText = htmlToPlainText(fragment);
 
-
       const payload = {
         mailSessionToken: session.mailSessionToken ?? "",
         password: session.password,
@@ -6003,7 +6027,10 @@ function Composer({
                       >
                         <ArrowLeftRight className="h-3.5 w-3.5" />
                       </ToolbarButton>
-                      <ToolbarButton title={tr("إزالة التنسيق")} onMouseDown={() => exec("removeFormat")}>
+                      <ToolbarButton
+                        title={tr("إزالة التنسيق")}
+                        onMouseDown={() => exec("removeFormat")}
+                      >
                         <Eraser className="h-3.5 w-3.5" />
                       </ToolbarButton>
                     </div>

@@ -7,10 +7,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import type { MailAttachment, MailMessage } from "@/lib/mail-types";
-import {
-  classifyBridgeMessageFailure,
-  type BridgeMessageErrorCode,
-} from "@/lib/mail-bridge-error";
+import { classifyBridgeMessageFailure, type BridgeMessageErrorCode } from "@/lib/mail-bridge-error";
 
 const FolderSchema = z.enum([
   "inbox",
@@ -155,6 +152,82 @@ export const openMailMessage = createServerFn({ method: "POST" })
 
     console.log(`[message-open] total ${Date.now() - t0}ms source=imap`);
     return { ok: true, source: "imap", message: msg, body: null };
+  });
+
+const InlinePartSchema = z.object({
+  cid: z.string().min(1).max(998),
+  part: z.string().regex(/^\d+(?:\.\d+)*$/),
+  mimeType: z.string().regex(/^image\//i),
+  size: z
+    .number()
+    .int()
+    .min(0)
+    .max(256 * 1024),
+});
+
+const InlineBatchSchema = z.object({
+  mailSessionToken: z.string().min(20).max(4096),
+  password: z.string().min(1).max(1024),
+  folder: FolderSchema,
+  uid: z.number().int().positive(),
+  parts: z.array(InlinePartSchema).max(20),
+});
+
+export type ResolveInlineImagesResult =
+  | {
+      ok: true;
+      images: NonNullable<MailMessage["inlineImages"]>;
+      failedCids: string[];
+      source: "cache" | "bridge" | "none";
+    }
+  | { ok: false; images: []; failedCids: string[]; error: string };
+
+/** Protected cache-first server batch, invoked only after the body paints. */
+export const resolveMessageInlineImages = createServerFn({ method: "POST" })
+  .inputValidator((value: z.input<typeof InlineBatchSchema>) => InlineBatchSchema.parse(value))
+  .handler(async ({ data }): Promise<ResolveInlineImagesResult> => {
+    const { resolveBridgeAuth } = await import("@/lib/mail-bridge-auth.server");
+    const { bridgeCallResolved } = await import("@/lib/mail-bridge-call.server");
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const cache = await import("@/lib/mail-body-cache.server");
+    const resolver = await import("@/lib/mail-inline-images.server");
+
+    const auth = await resolveBridgeAuth(data.mailSessionToken);
+    if (!auth.ok) return { ok: false, images: [], failedCids: [], error: auth.error };
+
+    const key = {
+      companyId: auth.companyId,
+      accountId: auth.accountId,
+      canonical: data.folder,
+      uid: data.uid,
+    };
+    const messageKey = `${auth.companyId}|${auth.accountId}|${data.folder}:${data.uid}`;
+
+    try {
+      const result = await resolver.resolveInlineImageBatchSingleFlight(messageKey, () =>
+        resolver.resolveInlineImageBatch(data.parts, {
+          lookup: () => cache.lookupCachedBody(supabaseAdmin, key),
+          fetchBatch: async (parts) => {
+            const response = await bridgeCallResolved(
+              auth,
+              "/api/message-inline-images",
+              { folder: data.folder, uid: data.uid, parts },
+              data.password,
+            );
+            if (!response.ok) throw new Error("INLINE_BATCH_FAILED");
+            return {
+              images: (response.json.images ?? []) as NonNullable<MailMessage["inlineImages"]>,
+              failedCids: (response.json.failedCids ?? []) as string[],
+            };
+          },
+          store: (uidValidity, images) =>
+            cache.storeCachedInlineImages(supabaseAdmin, key, uidValidity, images),
+        }),
+      );
+      return { ok: true, ...result };
+    } catch {
+      return { ok: false, images: [], failedCids: [], error: "INLINE_BATCH_FAILED" };
+    }
   });
 
 const WarmSchema = z.object({

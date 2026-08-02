@@ -77,6 +77,30 @@ export interface CacheKey {
   uid: number;
 }
 
+function boundedInlineParts(value: unknown): CachedBody["inlineParts"] {
+  if (!Array.isArray(value)) return [];
+  let totalBytes = 0;
+  const output: CachedBody["inlineParts"] = [];
+  for (const candidate of value as CachedBody["inlineParts"]) {
+    if (output.length >= 20) break;
+    if (
+      !candidate ||
+      typeof candidate.cid !== "string" ||
+      !/^\d+(?:\.\d+)*$/.test(candidate.part) ||
+      !/^image\//i.test(candidate.mimeType) ||
+      !Number.isInteger(candidate.size) ||
+      candidate.size < 0 ||
+      candidate.size > 256 * 1024 ||
+      totalBytes + candidate.size > 1024 * 1024
+    ) {
+      continue;
+    }
+    totalBytes += candidate.size;
+    output.push(candidate);
+  }
+  return output;
+}
+
 /**
  * Cache read.
  *
@@ -153,9 +177,7 @@ export async function lookupCachedBody(
     body: {
       bodyHtml: row.body_html ?? row.body_text ?? "",
       preview: row.preview ?? "",
-      inlineParts: Array.isArray(row.inline_parts)
-        ? (row.inline_parts as CachedBody["inlineParts"])
-        : [],
+      inlineParts: boundedInlineParts(row.inline_parts),
       inlineImages: Array.isArray(row.inline_images)
         ? (row.inline_images as CachedBody["inlineImages"])
         : [],
@@ -216,16 +238,16 @@ export async function storeCachedBody(
   const imagesBytes = images.reduce((n, i) => n + byteLength(i.dataUri), 0);
   const keepImages = imagesBytes <= limits.inlineMaxBytes;
   const inlineParts = keepImages
-    ? (input.inlineParts ?? [])
+    ? boundedInlineParts(input.inlineParts)
     : [
-        ...(input.inlineParts ?? []),
+        ...boundedInlineParts(input.inlineParts),
         ...images.map((i) => ({
           cid: i.cid,
           part: i.part,
           mimeType: i.mimeType,
           size: i.size,
         })),
-      ];
+      ].slice(0, 20);
 
   const { error } = await supabase.from("mail_message_body_cache").upsert(
     {
@@ -260,6 +282,45 @@ export async function storeCachedBody(
 
 export function byteLength(s: string): number {
   return new TextEncoder().encode(s || "").length;
+}
+
+/** Persist a completed deferred CID batch without rewriting the cached body. */
+export async function storeCachedInlineImages(
+  supabase: SupabaseClient,
+  key: CacheKey,
+  uidValidity: string | number,
+  images: NonNullable<MailMessage["inlineImages"]>,
+): Promise<"stored" | "skipped"> {
+  const validity = Number(uidValidity);
+  const totalBytes = images.reduce((sum, image) => sum + image.size, 0);
+  const valid =
+    Number.isFinite(validity) &&
+    validity > 0 &&
+    images.length <= 20 &&
+    totalBytes <= 1024 * 1024 &&
+    images.every(
+      (image) =>
+        image.size >= 0 &&
+        image.size <= 256 * 1024 &&
+        /^image\//i.test(image.mimeType) &&
+        image.dataUri.startsWith(`data:${image.mimeType};base64,`),
+    );
+  if (!valid || !isCacheableFolder(key.canonical)) return "skipped";
+
+  const { error } = await supabase
+    .from("mail_message_body_cache")
+    .update({ inline_images: images, last_accessed_at: new Date().toISOString() })
+    .eq("company_id", key.companyId)
+    .eq("account_id", key.accountId)
+    .eq("canonical", key.canonical)
+    .eq("uid", key.uid)
+    .eq("uid_validity", validity)
+    .eq("cache_version", BODY_CACHE_VERSION);
+  if (error) {
+    console.warn("[body-cache] inline store failed");
+    return "skipped";
+  }
+  return "stored";
 }
 
 /** Age + count bounded eviction for one account. */

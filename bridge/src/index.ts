@@ -13,12 +13,14 @@ import {
   getFolderCounts,
   getMessages,
   getMessageBody,
+  getInlineImagesBatch,
   markRead,
   starMessage,
   moveMessage,
   deleteMessage,
   searchMessages,
   downloadAttachment,
+  type InlinePartMetadata,
 } from "./imap.js";
 import { closeAllImapConnections } from "./imap-connection.js";
 import { sendMessage } from "./smtp.js";
@@ -85,6 +87,21 @@ const FolderPayloadSchema = AuthPayloadSchema.extend({
 
 const MessagePayloadSchema = FolderPayloadSchema.extend({
   uid: z.number().int().positive(),
+});
+
+const InlinePartSchema = z.object({
+  cid: z.string().min(1).max(998),
+  part: z.string().regex(/^\d+(?:\.\d+)*$/),
+  mimeType: z.string().regex(/^image\//i),
+  size: z
+    .number()
+    .int()
+    .min(0)
+    .max(256 * 1024),
+});
+
+const InlineBatchPayloadSchema = MessagePayloadSchema.extend({
+  parts: z.array(InlinePartSchema).max(20),
 });
 
 const MarkReadPayloadSchema = MessagePayloadSchema.extend({
@@ -228,6 +245,26 @@ app.post("/api/message", requireKey, messageGate, async (req, res) => {
   } catch (err: any) {
     console.error("[bridge] /api/message error:", err);
     return res.status(500).json({ ok: false, error: err?.message || "Failed to fetch message" });
+  }
+});
+
+app.post("/api/message-inline-images", requireKey, imapGate("interactive"), async (req, res) => {
+  try {
+    const payload = InlineBatchPayloadSchema.parse(req.body);
+    const result = await getInlineImagesBatch(
+      payload.account as MailAccount,
+      payload.password,
+      payload.folder,
+      payload.uid,
+      payload.parts as InlinePartMetadata[],
+    );
+    return res.json({ ok: true, ...result });
+  } catch (err: unknown) {
+    if (err instanceof z.ZodError) {
+      return res.status(400).json({ ok: false, error: "INVALID_PAYLOAD" });
+    }
+    console.error("[bridge] /api/message-inline-images error:", err);
+    return res.status(500).json({ ok: false, error: "Failed to fetch inline images" });
   }
 });
 
@@ -439,11 +476,7 @@ app.post(
       if (result.ok === false) {
         const err = result.error;
         const status =
-          err === "NO_DRAFTS_FOLDER"
-            ? 422
-            : err === "SAFE_DRAFT_REPLACE_UNSUPPORTED"
-              ? 409
-              : 500;
+          err === "NO_DRAFTS_FOLDER" ? 422 : err === "SAFE_DRAFT_REPLACE_UNSUPPORTED" ? 409 : 500;
         return res.status(status).json({ ok: false, error: err });
       }
 
@@ -504,7 +537,6 @@ app.post("/api/draft-delete", requireKey, imapGate("interactive"), async (req, r
 });
 
 // ---- Send with attachments (multipart/form-data, streamed to disk) ----
-
 
 app.post(
   "/api/send-multipart",
