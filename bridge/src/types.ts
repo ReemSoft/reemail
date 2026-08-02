@@ -58,11 +58,17 @@ export interface MailMessage {
    */
   uidValidity?: string;
   /**
-   * Inline (cid:) images that were too large to embed as data URIs. The
-   * client resolves them through the protected attachment route instead of
-   * rendering a broken image. Threshold: INLINE_CID_MAX_BYTES (bridge env).
+   * Inline (cid:) images outside the embedding budget. The client resolves
+   * them through the protected attachment route instead of rendering a
+   * broken image. Budgets: INLINE_IMAGE_* (bridge env).
    */
   inlineParts?: { cid: string; part: string; mimeType: string; size: number }[];
+  /**
+   * Inline (cid:) images downloaded inside the same IMAP session as the body
+   * and shipped as data URIs, so they render with the first paint.
+   */
+  inlineImages?: { cid: string; mimeType: string; dataUri: string }[];
+
 }
 
 export interface FolderCount {
