@@ -36,6 +36,7 @@ export interface CachedBodyPayload {
   bodyHtml: string;
   preview: string;
   inlineParts: NonNullable<MailMessage["inlineParts"]>;
+  inlineImages: NonNullable<MailMessage["inlineImages"]>;
   attachments: MailAttachment[];
   uidValidity: string;
 }
@@ -99,6 +100,7 @@ export const openMailMessage = createServerFn({ method: "POST" })
             bodyHtml: found.body.bodyHtml,
             preview: found.body.preview,
             inlineParts: found.body.inlineParts,
+            inlineImages: found.body.inlineImages,
             attachments: found.body.attachments,
             uidValidity: found.body.uidValidity,
           },
@@ -145,6 +147,7 @@ export const openMailMessage = createServerFn({ method: "POST" })
           bodyHtml: msg.body || "",
           preview: msg.preview || "",
           inlineParts: msg.inlineParts ?? [],
+          inlineImages: msg.inlineImages ?? [],
           attachments: msg.attachments ?? [],
         })
         .catch(() => undefined);
@@ -238,6 +241,7 @@ export const warmMessageBodies = createServerFn({ method: "POST" })
         bodyHtml: msg.body || "",
         preview: msg.preview || "",
         inlineParts: msg.inlineParts ?? [],
+        inlineImages: msg.inlineImages ?? [],
         attachments: msg.attachments ?? [],
       });
       if (outcome === "stored") warmed++;
