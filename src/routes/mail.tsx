@@ -1907,6 +1907,7 @@ function MailApp() {
                   body: result.body.bodyHtml,
                   preview: result.body.preview || base.preview,
                   inlineParts: result.body.inlineParts,
+                  inlineImages: result.body.inlineImages,
                   attachments: result.body.attachments,
                   hasAttachments:
                     result.body.attachments.length > 0 ? true : base.hasAttachments,
