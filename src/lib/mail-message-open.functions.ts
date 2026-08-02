@@ -25,6 +25,7 @@ const OpenSchema = z.object({
   password: z.string().min(1).max(1024),
   folder: FolderSchema,
   uid: z.number().int().positive(),
+  lane: z.enum(["interactive", "background"]).optional().default("interactive"),
   /** Set false when the caller has no index row to merge a cached body into. */
   allowCache: z.boolean().optional().default(true),
 });
@@ -110,7 +111,7 @@ export const openMailMessage = createServerFn({ method: "POST" })
     const r = await bridgeCallResolved(
       auth,
       "/api/message",
-      { folder: data.folder, uid: data.uid, lane: "interactive" },
+      { folder: data.folder, uid: data.uid, lane: data.lane },
       data.password,
     );
     console.log(`[message-open] imap-fetch ${Date.now() - tImap}ms`);

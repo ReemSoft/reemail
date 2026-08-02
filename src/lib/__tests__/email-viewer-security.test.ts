@@ -10,6 +10,9 @@ import {
   isValidHeightPayload,
   randomToken,
   hasRemoteImages,
+  preparePendingCidImages,
+  isAllowedInlineImageDataUri,
+  isValidCidApplyPayload,
 } from "../email-viewer-security";
 
 // Extract the img-src directive from a built srcDoc's CSP meta.
@@ -113,9 +116,7 @@ describe("sanitizeAndHardenEmailHtml — anchor hardening", () => {
   });
 
   it("allows mailto: and tel: schemes", () => {
-    const out = sanitizeAndHardenEmailHtml(
-      `<a href="mailto:x@y.z">m</a><a href="tel:+123">t</a>`,
-    );
+    const out = sanitizeAndHardenEmailHtml(`<a href="mailto:x@y.z">m</a><a href="tel:+123">t</a>`);
     expect(out).toMatch(/href="mailto:x@y.z"/);
     expect(out).toMatch(/href="tel:\+123"/);
   });
@@ -186,10 +187,117 @@ describe("buildEmailSrcDoc — CSP + measurement contract", () => {
     const evil = buildEmailSrcDoc({
       html: "",
       nonce: "n",
-      channelId: '</script><script>alert(1)</script>',
+      channelId: "</script><script>alert(1)</script>",
       parentOrigin: "https://x",
     });
     expect(evil).not.toMatch(/<\/script><script>alert/);
+  });
+});
+
+describe("MAILMAESTRO_INSTANT_NAVIGATION_R1 stable CID iframe", () => {
+  it("creates an inert CID placeholder while preserving dimensions", () => {
+    const out = preparePendingCidImages(`<img src="cid:logo" width="120" height="40">`);
+    expect(out).toContain(`data-mm-cid="logo"`);
+    expect(out).toContain(`width="120"`);
+    expect(out).toContain(`height="40"`);
+    expect(out).not.toContain(`src="cid:`);
+  });
+
+  it("keeps srcDoc stable before and after CID bytes become available", () => {
+    const options = {
+      html: `<p>hello</p><img src="cid:logo">`,
+      nonce: "n",
+      channelId: "channel",
+      parentOrigin: "https://app.example.com",
+    };
+    const before = buildEmailSrcDoc(options);
+    const after = buildEmailSrcDoc(options);
+    expect(after).toBe(before);
+    expect(before).toContain("requestAnimationFrame");
+    expect(before).toContain("querySelectorAll('img[data-mm-cid]')");
+  });
+
+  it("accepts only the matching channel and safe raster image MIME", () => {
+    const valid = {
+      __mm: "cid",
+      channel: "channel",
+      messageIdentity: "message",
+      generation: "generation",
+      images: [{ cid: "logo", dataUri: "data:image/png;base64,AAAA" }],
+    };
+    expect(isValidCidApplyPayload(valid, "channel", "message", "generation")).toBe(true);
+    expect(isValidCidApplyPayload(valid, "other", "message", "generation")).toBe(false);
+    expect(isValidCidApplyPayload(valid, "channel", "other", "generation")).toBe(false);
+    expect(isValidCidApplyPayload(valid, "channel", "message", "old")).toBe(false);
+    expect(isAllowedInlineImageDataUri("data:image/svg+xml;base64,AAAA")).toBe(false);
+    expect(isAllowedInlineImageDataUri("data:text/html;base64,AAAA")).toBe(false);
+  });
+
+  it("enforces 256KB per image and 1MB total postMessage limits", () => {
+    const tooLarge = `data:image/png;base64,${"A".repeat(350_000)}`;
+    expect(isAllowedInlineImageDataUri(tooLarge)).toBe(false);
+    const nearLimit = `data:image/png;base64,${"A".repeat(340_000)}`;
+    expect(
+      isValidCidApplyPayload(
+        {
+          __mm: "cid",
+          channel: "channel",
+          messageIdentity: "",
+          generation: "",
+          images: Array.from({ length: 5 }, (_, index) => ({
+            cid: String(index),
+            dataUri: nearLimit,
+          })),
+        },
+        "channel",
+      ),
+    ).toBe(false);
+  });
+
+  it("checks parent source/origin and batches all CID DOM writes in one frame", () => {
+    const doc = buildEmailSrcDoc({
+      html: `<img src="cid:a"><img src="cid:b">`,
+      nonce: "n",
+      channelId: "channel",
+      parentOrigin: "https://app.example.com",
+    });
+    expect(doc).toContain("event.source!==parent");
+    expect(doc).toContain("event.origin!==origin");
+    expect(doc.match(/querySelectorAll\('img\[data-mm-cid\]'\)/g)).toHaveLength(1);
+  });
+
+  it("does not reserve 320x240 for an image without dimensions", () => {
+    const doc = buildEmailSrcDoc({
+      html: `<img src="cid:logo">`,
+      nonce: "n",
+      channelId: "channel",
+      parentOrigin: "https://app.example.com",
+    });
+    expect(doc).not.toContain("320px");
+    expect(doc).toContain("img[data-mm-cid]:not([width]):not([height]){width:0;height:0;}");
+  });
+
+  it("hides tracking pixels and preserves valid HTML aspect ratios", () => {
+    const tracking = preparePendingCidImages(`<img src="cid:track" width="1" height="1">`);
+    expect(tracking).toContain('data-mm-tracking="true"');
+    const logo = preparePendingCidImages(`<img src="cid:logo" width="120" height="40">`);
+    expect(logo).toContain('width="120"');
+    expect(logo).toContain('height="40"');
+    expect(logo).toMatch(/aspect-ratio:\s*120\s*\/\s*40/i);
+  });
+
+  it("applies decoded intrinsic dimensions before exposing the CID src", () => {
+    const doc = buildEmailSrcDoc({
+      html: `<img src="cid:logo">`,
+      nonce: "n",
+      channelId: "channel",
+      messageIdentity: "inbox:1",
+      generation: "g1",
+      parentOrigin: "https://app.example.com",
+    });
+    expect(doc.indexOf("img.width=item.width")).toBeLessThan(doc.indexOf("img.src=src"));
+    expect(doc).toContain("data.messageIdentity!==messageIdentity");
+    expect(doc).toContain("data.generation!==generation");
   });
 });
 

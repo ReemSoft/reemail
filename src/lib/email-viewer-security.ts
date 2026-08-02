@@ -31,7 +31,9 @@ function sanitizeCssText(css: string): string {
   if (!css) return "";
   let out = css.replace(IMPORT_RE, "");
   out = out.replace(URL_RE, (_m, _q, ref: string) => {
-    const v = String(ref || "").trim().toLowerCase();
+    const v = String(ref || "")
+      .trim()
+      .toLowerCase();
     if (v.startsWith("data:")) return `url(${ref})`;
     // Block http(s):, blob:, filesystem:, javascript:, //cdn, /path, etc.
     return "none";
@@ -113,6 +115,8 @@ export interface BuildSrcDocOptions {
   html: string;
   nonce: string;
   channelId: string;
+  messageIdentity?: string;
+  generation?: string;
   parentOrigin: string;
   /**
    * When true, allow HTTPS image sources (only). Default is false: only
@@ -125,6 +129,115 @@ export interface BuildSrcDocOptions {
 function jsonSafe(value: string): string {
   // JSON.stringify escapes </ so it can't break out of a <script> tag.
   return JSON.stringify(value).replace(/</g, "\\u003c");
+}
+
+const INLINE_IMAGE_DATA_RE = /^data:image\/(?:png|jpe?g|gif|webp);base64,[a-z0-9+/=\s]+$/i;
+
+export interface CidImageMapping {
+  cid: string;
+  dataUri: string;
+  width?: number;
+  height?: number;
+}
+
+export interface CidApplyMessage {
+  __mm: "cid";
+  channel: string;
+  messageIdentity: string;
+  generation: string;
+  images: CidImageMapping[];
+}
+
+export function isAllowedInlineImageDataUri(value: unknown): value is string {
+  if (typeof value !== "string" || value.length > 350_000 || !INLINE_IMAGE_DATA_RE.test(value)) {
+    return false;
+  }
+  const base64 = value.slice(value.indexOf(",") + 1).replace(/\s/g, "");
+  const padding = base64.endsWith("==") ? 2 : base64.endsWith("=") ? 1 : 0;
+  return Math.floor((base64.length * 3) / 4) - padding <= 256 * 1024;
+}
+
+export function isValidCidApplyPayload(
+  data: unknown,
+  channelId: string,
+  messageIdentity = "",
+  generation = "",
+): data is CidApplyMessage {
+  if (!data || typeof data !== "object") return false;
+  const value = data as Record<string, unknown>;
+  if (
+    value.__mm !== "cid" ||
+    value.channel !== channelId ||
+    value.messageIdentity !== messageIdentity ||
+    value.generation !== generation ||
+    !Array.isArray(value.images)
+  ) {
+    return false;
+  }
+  if (value.images.length > 20) return false;
+  let totalBytes = 0;
+  const valid = value.images.every((item) => {
+    if (!item || typeof item !== "object") return false;
+    const image = item as Record<string, unknown>;
+    const dimensionsValid =
+      (image.width === undefined && image.height === undefined) ||
+      (Number.isInteger(image.width) &&
+        Number.isInteger(image.height) &&
+        Number(image.width) > 0 &&
+        Number(image.height) > 0 &&
+        Number(image.width) <= 20_000 &&
+        Number(image.height) <= 20_000);
+    if (
+      dimensionsValid &&
+      typeof image.cid === "string" &&
+      image.cid.length > 0 &&
+      image.cid.length <= 998 &&
+      isAllowedInlineImageDataUri(image.dataUri)
+    ) {
+      const base64 = image.dataUri.slice(image.dataUri.indexOf(",") + 1).replace(/\s/g, "");
+      const padding = base64.endsWith("==") ? 2 : base64.endsWith("=") ? 1 : 0;
+      totalBytes += Math.floor((base64.length * 3) / 4) - padding;
+      return totalBytes <= 1024 * 1024;
+    }
+    return false;
+  });
+  return valid;
+}
+
+/**
+ * Converts CID image sources into inert placeholders before srcDoc creation.
+ * The original dimensions remain intact; images without dimensions receive a
+ * bounded reserved box from the iframe CSS. No `cid:` navigation is attempted.
+ */
+export function preparePendingCidImages(html: string): string {
+  if (!html || !/<img\b/i.test(html) || !/\bsrc\s*=\s*(["']?)cid:/i.test(html)) return html;
+  if (typeof DOMParser === "undefined") {
+    return html.replace(
+      /(<img\b[^>]*?)\s+src\s*=\s*(["'])cid:([^"']+)\2([^>]*>)/gi,
+      (_match, before, _quote, cid, after) =>
+        `${before} data-mm-cid="${String(cid).replace(/&/g, "&amp;").replace(/"/g, "&quot;")}"${after}`,
+    );
+  }
+  const doc = new DOMParser().parseFromString(`<body>${html}</body>`, "text/html");
+  doc.querySelectorAll<HTMLImageElement>("img[src]").forEach((image) => {
+    const src = (image.getAttribute("src") || "").trim();
+    if (!src.toLowerCase().startsWith("cid:")) return;
+    const cid = src.slice(4).trim().replace(/^<|>$/g, "");
+    if (!cid || cid.length > 998) {
+      image.removeAttribute("src");
+      return;
+    }
+    image.removeAttribute("src");
+    image.setAttribute("data-mm-cid", cid);
+    image.setAttribute("aria-busy", "true");
+    const width = Number(image.getAttribute("width"));
+    const height = Number(image.getAttribute("height"));
+    if (Number.isFinite(width) && width > 0 && Number.isFinite(height) && height > 0) {
+      if (width <= 1 && height <= 1) image.setAttribute("data-mm-tracking", "true");
+      else image.style.aspectRatio = `${width} / ${height}`;
+    }
+  });
+  return doc.body.innerHTML;
 }
 
 /**
@@ -142,9 +255,12 @@ export function buildEmailSrcDoc({
   html,
   nonce,
   channelId,
+  messageIdentity = "",
+  generation = "",
   parentOrigin,
   allowRemoteImages = false,
 }: BuildSrcDocOptions): string {
+  const stableHtml = preparePendingCidImages(html);
   // Privacy-first image policy: block ALL remote images by default (trackers,
   // read receipts, spy pixels). Only inline `data:`/`blob:` render. When the
   // user explicitly opts in for a message, allow `https:` only — `http:` is
@@ -171,8 +287,12 @@ export function buildEmailSrcDoc({
     (function(){
       var origin=${jsonSafe(parentOrigin)};
       var channel=${jsonSafe(channelId)};
+      var messageIdentity=${jsonSafe(messageIdentity)};
+      var generation=${jsonSafe(generation)};
       var last=0;
-      function send(){
+      var batching=false;
+      function send(force){
+        if(batching && !force) return;
         try{
           var b=document.body, d=document.documentElement;
           var h=Math.max(
@@ -191,6 +311,66 @@ export function buildEmailSrcDoc({
       Array.prototype.forEach.call(document.images||[], function(img){
         if(!img.complete){ img.addEventListener('load', send); img.addEventListener('error', send); }
       });
+      function validImageData(value){
+        return typeof value==='string' && value.length<=350000 &&
+          /^data:image\\/(?:png|jpe?g|gif|webp);base64,[a-z0-9+\\/=\\s]+$/i.test(value);
+      }
+      window.addEventListener('message', function(event){
+        try{
+          if(event.source!==parent || event.origin!==origin) return;
+          var data=event.data;
+          if(!data || data.__mm!=='cid' || data.channel!==channel || data.messageIdentity!==messageIdentity || data.generation!==generation || !Array.isArray(data.images) || data.images.length>20) return;
+          var mapping=Object.create(null);
+          var total=0;
+          for(var i=0;i<data.images.length;i++){
+            var item=data.images[i];
+            if(!item || typeof item.cid!=='string' || item.cid.length<1 || item.cid.length>998 || !validImageData(item.dataUri)) continue;
+            if((item.width!==undefined || item.height!==undefined) &&
+              (!Number.isInteger(item.width) || !Number.isInteger(item.height) || item.width<1 || item.height<1 || item.width>20000 || item.height>20000)) continue;
+            var encoded=item.dataUri.slice(item.dataUri.indexOf(',')+1).replace(/\\s/g,'');
+            total+=Math.floor(encoded.length*3/4)-(encoded.endsWith('==')?2:encoded.endsWith('=')?1:0);
+            if(total>1048576) return;
+            mapping[item.cid.toLowerCase()]=item;
+          }
+          batching=true;
+          requestAnimationFrame(function(){
+            var nodes=document.querySelectorAll('img[data-mm-cid]');
+            var waiting=0, finished=false;
+            function done(){
+              if(finished) return;
+              waiting--;
+              if(waiting<=0){
+                finished=true;
+                batching=false;
+                requestAnimationFrame(function(){ send(true); });
+              }
+            }
+            for(var n=0;n<nodes.length;n++){
+              var img=nodes[n], cid=(img.getAttribute('data-mm-cid')||'').toLowerCase();
+              var item=mapping[cid];
+              if(!item) continue;
+              var src=item.dataUri;
+              if(item.width && item.height){
+                if(item.width<=1 && item.height<=1){
+                  img.style.display='none';
+                }else if(!img.hasAttribute('width') && !img.hasAttribute('height')){
+                  img.width=item.width;
+                  img.height=item.height;
+                  img.style.aspectRatio=item.width+' / '+item.height;
+                }
+              }
+              waiting++;
+              img.addEventListener('load', done, {once:true});
+              img.addEventListener('error', done, {once:true});
+              img.src=src;
+              img.removeAttribute('data-mm-cid');
+              img.removeAttribute('aria-busy');
+              img.style.visibility='';
+            }
+            if(waiting===0){ finished=true; batching=false; send(true); }
+          });
+        }catch(e){ batching=false; }
+      });
       try{
         if(window.ResizeObserver){
           var ro=new ResizeObserver(send);
@@ -207,6 +387,9 @@ export function buildEmailSrcDoc({
       font-size:14px;line-height:1.6;word-wrap:break-word;overflow-wrap:anywhere;
       overflow:hidden;}
     img,video{max-width:100%;height:auto;border-radius:6px;}
+    img[data-mm-cid]{visibility:hidden;}
+    img[data-mm-cid]:not([width]):not([height]){width:0;height:0;}
+    img[data-mm-tracking]{display:none!important;width:0!important;height:0!important;}
     table{max-width:100%;}
     a{color:#2563eb;}
     blockquote{border-inline-start:3px solid #e5e7eb;margin:8px 0;padding:4px 12px;color:#4b5563;}
@@ -219,8 +402,8 @@ export function buildEmailSrcDoc({
     `<meta http-equiv="Content-Security-Policy" content="${csp}">` +
     `<meta name="referrer" content="no-referrer">` +
     `<style>${baseCss}</style>` +
-    `</head><body>${html}` +
-    `<script nonce="${nonce}">${measureScript}<\/script>` +
+    `</head><body>${stableHtml}` +
+    `<script nonce="${nonce}">${measureScript}</script>` +
     `</body></html>`
   );
 }

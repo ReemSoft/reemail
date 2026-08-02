@@ -53,11 +53,8 @@ export const indexListMessages = createServerFn({ method: "POST" })
   .handler(async ({ data }): Promise<IndexListResult> => {
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
     const { verifyMailSessionToken } = await import("@/lib/mail-token.server");
-    const {
-      indexRowToMailMessage,
-      encodeIndexCursor,
-      decodeIndexCursor,
-    } = await import("@/lib/mail-index-row");
+    const { indexRowToMailMessage, encodeIndexCursor, decodeIndexCursor } =
+      await import("@/lib/mail-index-row");
 
     // ---- 1) Verify token ----
     let claims;
@@ -83,7 +80,6 @@ export const indexListMessages = createServerFn({ method: "POST" })
       return { ok: true, indexed: false, reason: "NO_FOLDER" };
     }
 
-
     // ---- 2) Resolve folder row by (account_id, canonical) ----
     const folderQ = await supabaseAdmin
       .from("mail_folders")
@@ -101,6 +97,7 @@ export const indexListMessages = createServerFn({ method: "POST" })
       return { ok: true, indexed: false, reason: "NO_UIDVALIDITY" };
 
     const folderId = folderQ.data.id;
+    const folderUidValidity = String(folderQ.data.uidvalidity);
 
     // ---- 3) Keyset cursor page ----
     const cursor = data.cursor ? decodeIndexCursor(data.cursor) : null;
@@ -136,8 +133,8 @@ export const indexListMessages = createServerFn({ method: "POST" })
     const hasMore = rows.length > limit;
     const pageRows = hasMore ? rows.slice(0, limit) : rows;
 
-    const messages = pageRows.map((r) =>
-      indexRowToMailMessage(canonical, {
+    const messages = pageRows.map((r) => ({
+      ...indexRowToMailMessage(canonical, {
         uid: Number(r.uid),
         subject: r.subject,
         from_addr: r.from_addr,
@@ -149,7 +146,8 @@ export const indexListMessages = createServerFn({ method: "POST" })
         has_attachments: !!r.has_attachments,
         message_id: r.message_id,
       }),
-    );
+      uidValidity: folderUidValidity,
+    }));
 
     const last = pageRows[pageRows.length - 1];
     const nextCursor =

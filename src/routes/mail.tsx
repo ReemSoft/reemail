@@ -10,12 +10,15 @@ import DOMPurify from "dompurify";
 import {
   sanitizeAndHardenEmailHtml,
   buildEmailSrcDoc,
+  isAllowedInlineImageDataUri,
+  isValidCidApplyPayload,
   isValidHeightPayload,
   randomToken,
   hasRemoteImages,
   getAlwaysShowRemoteImages,
   setAlwaysShowRemoteImages,
 } from "@/lib/email-viewer-security";
+import type { CidImageMapping } from "@/lib/email-viewer-security";
 
 import { buildReplyQuoteHtml, buildForwardQuoteHtml } from "@/lib/mail-quote";
 import { splitQuotedHtml } from "@/lib/mail-thread-split";
@@ -38,6 +41,18 @@ function sanitizeComposerHtml(html: string): string {
   });
 }
 
+function rotatingToken(identity: string, prefix = ""): string {
+  return `${prefix}${randomToken(12)}${identity.length.toString(36)}`;
+}
+
+function errorMessage(error: unknown, fallback: string): string {
+  if (error && typeof error === "object" && "message" in error) {
+    const message = (error as { message?: unknown }).message;
+    if (typeof message === "string" && message) return message;
+  }
+  return fallback;
+}
+
 /**
  * EmailBodyFrame — renders sanitized email HTML inside a sandboxed iframe with
  * a strict Content-Security-Policy. The sandbox has NO `allow-same-origin`,
@@ -46,12 +61,36 @@ function sanitizeComposerHtml(html: string): string {
  * the exact parent origin and a per-render channelId, both verified on
  * receive. Links open in a new top-level tab and never leak referrer.
  */
-function EmailBodyFrame({ html, className }: { html: string; className?: string }) {
+function EmailBodyFrame({
+  html,
+  cidImages,
+  messageIdentity,
+  className,
+}: {
+  html: string;
+  cidImages: CidImageMapping[];
+  messageIdentity: string;
+  className?: string;
+}) {
   const ref = useRef<HTMLIFrameElement | null>(null);
-  const nonce = useMemo(() => randomToken(12), []);
-  const channelId = useMemo(() => `mm-${randomToken(12)}`, []);
+  const nonce = useMemo(() => rotatingToken(`${messageIdentity}|${html}`), [html, messageIdentity]);
+  const channelId = useMemo(
+    () => rotatingToken(`${messageIdentity}|${html}`, "mm-"),
+    [html, messageIdentity],
+  );
+  const generation = useMemo(
+    () => rotatingToken(`${messageIdentity}|${html}`),
+    [html, messageIdentity],
+  );
   const [height, setHeight] = useState<number>(60);
   const [allowRemoteImages, setAllowRemoteImages] = useState(false);
+  const [frameReady, setFrameReady] = useState(false);
+  const appliedCidSignatureRef = useRef("");
+  const cidRafRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    mailPerf("iframe-created", { count: 1 });
+  }, []);
 
   // Remembered preference ("always show images"). Read after mount so SSR and
   // the first client render stay identical; costs nothing at open time.
@@ -71,9 +110,50 @@ function EmailBodyFrame({ html, className }: { html: string; className?: string 
   );
 
   const srcDoc = useMemo(
-    () => buildEmailSrcDoc({ html, nonce, channelId, parentOrigin, allowRemoteImages }),
-    [html, nonce, channelId, parentOrigin, allowRemoteImages],
+    () =>
+      buildEmailSrcDoc({
+        html,
+        nonce,
+        channelId,
+        messageIdentity,
+        generation,
+        parentOrigin,
+        allowRemoteImages,
+      }),
+    [html, nonce, channelId, messageIdentity, generation, parentOrigin, allowRemoteImages],
   );
+
+  useEffect(() => {
+    setFrameReady(false);
+    appliedCidSignatureRef.current = "";
+  }, [srcDoc]);
+
+  useEffect(() => {
+    if (!frameReady || cidImages.length === 0 || !ref.current?.contentWindow) return;
+    const safeImages = cidImages.filter((image) => isAllowedInlineImageDataUri(image.dataUri));
+    const signature = `${safeImages.length}:${safeImages.reduce((sum, image) => sum + image.dataUri.length, 0)}`;
+    if (signature === appliedCidSignatureRef.current) return;
+    const payload = {
+      __mm: "cid" as const,
+      channel: channelId,
+      messageIdentity,
+      generation,
+      images: safeImages,
+    };
+    if (!isValidCidApplyPayload(payload, channelId, messageIdentity, generation)) return;
+    appliedCidSignatureRef.current = signature;
+    const target = ref.current.contentWindow;
+    cidRafRef.current = requestAnimationFrame(() => {
+      cidRafRef.current = null;
+      if (ref.current?.contentWindow !== target) return;
+      target.postMessage(payload, "*");
+      mailPerf("cid-applied", { count: safeImages.length });
+    });
+    return () => {
+      if (cidRafRef.current !== null) cancelAnimationFrame(cidRafRef.current);
+      cidRafRef.current = null;
+    };
+  }, [cidImages, channelId, frameReady, generation, messageIdentity]);
 
   useEffect(() => {
     function onMsg(e: MessageEvent) {
@@ -124,6 +204,7 @@ function EmailBodyFrame({ html, className }: { html: string; className?: string 
         sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
         referrerPolicy="no-referrer"
         scrolling="no"
+        onLoad={() => setFrameReady(true)}
         style={{ width: "100%", height, border: 0, display: "block", overflow: "hidden" }}
       />
     </div>
@@ -135,7 +216,17 @@ function EmailBodyFrame({ html, className }: { html: string; className?: string 
  * collapses the quoted history behind a "•••" toggle (Gmail behaviour), so a
  * long back-and-forth thread reads as distinct turns instead of one wall.
  */
-function ThreadedEmailBody({ html, className }: { html: string; className?: string }) {
+function ThreadedEmailBody({
+  html,
+  cidImages,
+  messageIdentity,
+  className,
+}: {
+  html: string;
+  cidImages: CidImageMapping[];
+  messageIdentity: string;
+  className?: string;
+}) {
   const { latest, quoted } = useMemo(() => splitQuotedHtml(html), [html]);
   const [expanded, setExpanded] = useState(false);
 
@@ -143,11 +234,23 @@ function ThreadedEmailBody({ html, className }: { html: string; className?: stri
     setExpanded(false);
   }, [html]);
 
-  if (!quoted) return <EmailBodyFrame html={html} className={className} />;
+  if (!quoted)
+    return (
+      <EmailBodyFrame
+        html={html}
+        cidImages={cidImages}
+        messageIdentity={messageIdentity}
+        className={className}
+      />
+    );
 
   return (
     <div className={className}>
-      <EmailBodyFrame html={latest} />
+      <EmailBodyFrame
+        html={latest}
+        cidImages={cidImages}
+        messageIdentity={`${messageIdentity}:latest`}
+      />
       <div className="mt-3">
         <button
           type="button"
@@ -160,7 +263,11 @@ function ThreadedEmailBody({ html, className }: { html: string; className?: stri
         </button>
         {expanded && (
           <div className="mt-3 rounded-lg border border-border bg-muted/30 ps-3 pe-2 py-2 border-s-2 border-s-primary/40">
-            <EmailBodyFrame html={quoted} />
+            <EmailBodyFrame
+              html={quoted}
+              cidImages={cidImages}
+              messageIdentity={`${messageIdentity}:quoted`}
+            />
           </div>
         )}
       </div>
@@ -168,77 +275,114 @@ function ThreadedEmailBody({ html, className }: { html: string; className?: stri
   );
 }
 
-/**
- * Session-scoped cache of inline images resolved through the lazy fallback
- * route. Key: `${messageId}|${cid}` → data URI.
- */
-const inlineImageCache = new Map<string, string>();
-const inlineImageFlights = new Map<
-  string,
-  Promise<Awaited<ReturnType<typeof resolveMessageInlineImages>>>
->();
+type InlineImageFlight = {
+  promise: Promise<Awaited<ReturnType<typeof resolveMessageInlineImages>>>;
+  controller: AbortController;
+};
+const inlineImageFlights = new Map<string, InlineImageFlight>();
 
-/** Replaces every `cid:<id>` reference in `base` with its resolved source. */
-function applyInlineSources(base: string, pairs: { cid: string; dataUri: string }[]): string {
-  let out = base;
-  for (const r of pairs) {
-    const esc = r.cid.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    out = out.replace(new RegExp(`cid:${esc}`, "gi"), r.dataUri);
-  }
-  return out;
+function abortInlineImageFlights(): void {
+  for (const flight of inlineImageFlights.values()) flight.controller.abort();
+  inlineImageFlights.clear();
+}
+
+async function decodeInlineMappings(images: CidImageMapping[]): Promise<CidImageMapping[]> {
+  const decoded = await Promise.all(
+    images.map(async (image) => {
+      if (!isAllowedInlineImageDataUri(image.dataUri)) return null;
+      if (typeof Image === "undefined") return image;
+      const candidate = new Image();
+      candidate.src = image.dataUri;
+      try {
+        if (typeof candidate.decode === "function") await candidate.decode();
+        else if (!candidate.complete) {
+          await new Promise<void>((resolve, reject) => {
+            candidate.onload = () => resolve();
+            candidate.onerror = () => reject(new Error("IMAGE_DECODE_FAILED"));
+          });
+        }
+        const width = candidate.naturalWidth;
+        const height = candidate.naturalHeight;
+        return width > 0 && height > 0 ? { ...image, width, height } : image;
+      } catch {
+        return null;
+      }
+    }),
+  );
+  return decoded.filter(Boolean) as CidImageMapping[];
 }
 
 /**
  * Renders cached CID bytes immediately. Missing bytes are fetched after the
  * body paints by one protected batch and applied in one state update.
  */
-function useInlineResolvedHtml(message: MailMessage, html: string): string {
+function useInlineImageMappings(
+  message: MailMessage,
+  onResolved?: (images: NonNullable<MailMessage["inlineImages"]>) => void,
+): CidImageMapping[] {
   const resolveInlineImages = useMailServerFn(resolveMessageInlineImages);
-  const accountScope = getMailSession()?.account.id ?? "no-account";
-  const messageKey = `${accountScope}|${message.id}`;
-  // Synchronous, pre-paint substitution of everything the server already sent.
-  const base = useMemo(() => {
-    const embedded = (message.inlineImages ?? []).map((i) => ({
-      cid: i.cid,
-      dataUri: i.dataUri,
-    }));
-    const cachedLazy = (message.inlineParts ?? [])
-      .map((p) => {
-        const hit = inlineImageCache.get(`${messageKey}|${p.cid}`);
-        return hit ? { cid: p.cid, dataUri: hit } : null;
-      })
-      .filter(Boolean) as { cid: string; dataUri: string }[];
-    const pairs = [...embedded, ...cachedLazy];
-    return pairs.length ? applyInlineSources(html, pairs) : html;
-  }, [html, message.inlineImages, message.inlineParts, messageKey]);
-
-  const [resolved, setResolved] = useState(base);
+  const activeSession = getMailSession();
+  const identity = parseMessageId(message.id);
+  const uidValidity = validUidValidity(message.uidValidity);
+  const messageKey = uidValidity
+    ? `${activeSession?.company?.id ?? "none"}|${activeSession?.account.id ?? "none"}|${identity?.folder ?? message.folder}|${identity?.uid ?? message.id}|${uidValidity}`
+    : "";
+  const embedded = useMemo(
+    () =>
+      (message.inlineImages ?? [])
+        .filter((image) => isAllowedInlineImageDataUri(image.dataUri))
+        .map((image) => ({ cid: image.cid, dataUri: image.dataUri })),
+    [message.inlineImages],
+  );
+  const [resolved, setResolved] = useState<{ key: string; images: CidImageMapping[] }>({
+    key: messageKey,
+    images: [],
+  });
+  const onResolvedRef = useRef(onResolved);
+  useEffect(() => {
+    onResolvedRef.current = onResolved;
+  }, [onResolved]);
 
   useEffect(() => {
-    setResolved(base);
+    let cancelled = false;
+    setResolved({ key: messageKey, images: [] });
+
+    void decodeInlineMappings(embedded).then((decoded) => {
+      if (cancelled) return;
+      setResolved((current) => {
+        if (current.key !== messageKey) return current;
+        const byCid = new Map(current.images.map((image) => [image.cid.toLowerCase(), image]));
+        for (const image of decoded) byCid.set(image.cid.toLowerCase(), image);
+        return { key: messageKey, images: [...byCid.values()] };
+      });
+    });
 
     const parts = message.inlineParts;
-    if (!parts?.length || !base) return;
+    if (!parts?.length || !messageKey) {
+      return () => {
+        cancelled = true;
+      };
+    }
     const embeddedCids = new Set(
       (message.inlineImages ?? []).map((image) => image.cid.toLowerCase()),
     );
-    const pending = parts.filter(
-      (part) =>
-        !embeddedCids.has(part.cid.toLowerCase()) &&
-        !inlineImageCache.has(`${messageKey}|${part.cid}`),
-    );
-    if (!pending.length) return;
-
-    let cancelled = false;
+    const pending = parts.filter((part) => !embeddedCids.has(part.cid.toLowerCase()));
+    if (!pending.length) {
+      return () => {
+        cancelled = true;
+      };
+    }
 
     void (async () => {
       const session = getMailSession();
       const parsed = parseMessageId(message.id);
       if (!session || !parsed) return;
 
-      let flight = inlineImageFlights.get(messageKey);
-      if (!flight) {
-        flight = resolveInlineImages({
+      let entry = inlineImageFlights.get(messageKey);
+      if (!entry) {
+        mailPerf("cid-request-start", { count: parts.length });
+        const controller = new AbortController();
+        const promise = resolveInlineImages({
           data: {
             mailSessionToken: session.mailSessionToken ?? "",
             password: session.password,
@@ -246,22 +390,43 @@ function useInlineResolvedHtml(message: MailMessage, html: string): string {
             uid: parsed.uid,
             parts,
           },
-        }).finally(() => inlineImageFlights.delete(messageKey));
-        inlineImageFlights.set(messageKey, flight);
+          signal: controller.signal,
+        }).finally(() => {
+          if (inlineImageFlights.get(messageKey)?.promise === promise) {
+            inlineImageFlights.delete(messageKey);
+          }
+        });
+        entry = { promise, controller };
+        inlineImageFlights.set(messageKey, entry);
       }
-      const result = await flight;
+      let result: Awaited<ReturnType<typeof resolveMessageInlineImages>>;
+      try {
+        result = await entry.promise;
+      } catch {
+        return;
+      }
       if (!result.ok || cancelled) return;
-      const pairs = result.images.map((image) => ({ cid: image.cid, dataUri: image.dataUri }));
-      for (const pair of pairs) inlineImageCache.set(`${messageKey}|${pair.cid}`, pair.dataUri);
-      // All successful CID substitutions land in one React state update.
-      if (pairs.length) setResolved((current) => applyInlineSources(current, pairs));
+      const decoded = await decodeInlineMappings(
+        result.images.map((image) => ({ cid: image.cid, dataUri: image.dataUri })),
+      );
+      if (cancelled || decoded.length === 0) return;
+      mailPerf("cid-decoded", { count: decoded.length, failed: result.failedCids.length });
+      const decodedCids = new Set(decoded.map((image) => image.cid.toLowerCase()));
+      const stored = result.images.filter((image) => decodedCids.has(image.cid.toLowerCase()));
+      setResolved((current) => {
+        if (current.key !== messageKey) return current;
+        const byCid = new Map(current.images.map((image) => [image.cid.toLowerCase(), image]));
+        for (const image of decoded) byCid.set(image.cid.toLowerCase(), image);
+        return { key: messageKey, images: [...byCid.values()] };
+      });
+      onResolvedRef.current?.(stored);
     })();
 
     return () => {
       cancelled = true;
     };
   }, [
-    base,
+    embedded,
     message.id,
     message.inlineImages,
     message.inlineParts,
@@ -269,21 +434,30 @@ function useInlineResolvedHtml(message: MailMessage, html: string): string {
     resolveInlineImages,
   ]);
 
-  return resolved;
+  return resolved.key === messageKey ? resolved.images : [];
 }
 
 /** Body renderer that first resolves any deferred inline images. */
 function MessageBody({
   message,
   html,
+  onInlineImages,
   className,
 }: {
   message: MailMessage;
   html: string;
+  onInlineImages?: (images: NonNullable<MailMessage["inlineImages"]>) => void;
   className?: string;
 }) {
-  const resolved = useInlineResolvedHtml(message, html);
-  return <ThreadedEmailBody html={resolved} className={className} />;
+  const cidImages = useInlineImageMappings(message, onInlineImages);
+  return (
+    <ThreadedEmailBody
+      html={html}
+      cidImages={cidImages}
+      messageIdentity={`${message.id}|${message.uidValidity ?? ""}`}
+      className={className}
+    />
+  );
 }
 
 import {
@@ -390,11 +564,7 @@ import {
   bridgeSaveDraft,
   bridgeDeleteDraft,
 } from "@/lib/mail-bridge.functions";
-import {
-  openMailMessage,
-  resolveMessageInlineImages,
-  warmMessageBodies,
-} from "@/lib/mail-message-open.functions";
+import { openMailMessage, resolveMessageInlineImages } from "@/lib/mail-message-open.functions";
 import {
   readDraftDoc,
   writeDraftDoc,
@@ -420,6 +590,22 @@ import {
   createDraftAutosaveRefreshTracker,
   shouldRefreshDraftsOnFolderEntry,
 } from "@/lib/mail-autosave-refresh";
+import {
+  MessageMemoryCache,
+  validUidValidity,
+  type MessageCacheScope,
+} from "@/lib/mail-message-memory-cache";
+import {
+  AdaptivePrefetchQueue,
+  adjacentPrefetchIds,
+  firstVisiblePrefetchIds,
+  shouldUseWidePrefetch,
+  cancelScheduledPrefetch,
+  abortInflightControllers,
+  type PrefetchPriority,
+} from "@/lib/mail-prefetch";
+import { NavigationGeneration } from "@/lib/mail-navigation-race";
+import { mailPerf } from "@/lib/mail-performance";
 import { deleteSavedDraft, shouldShowDeleteDraft } from "@/lib/mail-composer-delete-draft";
 import { tombstoneGhostMessage } from "@/lib/mail-ghost-cleanup.functions";
 import { indexListMessages } from "@/lib/mail-index.functions";
@@ -1041,9 +1227,9 @@ function useMailData(session: MailSession | null) {
       });
       setFolderPaths(paths);
       setBridgeError(null);
-    } catch (err: any) {
+    } catch (err: unknown) {
       if (countsMutationGen.current !== gen) return;
-      setBridgeError(err?.message || tr("فشل الاتصال بخادم البريد"));
+      setBridgeError(errorMessage(err, tr("فشل الاتصال بخادم البريد")));
       setCounts(
         Object.fromEntries(
           getMockFolderCounts().map((c) => [
@@ -1234,9 +1420,9 @@ function useMailData(session: MailSession | null) {
         setUseMock(false);
         setSource("bridge");
         setIndexCursor(null);
-      } catch (err: any) {
+      } catch (err: unknown) {
         if (loadReqIdRef.current !== reqId) return;
-        setBridgeError(err?.message || tr("تعذّر الاتصال بخادم البريد"));
+        setBridgeError(errorMessage(err, tr("تعذّر الاتصال بخادم البريد")));
         setHasMore(false);
         setUseMock(false);
         setIndexCursor(null);
@@ -1679,7 +1865,7 @@ function MailApp() {
 
   // Cache-first open: Postgres body cache → (miss) bridge interactive lane.
   const openMsg = useMailServerFn(openMailMessage);
-  const warmBodies = useMailServerFn(warmMessageBodies);
+  const resolveInlineImagesBackground = useMailServerFn(resolveMessageInlineImages);
   const cleanupGhost = useMailServerFn(tombstoneGhostMessage);
 
   // Mirror of `messages` so the open path can merge a cached body into the
@@ -1688,44 +1874,6 @@ function MailApp() {
   useEffect(() => {
     messagesRef.current = messages;
   }, [messages]);
-
-  // Background body warming.
-  // Runs on the bridge's `background` IMAP lane (never in front of a click)
-  // and keeps looping bounded batches until the recent window is fully
-  // cached, so a click almost always lands on a cache HIT. Cancelled on
-  // folder/account change, tab hide, or unmount.
-  const warmedRef = useRef<Set<string>>(new Set());
-  useEffect(() => {
-    if (!session?.mailSessionToken) return;
-    if (loading || messages.length === 0) return;
-    if (folder === "drafts") return;
-    const stamp = `${session.account.id}|${folder}`;
-    if (warmedRef.current.has(stamp)) return;
-    let cancelled = false;
-    const token = session.mailSessionToken ?? "";
-    const password = session.password;
-    const t = window.setTimeout(async () => {
-      if (document.visibilityState !== "visible") return;
-      warmedRef.current.add(stamp);
-      // Hard bound: at most 40 bounded batches per folder visit.
-      for (let i = 0; i < 40; i++) {
-        if (cancelled || document.visibilityState !== "visible") return;
-        let res: { ok: boolean; warmed: number; remaining: number };
-        try {
-          res = await warmBodies({ data: { mailSessionToken: token, password, folder } });
-        } catch {
-          return;
-        }
-        if (!res.ok || res.remaining <= 0 || res.warmed === 0) return;
-        // Breather so the interactive lane always wins a race.
-        await new Promise((r) => window.setTimeout(r, 250));
-      }
-    }, 600);
-    return () => {
-      cancelled = true;
-      window.clearTimeout(t);
-    };
-  }, [session, folder, loading, messages.length, warmBodies]);
 
   const markRead = useMailServerFn(bridgeMarkRead);
   const star = useMailServerFn(bridgeStar);
@@ -1874,13 +2022,60 @@ function MailApp() {
     [],
   );
 
-  // In-memory caches for instant open (prefetch on hover)
-  const messageCache = useRef<Map<string, MailMessage>>(new Map());
-  const inflight = useRef<Map<string, Promise<MailMessage | null>>>(new Map());
+  type ClientMessageSource = "memory" | "server-cache" | "imap" | "error";
+  type ClientMessageResult = { message: MailMessage | null; source: ClientMessageSource };
+  type MessageCacheFacade = {
+    get: (id: string) => MailMessage | undefined;
+    set: (id: string, message: MailMessage) => void;
+    delete: (id: string) => void;
+    clear: () => void;
+  };
+
+  const messageMemoryRef = useRef<MessageMemoryCache | null>(null);
+  if (!messageMemoryRef.current) messageMemoryRef.current = new MessageMemoryCache();
+  const cacheScopeRef = useRef<MessageCacheScope | null>(null);
+  cacheScopeRef.current = session
+    ? {
+        companyId: session.company?.id ?? session.account.company_id,
+        accountId: session.account.id,
+      }
+    : null;
+  const messageCache = useRef<MessageCacheFacade>({
+    get: (id) => {
+      const scope = cacheScopeRef.current;
+      const parsed = parseMessageId(id);
+      if (!scope || !parsed) return undefined;
+      const base = messagesRef.current.find((message) => message.id === id);
+      if (!base || !validUidValidity(base.uidValidity)) return undefined;
+      return messageMemoryRef.current?.get(scope, base) ?? undefined;
+    },
+    set: (_id, message) => {
+      const scope = cacheScopeRef.current;
+      if (!scope) return;
+      messageMemoryRef.current?.set(scope, message);
+      const stats = messageMemoryRef.current?.stats();
+      if (stats) mailPerf("message-memory-cache", { ...stats });
+    },
+    delete: (id) => {
+      const scope = cacheScopeRef.current;
+      if (scope) messageMemoryRef.current?.delete(scope, id);
+    },
+    clear: () => messageMemoryRef.current?.clear(),
+  });
+  type InflightMessage = {
+    promise: Promise<ClientMessageResult>;
+    controller: AbortController;
+  };
+  const inflight = useRef<Map<string, InflightMessage>>(new Map());
+  const activeScopeGenerationRef = useRef(0);
 
   const fetchMessage = useCallback(
-    (id: string): Promise<MailMessage | null> => {
-      if (!session) return Promise.resolve(null);
+    (
+      id: string,
+      lane: "interactive" | "background" = "interactive",
+      signal?: AbortSignal,
+    ): Promise<ClientMessageResult> => {
+      if (!session) return Promise.resolve({ message: null, source: "error" });
       // Batch A / Fix #2: check the pending-move overlay BEFORE reading
       // cache. A source row the user just moved must not be resurrected
       // from a warm cache entry that was stored before the mutation.
@@ -1888,28 +2083,48 @@ function MailApp() {
       // NOT suppressed by design (see isMessageSuppressed).
       const accountId = currentAccountId;
       if (accountId && isMessageSuppressed(pendingMovesRef.current, accountId, id)) {
-        return Promise.resolve(null);
+        return Promise.resolve({ message: null, source: "error" });
       }
       const cached = messageCache.current.get(id);
-      if (cached) return Promise.resolve(cached);
-      const existing = inflight.current.get(id);
-      if (existing) return existing;
+      if (cached) return Promise.resolve({ message: cached, source: "memory" });
       const parsed = parseMessageId(id);
-      if (!parsed) return Promise.resolve(null);
+      if (!parsed) return Promise.resolve({ message: null, source: "error" });
       // Envelope row from the list: a cache HIT only ships the body, so the
       // headers/flags are merged from the row the user clicked. Without a
       // base row we force a full live fetch (allowCache: false).
       const base = messagesRef.current.find((m) => m.id === id) ?? null;
+      const uidValidity = validUidValidity(base?.uidValidity);
+      if (lane === "background" && !uidValidity) {
+        return Promise.resolve({ message: null, source: "error" });
+      }
+      const scope = {
+        companyId: session.company?.id ?? session.account.company_id,
+        accountId: session.account.id,
+      };
+      const requestKey = `${scope.companyId}|${scope.accountId}|${parsed.folder}|${parsed.uid}|${uidValidity ?? "interactive"}`;
+      const existing = inflight.current.get(requestKey);
+      if (existing) return existing.promise;
+      const scopeGeneration = activeScopeGenerationRef.current;
+      const controller = new AbortController();
+      const abortFromCaller = () => controller.abort();
+      if (signal?.aborted) controller.abort();
+      else signal?.addEventListener("abort", abortFromCaller, { once: true });
       const p = openMsg({
         data: {
           mailSessionToken: session.mailSessionToken ?? "",
           password: session.password,
           folder: parsed.folder,
           uid: parsed.uid,
+          lane,
           allowCache: base != null,
         },
+        signal: controller.signal,
       })
         .then((result) => {
+          if (scopeGeneration !== activeScopeGenerationRef.current || controller.signal.aborted) {
+            mailPerf("stale-response-dropped", { phase: "scope" });
+            return { message: null, source: "error" } as ClientMessageResult;
+          }
           const merged: MailMessage | null =
             result.ok && result.source === "cache" && base
               ? {
@@ -1931,13 +2146,16 @@ function MailApp() {
             // it into messageCache would let it re-appear.
             const acc = currentAccountId;
             if (acc && isMessageSuppressed(pendingMovesRef.current, acc, id)) {
-              return null;
+              return { message: null, source: "error" } as ClientMessageResult;
             }
             // Patch through pending overrides so a slow fetch response cannot
             // overwrite an in-flight optimistic star/read the user just set.
             const patched = applyPendingOne(merged);
-            messageCache.current.set(id, patched);
-            return patched;
+            messageMemoryRef.current?.set(scope, patched);
+            return {
+              message: patched,
+              source: result.ok && result.source === "cache" ? "server-cache" : "imap",
+            } as ClientMessageResult;
           }
           // Ghost cleanup: only on proven-absent (NOT_FOUND). Fire the
           // server-side tombstone (idempotent), then evict the local row
@@ -1958,25 +2176,132 @@ function MailApp() {
             setSelectedId((cur) => (cur === id ? null : cur));
             setSelectedMessage((cur) => (cur && cur.id === id ? null : cur));
             toast.info(tr("تم إزالة رسالة مفقودة من القائمة"));
-            return null;
+            return { message: null, source: "error" } as ClientMessageResult;
           }
 
-          return null;
+          return { message: null, source: "error" } as ClientMessageResult;
         })
-        .catch(() => null)
+        .catch(() => ({ message: null, source: "error" }) as ClientMessageResult)
         .finally(() => {
-          inflight.current.delete(id);
+          signal?.removeEventListener("abort", abortFromCaller);
+          if (inflight.current.get(requestKey)?.promise === p) inflight.current.delete(requestKey);
         });
-      inflight.current.set(id, p);
+      inflight.current.set(requestKey, { promise: p, controller });
       return p;
     },
     [session, openMsg, applyPendingOne, currentAccountId, cleanupGhost],
   );
 
-  // Prefetch on hover/focus/touch was REMOVED on purpose: every request is
-  // serialized on the single per-account IMAP connection, so hovering a list
-  // queued dozens of downloads ahead of the actual click (head-of-line
-  // blocking). A message is fetched on click only.
+  const prefetchQueueRef = useRef<AdaptivePrefetchQueue<ClientMessageResult> | null>(null);
+  if (!prefetchQueueRef.current) {
+    prefetchQueueRef.current = new AdaptivePrefetchQueue<ClientMessageResult>();
+  }
+  const prefetchCidWantedRef = useRef<Set<string>>(new Set());
+  const hoverPrefetchTimersRef = useRef<Map<string, number>>(new Map());
+  const cancelIdlePrefetchRef = useRef<(() => void) | null>(null);
+  const uidValidityByScopeRef = useRef<Map<string, string>>(new Map());
+  const navigationGenerationRef = useRef<NavigationGeneration | null>(null);
+  if (!navigationGenerationRef.current)
+    navigationGenerationRef.current = new NavigationGeneration();
+
+  const prefetchCidForMessage = useCallback(
+    async (message: MailMessage, signal?: AbortSignal): Promise<void> => {
+      if (!session || !message.inlineParts?.length) return;
+      const present = new Set((message.inlineImages ?? []).map((image) => image.cid.toLowerCase()));
+      const parts = message.inlineParts.filter((part) => !present.has(part.cid.toLowerCase()));
+      if (parts.length === 0) return;
+      const parsed = parseMessageId(message.id);
+      const uidValidity = validUidValidity(message.uidValidity);
+      if (!parsed || !uidValidity || signal?.aborted) return;
+      const scopeGeneration = activeScopeGenerationRef.current;
+      const scope = {
+        companyId: session.company?.id ?? session.account.company_id,
+        accountId: session.account.id,
+      };
+      const key = `${scope.companyId}|${scope.accountId}|${parsed.folder}|${parsed.uid}|${uidValidity}`;
+      let entry = inlineImageFlights.get(key);
+      if (!entry) {
+        mailPerf("cid-request-start", { count: parts.length, background: true });
+        const controller = new AbortController();
+        const abortFromQueue = () => controller.abort();
+        signal?.addEventListener("abort", abortFromQueue, { once: true });
+        const promise = resolveInlineImagesBackground({
+          data: {
+            mailSessionToken: session.mailSessionToken ?? "",
+            password: session.password,
+            folder: parsed.folder,
+            uid: parsed.uid,
+            parts,
+          },
+          signal: controller.signal,
+        }).finally(() => {
+          signal?.removeEventListener("abort", abortFromQueue);
+          if (inlineImageFlights.get(key)?.promise === promise) inlineImageFlights.delete(key);
+        });
+        entry = { promise, controller };
+        inlineImageFlights.set(key, entry);
+      }
+      const result = await entry.promise;
+      if (!result.ok || signal?.aborted || scopeGeneration !== activeScopeGenerationRef.current)
+        return;
+      const decoded = await decodeInlineMappings(
+        result.images.map((image) => ({ cid: image.cid, dataUri: image.dataUri })),
+      );
+      if (decoded.length === 0 || scopeGeneration !== activeScopeGenerationRef.current) return;
+      const decodedCids = new Set(decoded.map((image) => image.cid.toLowerCase()));
+      const successful = result.images.filter((image) => decodedCids.has(image.cid.toLowerCase()));
+      const current = messageMemoryRef.current?.get(scope, message) ?? message;
+      const byCid = new Map(
+        (current.inlineImages ?? []).map((image) => [image.cid.toLowerCase(), image]),
+      );
+      for (const image of successful) byCid.set(image.cid.toLowerCase(), image);
+      const updated = { ...current, inlineImages: [...byCid.values()] };
+      messageMemoryRef.current?.set(scope, updated);
+      setSelectedMessage((selected) =>
+        selected?.id === updated.id
+          ? { ...selected, inlineImages: updated.inlineImages }
+          : selected,
+      );
+      mailPerf("cid-decoded", { count: successful.length, background: true });
+    },
+    [session, resolveInlineImagesBackground],
+  );
+
+  const prefetchMessage = useCallback(
+    (
+      id: string,
+      priority: PrefetchPriority,
+      withCid = false,
+      lane: "interactive" | "background" = "background",
+    ) => {
+      if (!session) return Promise.resolve(undefined);
+      const identity = parseMessageId(id);
+      if (!identity || identity.folder !== folder) return Promise.resolve(undefined);
+      const scopeKey = `${session.company?.id ?? session.account.company_id}|${session.account.id}|${folder}|${id}`;
+      if (withCid) prefetchCidWantedRef.current.add(scopeKey);
+      const cached = messageCache.current.get(id);
+      if (cached) {
+        mailPerf("prefetch-hit", { source: "memory" });
+        if (!withCid) {
+          return Promise.resolve({ message: cached, source: "memory" } as ClientMessageResult);
+        }
+      }
+      const base = messagesRef.current.find((message) => message.id === id);
+      if (!base || !validUidValidity(base.uidValidity)) return Promise.resolve(undefined);
+      return prefetchQueueRef.current!.enqueue(scopeKey, priority, async (signal) => {
+        if (signal.aborted) return { message: null, source: "error" };
+        mailPerf("prefetch-start", { priority });
+        const result = await fetchMessage(id, lane, signal);
+        if (result.message && prefetchCidWantedRef.current.has(scopeKey)) {
+          await prefetchCidForMessage(result.message, signal);
+        }
+        prefetchCidWantedRef.current.delete(scopeKey);
+        mailPerf(result.message ? "prefetch-hit" : "prefetch-miss", { source: result.source });
+        return result;
+      });
+    },
+    [session, folder, fetchMessage, prefetchCidForMessage],
+  );
 
   useCompanyTheme(
     session?.company
@@ -1993,24 +2318,73 @@ function MailApp() {
     setSession(s);
   }, [navigate]);
 
+  const resetAsyncScope = useCallback((clearMemory: boolean) => {
+    cancelScheduledPrefetch(
+      hoverPrefetchTimersRef.current,
+      cancelIdlePrefetchRef.current,
+      window.clearTimeout.bind(window),
+    );
+    cancelIdlePrefetchRef.current = null;
+    abortInflightControllers(inflight.current);
+    abortInlineImageFlights();
+    prefetchQueueRef.current?.cancelAll();
+    prefetchCidWantedRef.current.clear();
+    navigationGenerationRef.current?.invalidate();
+    activeScopeGenerationRef.current += 1;
+    if (clearMemory) {
+      messageCache.current.clear();
+      uidValidityByScopeRef.current.clear();
+    }
+  }, []);
+
   // Silent Mail Session renewal: keeps the short-lived token fresh in the
   // background so an expired session never surfaces as a "connection" error.
   // Only when renewal itself fails (wrong/changed password) do we sign out.
   useMailSessionRenewal({
     onExpired: () => {
+      resetAsyncScope(true);
       clearMailSession();
       toast.error(tr("انتهت جلسة البريد. يرجى تسجيل الدخول مجدداً."));
       navigate({ to: "/login" });
     },
   });
 
-  // Clear message cache when switching folders (memory hygiene)
+  const previousScopeRef = useRef({
+    companyId: session?.company?.id ?? session?.account.company_id ?? "",
+    accountId: session?.account.id ?? "",
+    folder,
+  });
+
+  // Folder switches cancel speculative work but retain completed LRU entries.
+  // Company/account switches are hard privacy boundaries and wipe memory.
   useEffect(() => {
-    messageCache.current.clear();
-    inflight.current.clear();
+    const next = {
+      companyId: session?.company?.id ?? session?.account.company_id ?? "",
+      accountId: session?.account.id ?? "",
+      folder,
+    };
+    const previous = previousScopeRef.current;
+    const identityChanged =
+      previous.companyId !== next.companyId || previous.accountId !== next.accountId;
+    resetAsyncScope(identityChanged);
+    previousScopeRef.current = next;
+    if (identityChanged) {
+      messagesRef.current = [];
+      setMessages([]);
+      setSelectedId(null);
+      setSelectedMessage(null);
+      setReading(false);
+    }
     setSelection(new Set());
     setSelectMode(false);
-  }, [folder]);
+  }, [
+    folder,
+    resetAsyncScope,
+    session?.account.company_id,
+    session?.account.id,
+    session?.company?.id,
+    setMessages,
+  ]);
 
   // Clear deep search results when leaving deep mode or switching folder.
   useEffect(() => {
@@ -2050,10 +2424,10 @@ function MailApp() {
           setDeepResults([]);
           setDeepError(res.error || tr("فشل البحث على السيرفر"));
         }
-      } catch (err: any) {
+      } catch (err: unknown) {
         if (!cancelled) {
           setDeepResults([]);
-          setDeepError(err?.message || tr("فشل البحث على السيرفر"));
+          setDeepError(errorMessage(err, tr("فشل البحث على السيرفر")));
         }
       } finally {
         if (!cancelled) setDeepLoading(false);
@@ -2081,28 +2455,164 @@ function MailApp() {
     );
   }, [messages, query, searchMode, deepResults]);
   const inDeepSearch = searchMode === "deep" && query.trim().length >= 2;
+  useEffect(() => {
+    messagesRef.current = filteredMessages;
+    const scope = cacheScopeRef.current;
+    const authoritative = filteredMessages.find((message) =>
+      Boolean(validUidValidity(message.uidValidity)),
+    );
+    const parsed = authoritative ? parseMessageId(authoritative.id) : null;
+    const uidValidity = validUidValidity(authoritative?.uidValidity);
+    if (scope && parsed && parsed.folder === folder && uidValidity) {
+      const scopeKey = `${scope.companyId}|${scope.accountId}|${parsed.folder}`;
+      const previous = uidValidityByScopeRef.current.get(scopeKey);
+      if (previous && previous !== uidValidity) {
+        resetAsyncScope(false);
+        setSelectedId(null);
+        setSelectedMessage(null);
+        setReading(false);
+      }
+      uidValidityByScopeRef.current.set(scopeKey, uidValidity);
+      messageMemoryRef.current?.retainUidValidity(scope, parsed.folder, uidValidity);
+    }
+  }, [filteredMessages, folder, resetAsyncScope]);
+
+  const connection = (
+    navigator as Navigator & {
+      connection?: { saveData?: boolean; effectiveType?: string };
+    }
+  ).connection;
+  const widePrefetch = shouldUseWidePrefetch(connection);
+
+  useEffect(() => {
+    if (!session || loading || folder === "drafts" || !widePrefetch) return;
+    const ids = firstVisiblePrefetchIds(
+      filteredMessages.map((message) => message.id),
+      5,
+    );
+    if (ids.length === 0) return;
+    let cancelled = false;
+    const idleWindow = window as Window & {
+      requestIdleCallback?: (callback: () => void, options?: { timeout: number }) => number;
+      cancelIdleCallback?: (id: number) => void;
+    };
+    const run = () => {
+      if (cancelled || document.visibilityState !== "visible") return;
+      ids.forEach((id) => void prefetchMessage(id, "visible"));
+    };
+    const handle = idleWindow.requestIdleCallback
+      ? idleWindow.requestIdleCallback(run, { timeout: 1_500 })
+      : window.setTimeout(run, 350);
+    const cancel = () => {
+      cancelled = true;
+      if (idleWindow.cancelIdleCallback) {
+        idleWindow.cancelIdleCallback(handle);
+      } else {
+        window.clearTimeout(handle);
+      }
+    };
+    cancelIdlePrefetchRef.current = cancel;
+    return () => {
+      cancel();
+      if (cancelIdlePrefetchRef.current === cancel) cancelIdlePrefetchRef.current = null;
+    };
+  }, [filteredMessages, folder, loading, prefetchMessage, session, widePrefetch]);
+
+  useEffect(() => {
+    if (!selectedId || !session || !widePrefetch) return;
+    const ids = adjacentPrefetchIds(
+      filteredMessages.map((message) => message.id),
+      selectedId,
+      2,
+    );
+    const selectedIndex = filteredMessages.findIndex((message) => message.id === selectedId);
+    ids.forEach((id) => {
+      const index = filteredMessages.findIndex((message) => message.id === id);
+      void prefetchMessage(id, "adjacent", Math.abs(index - selectedIndex) === 1);
+    });
+  }, [filteredMessages, prefetchMessage, selectedId, session, widePrefetch]);
+
+  const cancelHoverPrefetch = useCallback(
+    (id: string) => {
+      const timer = hoverPrefetchTimersRef.current.get(id);
+      if (timer !== undefined) window.clearTimeout(timer);
+      hoverPrefetchTimersRef.current.delete(id);
+      if (session) {
+        const key = `${session.company?.id ?? session.account.company_id}|${session.account.id}|${folder}|${id}`;
+        if (prefetchQueueRef.current?.cancel(key)) mailPerf("prefetch-aborted", { count: 1 });
+        prefetchCidWantedRef.current.delete(key);
+      }
+    },
+    [folder, session],
+  );
+  const scheduleHoverPrefetch = useCallback(
+    (id: string) => {
+      if (!widePrefetch || hoverPrefetchTimersRef.current.has(id)) return;
+      const timer = window.setTimeout(() => {
+        hoverPrefetchTimersRef.current.delete(id);
+        void prefetchMessage(id, "hover");
+      }, 120);
+      hoverPrefetchTimersRef.current.set(id, timer);
+    },
+    [prefetchMessage, widePrefetch],
+  );
+  useEffect(
+    () => () => {
+      for (const timer of hoverPrefetchTimersRef.current.values()) window.clearTimeout(timer);
+      hoverPrefetchTimersRef.current.clear();
+    },
+    [],
+  );
 
   async function openMessage(id: string) {
     if (!(await guardComposerNav())) return;
+    // Drop speculative work queued for the previous intent. An already
+    // running single-flight may still be reused by this foreground open.
+    const aborted = prefetchQueueRef.current?.pendingKeys().length ?? 0;
+    prefetchQueueRef.current?.cancelAll({ abortRunning: false });
+    if (aborted > 0) mailPerf("prefetch-aborted", { count: aborted });
+    prefetchCidWantedRef.current.clear();
+    const startedAt = performance.now();
+    const generation = navigationGenerationRef.current!.next();
     setSelectedId(id);
     const parsed = parseMessageId(id);
     if (!parsed || !session) {
       setSelectedMessage(getMockMessage(id) ?? null);
       return;
     }
+    const base = filteredMessages.find((message) => message.id === id) ?? null;
     const cached = messageCache.current.get(id);
+    mailPerf("message-click-to-shell", { elapsedMs: Math.round(performance.now() - startedAt) });
     if (cached) {
-      // Instant open (0ms perceived latency)
       setSelectedMessage(cached);
       setReading(false);
+      mailPerf("message-click-to-body", {
+        source: "memory",
+        elapsedMs: Math.round(performance.now() - startedAt),
+      });
     } else {
-      setSelectedMessage(null);
+      setSelectedMessage(base);
       setReading(true);
     }
     try {
-      const msg = await fetchMessage(id);
-      if (msg) setSelectedMessage(msg);
-      else if (!cached) throw new Error(tr("فشل فتح الرسالة"));
+      const result = cached
+        ? ({ message: cached, source: "memory" } as ClientMessageResult)
+        : await fetchMessage(id, "interactive");
+      if (!navigationGenerationRef.current!.isCurrent(generation)) {
+        mailPerf("stale-response-dropped", { phase: "navigation" });
+        return;
+      }
+      const msg = result.message;
+      if (msg) {
+        setSelectedMessage(msg);
+        setReading(false);
+        if (!cached) {
+          mailPerf("message-click-to-body", {
+            source: result.source,
+            elapsedMs: Math.round(performance.now() - startedAt),
+          });
+        }
+      } else if (!cached) throw new Error(tr("فشل فتح الرسالة"));
 
       // M4-C: Drafts folder → open the message directly inside the composer
       // as an Edit-Draft (server-side draft is the source of truth). We
@@ -2118,7 +2628,7 @@ function MailApp() {
         return;
       }
 
-      const listMsg = messages.find((m) => m.id === id);
+      const listMsg = filteredMessages.find((m) => m.id === id);
       if (listMsg && !listMsg.read) {
         // Optimistic read
         setPendingFlagOverride(id, { read: true });
@@ -2134,13 +2644,13 @@ function MailApp() {
           clearPendingFlagOverride(id, "read");
         });
       }
-    } catch (err: any) {
-      if (!cached) {
-        toast.error(err?.message || tr("فشل فتح الرسالة"));
+    } catch (err: unknown) {
+      if (!cached && navigationGenerationRef.current!.isCurrent(generation)) {
+        toast.error(errorMessage(err, tr("فشل فتح الرسالة")));
         setSelectedMessage(getMockMessage(id) ?? null);
       }
     } finally {
-      setReading(false);
+      if (navigationGenerationRef.current!.isCurrent(generation)) setReading(false);
     }
   }
 
@@ -2206,7 +2716,7 @@ function MailApp() {
       if (starredFolderSnapshot) {
         confirmHideRow(id, Date.now());
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       clearPendingFlagOverride(id, "starred");
       // Rollback counter with the inverse delta (single, exact revert).
       setCounts((prev) => {
@@ -2237,12 +2747,26 @@ function MailApp() {
       );
       const c = messageCache.current.get(id);
       if (c) messageCache.current.set(id, { ...c, starred: !nextStarred });
-      toast.error(err?.message || tr("فشل تحديث المميّز"));
+      toast.error(errorMessage(err, tr("فشل تحديث المميّز")));
     } finally {
       // V4: always release the star-count "hot" window, success or failure.
       endStarMutation();
     }
   }
+
+  const handleInlineImagesResolved = useCallback(
+    (messageId: string, images: NonNullable<MailMessage["inlineImages"]>) => {
+      const current = messageCache.current.get(messageId);
+      if (!current) return;
+      const byCid = new Map(
+        (current.inlineImages ?? []).map((image) => [image.cid.toLowerCase(), image]),
+      );
+      for (const image of images) byCid.set(image.cid.toLowerCase(), image);
+      const updated = { ...current, inlineImages: [...byCid.values()] };
+      messageCache.current.set(messageId, updated);
+    },
+    [],
+  );
 
   async function toggleRead(e: React.MouseEvent, id: string) {
     e.stopPropagation();
@@ -2268,7 +2792,7 @@ function MailApp() {
     });
     try {
       await mutateFlag(parsed.folder, parsed.uid, "seen", nextRead);
-    } catch (err: any) {
+    } catch (err: unknown) {
       // Revert both flag and counter.
       clearPendingFlagOverride(id, "read");
       setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, read: !nextRead } : m)));
@@ -2284,7 +2808,7 @@ function MailApp() {
         const unread = Math.max(0, cur.unread + delta);
         return { ...prev, [parsed.folder]: { ...cur, unread } };
       });
-      toast.error(err?.message || tr("فشل تحديث حالة القراءة"));
+      toast.error(errorMessage(err, tr("فشل تحديث حالة القراءة")));
     }
   }
 
@@ -2381,7 +2905,7 @@ function MailApp() {
         confirmHideRow(id);
         confirmPendingMove(id);
         toast.success(tr("تم نقل الرسالة"));
-      } catch (err: any) {
+      } catch (err: unknown) {
         // Per-item rollback ONLY. Do not touch other messages that may have
         // changed concurrently.
         unhideRow(id);
@@ -2393,7 +2917,7 @@ function MailApp() {
           setSelectedId(id);
           if (prevSelected) setSelectedMessage(prevSelected);
         }
-        toast.error(err?.message || tr("فشل نقل الرسالة"));
+        toast.error(errorMessage(err, tr("فشل نقل الرسالة")));
       }
     });
   }
@@ -2474,7 +2998,7 @@ function MailApp() {
         confirmHideRow(id);
         confirmPendingMove(id);
         toast.success(isTrash ? tr("تم حذف الرسالة نهائياً") : tr("تم نقل الرسالة إلى المهملات"));
-      } catch (err: any) {
+      } catch (err: unknown) {
         unhideRow(id);
         rollbackPendingMove(id);
         applyMoveCountsDelta(destForCounts ?? parsed.folder, parsed.folder, wasUnread); // revert
@@ -2486,7 +3010,7 @@ function MailApp() {
           if (prevSelected) setSelectedMessage(prevSelected);
         }
         toast.error(
-          err?.message || (isTrash ? tr("فشل حذف الرسالة") : tr("فشل نقل الرسالة إلى المهملات")),
+          errorMessage(err, isTrash ? tr("فشل حذف الرسالة") : tr("فشل نقل الرسالة إلى المهملات")),
         );
       }
     });
@@ -2533,7 +3057,7 @@ function MailApp() {
         confirmPendingMove(id);
         const label = FOLDER_META[target as MailFolder]?.label || target;
         toast.success(trf("تم استعادة الرسالة إلى {{folder}}", { folder: tr(label) }));
-      } catch (err: any) {
+      } catch (err: unknown) {
         unhideRow(id);
         rollbackPendingMove(id);
         applyMoveCountsDelta(target, parsed.folder, wasUnread); // revert
@@ -2543,7 +3067,7 @@ function MailApp() {
           setSelectedId(id);
           if (prevSelected) setSelectedMessage(prevSelected);
         }
-        toast.error(err?.message || tr("فشل استعادة الرسالة"));
+        toast.error(errorMessage(err, tr("فشل استعادة الرسالة")));
       }
     });
   }
@@ -2570,7 +3094,7 @@ function MailApp() {
     setSelectedMessage(null);
     try {
       await mutateFlag(parsed.folder, parsed.uid, "seen", false);
-    } catch (err: any) {
+    } catch (err: unknown) {
       // Full revert — row, counter, cache, selection.
       setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, read: true } : m)));
       setCounts((prev) => {
@@ -2583,7 +3107,7 @@ function MailApp() {
         setSelectedId(prevSelectedId);
         setSelectedMessage(prevSelected);
       }
-      toast.error(err?.message || tr("فشل التعليم كغير مقروءة"));
+      toast.error(errorMessage(err, tr("فشل التعليم كغير مقروءة")));
     }
   }
 
@@ -2617,7 +3141,7 @@ function MailApp() {
   }
 
   // Run async ops with limited concurrency to stay fast without hammering the bridge
-  async function runBatch<T>(items: T[], limit: number, worker: (item: T) => Promise<any>) {
+  async function runBatch<T>(items: T[], limit: number, worker: (item: T) => Promise<unknown>) {
     let idx = 0;
     let failed = 0;
     const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
@@ -2796,7 +3320,7 @@ function MailApp() {
     const prevSelected = selectedMessage;
     // Per-id cache snapshots so bulk-delete rollback restores only the
     // failed items' bodies — successful items stay purged.
-    const cachedBodies = new Map<string, any>();
+    const cachedBodies = new Map<string, MailMessage>();
     for (const id of ids) {
       const c = messageCache.current.get(id);
       if (c) cachedBodies.set(id, c);
@@ -3048,6 +3572,8 @@ function MailApp() {
     // Address-book: wipe local suggestion cache so a new sign-in on the same
     // device starts fresh and never surfaces a previous scope's contacts.
     void wipeAllPersisted();
+
+    resetAsyncScope(true);
 
     clearMailSession();
     navigate({ to: "/login" });
@@ -3591,6 +4117,13 @@ function MailApp() {
                     onToggleStar={(e) => toggleStar(e, m.id)}
                     onToggleRead={(e) => toggleRead(e, m.id)}
                     onToggleSelect={() => toggleSelect(m.id)}
+                    onPrefetch={() => scheduleHoverPrefetch(m.id)}
+                    onCancelPrefetch={() => cancelHoverPrefetch(m.id)}
+                    onImmediatePrefetch={() => {
+                      cancelHoverPrefetch(m.id);
+                      if (widePrefetch)
+                        void prefetchMessage(m.id, "adjacent", false, "interactive");
+                    }}
                   />
                 )}
                 components={{
@@ -3631,10 +4164,13 @@ function MailApp() {
             <MessageView
               message={selectedMessage}
               loading={reading}
+              onInlineImages={handleInlineImagesResolved}
               myEmail={session.account.email_address}
               onBack={() => {
+                navigationGenerationRef.current?.invalidate();
                 setSelectedId(null);
                 setSelectedMessage(null);
+                setReading(false);
               }}
               onReply={() =>
                 setCompose(buildReply(selectedMessage, session.account.email_address, false))
@@ -3655,8 +4191,10 @@ function MailApp() {
           ) : selectedId && reading ? (
             <LoadingViewer
               onBack={() => {
+                navigationGenerationRef.current?.invalidate();
                 setSelectedId(null);
                 setSelectedMessage(null);
+                setReading(false);
               }}
             />
           ) : (
@@ -3678,6 +4216,9 @@ function MessageRow({
   onToggleStar,
   onToggleRead,
   onToggleSelect,
+  onPrefetch,
+  onCancelPrefetch,
+  onImmediatePrefetch,
 }: {
   message: MailMessage;
   active: boolean;
@@ -3688,12 +4229,20 @@ function MessageRow({
   onToggleStar: (e: React.MouseEvent) => void;
   onToggleRead: (e: React.MouseEvent) => void;
   onToggleSelect: () => void;
+  onPrefetch: () => void;
+  onCancelPrefetch: () => void;
+  onImmediatePrefetch: () => void;
 }) {
   return (
     <div
       role="button"
       tabIndex={0}
       onClick={onClick}
+      onPointerEnter={onPrefetch}
+      onPointerLeave={onCancelPrefetch}
+      onPointerDown={onImmediatePrefetch}
+      onFocus={onPrefetch}
+      onBlur={onCancelPrefetch}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
@@ -3806,6 +4355,7 @@ function MessageRow({
 function MessageView({
   message,
   loading,
+  onInlineImages,
   myEmail,
   onBack,
   onReply,
@@ -3820,6 +4370,7 @@ function MessageView({
 }: {
   message: MailMessage;
   loading: boolean;
+  onInlineImages: (messageId: string, images: NonNullable<MailMessage["inlineImages"]>) => void;
   myEmail: string;
   onBack: () => void;
   onReply: () => void;
@@ -3850,6 +4401,10 @@ function MessageView({
   const canArchive = message.folder !== "archive" && message.folder !== "trash";
 
   const isSecure = !!message.security && !/غير/.test(message.security);
+  const handleInlineImages = useCallback(
+    (images: NonNullable<MailMessage["inlineImages"]>) => onInlineImages(message.id, images),
+    [message.id, onInlineImages],
+  );
 
   async function copyEmail() {
     try {
@@ -3898,7 +4453,7 @@ function MessageView({
   <div><strong>${tr("التاريخ:")}</strong> ${date}</div>
 </div>
 <div class="body">${body}</div>
-<script>window.onload=function(){setTimeout(function(){window.print();},300);};<\/script>
+<script>window.onload=function(){setTimeout(function(){window.print();},300);};</script>
 </body></html>`);
     win.document.close();
   }
@@ -4040,185 +4595,176 @@ function MessageView({
         </DropdownMenu>
       </div>
       <div className="flex-1 overflow-y-auto">
-        {loading ? (
-          <div className="flex h-full items-center justify-center">
-            <Loader2 className="h-6 w-6 animate-spin text-primary" />
-          </div>
-        ) : (
-          <div className="mx-auto max-w-3xl p-4 sm:p-6">
-            <h1 className="break-words text-xl font-bold leading-snug sm:text-2xl">
-              {message.subject || tr("(بدون موضوع)")}
-            </h1>
+        <div className="mx-auto max-w-3xl p-4 sm:p-6">
+          <h1 className="break-words text-xl font-bold leading-snug sm:text-2xl">
+            {message.subject || tr("(بدون موضوع)")}
+          </h1>
 
-            <div className="mt-4 flex items-start gap-3 border-b border-border pb-4">
-              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-brand-gradient text-sm font-bold text-white">
-                {(message.from.name || message.from.email || "?").charAt(0).toUpperCase()}
-              </div>
-              <div className="min-w-0 flex-1">
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate font-semibold leading-tight">
-                      {message.from.name || message.from.email || tr("(مرسل غير معروف)")}
-                    </div>
-                    {message.from.name && message.from.email && (
-                      <div
-                        className="truncate text-xs text-muted-foreground"
-                        title={message.from.email}
-                      >
-                        <span dir="ltr" style={{ unicodeBidi: "isolate" }}>
-                          {message.from.email}
-                        </span>
-                      </div>
-                    )}
+          <div className="mt-4 flex items-start gap-3 border-b border-border pb-4">
+            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-brand-gradient text-sm font-bold text-white">
+              {(message.from.name || message.from.email || "?").charAt(0).toUpperCase()}
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0 flex-1">
+                  <div className="truncate font-semibold leading-tight">
+                    {message.from.name || message.from.email || tr("(مرسل غير معروف)")}
                   </div>
-                  <span
-                    className="shrink-0 whitespace-nowrap text-xs text-muted-foreground"
-                    title={new Date(message.date).toLocaleString(getCurrentLang())}
-                  >
-                    {formatDate(message.date)}
-                  </span>
-                </div>
-                <div className="mt-1 text-xs text-muted-foreground">
-                  <button
-                    type="button"
-                    onClick={() => setDetailsOpen((v) => !v)}
-                    aria-expanded={detailsOpen}
-                    className="inline-flex max-w-full items-center gap-1 rounded hover:text-foreground"
-                    title={tr("تفاصيل الرسالة")}
-                  >
-                    <span className="truncate">
-                      <span className="text-foreground/70">{tr("إلى")} </span>
-                      <span dir="ltr" className="unicode-bidi-isolate">
-                        {toSummary}
+                  {message.from.name && message.from.email && (
+                    <div
+                      className="truncate text-xs text-muted-foreground"
+                      title={message.from.email}
+                    >
+                      <span dir="ltr" style={{ unicodeBidi: "isolate" }}>
+                        {message.from.email}
                       </span>
-                    </span>
-                    <ChevronDown
-                      className={`h-3.5 w-3.5 shrink-0 transition-transform ${detailsOpen ? "rotate-180" : ""}`}
-                    />
-                  </button>
-                  {detailsOpen && (
-                    <div className="mt-2 rounded-lg border border-border bg-muted/40 p-3">
-                      <dl className="grid grid-cols-[max-content_1fr] gap-x-2 gap-y-1.5 text-xs">
-                        <dt className="text-foreground/70 whitespace-nowrap">{tr("المرسل:")}</dt>
-                        <dd className="min-w-0 break-all">
-                          {message.from.name ? (
-                            <span className="ms-1">{message.from.name}</span>
-                          ) : null}
-                          <span dir="ltr" className="text-muted-foreground">
-                            &lt;{message.from.email || "—"}&gt;
-                          </span>
-                        </dd>
-
-                        <dt className="text-foreground/70 whitespace-nowrap">{tr("المستلم:")}</dt>
-                        <dd className="min-w-0 break-all">
-                          <span dir="ltr" style={{ unicodeBidi: "isolate" }}>
-                            {message.to.length > 0
-                              ? message.to.map((t) => t.email).join(", ")
-                              : "—"}
-                          </span>
-                        </dd>
-
-                        {message.cc && message.cc.length > 0 && (
-                          <>
-                            <dt className="text-foreground/70 whitespace-nowrap">{tr("نسخة:")}</dt>
-                            <dd className="min-w-0 break-all">
-                              <span dir="ltr" style={{ unicodeBidi: "isolate" }}>
-                                {message.cc.map((c) => c.email).join(", ")}
-                              </span>
-                            </dd>
-                          </>
-                        )}
-
-                        <dt className="text-foreground/70 whitespace-nowrap">{tr("التاريخ:")}</dt>
-                        <dd className="min-w-0">{fullDate}</dd>
-
-                        {message.mailedBy && (
-                          <>
-                            <dt className="text-foreground/70 whitespace-nowrap">
-                              {tr("الخادم:")}
-                            </dt>
-                            <dd className="min-w-0 break-all">
-                              <span dir="ltr" style={{ unicodeBidi: "isolate" }}>
-                                {message.mailedBy}
-                              </span>
-                            </dd>
-                          </>
-                        )}
-                        {message.signedBy && (
-                          <>
-                            <dt className="text-foreground/70 whitespace-nowrap">
-                              {tr("التوقيع:")}
-                            </dt>
-                            <dd className="min-w-0 break-all">
-                              <span dir="ltr" style={{ unicodeBidi: "isolate" }}>
-                                {message.signedBy}
-                              </span>
-                            </dd>
-                          </>
-                        )}
-                        {message.security && (
-                          <>
-                            <dt className="text-foreground/70 whitespace-nowrap">
-                              {tr("الأمان:")}
-                            </dt>
-                            <dd className="min-w-0 inline-flex items-center gap-1">
-                              {isSecure ? (
-                                <ShieldCheck className="h-3.5 w-3.5 text-emerald-600" />
-                              ) : (
-                                <ShieldAlert className="h-3.5 w-3.5 text-amber-600" />
-                              )}
-                              <span>{message.security}</span>
-                            </dd>
-                          </>
-                        )}
-                      </dl>
                     </div>
                   )}
                 </div>
+                <span
+                  className="shrink-0 whitespace-nowrap text-xs text-muted-foreground"
+                  title={new Date(message.date).toLocaleString(getCurrentLang())}
+                >
+                  {formatDate(message.date)}
+                </span>
+              </div>
+              <div className="mt-1 text-xs text-muted-foreground">
+                <button
+                  type="button"
+                  onClick={() => setDetailsOpen((v) => !v)}
+                  aria-expanded={detailsOpen}
+                  className="inline-flex max-w-full items-center gap-1 rounded hover:text-foreground"
+                  title={tr("تفاصيل الرسالة")}
+                >
+                  <span className="truncate">
+                    <span className="text-foreground/70">{tr("إلى")} </span>
+                    <span dir="ltr" className="unicode-bidi-isolate">
+                      {toSummary}
+                    </span>
+                  </span>
+                  <ChevronDown
+                    className={`h-3.5 w-3.5 shrink-0 transition-transform ${detailsOpen ? "rotate-180" : ""}`}
+                  />
+                </button>
+                {detailsOpen && (
+                  <div className="mt-2 rounded-lg border border-border bg-muted/40 p-3">
+                    <dl className="grid grid-cols-[max-content_1fr] gap-x-2 gap-y-1.5 text-xs">
+                      <dt className="text-foreground/70 whitespace-nowrap">{tr("المرسل:")}</dt>
+                      <dd className="min-w-0 break-all">
+                        {message.from.name ? (
+                          <span className="ms-1">{message.from.name}</span>
+                        ) : null}
+                        <span dir="ltr" className="text-muted-foreground">
+                          &lt;{message.from.email || "—"}&gt;
+                        </span>
+                      </dd>
+
+                      <dt className="text-foreground/70 whitespace-nowrap">{tr("المستلم:")}</dt>
+                      <dd className="min-w-0 break-all">
+                        <span dir="ltr" style={{ unicodeBidi: "isolate" }}>
+                          {message.to.length > 0 ? message.to.map((t) => t.email).join(", ") : "—"}
+                        </span>
+                      </dd>
+
+                      {message.cc && message.cc.length > 0 && (
+                        <>
+                          <dt className="text-foreground/70 whitespace-nowrap">{tr("نسخة:")}</dt>
+                          <dd className="min-w-0 break-all">
+                            <span dir="ltr" style={{ unicodeBidi: "isolate" }}>
+                              {message.cc.map((c) => c.email).join(", ")}
+                            </span>
+                          </dd>
+                        </>
+                      )}
+
+                      <dt className="text-foreground/70 whitespace-nowrap">{tr("التاريخ:")}</dt>
+                      <dd className="min-w-0">{fullDate}</dd>
+
+                      {message.mailedBy && (
+                        <>
+                          <dt className="text-foreground/70 whitespace-nowrap">{tr("الخادم:")}</dt>
+                          <dd className="min-w-0 break-all">
+                            <span dir="ltr" style={{ unicodeBidi: "isolate" }}>
+                              {message.mailedBy}
+                            </span>
+                          </dd>
+                        </>
+                      )}
+                      {message.signedBy && (
+                        <>
+                          <dt className="text-foreground/70 whitespace-nowrap">{tr("التوقيع:")}</dt>
+                          <dd className="min-w-0 break-all">
+                            <span dir="ltr" style={{ unicodeBidi: "isolate" }}>
+                              {message.signedBy}
+                            </span>
+                          </dd>
+                        </>
+                      )}
+                      {message.security && (
+                        <>
+                          <dt className="text-foreground/70 whitespace-nowrap">{tr("الأمان:")}</dt>
+                          <dd className="min-w-0 inline-flex items-center gap-1">
+                            {isSecure ? (
+                              <ShieldCheck className="h-3.5 w-3.5 text-emerald-600" />
+                            ) : (
+                              <ShieldAlert className="h-3.5 w-3.5 text-amber-600" />
+                            )}
+                            <span>{message.security}</span>
+                          </dd>
+                        </>
+                      )}
+                    </dl>
+                  </div>
+                )}
               </div>
             </div>
+          </div>
 
+          {loading ? (
+            <MessageBodySkeleton />
+          ) : (
             <MessageBody
               message={message}
               html={sanitizeEmailHtml(message.body || message.preview || "")}
+              onInlineImages={handleInlineImages}
               className="mt-6"
             />
+          )}
 
-            {message.attachments && message.attachments.length > 0 && (
-              <div className="mt-6">
-                <p className="mb-2 text-xs font-semibold text-muted-foreground">
-                  {tr("المرفقات")} ({message.attachments.length})
-                </p>
-                <div className="grid gap-2 sm:grid-cols-2">
-                  {message.attachments.map((a) => (
-                    <AttachmentCard key={a.id} attachment={a} message={message} />
-                  ))}
-                </div>
+          {!loading && message.attachments && message.attachments.length > 0 && (
+            <div className="mt-6">
+              <p className="mb-2 text-xs font-semibold text-muted-foreground">
+                {tr("المرفقات")} ({message.attachments.length})
+              </p>
+              <div className="grid gap-2 sm:grid-cols-2">
+                {message.attachments.map((a) => (
+                  <AttachmentCard key={a.id} attachment={a} message={message} />
+                ))}
               </div>
-            )}
-
-            <div className="mt-6 flex flex-wrap gap-2">
-              <button
-                onClick={onReply}
-                className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-4 py-2 text-sm font-medium hover:bg-muted"
-              >
-                <Reply className="h-4 w-4" /> {tr("رد")}
-              </button>
-              <button
-                onClick={onReplyAll}
-                className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-4 py-2 text-sm font-medium hover:bg-muted"
-              >
-                <ReplyAll className="h-4 w-4" /> {tr("رد على الكل")}
-              </button>
-              <button
-                onClick={onForward}
-                className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-4 py-2 text-sm font-medium hover:bg-muted"
-              >
-                <Forward className="h-4 w-4" /> {tr("إعادة توجيه")}
-              </button>
             </div>
+          )}
+
+          <div className="mt-6 flex flex-wrap gap-2">
+            <button
+              onClick={onReply}
+              className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-4 py-2 text-sm font-medium hover:bg-muted"
+            >
+              <Reply className="h-4 w-4" /> {tr("رد")}
+            </button>
+            <button
+              onClick={onReplyAll}
+              className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-4 py-2 text-sm font-medium hover:bg-muted"
+            >
+              <ReplyAll className="h-4 w-4" /> {tr("رد على الكل")}
+            </button>
+            <button
+              onClick={onForward}
+              className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-4 py-2 text-sm font-medium hover:bg-muted"
+            >
+              <Forward className="h-4 w-4" /> {tr("إعادة توجيه")}
+            </button>
           </div>
-        )}
+        </div>
       </div>
     </>
   );
@@ -4229,6 +4775,17 @@ function EmptyViewer() {
     <div className="flex h-full flex-col items-center justify-center gap-3 p-8 text-center text-muted-foreground">
       <MailIcon className="h-16 w-16 opacity-30" />
       <p className="text-sm">{tr("اختر رسالة من القائمة لعرضها")}</p>
+    </div>
+  );
+}
+
+function MessageBodySkeleton() {
+  return (
+    <div className="mt-6 space-y-3" aria-label={tr("جاري تحميل نص الرسالة")}>
+      <div className="h-3 w-full animate-pulse rounded bg-muted" />
+      <div className="h-3 w-11/12 animate-pulse rounded bg-muted" />
+      <div className="h-3 w-4/5 animate-pulse rounded bg-muted" />
+      <div className="h-3 w-2/3 animate-pulse rounded bg-muted" />
     </div>
   );
 }
@@ -4246,8 +4803,10 @@ function LoadingViewer({ onBack }: { onBack: () => void }) {
         </button>
         <div />
       </div>
-      <div className="flex flex-1 items-center justify-center">
-        <Loader2 className="h-6 w-6 animate-spin text-primary" />
+      <div className="mx-auto w-full max-w-3xl flex-1 p-4 sm:p-6">
+        <div className="h-7 w-2/3 animate-pulse rounded bg-muted" />
+        <div className="mt-5 h-12 w-full animate-pulse rounded bg-muted/70" />
+        <MessageBodySkeleton />
       </div>
     </>
   );
@@ -5719,8 +6278,8 @@ function Composer({
       toast.success(tr("تم إرسال الرسالة"));
       onClose({ refreshDrafts: false });
       onSent();
-    } catch (err: any) {
-      toast.error(err?.message || tr("فشل إرسال الرسالة"));
+    } catch (err: unknown) {
+      toast.error(errorMessage(err, tr("فشل إرسال الرسالة")));
     } finally {
       setSending(false);
       setProgress(0);

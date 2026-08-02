@@ -1,25 +1,23 @@
-// Regression guard: hover/focus/touch prefetch must stay disabled.
-//
-// Every message download is serialized on the single per-account IMAP
-// connection. When rows prefetched on hover, scrolling a list queued dozens of
-// downloads ahead of the user's actual click (head-of-line blocking → slow
-// opens and "Failed to open message"). Messages are fetched on click only.
+// Regression guard: hover/focus prefetch is delayed and enters the bounded,
+// single-concurrency adaptive queue. Pointer-down promotes the requested row.
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 const mailSource = readFileSync(resolve(__dirname, "../../routes/mail.tsx"), "utf8");
 
-describe("no hover prefetch accumulation", () => {
-  it("message rows do not bind prefetch to onMouseEnter / onFocus / onTouchStart", () => {
-    expect(mailSource).not.toMatch(/onMouseEnter=\{onPrefetch\}/);
-    expect(mailSource).not.toMatch(/onFocus=\{onPrefetch\}/);
-    expect(mailSource).not.toMatch(/onTouchStart=\{onPrefetch\}/);
+describe("bounded hover prefetch", () => {
+  it("delays hover/focus and cancels abandoned intent", () => {
+    expect(mailSource).toMatch(/onPointerEnter=\{onPrefetch\}/);
+    expect(mailSource).toMatch(/onFocus=\{onPrefetch\}/);
+    expect(mailSource).toMatch(/onPointerLeave=\{onCancelPrefetch\}/);
+    expect(mailSource).toMatch(/}, 120\)/);
   });
 
-  it("no prefetch callback is passed to the list rows any more", () => {
-    expect(mailSource).not.toMatch(/onPrefetch=\{/);
-    expect(mailSource).not.toMatch(/const prefetchMessage\b/);
+  it("uses immediate pointer-down intent and a shared adaptive queue", () => {
+    expect(mailSource).toMatch(/onPointerDown=\{onImmediatePrefetch\}/);
+    expect(mailSource).toMatch(/AdaptivePrefetchQueue/);
+    expect(mailSource).toMatch(/const prefetchMessage\b/);
   });
 
   it("opening a message is still wired to the row click handler", () => {
