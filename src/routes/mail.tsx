@@ -3374,7 +3374,7 @@ function MailApp() {
               </button>
               <span className="font-semibold text-foreground">
                 {selection.size > 0
-                  ? trf("{{count}} محددة", { count: selection.size })
+                  ? trf("الرسائل المحددة", { count: selection.size })
                   : tr("اختر الرسائل")}
               </span>
               <div className="flex-1" />

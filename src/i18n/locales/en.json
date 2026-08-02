@@ -386,6 +386,8 @@
   "فشل تعليم {{count}} رسالة": "Failed to flag {{count}} messages",
   "تم تعليم {{count}} رسالة كغير مقروءة": "Marked {{count}} messages as unread",
   "{{count}} محددة": "{{count}} selected",
+  "الرسائل المحددة_one": "Selected {{count}} message",
+  "الرسائل المحددة_other": "Selected {{count}} messages",
   "إزالة {{email}}": "Remove {{email}}",
   "الحد الأقصى {{count}} ملفات": "Maximum {{count}} files",
   "عنوان بريد غير صالح: {{email}}": "Invalid email address: {{email}}",
