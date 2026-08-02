@@ -18,6 +18,9 @@ if (!i18n.isInitialized) {
     instance.use(LanguageDetector);
   }
   instance.init({
+    // All resources are bundled locally. Initialise synchronously so direct
+    // `tr` / `trf` calls cannot render an untranslated key on the first pass.
+    initAsync: false,
     resources: {
       ar: { translation: ar as Record<string, string> },
       en: { translation: en as Record<string, string> },
@@ -53,7 +56,6 @@ export function tr(key: string): string {
 export function trf(key: string, vars: Record<string, string | number>): string {
   return i18n.t(key, vars) as string;
 }
-
 
 export function getCurrentLang(): SupportedLang {
   const lng = (i18n.resolvedLanguage || i18n.language || "ar").slice(0, 2);

@@ -420,6 +420,7 @@ import {
   createDraftAutosaveRefreshTracker,
   shouldRefreshDraftsOnFolderEntry,
 } from "@/lib/mail-autosave-refresh";
+import { deleteSavedDraft, shouldShowDeleteDraft } from "@/lib/mail-composer-delete-draft";
 import { tombstoneGhostMessage } from "@/lib/mail-ghost-cleanup.functions";
 import { indexListMessages } from "@/lib/mail-index.functions";
 import { indexListFolderCounts } from "@/lib/mail-index-counts.functions";
@@ -4662,6 +4663,7 @@ function Composer({
   onDraftCreated: () => void;
 }) {
   // Draft storage keying is owned by mail-draft-lifecycle (v3 + auto-migration).
+  const { confirm } = useConfirm();
 
   // ----- Address book (contact suggestions) — local IDB, hydrated once -----
   const hydrateSuggestions = useMailServerFn(hydrateContactSuggestions);
@@ -4737,6 +4739,11 @@ function Composer({
   const [saveStatus, setSaveStatus] = useState<DraftSaveStatus>(() =>
     isEditMode ? "saved" : initialDoc ? "saved-local" : "idle",
   );
+  const [hasLocalDraft, setHasLocalDraft] = useState(() => Boolean(initialDoc));
+  const [hasRemoteDraft, setHasRemoteDraft] = useState(
+    () => isEditMode || Boolean(initial?.previousRef) || Boolean(initialDoc?.serverRef),
+  );
+  const [deletingDraft, setDeletingDraft] = useState(false);
   const serverRefRef = useRef<DraftServerRef | null>(serverRef);
   useEffect(() => {
     serverRefRef.current = serverRef;
@@ -4923,6 +4930,7 @@ function Composer({
           setSavedAt(lastSavedAtRef.current);
           lastFailCodeRef.current = null;
           if (status === "saved") {
+            setHasRemoteDraft(true);
             const tracked = autosaveRefreshTrackerRef.current!.noteRemoteSave();
             if (tracked.incrementDraftCount) onDraftCreated();
             if (serverRef && typeof window !== "undefined") {
@@ -5187,6 +5195,7 @@ function Composer({
         });
         if (isEmpty) {
           clearDraftDoc(window.localStorage, s.accountEmail);
+          setHasLocalDraft(false);
           setSavedAt(null);
           setSaveStatus("idle");
           // Empty draft = nothing to persist; treat current gen as saved.
@@ -5214,6 +5223,7 @@ function Composer({
           setSaveStatus("failed");
           return;
         }
+        setHasLocalDraft(true);
         // Capture generation at schedule-fire time and pass it into the
         // saver. `savedGeneration` will only advance when onCompleted echoes
         // this exact value (or a newer coalesced one) — a stale response
@@ -5765,7 +5775,10 @@ function Composer({
 
   const savedLabel = (() => {
     const t = savedAt
-      ? new Date(savedAt).toLocaleTimeString("ar", { hour: "2-digit", minute: "2-digit" })
+      ? new Date(savedAt).toLocaleTimeString(getCurrentLang() === "ar" ? "ar-SA" : "en-US", {
+          hour: "2-digit",
+          minute: "2-digit",
+        })
       : "";
     switch (saveStatus) {
       case "saving":
@@ -5827,6 +5840,7 @@ function Composer({
         toast.error(tr("تعذّر حفظ المسودّة"));
         return "failed";
       }
+      setHasLocalDraft(true);
       const genAtRequest = generationRef.current;
       await saverRef.current?.requestSave(snapshot, serverRefRef.current, genAtRequest);
       const st = saverRef.current?.getStatus();
@@ -5847,6 +5861,46 @@ function Composer({
       return "failed";
     } finally {
       savingNowRef.current = false;
+    }
+  }
+
+  async function handleDeleteDraft() {
+    if (deletingDraft) return;
+    const confirmed = await confirm({
+      title: tr("حذف المسودة؟"),
+      description: tr("سيتم حذف النسخة المحفوظة نهائياً. لا يمكن التراجع عن هذا الإجراء."),
+      confirmLabel: tr("حذف المسودة"),
+      cancelLabel: tr("إلغاء"),
+      variant: "destructive",
+    });
+    if (!confirmed) return;
+
+    setDeletingDraft(true);
+    autosaveRef.current?.cancel();
+    const deleted = await deleteSavedDraft({
+      // A local-only status can mean the APPEND succeeded but its response
+      // was lost. Probe by draftId so explicit deletion never leaves a ghost.
+      mayHaveRemoteCopy: hasLocalDraft || hasRemoteDraft,
+      deleteRemote: async () => {
+        const token = session.mailSessionToken;
+        if (!token) return { ok: false };
+        const result = await bridgeDeleteDraftFn({
+          data: {
+            mailSessionToken: token,
+            draftId,
+            previousRef: serverRefRef.current ?? undefined,
+          },
+        });
+        return { ok: Boolean(result?.ok) };
+      },
+      clearLocal: () => clearDraftDoc(window.localStorage, accountEmail),
+      closeWithRefresh: () => onClose({ refreshDrafts: true }),
+    });
+
+    if (!deleted) {
+      setDeletingDraft(false);
+      if (isDirtyRef.current) autosaveRef.current?.schedule();
+      toast.error(tr("تعذّر حذف المسودة. احتفظنا بنسختك؛ حاول مرة أخرى."));
     }
   }
 
@@ -6388,7 +6442,7 @@ function Composer({
           <button
             type="button"
             onClick={saveDraftNow}
-            disabled={sending}
+            disabled={sending || deletingDraft}
             className="inline-flex items-center gap-1.5 rounded-lg border border-input bg-background px-2.5 py-2 text-xs text-muted-foreground transition hover:bg-muted hover:text-foreground disabled:opacity-40 sm:px-3"
             aria-label={tr("حفظ كمسودة")}
             title={tr("حفظ كمسودة")}
@@ -6396,11 +6450,28 @@ function Composer({
             <FileText className="h-4 w-4" />
             <span className="hidden sm:inline">{tr("حفظ كمسودة")}</span>
           </button>
+          {shouldShowDeleteDraft(hasLocalDraft, hasRemoteDraft) && (
+            <button
+              type="button"
+              onClick={() => void handleDeleteDraft()}
+              disabled={sending || deletingDraft || saveStatus === "saving"}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-destructive/40 bg-background px-2.5 py-2 text-xs font-medium text-destructive transition hover:bg-destructive/10 disabled:opacity-40 sm:px-3"
+              aria-label={tr("حذف المسودة")}
+              title={tr("حذف المسودة")}
+            >
+              {deletingDraft ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Trash2 className="h-4 w-4" />
+              )}
+              <span>{tr(deletingDraft ? "جارٍ حذف المسودة" : "حذف المسودة")}</span>
+            </button>
+          )}
         </div>
         <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground sm:gap-3">
           <span className="sm:hidden">{savedLabel}</span>
           {(to.length > 0 || cc.length > 0 || bcc.length > 0) && (
-            <span>{trf("{{count}} مستلم", { count: to.length + cc.length + bcc.length })}</span>
+            <span>{trf("عدد المستلمين", { count: to.length + cc.length + bcc.length })}</span>
           )}
           <button
             onClick={() => void requestClose()}
