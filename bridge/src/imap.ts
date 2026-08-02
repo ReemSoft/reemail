@@ -594,16 +594,18 @@ export async function getMessageBody(
     }
 
     // ---- attachments: unchanged contract ---------------------------------
-    const inlineCids = new Set([
-      ...deferredInline.map((d) => d.cid),
-      ...embedded.map((d) => d.cid),
-    ]);
+    // Deferred cids stay reachable (the lazy route still needs them); cids we
+    // already embedded are rendered in the body, so they are not listed twice.
+    const embeddedCids = new Set(embedded.map((d) => d.cid));
+    const deferredCids = new Set(deferredInline.map((d) => d.cid));
     const visible = structural.filter((a) => {
       const cid = (a.contentId || "").replace(/^<|>$/g, "").toLowerCase();
-      if (cid && inlineCids.has(cid)) return cid ? !embedded.some((e) => e.cid === cid) : true;
+      if (cid && embeddedCids.has(cid)) return false;
+      if (cid && deferredCids.has(cid)) return true;
       if (a.disposition === "inline" && a.contentId) return false;
       return true;
     });
+
     parsed.attachments = visible;
     parsed.hasAttachments = visible.length > 0;
     if (deferredInline.length) parsed.inlineParts = deferredInline;
