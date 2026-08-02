@@ -153,7 +153,7 @@ describe("storeCachedBody", () => {
         inlineParts: [],
         attachments: [],
       },
-      { maxBytes: 100, maxAgeDays: 14, maxRowsPerAccount: 100, warmBatch: 5, warmWindow: 100 },
+      { maxBytes: 100, maxAgeDays: 14, maxRowsPerAccount: 100, warmBatch: 5, warmWindow: 100, inlineMaxBytes: 1536 * 1024 },
     );
     expect(out).toBe("oversize");
     const row = spy.upserts[0] as Record<string, unknown>;
