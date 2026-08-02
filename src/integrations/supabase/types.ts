@@ -325,6 +325,7 @@ export type Database = {
           company_id: string
           created_at: string
           id: string
+          inline_images: Json
           inline_parts: Json
           last_accessed_at: string
           oversize: boolean
@@ -345,6 +346,7 @@ export type Database = {
           company_id: string
           created_at?: string
           id?: string
+          inline_images?: Json
           inline_parts?: Json
           last_accessed_at?: string
           oversize?: boolean
@@ -365,6 +367,7 @@ export type Database = {
           company_id?: string
           created_at?: string
           id?: string
+          inline_images?: Json
           inline_parts?: Json
           last_accessed_at?: string
           oversize?: boolean
