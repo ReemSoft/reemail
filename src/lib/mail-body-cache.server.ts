@@ -16,7 +16,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { MailAttachment, MailMessage } from "@/lib/mail-types";
 
 /** Bump when the HTML/body pipeline changes: invalidates every stored body. */
-export const BODY_CACHE_VERSION = 1;
+export const BODY_CACHE_VERSION = 2;
 
 /** Folders whose bodies are never cached (drafts mutate in place). */
 const NON_CACHEABLE = new Set(["drafts"]);
@@ -37,6 +37,8 @@ export interface BodyCacheLimits {
   warmBatch: number;
   /** How many recent messages per account the warmer considers. */
   warmWindow: number;
+  /** Largest total of embedded inline images we persist with a body. */
+  inlineMaxBytes: number;
 }
 
 export function bodyCacheLimits(): BodyCacheLimits {
@@ -46,6 +48,7 @@ export function bodyCacheLimits(): BodyCacheLimits {
     maxRowsPerAccount: envInt("MAIL_BODY_CACHE_MAX_ROWS", 100),
     warmBatch: envInt("MAIL_BODY_WARM_BATCH", 5),
     warmWindow: envInt("MAIL_BODY_WARM_WINDOW", 100),
+    inlineMaxBytes: envInt("MAIL_BODY_CACHE_INLINE_MAX_BYTES", 1536 * 1024),
   };
 }
 
@@ -57,6 +60,7 @@ export interface CachedBody {
   bodyHtml: string;
   preview: string;
   inlineParts: NonNullable<MailMessage["inlineParts"]>;
+  inlineImages: NonNullable<MailMessage["inlineImages"]>;
   attachments: MailAttachment[];
   uidValidity: string;
   byteSize: number;
@@ -99,7 +103,7 @@ export async function lookupCachedBody(
     supabase
       .from("mail_message_body_cache")
       .select(
-        "uid_validity, body_html, body_text, preview, inline_parts, attachments, byte_size, oversize",
+        "uid_validity, body_html, body_text, preview, inline_parts, inline_images, attachments, byte_size, oversize",
       )
       .eq("company_id", key.companyId)
       .eq("account_id", key.accountId)
@@ -118,6 +122,7 @@ export async function lookupCachedBody(
     body_text: string | null;
     preview: string | null;
     inline_parts: unknown;
+    inline_images: unknown;
     attachments: unknown;
     byte_size: number;
     oversize: boolean;
@@ -151,6 +156,9 @@ export async function lookupCachedBody(
       inlineParts: Array.isArray(row.inline_parts)
         ? (row.inline_parts as CachedBody["inlineParts"])
         : [],
+      inlineImages: Array.isArray(row.inline_images)
+        ? (row.inline_images as CachedBody["inlineImages"])
+        : [],
       attachments: Array.isArray(row.attachments) ? (row.attachments as MailAttachment[]) : [],
       uidValidity: String(row.uid_validity),
       byteSize: row.byte_size,
@@ -178,6 +186,7 @@ export interface StoreInput extends CacheKey {
   bodyHtml: string;
   preview: string;
   inlineParts: NonNullable<MailMessage["inlineParts"]>;
+  inlineImages?: NonNullable<MailMessage["inlineImages"]>;
   attachments: MailAttachment[];
 }
 
@@ -199,6 +208,25 @@ export async function storeCachedBody(
   const oversize = byteSize > limits.maxBytes;
   const now = new Date().toISOString();
 
+  // Embedded inline images are persisted with the body so a cache hit paints
+  // every logo with zero requests. Above the budget we keep the body and
+  // demote the images to lazy metadata — never a broken image, never a row
+  // that could grow without bound.
+  const images = input.inlineImages ?? [];
+  const imagesBytes = images.reduce((n, i) => n + byteLength(i.dataUri), 0);
+  const keepImages = imagesBytes <= limits.inlineMaxBytes;
+  const inlineParts = keepImages
+    ? (input.inlineParts ?? [])
+    : [
+        ...(input.inlineParts ?? []),
+        ...images.map((i) => ({
+          cid: i.cid,
+          part: i.part,
+          mimeType: i.mimeType,
+          size: i.size,
+        })),
+      ];
+
   const { error } = await supabase.from("mail_message_body_cache").upsert(
     {
       company_id: input.companyId,
@@ -210,7 +238,8 @@ export async function storeCachedBody(
       body_html: oversize ? null : input.bodyHtml,
       body_text: null,
       preview: input.preview.slice(0, 512),
-      inline_parts: input.inlineParts ?? [],
+      inline_parts: inlineParts,
+      inline_images: keepImages ? images : [],
       attachments: input.attachments ?? [],
       byte_size: byteSize,
       oversize,
@@ -223,7 +252,9 @@ export async function storeCachedBody(
     console.warn("[body-cache] store failed");
     return "skipped";
   }
-  console.log(`[body-cache] store bytes=${byteSize} oversize=${oversize}`);
+  console.log(
+    `[body-cache] store bytes=${byteSize} oversize=${oversize} inlineBytes=${imagesBytes} inlineKept=${keepImages}`,
+  );
   return oversize ? "oversize" : "stored";
 }
 
