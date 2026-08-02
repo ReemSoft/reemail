@@ -12,6 +12,22 @@ import {
 
 const IMAP_TIMEOUT_MS = 30_000;
 
+function envInt(name: string, fallback: number): number {
+  const n = Number(process.env[name]);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
+}
+
+/**
+ * Budgets for embedding inline (cid:) images together with the body.
+ * Signature logos / banners are typically a few KB each; these caps keep a
+ * pathological message (dozens of full-size embedded photos) from ever
+ * slowing the open path down. Anything outside the budget stays lazy.
+ */
+const INLINE_IMAGE_MAX_BYTES = envInt("INLINE_IMAGE_MAX_BYTES", 256 * 1024);
+const INLINE_IMAGE_TOTAL_BYTES = envInt("INLINE_IMAGE_TOTAL_BYTES", 1024 * 1024);
+const INLINE_IMAGE_MAX_COUNT = envInt("INLINE_IMAGE_MAX_COUNT", 20);
+
+
 const WELL_KNOWN_FOLDERS: Record<MailFolder, string[]> = {
   inbox: ["INBOX"],
   sent: ["Sent", "Sent Items", "Sent Mail", "[Gmail]/Sent Mail", "[Gmail]/Sent"],
