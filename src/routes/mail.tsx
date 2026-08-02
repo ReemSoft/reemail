@@ -170,55 +170,64 @@ function ThreadedEmailBody({ html, className }: { html: string; className?: stri
 }
 
 /**
- * Session-scoped cache of already-resolved inline images.
- * Key: `${messageId}|${cid}` → data URI. Re-opening a message (or switching
- * back to it) reuses the bytes instead of re-streaming them from IMAP.
+ * Session-scoped cache of inline images resolved through the lazy fallback
+ * route. Key: `${messageId}|${cid}` → data URI.
  */
 const inlineImageCache = new Map<string, string>();
 
+/** Replaces every `cid:<id>` reference in `base` with its resolved source. */
+function applyInlineSources(
+  base: string,
+  pairs: { cid: string; dataUri: string }[],
+): string {
+  let out = base;
+  for (const r of pairs) {
+    const esc = r.cid.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    out = out.replace(new RegExp(`cid:${esc}`, "gi"), r.dataUri);
+  }
+  return out;
+}
+
 /**
- * useInlineResolvedHtml — resolves oversized inline (cid:) images.
+ * useInlineResolvedHtml — renders inline (cid:) images.
  *
- * The bridge embeds small inline images as data URIs while it downloads the
- * body. Anything above the configured limit is reported in
- * `message.inlineParts` instead, and streamed here lazily through the
- * protected /api/mail-attachment route so the image renders instead of
- * breaking. The sandboxed viewer has an opaque origin, so a parent-origin
- * blob: URL is unreachable inside it — the fetched bytes are converted to a
- * data URI, exactly like the bridge-side inline path.
+ * Primary path (the normal case): the bridge downloads every referenced
+ * inline image inside the SAME IMAP session as the body and ships it as a
+ * data URI in `message.inlineImages`. They are substituted synchronously,
+ * BEFORE the first paint of the body, so the images appear together with the
+ * text — no second request, no progressive pop-in, no iframe re-mount. Those
+ * bytes are also persisted with the server-side body cache, so a cached open
+ * shows the complete message with zero network calls.
  *
- * Rendering is PROGRESSIVE: every image is swapped into the HTML the moment
- * its own bytes arrive, so one slow attachment can never hold back the ones
- * that already finished. The message text itself is painted before any of
- * this starts, so open latency is unaffected.
+ * Fallback path (rare): images outside the bridge's embedding budget arrive
+ * as `inlineParts` metadata and are streamed lazily, with bounded
+ * parallelism, through the protected attachment route. The text is already
+ * on screen while that happens, so open latency is never affected.
  */
 function useInlineResolvedHtml(message: MailMessage, html: string): string {
-  const [resolved, setResolved] = useState(html);
-
-  useEffect(() => {
-    const parts = message.inlineParts;
-
-    // Apply anything already cached synchronously, before the first paint of
-    // this body, so re-opens show inline images instantly.
-    const applyAll = (base: string, pairs: { cid: string; dataUri: string }[]) => {
-      let out = base;
-      for (const r of pairs) {
-        const esc = r.cid.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-        out = out.replace(new RegExp(`cid:${esc}`, "gi"), r.dataUri);
-      }
-      return out;
-    };
-
-    const cachedPairs = (parts ?? [])
+  // Synchronous, pre-paint substitution of everything the server already sent.
+  const base = useMemo(() => {
+    const embedded = (message.inlineImages ?? []).map((i) => ({
+      cid: i.cid,
+      dataUri: i.dataUri,
+    }));
+    const cachedLazy = (message.inlineParts ?? [])
       .map((p) => {
         const hit = inlineImageCache.get(`${message.id}|${p.cid}`);
         return hit ? { cid: p.cid, dataUri: hit } : null;
       })
       .filter(Boolean) as { cid: string; dataUri: string }[];
+    const pairs = [...embedded, ...cachedLazy];
+    return pairs.length ? applyInlineSources(html, pairs) : html;
+  }, [html, message.id, message.inlineImages, message.inlineParts]);
 
-    setResolved(cachedPairs.length ? applyAll(html, cachedPairs) : html);
+  const [resolved, setResolved] = useState(base);
 
-    if (!parts?.length || !html) return;
+  useEffect(() => {
+    setResolved(base);
+
+    const parts = message.inlineParts;
+    if (!parts?.length || !base) return;
     const pending = parts.filter((p) => !inlineImageCache.has(`${message.id}|${p.cid}`));
     if (!pending.length) return;
 
@@ -229,9 +238,6 @@ function useInlineResolvedHtml(message: MailMessage, html: string): string {
       const parsed = parseMessageId(message.id);
       if (!session || !parsed) return;
 
-      // Bounded parallelism: inline images used to be fetched strictly one
-      // after another, so a mail with several embedded logos showed broken
-      // images for seconds.
       const CONCURRENCY = 4;
       const queue = [...pending];
 
@@ -262,9 +268,7 @@ function useInlineResolvedHtml(message: MailMessage, html: string): string {
             if (!dataUri.startsWith("data:")) continue;
             inlineImageCache.set(`${message.id}|${p.cid}`, dataUri);
             if (cancelled) return;
-            // Progressive swap: this image appears immediately, without
-            // waiting for its slower siblings.
-            setResolved((prev) => applyAll(prev, [{ cid: p.cid, dataUri }]));
+            setResolved((prev) => applyInlineSources(prev, [{ cid: p.cid, dataUri }]));
           } catch {
             /* leave the original cid: reference untouched */
           }
@@ -279,10 +283,11 @@ function useInlineResolvedHtml(message: MailMessage, html: string): string {
     return () => {
       cancelled = true;
     };
-  }, [message.id, message.inlineParts, html]);
+  }, [base, message.id, message.inlineParts]);
 
   return resolved;
 }
+
 
 
 /** Body renderer that first resolves any deferred inline images. */
