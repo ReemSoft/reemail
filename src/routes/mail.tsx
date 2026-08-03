@@ -2071,7 +2071,7 @@ function MailApp() {
   const activeScopeGenerationRef = useRef(0);
 
   const fetchMessage = useCallback(
-    (
+    async (
       id: string,
       lane: "interactive" | "background" = "interactive",
       signal?: AbortSignal,
@@ -2105,14 +2105,26 @@ function MailApp() {
       const requestKey = `${scope.companyId}|${scope.accountId}|${parsed.folder}|${parsed.uid}|${uidValidity ?? "interactive"}`;
       const existing = inflight.current.get(requestKey);
       if (existing) {
-        if (lane === "interactive" && existing.lane === "background") {
-          // A foreground click must never inherit a speculative background failure.
-          existing.controller.abort();
-          inflight.current.delete(requestKey);
-          mailPerf("prefetch-aborted", { count: 1, upgradedToInteractive: true });
-        } else {
+        if (lane !== "interactive" || existing.lane !== "background") {
           return existing.promise;
         }
+
+        // Reuse an already-started prefetch when it succeeds; this is
+        // normally faster than discarding completed network work.
+        const prefetched = await existing.promise;
+        if (prefetched.message) return prefetched;
+        if (signal?.aborted) return { message: null, source: "error" };
+
+        // The speculative request failed or was cancelled. Exactly one
+        // foreground caller replaces it; concurrent clicks share that retry.
+        const replacement = inflight.current.get(requestKey);
+        if (replacement && replacement.promise !== existing.promise) {
+          return replacement.promise;
+        }
+        if (replacement?.promise === existing.promise) {
+          inflight.current.delete(requestKey);
+        }
+        mailPerf("prefetch-retry", { upgradedToInteractive: true });
       }
       const scopeGeneration = activeScopeGenerationRef.current;
       const controller = new AbortController();
