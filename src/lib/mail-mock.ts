@@ -118,20 +118,21 @@ export function formatSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-export function formatDate(iso: string): string {
+export function formatDate(iso: string, lang: "ar" | "en" = "ar"): string {
   const d = new Date(iso);
   const now = new Date();
+  const locale = lang === "ar" ? "ar-SA" : "en-GB";
   const sameDay = d.toDateString() === now.toDateString();
   if (sameDay) {
-    return d.toLocaleTimeString("ar-SA", { hour: "2-digit", minute: "2-digit" });
+    return d.toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" });
   }
   const diffDays = Math.floor((now.getTime() - d.getTime()) / 86400_000);
   if (diffDays < 7 && d.getFullYear() === now.getFullYear()) {
-    return d.toLocaleDateString("ar-SA", { weekday: "short" });
+    return d.toLocaleDateString(locale, { weekday: "short" });
   }
   if (d.getFullYear() === now.getFullYear()) {
-    return d.toLocaleDateString("ar-SA", { day: "numeric", month: "short" });
+    return d.toLocaleDateString(locale, { day: "numeric", month: "short" });
   }
   // Different year — always include the year (Roundcube nice_date behavior)
-  return d.toLocaleDateString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric" });
+  return d.toLocaleDateString(locale, { day: "2-digit", month: "2-digit", year: "numeric" });
 }

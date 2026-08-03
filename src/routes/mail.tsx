@@ -4299,7 +4299,7 @@ function MessageRow({
             {message.from.name || message.from.email}
           </span>
           <span className="shrink-0 text-[11px] text-muted-foreground">
-            {formatDate(message.date)}
+            {formatDate(message.date, getCurrentLang())}
           </span>
         </div>
         <p
@@ -4392,7 +4392,7 @@ function MessageView({
   const toSummary =
     recipientsAll.length > 0 ? recipientsAll.map((r) => r.email).join(tr("،")) : "—";
 
-  const fullDate = new Date(message.date).toLocaleString("ar", {
+  const fullDate = new Date(message.date).toLocaleString(getCurrentLang() === "ar" ? "ar-SA" : "en-GB", {
     dateStyle: "full",
     timeStyle: "short",
   });
@@ -4625,7 +4625,7 @@ function MessageView({
                   className="shrink-0 whitespace-nowrap text-xs text-muted-foreground"
                   title={new Date(message.date).toLocaleString(getCurrentLang())}
                 >
-                  {formatDate(message.date)}
+                  {formatDate(message.date, getCurrentLang())}
                 </span>
               </div>
               <div className="mt-1 text-xs text-muted-foreground">
