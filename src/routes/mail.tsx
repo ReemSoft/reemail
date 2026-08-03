@@ -2065,6 +2065,7 @@ function MailApp() {
   type InflightMessage = {
     promise: Promise<ClientMessageResult>;
     controller: AbortController;
+    lane: "interactive" | "background";
   };
   const inflight = useRef<Map<string, InflightMessage>>(new Map());
   const activeScopeGenerationRef = useRef(0);
@@ -2103,7 +2104,16 @@ function MailApp() {
       };
       const requestKey = `${scope.companyId}|${scope.accountId}|${parsed.folder}|${parsed.uid}|${uidValidity ?? "interactive"}`;
       const existing = inflight.current.get(requestKey);
-      if (existing) return existing.promise;
+      if (existing) {
+        if (lane === "interactive" && existing.lane === "background") {
+          // A foreground click must never inherit a speculative background failure.
+          existing.controller.abort();
+          inflight.current.delete(requestKey);
+          mailPerf("prefetch-aborted", { count: 1, upgradedToInteractive: true });
+        } else {
+          return existing.promise;
+        }
+      }
       const scopeGeneration = activeScopeGenerationRef.current;
       const controller = new AbortController();
       const abortFromCaller = () => controller.abort();
@@ -2186,7 +2196,7 @@ function MailApp() {
           signal?.removeEventListener("abort", abortFromCaller);
           if (inflight.current.get(requestKey)?.promise === p) inflight.current.delete(requestKey);
         });
-      inflight.current.set(requestKey, { promise: p, controller });
+      inflight.current.set(requestKey, { promise: p, controller, lane });
       return p;
     },
     [session, openMsg, applyPendingOne, currentAccountId, cleanupGhost],
