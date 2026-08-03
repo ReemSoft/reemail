@@ -4145,7 +4145,7 @@ function MailApp() {
 
         {/* Message viewer */}
         <div
-          className={`flex-1 overflow-hidden bg-background ${
+          className={`flex-1 overflow-hidden bg-white ${
             compose || selectedMessage || (selectedId && reading) ? "flex" : "hidden md:flex"
           } flex-col`}
         >
