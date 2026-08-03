@@ -2179,16 +2179,21 @@ function MailApp() {
               source: result.ok && result.source === "cache" ? "server-cache" : "imap",
             } as ClientMessageResult;
           }
-          // Ghost cleanup: only on proven-absent (NOT_FOUND). Fire the
-          // server-side tombstone (idempotent), then evict the local row
-          // so the list and message view stop pointing at nothing.
+          // A speculative/background fetch must never mutate the mailbox
+          // index. NOT_FOUND may be transient while a folder sync is racing.
+          // Cleanup is allowed only after an explicit interactive open.
           if (!result.ok && result.code === "NOT_FOUND") {
+            if (lane === "background") {
+              return { message: null, source: "error" } as ClientMessageResult;
+            }
+
             if (parsed.folder !== "all") {
               void cleanupGhost({
                 data: {
                   mailSessionToken: session.mailSessionToken ?? "",
                   canonical: parsed.folder,
                   uid: parsed.uid,
+                  uidvalidity: uidValidity ? Number(uidValidity) : undefined,
                 },
               }).catch(() => {});
             }
