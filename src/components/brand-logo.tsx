@@ -1,9 +1,8 @@
-import logoAsset from "@/assets/mailmaestro-logo.png.asset.json";
 import { cn } from "@/lib/utils";
 
 /**
  * Official MailMaestro brand mark.
- * Served from the CDN so it stays out of the JS bundle.
+ * Served locally as an optimized 64x64 PNG.
  */
 export function BrandLogo({
   className,
@@ -14,7 +13,7 @@ export function BrandLogo({
 }) {
   return (
     <img
-      src={logoAsset.url}
+      src="/favicon.png"
       alt={alt}
       width={64}
       height={64}
