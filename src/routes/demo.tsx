@@ -43,6 +43,8 @@ import { tr, trf, getCurrentLang } from "@/i18n";
 import { useLanguage } from "@/hooks/use-language";
 import { BrandLogo } from "@/components/brand-logo";
 import { LanguageSwitcher } from "@/components/language-switcher";
+import { DemoMailboxSwitcher } from "@/components/demo-mailbox-switcher";
+
 import { ChevronBackward } from "@/components/ui/directional-icon";
 import {
   DropdownMenu,
