@@ -44,7 +44,7 @@ type Mode = "signin" | "register";
 
 function CompanyPortalPage() {
   const navigate = useNavigate();
-  const [mode, setMode] = useState<Mode>("register");
+  const [mode, setMode] = useState<Mode>("signin");
   const [checkingSession, setCheckingSession] = useState(true);
 
   useEffect(() => {
@@ -113,17 +113,6 @@ function CompanyPortalPage() {
           <div className="mb-8 grid grid-cols-2 gap-2 rounded-xl border border-border bg-card p-1.5">
             <button
               type="button"
-              onClick={() => setMode("register")}
-              className={`flex items-center justify-center gap-2 rounded-lg px-3 py-2.5 text-sm font-medium transition ${
-                mode === "register"
-                  ? "bg-brand-gradient text-white shadow-soft"
-                  : "text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              <Building2 className="h-4 w-4" /> {tr("تسجيل شركة جديدة")}
-            </button>
-            <button
-              type="button"
               onClick={() => setMode("signin")}
               className={`flex items-center justify-center gap-2 rounded-lg px-3 py-2.5 text-sm font-medium transition ${
                 mode === "signin"
@@ -132,6 +121,17 @@ function CompanyPortalPage() {
               }`}
             >
               <LogIn className="h-4 w-4" /> {tr("دخول المدير")}
+            </button>
+            <button
+              type="button"
+              onClick={() => setMode("register")}
+              className={`flex items-center justify-center gap-2 rounded-lg px-3 py-2.5 text-sm font-medium transition ${
+                mode === "register"
+                  ? "bg-brand-gradient text-white shadow-soft"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              <Building2 className="h-4 w-4" /> {tr("تسجيل شركة")}
             </button>
           </div>
 
