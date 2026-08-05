@@ -1,4 +1,5 @@
 import { tr } from "@/i18n";
+import { LanguageSwitcher } from "@/components/language-switcher";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { Loader2, Building2, LogIn } from "lucide-react";
