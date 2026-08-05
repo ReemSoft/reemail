@@ -44,7 +44,7 @@ type Mode = "signin" | "register";
 
 function CompanyPortalPage() {
   const navigate = useNavigate();
-  const [mode, setMode] = useState<Mode>("register");
+  const [mode, setMode] = useState<Mode>("signin");
   const [checkingSession, setCheckingSession] = useState(true);
 
   useEffect(() => {
