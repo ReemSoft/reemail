@@ -13,7 +13,7 @@ interface Props {
 export function LanguageSwitcher({ className = "", compact = false }: Props) {
   const { lang, setLang } = useLanguage();
   const isAr = lang === "ar";
-  const label = isAr ? "EN" : "AR";
+  const label = isAr ? "English" : "العربية";
   const title = isAr ? "Switch to English" : "التبديل إلى العربية";
 
   return (
@@ -23,11 +23,11 @@ export function LanguageSwitcher({ className = "", compact = false }: Props) {
       title={title}
       aria-label={title}
       className={
-        `inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 py-1.5 text-xs font-semibold text-foreground transition hover:bg-muted ${className}`
+        `inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm font-medium text-muted-foreground transition hover:bg-muted hover:text-foreground ${className}`
       }
     >
-      <Languages className="h-3.5 w-3.5 opacity-70" />
-      {compact ? <span>{label}</span> : <span>{label}</span>}
+      <Languages className="h-4 w-4 opacity-70" />
+      <span>{label}</span>
     </button>
   );
 }
