@@ -12,6 +12,8 @@ import {
 } from "lucide-react";
 import { BrandLogo } from "@/components/brand-logo";
 import { ArrowForward } from "@/components/ui/directional-icon";
+import demoPreview from "@/assets/demo-preview.jpg.asset.json";
+
 
 export const Route = createFileRoute("/")({
   head: () => ({
