@@ -380,7 +380,13 @@ function DemoMailApp() {
             >
               <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin text-primary" : ""}`} />
             </button>
+            <DemoMailboxSwitcher compact />
           </div>
+
+          <div className="hidden lg:block">
+            <DemoMailboxSwitcher />
+          </div>
+
 
           <button
             onClick={refresh}
