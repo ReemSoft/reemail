@@ -43,6 +43,8 @@ import { tr, trf, getCurrentLang } from "@/i18n";
 import { useLanguage } from "@/hooks/use-language";
 import { BrandLogo } from "@/components/brand-logo";
 import { LanguageSwitcher } from "@/components/language-switcher";
+import { DemoMailboxSwitcher } from "@/components/demo-mailbox-switcher";
+
 import { ChevronBackward } from "@/components/ui/directional-icon";
 import {
   DropdownMenu,
@@ -380,7 +382,13 @@ function DemoMailApp() {
             >
               <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin text-primary" : ""}`} />
             </button>
+            <DemoMailboxSwitcher compact />
           </div>
+
+          <div className="hidden lg:block">
+            <DemoMailboxSwitcher />
+          </div>
+
 
           <button
             onClick={refresh}
