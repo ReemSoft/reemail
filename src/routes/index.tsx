@@ -130,7 +130,7 @@ function Landing() {
             <div className="rounded-xl bg-surface p-1">
               <div className="flex h-96 items-center justify-center rounded-lg bg-brand-gradient/5">
                 <Link
-                  to="/login"
+                  to="/demo"
                   className="rounded-xl bg-brand-gradient px-6 py-3 text-white shadow-brand"
                 >
                   <span className="flex items-center gap-2">
