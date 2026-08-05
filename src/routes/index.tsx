@@ -128,10 +128,18 @@ function Landing() {
         <div className="mx-auto mt-16 max-w-5xl">
           <div className="relative rounded-2xl border border-border bg-card p-2 shadow-float">
             <div className="rounded-xl bg-surface p-1">
-              <div className="flex h-96 items-center justify-center rounded-lg bg-brand-gradient/5">
+              <div className="relative flex h-96 items-center justify-center overflow-hidden rounded-lg">
+                <img
+                  src={demoPreview.url}
+                  alt={tr("لقطة من واجهة بريد MailMaestro")}
+                  loading="lazy"
+                  decoding="async"
+                  className="pointer-events-none absolute inset-0 h-full w-full scale-105 object-cover object-top blur-[3px]"
+                />
+                <div className="absolute inset-0 bg-background/45" />
                 <Link
                   to="/demo"
-                  className="rounded-xl bg-brand-gradient px-6 py-3 text-white shadow-brand"
+                  className="relative rounded-xl bg-brand-gradient px-6 py-3 text-white shadow-brand transition hover:scale-[1.02]"
                 >
                   <span className="flex items-center gap-2">
                     <Mail className="h-5 w-5" /> {tr("افتح تجربة الواجهة")}
@@ -141,6 +149,7 @@ function Landing() {
             </div>
           </div>
         </div>
+
       </section>
 
       {/* Features */}
