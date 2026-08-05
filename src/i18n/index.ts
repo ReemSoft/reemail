@@ -3,7 +3,6 @@
 // Import once (e.g. in __root.tsx) — safe to import in any environment.
 import i18n from "i18next";
 import { initReactI18next } from "react-i18next";
-import LanguageDetector from "i18next-browser-languagedetector";
 import ar from "./locales/ar.json";
 import en from "./locales/en.json";
 
@@ -11,12 +10,10 @@ export const SUPPORTED_LANGS = ["ar", "en"] as const;
 export type SupportedLang = (typeof SUPPORTED_LANGS)[number];
 export const LANG_STORAGE_KEY = "mailmaestro.lang";
 
-// SSR-safe: only initialize once, and only add the browser detector on the client.
+// SSR-safe: both server and the first browser render start in Arabic. The saved
+// browser preference is applied after hydration by useLanguage.
 if (!i18n.isInitialized) {
   const instance = i18n.use(initReactI18next);
-  if (typeof window !== "undefined") {
-    instance.use(LanguageDetector);
-  }
   instance.init({
     // All resources are bundled locally. Initialise synchronously so direct
     // `tr` / `trf` calls cannot render an untranslated key on the first pass.
@@ -26,17 +23,13 @@ if (!i18n.isInitialized) {
       en: { translation: en as Record<string, string> },
     },
     fallbackLng: "ar",
+    lng: "ar",
     supportedLngs: SUPPORTED_LANGS,
     load: "languageOnly", // "en-US" → "en"
     // Natural-language keys — Arabic contains dots/colons; disable separators.
     keySeparator: false,
     nsSeparator: false,
     interpolation: { escapeValue: false }, // React handles escaping
-    detection: {
-      order: ["localStorage", "navigator"],
-      lookupLocalStorage: LANG_STORAGE_KEY,
-      caches: ["localStorage"],
-    },
     react: { useSuspense: false },
     // If a key is missing in the active resource, use the key itself (Arabic).
     returnEmptyString: false,

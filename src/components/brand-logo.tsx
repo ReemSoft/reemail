@@ -1,8 +1,9 @@
 import { cn } from "@/lib/utils";
+import logoAsset from "@/assets/mailmaestro-envelope-original.png.asset.json";
 
 /**
  * Official MailMaestro brand mark.
- * Served locally as an optimized 128x128 PNG with transparent rounded corners.
+ * Uses the original uploaded transparent artwork without cropping or recompression.
  */
 export function BrandLogo({
   className,
@@ -13,13 +14,13 @@ export function BrandLogo({
 }) {
   return (
     <img
-      src="/favicon.png"
+      src={logoAsset.url}
       alt={alt}
-      width={128}
-      height={128}
+      width={1024}
+      height={1024}
       loading="eager"
       decoding="async"
-      className={cn("object-contain", className)}
+      className={cn("object-contain object-center", className)}
     />
   );
 }

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import i18n, {
   SUPPORTED_LANGS,
+  LANG_STORAGE_KEY,
   dirFor,
   getCurrentLang,
   type SupportedLang,
@@ -26,15 +27,25 @@ export function useLanguage() {
         document.documentElement.dir = dirFor(next as SupportedLang);
       }
     };
-    // Sync once on mount in case detector picked EN before we subscribed.
-    onChanged(i18nInst.resolvedLanguage || i18nInst.language || "ar");
     i18nInst.on("languageChanged", onChanged);
+    const saved = window.localStorage.getItem(LANG_STORAGE_KEY)?.slice(0, 2);
+    const browser = window.navigator.language.slice(0, 2);
+    const preferred = saved || browser;
+    const initial = (SUPPORTED_LANGS as readonly string[]).includes(preferred)
+      ? (preferred as SupportedLang)
+      : "ar";
+    if (initial !== getCurrentLang()) {
+      void i18nInst.changeLanguage(initial);
+    } else {
+      onChanged(initial);
+    }
     return () => {
       i18nInst.off("languageChanged", onChanged);
     };
   }, [i18nInst]);
 
   const setLang = useCallback((next: SupportedLang) => {
+    window.localStorage.setItem(LANG_STORAGE_KEY, next);
     void i18n.changeLanguage(next);
   }, []);
 
