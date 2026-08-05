@@ -438,5 +438,16 @@
   "عرض الرسائل السابقة": "Show previous messages",
   "إخفاء الرسائل السابقة": "Hide previous messages",
   "عرض الصور دائماً": "Always show images",
-  "الآن": "Now"
+  "الآن": "Now",
+  "تم النقل إلى المهملات": "Moved to Trash",
+  "هذه معاينة تجريبية — الإجراء الحقيقي يتم بعد ربط بريدك.": "This is a demo preview — real actions work once you connect your mailbox.",
+  "تم تعليم الرسائل": "Messages updated",
+  "نسخة": "Cc",
+  "تم النقل": "Moved",
+  "اكتب رسالتك هنا…": "Write your message here…",
+  "وضع تجريبي — بيانات وهمية، بدون أي اتصال بحساب بريد حقيقي.": "Demo mode — sample data only, no real mailbox is connected.",
+  "ابدأ ببريدك الحقيقي": "Start with your real mailbox",
+  "تجاهل": "Discard",
+  "تم الحذف نهائياً": "Permanently deleted",
+  "تمت الاستعادة": "Restored"
 }

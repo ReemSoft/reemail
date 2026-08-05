@@ -546,7 +546,9 @@ function DemoMailApp() {
                       {tr("أرشفة المحدد")}
                     </DropdownMenuItem>
                     <DropdownMenuSeparator />
-                    <DropdownMenuItem onClick={() => bulk((id) => move(id, "spam"), tr("تم النقل"))}>
+                    <DropdownMenuItem
+                      onClick={() => bulk((id) => move(id, "spam"), tr("تم النقل"))}
+                    >
                       <AlertOctagon className="ms-2 h-4 w-4" />
                       {tr("نقل إلى المزعج")}
                     </DropdownMenuItem>
@@ -876,7 +878,8 @@ function MessageView({
   const { dir: uiDir, lang } = useLanguage();
   const [detailsOpen, setDetailsOpen] = useState(false);
   const recipientsAll = [...message.to, ...(message.cc || [])];
-  const toSummary = recipientsAll.length > 0 ? recipientsAll.map((r) => r.email).join(tr("،")) : "—";
+  const toSummary =
+    recipientsAll.length > 0 ? recipientsAll.map((r) => r.email).join(tr("،")) : "—";
   const fullDate = new Date(message.date).toLocaleString(lang === "ar" ? "ar-SA" : "en-GB", {
     dateStyle: "full",
     timeStyle: "short",
@@ -937,7 +940,11 @@ function MessageView({
             </button>
           )}
           {canArchive && (
-            <button onClick={onArchive} className="rounded-lg p-2 hover:bg-muted" title={tr("أرشفة")}>
+            <button
+              onClick={onArchive}
+              className="rounded-lg p-2 hover:bg-muted"
+              title={tr("أرشفة")}
+            >
               <Archive className="h-4 w-4" />
             </button>
           )}
@@ -951,7 +958,11 @@ function MessageView({
           >
             <MailOpen className="h-4 w-4" />
           </button>
-          <button onClick={printMessage} className="rounded-lg p-2 hover:bg-muted" title={tr("طباعة")}>
+          <button
+            onClick={printMessage}
+            className="rounded-lg p-2 hover:bg-muted"
+            title={tr("طباعة")}
+          >
             <Printer className="h-4 w-4" />
           </button>
           <button
@@ -1010,7 +1021,10 @@ function MessageView({
             <DropdownMenuItem onClick={onSpam} className="md:hidden">
               <AlertOctagon className="h-4 w-4" /> {tr("مزعج")}
             </DropdownMenuItem>
-            <DropdownMenuItem onClick={onDelete} className="text-destructive focus:text-destructive">
+            <DropdownMenuItem
+              onClick={onDelete}
+              className="text-destructive focus:text-destructive"
+            >
               <Trash2 className="h-4 w-4" /> {isTrash ? tr("حذف نهائي") : tr("نقل إلى المهملات")}
             </DropdownMenuItem>
           </DropdownMenuContent>
@@ -1033,7 +1047,10 @@ function MessageView({
                   <div className="truncate font-semibold leading-tight">
                     {message.from.name || message.from.email}
                   </div>
-                  <div className="truncate text-xs text-muted-foreground" title={message.from.email}>
+                  <div
+                    className="truncate text-xs text-muted-foreground"
+                    title={message.from.email}
+                  >
                     <span dir="ltr" style={{ unicodeBidi: "isolate" }}>
                       {message.from.email}
                     </span>

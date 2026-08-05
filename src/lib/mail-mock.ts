@@ -22,7 +22,14 @@ type Seed = {
 };
 
 const SEEDS: Seed[] = [
-  { id: 1, folder: "inbox", read: false, starred: true, date: hoursAgo(1), labels: { ar: "مهم", en: "Important" } },
+  {
+    id: 1,
+    folder: "inbox",
+    read: false,
+    starred: true,
+    date: hoursAgo(1),
+    labels: { ar: "مهم", en: "Important" },
+  },
   { id: 2, folder: "inbox", read: false, starred: false, date: hoursAgo(3) },
   {
     id: 3,
@@ -30,18 +37,33 @@ const SEEDS: Seed[] = [
     read: false,
     starred: false,
     date: hoursAgo(5),
-    attach: { name: { ar: "تقرير_الربع_الأول.pdf", en: "Q1_Report.pdf" }, size: 284_120, mime: "application/pdf" },
+    attach: {
+      name: { ar: "تقرير_الربع_الأول.pdf", en: "Q1_Report.pdf" },
+      size: 284_120,
+      mime: "application/pdf",
+    },
     cc: true,
   },
   { id: 4, folder: "inbox", read: true, starred: false, date: hoursAgo(9) },
-  { id: 5, folder: "inbox", read: true, starred: true, date: hoursAgo(20), labels: { ar: "متابعة", en: "Follow-up" } },
+  {
+    id: 5,
+    folder: "inbox",
+    read: true,
+    starred: true,
+    date: hoursAgo(20),
+    labels: { ar: "متابعة", en: "Follow-up" },
+  },
   {
     id: 6,
     folder: "inbox",
     read: true,
     starred: false,
     date: daysAgo(1),
-    attach: { name: { ar: "الفاتورة_ديسمبر.pdf", en: "Invoice_December.pdf" }, size: 96_400, mime: "application/pdf" },
+    attach: {
+      name: { ar: "الفاتورة_ديسمبر.pdf", en: "Invoice_December.pdf" },
+      size: 96_400,
+      mime: "application/pdf",
+    },
   },
   { id: 7, folder: "inbox", read: true, starred: false, date: daysAgo(2) },
   { id: 8, folder: "inbox", read: true, starred: false, date: daysAgo(3), cc: true },
@@ -51,7 +73,11 @@ const SEEDS: Seed[] = [
     read: true,
     starred: true,
     date: daysAgo(4),
-    attach: { name: { ar: "العرض_التقديمي.pptx", en: "Deck_2026.pptx" }, size: 1_482_000, mime: "application/vnd.ms-powerpoint" },
+    attach: {
+      name: { ar: "العرض_التقديمي.pptx", en: "Deck_2026.pptx" },
+      size: 1_482_000,
+      mime: "application/vnd.ms-powerpoint",
+    },
   },
   { id: 10, folder: "inbox", read: true, starred: false, date: daysAgo(6) },
   { id: 11, folder: "inbox", read: true, starred: false, date: daysAgo(9) },
@@ -64,7 +90,11 @@ const SEEDS: Seed[] = [
     read: true,
     starred: false,
     date: daysAgo(5),
-    attach: { name: { ar: "العقد_الموقع.pdf", en: "Signed_Contract.pdf" }, size: 512_300, mime: "application/pdf" },
+    attach: {
+      name: { ar: "العقد_الموقع.pdf", en: "Signed_Contract.pdf" },
+      size: 512_300,
+      mime: "application/pdf",
+    },
   },
   { id: 16, folder: "drafts", read: true, starred: false, date: hoursAgo(2) },
   { id: 17, folder: "drafts", read: true, starred: false, date: daysAgo(3) },
