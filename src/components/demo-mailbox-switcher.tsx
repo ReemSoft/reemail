@@ -18,7 +18,6 @@ const DEMO_MAILBOXES = [
   "sales@mailmaestro.online",
   "support@mailmaestro.online",
   "billing@mailmaestro.online",
-  "info@mailmaestro.online",
 ];
 
 const MAX = 5;
