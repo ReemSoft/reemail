@@ -99,14 +99,15 @@ function LoginPage() {
 
       <div className="flex w-full items-center justify-center p-6 lg:w-1/2">
         <div className="w-full max-w-md">
-          <Link
-            to="/"
-            className="mb-8 inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"
-          >
-            <ArrowBackward className="h-4 w-4" /> {tr("العودة")}
-          </Link>
-
-          <div className="mb-6"><LanguageSwitcher /></div>
+          <div className="mb-8 flex items-center justify-between">
+            <Link
+              to="/"
+              className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"
+            >
+              <ArrowBackward className="h-4 w-4" /> {tr("العودة")}
+            </Link>
+            <LanguageSwitcher />
+          </div>
 
           <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-brand-gradient/10 text-brand-accent">
             <Lock className="h-6 w-6" />
