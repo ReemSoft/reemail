@@ -86,7 +86,7 @@ function Landing() {
         <div className="mx-auto max-w-4xl text-center animate-in-up">
           <div className="mb-6 inline-flex items-center gap-2 rounded-full border border-border bg-card/60 px-4 py-1.5 text-xs font-medium text-muted-foreground shadow-soft">
             <span className="flex h-1.5 w-1.5 rounded-full bg-emerald-500" />
-            {tr("منصة SaaS جاهزة لشركتك")}
+            {tr("منصة احترافية جاهزة لشركتك")}
           </div>
           <h1 className="text-balance text-4xl font-extrabold leading-tight tracking-tight text-foreground sm:text-6xl md:text-7xl">
             {tr("بريدك المؤسسي")}
