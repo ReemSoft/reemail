@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as SitemapDotxmlRouteImport } from './routes/sitemap[.]xml'
 import { Route as MailRouteImport } from './routes/mail'
 import { Route as LoginRouteImport } from './routes/login'
+import { Route as DemoRouteImport } from './routes/demo'
 import { Route as CompanyRouteImport } from './routes/company'
 import { Route as AuthenticatedRouteRouteImport } from './routes/_authenticated/route'
 import { Route as IndexRouteImport } from './routes/index'
@@ -33,6 +34,11 @@ const MailRoute = MailRouteImport.update({
 const LoginRoute = LoginRouteImport.update({
   id: '/login',
   path: '/login',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DemoRoute = DemoRouteImport.update({
+  id: '/demo',
+  path: '/demo',
   getParentRoute: () => rootRouteImport,
 } as any)
 const CompanyRoute = CompanyRouteImport.update({
@@ -74,6 +80,7 @@ const ApiPublicHooksMailSyncTickRoute =
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/company': typeof CompanyRoute
+  '/demo': typeof DemoRoute
   '/login': typeof LoginRoute
   '/mail': typeof MailRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
@@ -85,6 +92,7 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/company': typeof CompanyRoute
+  '/demo': typeof DemoRoute
   '/login': typeof LoginRoute
   '/mail': typeof MailRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
@@ -98,6 +106,7 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/_authenticated': typeof AuthenticatedRouteRouteWithChildren
   '/company': typeof CompanyRoute
+  '/demo': typeof DemoRoute
   '/login': typeof LoginRoute
   '/mail': typeof MailRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
@@ -111,6 +120,7 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/company'
+    | '/demo'
     | '/login'
     | '/mail'
     | '/sitemap.xml'
@@ -122,6 +132,7 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/company'
+    | '/demo'
     | '/login'
     | '/mail'
     | '/sitemap.xml'
@@ -134,6 +145,7 @@ export interface FileRouteTypes {
     | '/'
     | '/_authenticated'
     | '/company'
+    | '/demo'
     | '/login'
     | '/mail'
     | '/sitemap.xml'
@@ -147,6 +159,7 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AuthenticatedRouteRoute: typeof AuthenticatedRouteRouteWithChildren
   CompanyRoute: typeof CompanyRoute
+  DemoRoute: typeof DemoRoute
   LoginRoute: typeof LoginRoute
   MailRoute: typeof MailRoute
   SitemapDotxmlRoute: typeof SitemapDotxmlRoute
@@ -176,6 +189,13 @@ declare module '@tanstack/react-router' {
       path: '/login'
       fullPath: '/login'
       preLoaderRoute: typeof LoginRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/demo': {
+      id: '/demo'
+      path: '/demo'
+      fullPath: '/demo'
+      preLoaderRoute: typeof DemoRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/company': {
@@ -245,6 +265,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AuthenticatedRouteRoute: AuthenticatedRouteRouteWithChildren,
   CompanyRoute: CompanyRoute,
+  DemoRoute: DemoRoute,
   LoginRoute: LoginRoute,
   MailRoute: MailRoute,
   SitemapDotxmlRoute: SitemapDotxmlRoute,
