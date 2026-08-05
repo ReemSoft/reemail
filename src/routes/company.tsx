@@ -1,4 +1,5 @@
 import { tr } from "@/i18n";
+import { LanguageSwitcher } from "@/components/language-switcher";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { Loader2, Building2, LogIn } from "lucide-react";
@@ -99,12 +100,15 @@ function CompanyPortalPage() {
 
       <div className="flex w-full items-center justify-center p-6 lg:w-1/2">
         <div className="w-full max-w-md">
-          <Link
-            to="/"
-            className="mb-8 inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"
-          >
-            <ArrowBackward className="h-4 w-4" /> {tr("العودة")}
-          </Link>
+          <div className="mb-8 flex items-center justify-between">
+            <Link
+              to="/"
+              className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"
+            >
+              <ArrowBackward className="h-4 w-4" /> {tr("العودة")}
+            </Link>
+            <LanguageSwitcher />
+          </div>
 
           <div className="mb-8 grid grid-cols-2 gap-2 rounded-xl border border-border bg-card p-1.5">
             <button
