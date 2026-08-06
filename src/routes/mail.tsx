@@ -4444,6 +4444,12 @@ function MessageView({
   const canArchive = message.folder !== "archive" && message.folder !== "trash";
 
   const isSecure = !!message.security && !/غير/.test(message.security);
+  // The bridge emits Arabic security text; localize it at render time.
+  const securityLabel = message.security
+    ? isSecure
+      ? `${tr("مشفّر")} (${(message.security.match(/\(([^)]+)\)/)?.[1] ?? "TLS").toUpperCase()})`
+      : tr("غير مشفّر")
+    : "";
   const handleInlineImages = useCallback(
     (images: NonNullable<MailMessage["inlineImages"]>) => onInlineImages(message.id, images),
     [message.id, onInlineImages],
