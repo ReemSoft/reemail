@@ -21,7 +21,7 @@ import {
 import type { CidImageMapping } from "@/lib/email-viewer-security";
 
 import { buildReplyQuoteHtml, buildForwardQuoteHtml } from "@/lib/mail-quote";
-import { getMailConversation } from "@/lib/mail-conversation.functions";
+import { splitQuotedHtml } from "@/lib/mail-thread-split";
 
 // Kept as a thin wrapper — the heavy lifting (DOMPurify + CSS url()/@import
 // stripping + anchor hardening) lives in `@/lib/email-viewer-security` and is
@@ -29,9 +29,6 @@ import { getMailConversation } from "@/lib/mail-conversation.functions";
 function sanitizeEmailHtml(html: string): string {
   return sanitizeAndHardenEmailHtml(html);
 }
-
-type ClientMessageSource = "memory" | "server-cache" | "imap" | "error";
-type ClientMessageResult = { message: MailMessage | null; source: ClientMessageSource };
 
 // Sanitizer for OUTGOING composer HTML — allows inline styles/fonts/colors
 // (needed for email) but blocks scripts, event handlers, and dangerous tags.
@@ -214,28 +211,69 @@ function EmailBodyFrame({
   );
 }
 
-function SingleEmailBody({
+/**
+ * ThreadedEmailBody — renders the newest part of a message on its own and
+ * collapses the quoted history behind a "•••" toggle (Gmail behaviour), so a
+ * long back-and-forth thread reads as distinct turns instead of one wall.
+ */
+function ThreadedEmailBody({
   html,
   cidImages,
   messageIdentity,
   className,
-  attachmentsSlot,
 }: {
   html: string;
   cidImages: CidImageMapping[];
   messageIdentity: string;
   className?: string;
-  attachmentsSlot?: React.ReactNode;
 }) {
+  const { latest, quoted } = useMemo(() => splitQuotedHtml(html), [html]);
+  const [expanded, setExpanded] = useState(false);
+
+  useEffect(() => {
+    setExpanded(false);
+  }, [html]);
+
+  if (!quoted)
+    return (
+      <EmailBodyFrame
+        html={html}
+        cidImages={cidImages}
+        messageIdentity={messageIdentity}
+        className={className}
+      />
+    );
+
   return (
     <div className={className}>
-      <EmailBodyFrame html={html} cidImages={cidImages} messageIdentity={messageIdentity} />
-      {attachmentsSlot}
+      <EmailBodyFrame
+        html={latest}
+        cidImages={cidImages}
+        messageIdentity={`${messageIdentity}:latest`}
+      />
+      <div className="mt-3">
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          aria-expanded={expanded}
+          className="inline-flex items-center gap-2 rounded-md border border-border bg-muted/60 px-2.5 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted"
+        >
+          <span className="tracking-widest leading-none">•••</span>
+          <span>{expanded ? tr("إخفاء الرسائل السابقة") : tr("عرض الرسائل السابقة")}</span>
+        </button>
+        {expanded && (
+          <div className="mt-3 rounded-lg border border-border bg-muted/30 ps-3 pe-2 py-2 border-s-2 border-s-primary/40">
+            <EmailBodyFrame
+              html={quoted}
+              cidImages={cidImages}
+              messageIdentity={`${messageIdentity}:quoted`}
+            />
+          </div>
+        )}
+      </div>
     </div>
   );
 }
-
-
 
 type InlineImageFlight = {
   promise: Promise<Awaited<ReturnType<typeof resolveMessageInlineImages>>>;
@@ -405,22 +443,19 @@ function MessageBody({
   html,
   onInlineImages,
   className,
-  attachmentsSlot,
 }: {
   message: MailMessage;
   html: string;
   onInlineImages?: (images: NonNullable<MailMessage["inlineImages"]>) => void;
   className?: string;
-  attachmentsSlot?: React.ReactNode;
 }) {
   const cidImages = useInlineImageMappings(message, onInlineImages);
   return (
-    <SingleEmailBody
+    <ThreadedEmailBody
       html={html}
       cidImages={cidImages}
       messageIdentity={`${message.id}|${message.uidValidity ?? ""}`}
       className={className}
-      attachmentsSlot={attachmentsSlot}
     />
   );
 }
@@ -1738,7 +1773,6 @@ function MailApp() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [compose, setCompose] = useState<ComposeInitial | null>(null);
   const [selectedMessage, setSelectedMessage] = useState<MailMessage | null>(null);
-  const [conversation, setConversation] = useState<MailMessage[]>([]);
   const [reading, setReading] = useState(false);
   const [selection, setSelection] = useState<Set<string>>(() => new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
@@ -1831,7 +1865,6 @@ function MailApp() {
 
   // Cache-first open: Postgres body cache → (miss) bridge interactive lane.
   const openMsg = useMailServerFn(openMailMessage);
-  const loadConversation = useMailServerFn(getMailConversation);
   const resolveInlineImagesBackground = useMailServerFn(resolveMessageInlineImages);
   const cleanupGhost = useMailServerFn(tombstoneGhostMessage);
 
@@ -1989,6 +2022,8 @@ function MailApp() {
     [],
   );
 
+  type ClientMessageSource = "memory" | "server-cache" | "imap" | "error";
+  type ClientMessageResult = { message: MailMessage | null; source: ClientMessageSource };
   type MessageCacheFacade = {
     get: (id: string) => MailMessage | undefined;
     set: (id: string, message: MailMessage) => void;
@@ -2567,7 +2602,6 @@ function MailApp() {
     const startedAt = performance.now();
     const generation = navigationGenerationRef.current!.next();
     setSelectedId(id);
-    setConversation([]);
     const parsed = parseMessageId(id);
     if (!parsed || !session) {
       setSelectedMessage(getMockMessage(id) ?? null);
@@ -2619,19 +2653,6 @@ function MailApp() {
         setSelectedMessage(null);
         setReading(false);
         return;
-      }
-
-      if (msg && session.mailSessionToken) {
-        void loadConversation({
-          data: {
-            mailSessionToken: session.mailSessionToken,
-            canonical: parsed.folder,
-            uid: parsed.uid,
-          },
-        }).then((thread) => {
-          if (!thread.ok || !navigationGenerationRef.current!.isCurrent(generation)) return;
-          setConversation(thread.messages.filter((candidate) => candidate.id !== id));
-        }).catch(() => undefined);
       }
 
       const listMsg = filteredMessages.find((m) => m.id === id);
@@ -4169,8 +4190,6 @@ function MailApp() {
           ) : selectedMessage ? (
             <MessageView
               message={selectedMessage}
-              conversation={conversation}
-              loadConversationMessage={(candidate) => fetchMessage(candidate.id, "interactive")}
               loading={reading}
               onInlineImages={handleInlineImagesResolved}
               myEmail={session.account.email_address}
@@ -4178,7 +4197,6 @@ function MailApp() {
                 navigationGenerationRef.current?.invalidate();
                 setSelectedId(null);
                 setSelectedMessage(null);
-                setConversation([]);
                 setReading(false);
               }}
               onReply={() =>
@@ -4363,8 +4381,6 @@ function MessageRow({
 
 function MessageView({
   message,
-  conversation,
-  loadConversationMessage,
   loading,
   onInlineImages,
   myEmail,
@@ -4380,8 +4396,6 @@ function MessageView({
   onPrint,
 }: {
   message: MailMessage;
-  conversation: MailMessage[];
-  loadConversationMessage: (message: MailMessage) => Promise<ClientMessageResult>;
   loading: boolean;
   onInlineImages: (messageId: string, images: NonNullable<MailMessage["inlineImages"]>) => void;
   myEmail: string;
@@ -4398,24 +4412,6 @@ function MessageView({
 }) {
   const { dir: uiDir } = useLanguage();
   const [detailsOpen, setDetailsOpen] = useState(false);
-  const [visiblePrevious, setVisiblePrevious] = useState(0);
-  const [loadedPrevious, setLoadedPrevious] = useState<Record<string, MailMessage>>({});
-  useEffect(() => {
-    setVisiblePrevious(0);
-    setLoadedPrevious({});
-  }, [message.id]);
-
-  const revealPrevious = useCallback((count: number) => {
-    const next = Math.min(count, conversation.length);
-    setVisiblePrevious(next);
-    for (const candidate of conversation.slice(0, next)) {
-      if (loadedPrevious[candidate.id]) continue;
-      void loadConversationMessage(candidate).then((result) => {
-        if (!result.message) return;
-        setLoadedPrevious((current) => ({ ...current, [candidate.id]: result.message as MailMessage }));
-      });
-    }
-  }, [conversation, loadedPrevious, loadConversationMessage]);
   const recipientsAll = [
     ...message.to.map((t) => ({ ...t, kind: "to" as const })),
     ...(message.cc || []).map((c) => ({ ...c, kind: "cc" as const })),
@@ -4759,79 +4755,21 @@ function MessageView({
               html={sanitizeEmailHtml(message.body || message.preview || "")}
               onInlineImages={handleInlineImages}
               className="mt-6"
-              attachmentsSlot={
-                message.attachments && message.attachments.length > 0 ? (
-                  <div className="mt-4">
-                    <p className="mb-2 text-xs font-semibold text-muted-foreground">
-                      {tr("المرفقات")} ({message.attachments.length})
-                    </p>
-                    <div className="grid gap-2 sm:grid-cols-2">
-                      {message.attachments.map((a) => (
-                        <AttachmentCard key={a.id} attachment={a} message={message} />
-                      ))}
-                    </div>
-                  </div>
-                ) : null
-              }
             />
           )}
 
-          {conversation.slice(0, visiblePrevious).map((candidate) => {
-            const loaded = loadedPrevious[candidate.id];
-            return (
-              <div key={candidate.id} className="mt-6 border-t border-border pt-6">
-                <div className="mb-4 flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="truncate text-sm font-semibold">
-                      {candidate.from.name || candidate.from.email || tr("(مرسل غير معروف)")}
-                    </div>
-                    <div className="truncate text-xs text-muted-foreground" dir="ltr">
-                      {candidate.from.email}
-                    </div>
-                  </div>
-                  <span className="shrink-0 text-xs text-muted-foreground">
-                    {formatDate(candidate.date, getCurrentLang())}
-                  </span>
-                </div>
-                {loaded ? (
-                  <MessageBody
-                    message={loaded}
-                    html={sanitizeEmailHtml(loaded.body || loaded.preview || "")}
-                    onInlineImages={(images) => onInlineImages(loaded.id, images)}
-                    attachmentsSlot={loaded.attachments?.length ? (
-                      <div className="mt-4 grid gap-2 sm:grid-cols-2">
-                        {loaded.attachments.map((attachment) => (
-                          <AttachmentCard key={attachment.id} attachment={attachment} message={loaded} />
-                        ))}
-                      </div>
-                    ) : null}
-                  />
-                ) : (
-                  <MessageBodySkeleton />
-                )}
+          {!loading && message.attachments && message.attachments.length > 0 && (
+            <div className="mt-6">
+              <p className="mb-2 text-xs font-semibold text-muted-foreground">
+                {tr("المرفقات")} ({message.attachments.length})
+              </p>
+              <div className="grid gap-2 sm:grid-cols-2">
+                {message.attachments.map((a) => (
+                  <AttachmentCard key={a.id} attachment={a} message={message} />
+                ))}
               </div>
-            );
-          })}
-
-          {visiblePrevious < conversation.length && (
-            <div className="mt-6 flex flex-wrap items-center gap-2 border-t border-border pt-4">
-              <button
-                type="button"
-                onClick={() => revealPrevious(visiblePrevious + 1)}
-                className="inline-flex items-center gap-2 rounded-md border border-border bg-muted/60 px-2.5 py-1 text-xs font-medium text-muted-foreground hover:bg-muted"
-              >
-                <span className="tracking-widest">•••</span> {tr("الرسالة السابقة")}
-              </button>
-              <button
-                type="button"
-                onClick={() => revealPrevious(conversation.length)}
-                className="inline-flex items-center rounded-md border border-border px-2.5 py-1 text-xs font-medium text-muted-foreground hover:bg-muted"
-              >
-                {tr("إظهار جميع الرسائل")} ({conversation.length - visiblePrevious})
-              </button>
             </div>
           )}
-
 
           <div className="mt-6 flex flex-wrap gap-2">
             <button

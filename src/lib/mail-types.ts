@@ -30,10 +30,6 @@ export interface MailAttachment {
 export interface MailMessage {
   id: string;
   threadId: string;
-  /** RFC Message-ID used to build a real conversation across IMAP folders. */
-  messageId?: string;
-  /** RFC In-Reply-To parent identifier. */
-  inReplyTo?: string;
   folder: MailFolder;
   from: MailAddress;
   to: MailAddress[];

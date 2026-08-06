@@ -1,1 +1,0 @@
-GRANT EXECUTE ON FUNCTION public.get_mail_conversation(uuid, uuid, text, bigint, integer) TO postgres;

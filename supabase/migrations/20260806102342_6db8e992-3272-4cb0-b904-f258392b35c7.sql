@@ -1,2 +1,0 @@
-CREATE INDEX IF NOT EXISTS mail_messages_message_id_live_idx ON public.mail_messages (account_id, message_id) WHERE deleted_at IS NULL AND message_id IS NOT NULL;
-CREATE INDEX IF NOT EXISTS mail_messages_in_reply_to_live_idx ON public.mail_messages (account_id, in_reply_to) WHERE deleted_at IS NULL AND in_reply_to IS NOT NULL;

@@ -854,30 +854,6 @@ export type Database = {
         }
         Returns: boolean
       }
-      get_mail_conversation: {
-        Args: {
-          _account_id: string
-          _canonical: string
-          _company_id: string
-          _limit?: number
-          _uid: number
-        }
-        Returns: {
-          canonical: string
-          cc_addrs: Json
-          flagged: boolean
-          from_addr: Json
-          has_attachments: boolean
-          in_reply_to: string
-          internal_date: string
-          message_id: string
-          seen: boolean
-          subject: string
-          to_addrs: Json
-          uid: number
-          uidvalidity: number
-        }[]
-      }
       get_mail_credentials_master_key: {
         Args: { p_version: number }
         Returns: string
