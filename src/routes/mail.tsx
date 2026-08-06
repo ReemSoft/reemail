@@ -30,6 +30,9 @@ function sanitizeEmailHtml(html: string): string {
   return sanitizeAndHardenEmailHtml(html);
 }
 
+type ClientMessageSource = "memory" | "server-cache" | "imap" | "error";
+type ClientMessageResult = { message: MailMessage | null; source: ClientMessageSource };
+
 // Sanitizer for OUTGOING composer HTML — allows inline styles/fonts/colors
 // (needed for email) but blocks scripts, event handlers, and dangerous tags.
 function sanitizeComposerHtml(html: string): string {
@@ -1986,8 +1989,6 @@ function MailApp() {
     [],
   );
 
-  type ClientMessageSource = "memory" | "server-cache" | "imap" | "error";
-  type ClientMessageResult = { message: MailMessage | null; source: ClientMessageSource };
   type MessageCacheFacade = {
     get: (id: string) => MailMessage | undefined;
     set: (id: string, message: MailMessage) => void;
