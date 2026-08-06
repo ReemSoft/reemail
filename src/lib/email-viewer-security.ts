@@ -342,6 +342,8 @@ export function buildEmailSrcDoc({
       if(document.readyState==='complete') send();
       else window.addEventListener('load', send);
       window.addEventListener('DOMContentLoaded', send);
+      window.addEventListener('resize', function(){ send(true); });
+      window.addEventListener('orientationchange', function(){ send(true); });
       Array.prototype.forEach.call(document.images||[], function(img){
         if(!img.complete){ img.addEventListener('load', send); img.addEventListener('error', send); }
       });
