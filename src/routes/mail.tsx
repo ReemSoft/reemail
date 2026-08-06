@@ -1566,9 +1566,13 @@ function useMailData(session: MailSession | null) {
     canUseIndex,
   ]);
 
+  // Counts on mount: Local-Index first (one Supabase SELECT, ~ms) instead of
+  // a blocking Bridge/IMAP STATUS sweep. `loadCountsFast` falls back to the
+  // Bridge automatically when the index has nothing for this account yet.
   useEffect(() => {
-    loadCounts();
-  }, [loadCounts]);
+    loadCountsFast();
+  }, [loadCountsFast]);
+
 
   useEffect(() => {
     loadMessages();
