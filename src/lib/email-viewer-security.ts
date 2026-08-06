@@ -293,24 +293,29 @@ export function buildEmailSrcDoc({
       var batching=false;
       var scale=1;
       var fitting=false;
-      var lastVw=0, lastCw=0;
+      var fitVw=0;
+      var sends=0;
       /**
        * Gmail-style shrink-to-fit: wide fixed-width newsletters (600-800px
        * tables) would otherwise be clipped on phones/tablets because the
        * document is overflow:hidden. Instead of clipping we downscale the
        * whole body so the full message stays visible, exactly like the Gmail
-       * mobile app. No-op (zero cost) when the content already fits.
+       * mobile app. It only re-runs when the VIEWPORT WIDTH changes, so the
+       * height it reports can never feed back into another measurement.
        */
-      function fit(){
+      function fit(force){
         if(fitting) return;
+        var b=document.body, d=document.documentElement;
+        if(!b||!d) return;
+        var vw=d.clientWidth||0;
+        if(!vw) return;
+        if(!force && vw===fitVw) return;
         fitting=true;
         try{
-          var b=document.body, d=document.documentElement;
-          if(!b||!d) return;
-          var vw=d.clientWidth||0;
-          if(!vw) return;
-          if(scale!==1){ b.style.transform=''; b.style.width=''; scale=1; }
-          var cw=Math.max(b.scrollWidth||0, d.scrollWidth||0);
+          fitVw=vw;
+          b.style.transform=''; b.style.width=''; b.style.transformOrigin='';
+          scale=1;
+          var cw=b.scrollWidth||0;
           if(cw>vw+1){
             var s=Math.max(vw/cw, 0.25);
             scale=s;
@@ -318,32 +323,34 @@ export function buildEmailSrcDoc({
             b.style.width=cw+'px';
             b.style.transform='scale('+s+')';
           }
-          lastVw=vw; lastCw=cw;
         }catch(e){}
         finally{ fitting=false; }
       }
       function send(force){
         if(batching && !force) return;
+        if(sends>200) return;
         try{
-          fit();
-          var b=document.body, d=document.documentElement;
-          var raw=Math.max(
-            b?b.scrollHeight:0, b?b.offsetHeight:0,
-            (scale===1&&d)?d.scrollHeight:0, (scale===1&&d)?d.offsetHeight:0
-          );
+          fit(false);
+          var b=document.body;
+          // Height is derived from the BODY box only. Using documentElement
+          // would include the iframe viewport height the parent just set,
+          // which creates an endless grow loop.
+          var raw=Math.max(b?b.scrollHeight:0, b?b.offsetHeight:0);
           var h=Math.ceil(raw*scale);
-          if(h && Math.abs(h-last)>1){
+          if(h && Math.abs(h-last)>2){
             last=h;
+            sends++;
             parent.postMessage({__mm:'h', channel:channel, h:h}, origin);
           }
         }catch(e){}
       }
 
+
       if(document.readyState==='complete') send();
       else window.addEventListener('load', send);
       window.addEventListener('DOMContentLoaded', send);
-      window.addEventListener('resize', function(){ send(true); });
-      window.addEventListener('orientationchange', function(){ send(true); });
+      window.addEventListener('resize', function(){ fit(true); send(true); });
+      window.addEventListener('orientationchange', function(){ fit(true); send(true); });
       Array.prototype.forEach.call(document.images||[], function(img){
         if(!img.complete){ img.addEventListener('load', send); img.addEventListener('error', send); }
       });
@@ -409,8 +416,9 @@ export function buildEmailSrcDoc({
       });
       try{
         if(window.ResizeObserver){
-          var ro=new ResizeObserver(send);
-          ro.observe(document.documentElement);
+          // Observe the BODY only: documentElement tracks the iframe height
+          // the parent sets, which would loop forever.
+          var ro=new ResizeObserver(function(){ send(false); });
           if(document.body) ro.observe(document.body);
         }
       }catch(e){}
