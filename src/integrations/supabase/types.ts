@@ -324,6 +324,7 @@ export type Database = {
           canonical: string
           company_id: string
           created_at: string
+          headers_meta: Json | null
           id: string
           inline_images: Json
           inline_parts: Json
@@ -345,6 +346,7 @@ export type Database = {
           canonical: string
           company_id: string
           created_at?: string
+          headers_meta?: Json | null
           id?: string
           inline_images?: Json
           inline_parts?: Json
@@ -366,6 +368,7 @@ export type Database = {
           canonical?: string
           company_id?: string
           created_at?: string
+          headers_meta?: Json | null
           id?: string
           inline_images?: Json
           inline_parts?: Json
