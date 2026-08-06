@@ -78,9 +78,9 @@ function CompanyPortalPage() {
           }}
         />
         <div className="relative flex h-full flex-col justify-between p-12 text-white">
-          <Link to="/" className="inline-flex w-fit self-start items-center gap-1.5" dir="ltr">
-            <span className="inline-flex h-11 w-11 items-center justify-center rounded-full bg-white shadow-sm">
-              <BrandLogo className="h-7 w-7" />
+          <Link to="/" className="inline-flex w-fit self-start items-center gap-1" dir="ltr">
+            <span className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-white shadow-sm">
+              <BrandLogo className="h-6 w-6" />
             </span>
             <span className="text-xl font-bold">MailMaestro</span>
           </Link>
