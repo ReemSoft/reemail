@@ -1,5 +1,5 @@
 import { cn } from "@/lib/utils";
-import logoAsset from "@/assets/mailmaestro-mark-v3.png.asset.json";
+import logoAsset from "@/assets/mailmaestro-mark-v4.png.asset.json";
 
 /**
  * Official MailMaestro brand mark.
