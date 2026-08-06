@@ -1,5 +1,5 @@
 import { cn } from "@/lib/utils";
-import logoAsset from "@/assets/mailmaestro-mark-v9.svg.asset.json";
+import logoAsset from "@/assets/mailmaestro-mark-v10.svg.asset.json";
 
 /**
  * Official MailMaestro brand mark.
@@ -16,8 +16,8 @@ export function BrandLogo({
     <img
       src={logoAsset.url}
       alt={alt}
-      width={1024}
-      height={1024}
+      width={1319}
+      height={939}
       loading="eager"
       decoding="async"
       className={cn("object-contain object-center", className)}
