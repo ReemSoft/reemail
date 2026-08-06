@@ -4287,9 +4287,14 @@ function MessageRow({
           onClick();
         }
       }}
-      className={`group flex w-full cursor-pointer items-start gap-3 border-b border-border/60 px-4 py-3 text-start transition-colors duration-150 hover:bg-muted/50 active:bg-muted active:duration-75 ${
-        active ? "bg-accent" : ""
-      } ${selected ? "bg-primary/5" : ""} ${!message.read ? "bg-card" : "bg-card/70"}`}
+      aria-current={active ? "true" : undefined}
+      className={`group relative flex w-full cursor-pointer items-start gap-3 border-b border-border/60 px-4 py-3 text-start transition-colors duration-150 active:duration-75 ${
+        active
+          ? "bg-primary/10 before:absolute before:inset-y-0 before:start-0 before:w-[3px] before:bg-primary before:content-['']"
+          : selected
+            ? "bg-primary/5 hover:bg-primary/10"
+            : `${!message.read ? "bg-card" : "bg-card/70"} hover:bg-muted/50 active:bg-muted`
+      }`}
     >
       {/* Avatar doubles as selection checkbox so no extra layout shift occurs */}
       <div className="relative flex h-9 w-9 shrink-0 items-center justify-center">
