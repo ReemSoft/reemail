@@ -453,5 +453,7 @@
   "— نهاية الرسائل —": "— end of messages —",
   "الخروج بدون حفظ الرسالة؟": "Leave without saving this message?",
   "لديك رسالة غير محفوظة. يمكنك حفظها كمسودّة، أو حذفها، أو البقاء هنا.": "You have an unsaved message. You can save it as a draft, discard it, or stay here.",
-  "البقاء هنا": "Stay here"
+  "البقاء هنا": "Stay here",
+  "مشفّر": "Encrypted",
+  "غير مشفّر": "Not encrypted"
 }
