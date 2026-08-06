@@ -349,8 +349,8 @@ export function buildEmailSrcDoc({
       if(document.readyState==='complete') send();
       else window.addEventListener('load', send);
       window.addEventListener('DOMContentLoaded', send);
-      window.addEventListener('resize', function(){ send(true); });
-      window.addEventListener('orientationchange', function(){ send(true); });
+      window.addEventListener('resize', function(){ fit(true); send(true); });
+      window.addEventListener('orientationchange', function(){ fit(true); send(true); });
       Array.prototype.forEach.call(document.images||[], function(img){
         if(!img.complete){ img.addEventListener('load', send); img.addEventListener('error', send); }
       });
@@ -416,8 +416,9 @@ export function buildEmailSrcDoc({
       });
       try{
         if(window.ResizeObserver){
-          var ro=new ResizeObserver(send);
-          ro.observe(document.documentElement);
+          // Observe the BODY only: documentElement tracks the iframe height
+          // the parent sets, which would loop forever.
+          var ro=new ResizeObserver(function(){ send(false); });
           if(document.body) ro.observe(document.body);
         }
       }catch(e){}
