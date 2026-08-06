@@ -36,6 +36,10 @@ export interface CachedBodyPayload {
   inlineParts: NonNullable<MailMessage["inlineParts"]>;
   inlineImages: NonNullable<MailMessage["inlineImages"]>;
   attachments: MailAttachment[];
+  /** Gmail-style provenance rows: mailed-by / signed-by / security. */
+  mailedBy?: string;
+  signedBy?: string;
+  security?: string;
   uidValidity: string;
 }
 
@@ -100,6 +104,9 @@ export const openMailMessage = createServerFn({ method: "POST" })
             inlineParts: found.body.inlineParts,
             inlineImages: found.body.inlineImages,
             attachments: found.body.attachments,
+            mailedBy: found.body.headersMeta?.mailedBy,
+            signedBy: found.body.headersMeta?.signedBy,
+            security: found.body.headersMeta?.security,
             uidValidity: found.body.uidValidity,
           },
         };
@@ -147,6 +154,11 @@ export const openMailMessage = createServerFn({ method: "POST" })
           inlineParts: msg.inlineParts ?? [],
           inlineImages: msg.inlineImages ?? [],
           attachments: msg.attachments ?? [],
+          headersMeta: {
+            mailedBy: msg.mailedBy,
+            signedBy: msg.signedBy,
+            security: msg.security,
+          },
         })
         .catch(() => undefined);
     }

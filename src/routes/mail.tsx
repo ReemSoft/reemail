@@ -2166,6 +2166,9 @@ function MailApp() {
                   inlineParts: result.body.inlineParts,
                   inlineImages: result.body.inlineImages,
                   attachments: result.body.attachments,
+                  mailedBy: result.body.mailedBy ?? base.mailedBy,
+                  signedBy: result.body.signedBy ?? base.signedBy,
+                  security: result.body.security ?? base.security,
                   hasAttachments: result.body.attachments.length > 0 ? true : base.hasAttachments,
                   uidValidity: base.uidValidity ?? result.body.uidValidity,
                 }
