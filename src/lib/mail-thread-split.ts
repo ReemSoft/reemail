@@ -82,16 +82,20 @@ function findFirstBlockquote(
 function nextMarkerIndex(html: string): number {
   let best = -1;
   for (const re of MARKERS) {
-    const rx = new RegExp(re.source, re.flags.includes("g") ? re.flags : re.flags + "g");
+    const flags = re.flags.includes("g") ? re.flags : re.flags + "g";
+    const rx = new RegExp(re.source, flags);
     let m: RegExpExecArray | null;
-    while ((m = rx.exec(html))) {
-      if (m.index > 0 && (best === -1 || m.index < best)) best = m.index;
-      if (m.index >= (best === -1 ? Infinity : best)) break;
-      if (rx.lastIndex === m.index) rx.lastIndex++;
+    while ((m = rx.exec(html)) !== null) {
+      if (m.index > 0) {
+        if (best === -1 || m.index < best) best = m.index;
+        break;
+      }
+      if (rx.lastIndex <= m.index) rx.lastIndex = m.index + 1;
     }
   }
   return best;
 }
+
 
 /**
  * Split a fragment into "this turn" (its own attribution header + content) and
