@@ -329,6 +329,11 @@ export const warmMessageBodies = createServerFn({ method: "POST" })
         inlineParts: msg.inlineParts ?? [],
         inlineImages: msg.inlineImages ?? [],
         attachments: msg.attachments ?? [],
+        headersMeta: {
+          mailedBy: msg.mailedBy,
+          signedBy: msg.signedBy,
+          security: msg.security,
+        },
       });
       if (outcome === "stored") warmed++;
     }
