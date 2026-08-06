@@ -291,20 +291,54 @@ export function buildEmailSrcDoc({
       var generation=${jsonSafe(generation)};
       var last=0;
       var batching=false;
+      var scale=1;
+      var fitting=false;
+      var lastVw=0, lastCw=0;
+      /**
+       * Gmail-style shrink-to-fit: wide fixed-width newsletters (600-800px
+       * tables) would otherwise be clipped on phones/tablets because the
+       * document is overflow:hidden. Instead of clipping we downscale the
+       * whole body so the full message stays visible, exactly like the Gmail
+       * mobile app. No-op (zero cost) when the content already fits.
+       */
+      function fit(){
+        if(fitting) return;
+        fitting=true;
+        try{
+          var b=document.body, d=document.documentElement;
+          if(!b||!d) return;
+          var vw=d.clientWidth||0;
+          if(!vw) return;
+          if(scale!==1){ b.style.transform=''; b.style.width=''; scale=1; }
+          var cw=Math.max(b.scrollWidth||0, d.scrollWidth||0);
+          if(cw>vw+1){
+            var s=Math.max(vw/cw, 0.25);
+            scale=s;
+            b.style.transformOrigin='top left';
+            b.style.width=cw+'px';
+            b.style.transform='scale('+s+')';
+          }
+          lastVw=vw; lastCw=cw;
+        }catch(e){}
+        finally{ fitting=false; }
+      }
       function send(force){
         if(batching && !force) return;
         try{
+          fit();
           var b=document.body, d=document.documentElement;
-          var h=Math.max(
+          var raw=Math.max(
             b?b.scrollHeight:0, b?b.offsetHeight:0,
-            d?d.scrollHeight:0, d?d.offsetHeight:0
+            (scale===1&&d)?d.scrollHeight:0, (scale===1&&d)?d.offsetHeight:0
           );
+          var h=Math.ceil(raw*scale);
           if(h && Math.abs(h-last)>1){
             last=h;
             parent.postMessage({__mm:'h', channel:channel, h:h}, origin);
           }
         }catch(e){}
       }
+
       if(document.readyState==='complete') send();
       else window.addEventListener('load', send);
       window.addEventListener('DOMContentLoaded', send);
