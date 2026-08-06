@@ -56,3 +56,21 @@ export function splitQuotedHtml(html: string): ThreadSplit {
   if (textLength(quoted) < 2) return { latest: input, quoted: "" };
   return { latest, quoted };
 }
+
+/**
+ * Split a body into an ordered list of thread turns (newest first) by applying
+ * splitQuotedHtml repeatedly to the quoted remainder. Returns at least one
+ * segment; capped to avoid pathological nesting on very long threads.
+ */
+export function splitThreadSegments(html: string, max = 12): string[] {
+  const out: string[] = [];
+  let rest = html || "";
+  for (let i = 0; i < max; i++) {
+    const { latest, quoted } = splitQuotedHtml(rest);
+    if (!quoted) break;
+    out.push(latest);
+    rest = quoted;
+  }
+  out.push(rest);
+  return out;
+}
