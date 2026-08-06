@@ -458,11 +458,13 @@ function MessageBody({
   html,
   onInlineImages,
   className,
+  attachmentsSlot,
 }: {
   message: MailMessage;
   html: string;
   onInlineImages?: (images: NonNullable<MailMessage["inlineImages"]>) => void;
   className?: string;
+  attachmentsSlot?: React.ReactNode;
 }) {
   const cidImages = useInlineImageMappings(message, onInlineImages);
   return (
@@ -471,6 +473,7 @@ function MessageBody({
       cidImages={cidImages}
       messageIdentity={`${message.id}|${message.uidValidity ?? ""}`}
       className={className}
+      attachmentsSlot={attachmentsSlot}
     />
   );
 }
