@@ -21,7 +21,7 @@ import {
 import type { CidImageMapping } from "@/lib/email-viewer-security";
 
 import { buildReplyQuoteHtml, buildForwardQuoteHtml } from "@/lib/mail-quote";
-import { splitQuotedHtml } from "@/lib/mail-thread-split";
+import { splitThreadSegments } from "@/lib/mail-thread-split";
 
 // Kept as a thin wrapper — the heavy lifting (DOMPurify + CSS url()/@import
 // stripping + anchor hardening) lives in `@/lib/email-viewer-security` and is
