@@ -7119,21 +7119,31 @@ function Composer({
         }}
       >
         <AlertDialogContent className="sm:max-w-md">
-          <AlertDialogHeader className="text-center sm:text-start">
-            <AlertDialogTitle>{tr("لديك تغييرات غير محفوظة")}</AlertDialogTitle>
-            <AlertDialogDescription>
-              {tr("هل تريد حفظ الرسالة كمسودّة قبل المغادرة؟")}
-            </AlertDialogDescription>
+          <AlertDialogHeader className="text-start">
+            <div className="flex items-start gap-3">
+              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
+                <AlertTriangle className="h-5 w-5" />
+              </span>
+              <div className="min-w-0 space-y-1.5">
+                <AlertDialogTitle className="text-base">
+                  {tr("الخروج بدون حفظ الرسالة؟")}
+                </AlertDialogTitle>
+                <AlertDialogDescription className="text-sm leading-relaxed">
+                  {tr("لديك رسالة غير محفوظة. يمكنك حفظها كمسودّة، أو حذفها، أو البقاء هنا.")}
+                </AlertDialogDescription>
+              </div>
+            </div>
           </AlertDialogHeader>
-          <AlertDialogFooter className="gap-2 sm:justify-start">
+          <AlertDialogFooter className="flex-col-reverse gap-2 sm:flex-row sm:justify-start">
             <button
               type="button"
               onClick={() => {
                 closePrompt?.resolve("save");
                 setClosePrompt(null);
               }}
-              className="inline-flex h-10 items-center justify-center rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground transition hover:bg-primary/90"
+              className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground transition hover:bg-primary/90"
             >
+              <FileText className="h-4 w-4" />
               {tr("حفظ كمسودّة")}
             </button>
             <button
@@ -7142,9 +7152,10 @@ function Composer({
                 closePrompt?.resolve("discard");
                 setClosePrompt(null);
               }}
-              className="inline-flex h-10 items-center justify-center rounded-md border border-destructive/40 bg-background px-4 text-sm font-medium text-destructive transition hover:bg-destructive/10"
+              className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-destructive/40 bg-background px-4 text-sm font-medium text-destructive transition hover:bg-destructive/10"
             >
-              {tr("بدون حفظ")}
+              <Trash2 className="h-4 w-4" />
+              {tr("حذف")}
             </button>
             <button
               type="button"
@@ -7152,12 +7163,13 @@ function Composer({
                 closePrompt?.resolve("cancel");
                 setClosePrompt(null);
               }}
-              className="inline-flex h-10 items-center justify-center rounded-md border border-input bg-background px-4 text-sm font-medium text-muted-foreground transition hover:bg-muted"
+              className="inline-flex h-10 items-center justify-center rounded-md border border-input bg-background px-4 text-sm font-medium text-muted-foreground transition hover:bg-muted sm:ms-auto"
             >
-              {tr("إلغاء")}
+              {tr("البقاء هنا")}
             </button>
           </AlertDialogFooter>
         </AlertDialogContent>
+
       </AlertDialog>
     </div>
   );
