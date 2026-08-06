@@ -35,8 +35,9 @@ describe("splitThreadSegments", () => {
     expect(s[2]).toContain(">a<");
   });
 
-  it("never loses content and always returns at least one segment", () => {
-    expect(splitThreadSegments("")).toEqual([""]);
+  it("never emits blank segments", () => {
+    expect(splitThreadSegments("")).toEqual([]);
+
     const s = splitThreadSegments(nested);
     for (const seg of s) expect(seg.trim().length).toBeGreaterThan(0);
   });
