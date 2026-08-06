@@ -3652,7 +3652,7 @@ function MailApp() {
           <Menu className="h-5 w-5" />
         </button>
 
-        <Link to="/mail" className="flex shrink-0 items-center gap-1.5" dir="ltr">
+        <Link to="/mail" className="flex shrink-0 items-center gap-1" dir="ltr">
           {session.company?.logo_url ? (
             <img
               src={session.company.logo_url}
