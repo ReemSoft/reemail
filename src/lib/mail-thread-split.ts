@@ -78,23 +78,33 @@ function findFirstBlockquote(
   return { start: open.index, innerStart, innerEnd: html.length, end: html.length };
 }
 
-/** First marker position strictly after the start of the fragment, or -1. */
+/**
+ * Index of the marker that introduces the NEXT (older) turn.
+ *
+ * Markers that sit at the very start — the attribution header of the current
+ * turn, e.g. `<div class="gmail_quote">On Mon, Ali wrote:` where two markers
+ * overlap — are absorbed instead of treated as a boundary.
+ */
 function nextMarkerIndex(html: string): number {
-  let best = -1;
+  const matches: { index: number; end: number }[] = [];
   for (const re of MARKERS) {
     const flags = re.flags.includes("g") ? re.flags : re.flags + "g";
     const rx = new RegExp(re.source, flags);
     let m: RegExpExecArray | null;
     while ((m = rx.exec(html)) !== null) {
-      if (m.index > 0) {
-        if (best === -1 || m.index < best) best = m.index;
-        break;
-      }
+      matches.push({ index: m.index, end: m.index + m[0].length });
       if (rx.lastIndex <= m.index) rx.lastIndex = m.index + 1;
     }
   }
-  return best;
+  matches.sort((a, b) => a.index - b.index);
+  let leadEnd = 0;
+  for (const m of matches) {
+    if (m.index <= leadEnd) leadEnd = Math.max(leadEnd, m.end);
+    else return m.index;
+  }
+  return -1;
 }
+
 
 
 /**
