@@ -299,6 +299,10 @@ function CompanyDashboard() {
 }
 
 /* -------------------------------------------------------------- Branding -- */
+const LOGO_MAX_BYTES = 512 * 1024;
+const LOGO_TYPES = ["image/png", "image/svg+xml", "image/webp"];
+const LOGO_SIGNED_URL_TTL = 60 * 60 * 24 * 365 * 10; // 10 سنوات
+
 function BrandingTab({
   company,
   setCompany,
@@ -306,6 +310,39 @@ function BrandingTab({
   company: Company;
   setCompany: (c: Company) => void;
 }) {
+  const [uploading, setUploading] = useState(false);
+
+  async function handleLogoFile(file: File | null | undefined) {
+    if (!file) return;
+    if (!LOGO_TYPES.includes(file.type)) {
+      toast.error(tr("نوع الملف غير مدعوم. استخدم PNG أو SVG أو WebP بخلفية شفافة."));
+      return;
+    }
+    if (file.size > LOGO_MAX_BYTES) {
+      toast.error(tr("حجم الملف كبير. الحد الأقصى 512 كيلوبايت."));
+      return;
+    }
+    setUploading(true);
+    try {
+      const ext = file.type === "image/svg+xml" ? "svg" : file.type === "image/webp" ? "webp" : "png";
+      const path = `${company.id}/logo-${Date.now()}.${ext}`;
+      const { error: upErr } = await supabase.storage
+        .from("company-logos")
+        .upload(path, file, { cacheControl: "31536000", upsert: true, contentType: file.type });
+      if (upErr) throw upErr;
+      const { data: signed, error: signErr } = await supabase.storage
+        .from("company-logos")
+        .createSignedUrl(path, LOGO_SIGNED_URL_TTL);
+      if (signErr || !signed?.signedUrl) throw signErr ?? new Error("signed url failed");
+      setCompany({ ...company, logo_url: signed.signedUrl });
+      toast.success(tr("تم رفع الشعار. اضغط حفظ لتطبيقه."));
+    } catch (e) {
+      toast.error(tr("تعذّر رفع الشعار. حاول مرة أخرى."));
+    } finally {
+      setUploading(false);
+    }
+  }
+
   return (
     <div className="rounded-2xl border border-border bg-card p-6 shadow-soft">
       <h2 className="text-xl font-bold">{tr("العلامة التجارية")}</h2>
