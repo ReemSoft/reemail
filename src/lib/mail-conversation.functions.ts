@@ -2,18 +2,18 @@ import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import type { MailMessage } from "@/lib/mail-types";
 
-const InputSchema = z.object({
-  mailSessionToken: z.string().min(20).max(4096),
-  canonical: z.enum(["inbox", "starred", "sent", "drafts", "spam", "trash", "archive", "all"]),
-  uid: z.number().int().positive(),
-});
-
 export type MailConversationResult =
   | { ok: true; messages: MailMessage[] }
   | { ok: false; messages: []; error: string };
 
 export const getMailConversation = createServerFn({ method: "POST" })
-  .inputValidator((value: z.input<typeof InputSchema>) => InputSchema.parse(value))
+  .inputValidator((value: unknown) =>
+    z.object({
+      mailSessionToken: z.string().min(20).max(4096),
+      canonical: z.enum(["inbox", "starred", "sent", "drafts", "spam", "trash", "archive", "all"]),
+      uid: z.number().int().positive(),
+    }).parse(value),
+  )
   .handler(async ({ data }): Promise<MailConversationResult> => {
     const { resolveBridgeAuth } = await import("@/lib/mail-bridge-auth.server");
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
