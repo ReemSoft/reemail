@@ -5889,13 +5889,30 @@ function Composer({
       refreshDrafts: autosaveRefreshTrackerRef.current?.consumeCloseRefresh() ?? false,
     });
   };
+  /** Composer carries content worth keeping (reply/forward quotes included). */
+  function hasComposerContent(): boolean {
+    if (typeof window === "undefined") return false;
+    return !isDraftEmpty({
+      toCount: to.length,
+      ccCount: cc.length,
+      bccCount: bcc.length,
+      subject,
+      htmlTrimmed: (editorRef.current?.textContent ?? "").trim(),
+      existingKeptCount: existingKeptRef.current.length,
+      filesCount: filesRef.current.length,
+    });
+  }
   async function requestClose(): Promise<boolean> {
     if (closeFlowRef.current) return closeFlowRef.current;
     const flow = (async (): Promise<boolean> => {
-      if (!isDirtyRef.current) {
+      // Prompt whenever there is anything worth keeping — not only when the
+      // draft is "dirty" — so Cancel / outside navigation on a fresh
+      // reply/forward still asks before throwing the message away.
+      if (!isDirtyRef.current && !hasComposerContent()) {
         closeComposer();
         return true;
       }
+
       const choice = await new Promise<"save" | "discard" | "cancel">((resolve) => {
         setClosePrompt({ resolve });
       });
