@@ -654,27 +654,30 @@ function AccountsTab({
             </div>
 
             <Field label={tr("إعدادات السيرفر")}>
-              <select
-                value={useCustom ? "custom" : form.source_domain_id}
-                onChange={(e) => {
-                  if (e.target.value === "custom") {
-                    setUseCustom(true);
-                    setForm({ ...form, source_domain_id: "" });
-                  } else {
-                    setUseCustom(false);
-                    setForm({ ...form, source_domain_id: e.target.value });
-                  }
-                }}
-                className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary"
-              >
-                <option value="">{tr("— اختر قالب دومين —")}</option>
-                {domains.map((d) => (
-                  <option key={d.id} value={d.id}>
-                    @{d.domain}
-                  </option>
-                ))}
-                <option value="custom">{tr("إعدادات مخصّصة لهذا البريد")}</option>
-              </select>
+              <div className="relative flex items-center">
+                <select
+                  value={useCustom ? "custom" : form.source_domain_id}
+                  onChange={(e) => {
+                    if (e.target.value === "custom") {
+                      setUseCustom(true);
+                      setForm({ ...form, source_domain_id: "" });
+                    } else {
+                      setUseCustom(false);
+                      setForm({ ...form, source_domain_id: e.target.value });
+                    }
+                  }}
+                  className="w-full cursor-pointer appearance-none rounded-lg border border-input bg-background ps-3 pe-10 py-2 text-sm outline-none focus:border-primary"
+                >
+                  <option value="">{tr("— اختر قالب دومين —")}</option>
+                  {domains.map((d) => (
+                    <option key={d.id} value={d.id}>
+                      @{d.domain}
+                    </option>
+                  ))}
+                  <option value="custom">{tr("إعدادات مخصّصة لهذا البريد")}</option>
+                </select>
+                <ChevronDown className="pointer-events-none absolute end-3 h-4 w-4 text-muted-foreground" />
+              </div>
               <p className="mt-1 text-xs text-muted-foreground">
                 {useCustom
                   ? tr("سيتم استخدام الإعدادات المُدخلة أدناه لهذا البريد فقط.")
