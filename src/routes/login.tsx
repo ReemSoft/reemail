@@ -80,7 +80,7 @@ function LoginPage() {
         />
         <div className="relative flex h-full flex-col justify-between p-12 text-white">
           <Link to="/" className="flex items-center gap-2.5">
-            <BrandLogo className="h-10 w-10 rounded-xl" />
+            <BrandLogo variant="white" className="h-10 w-10 rounded-xl" />
             <span className="text-xl font-bold">MailMaestro</span>
           </Link>
           <div>
@@ -90,7 +90,7 @@ function LoginPage() {
               {tr("بسرعة البرق ⚡")}
             </h2>
             <p className="mt-4 text-lg text-white/85">
-              {tr("أدخل بريدك وكلمة مروره فقط — لا حاجة لأي حساب إضافي.")}
+              {tr("أدخل بريدك وكلمة مروره فقط — لا حاجة لأي إعداد إضافي.")}
             </p>
           </div>
           <p className="text-sm text-white/70">© {new Date().getFullYear()} MailMaestro</p>
