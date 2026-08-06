@@ -1,4 +1,5 @@
 import { cn } from "@/lib/utils";
+import * as React from "react";
 
 /**
  * Official MailMaestro brand mark — exact vector replica of the reference
@@ -12,6 +13,8 @@ export function BrandLogo({
   className?: string;
   alt?: string;
 }) {
+  const gradientId = React.useId().replace(/:/g, "_");
+
   return (
     <svg
       viewBox="0 0 512 512"
@@ -22,7 +25,7 @@ export function BrandLogo({
     >
       <defs>
         <linearGradient
-          id="brandGradient"
+          id={gradientId}
           x1="0"
           y1="0"
           x2="512"
@@ -36,27 +39,20 @@ export function BrandLogo({
 
       {/* Envelope body with V-shaped top opening */}
       <path
-        fill="url(#brandGradient)"
-        d="M91 199
-           L91 352
-           Q91 372.5 111 372.5
-           L399.5 372.5
-           Q419.5 372.5 419.5 352
-           L419.5 199
-           L341 179
-           Q255.5 159 170 179
-           Z"
+        fill={`url(#${gradientId})`}
+        d="M86 265 L86 155 L248 265 Q256 275 264 265 L426 155 L426 265 L426 370 Q426 386 410 386 L102 386 Q86 386 86 370 Z"
       />
 
       {/* Top flap */}
       <rect
-        x="91"
-        y="139"
-        width="328.5"
-        height="20"
-        rx="10"
-        fill="url(#brandGradient)"
+        x="80"
+        y="138"
+        width="352"
+        height="18"
+        rx="9"
+        fill={`url(#${gradientId})`}
       />
     </svg>
   );
 }
+
