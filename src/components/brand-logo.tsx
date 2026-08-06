@@ -8,11 +8,9 @@ import logoAsset from "@/assets/mailmaestro-envelope-original.png.asset.json";
 export function BrandLogo({
   className,
   alt = "MailMaestro",
-  variant = "default",
 }: {
   className?: string;
   alt?: string;
-  variant?: "default" | "white";
 }) {
   return (
     <img
@@ -22,11 +20,7 @@ export function BrandLogo({
       height={1024}
       loading="eager"
       decoding="async"
-      className={cn(
-        "object-contain object-center",
-        variant === "white" && "bg-white",
-        className,
-      )}
+      className={cn("object-contain object-center", className)}
     />
   );
 }
