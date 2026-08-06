@@ -1371,7 +1371,12 @@ function useMailData(session: MailSession | null) {
       MAIL_INDEX_ENABLED &&
       s === "date-desc" &&
       !!session?.mailSessionToken &&
-      !!folderPaths[f] &&
+      // NOTE: `folderPaths` is intentionally NOT required here. It is only
+      // populated by the Bridge/Index counts round-trip, and gating on it
+      // forced the very first list render to wait for IMAP (slow path) and
+      // then re-run the whole load once paths arrived (double fetch).
+      // `indexListMessages` resolves the folder by `canonical` on its own and
+      // returns `indexed:false` cleanly when it is not synced yet.
       // V4: "starred" is a virtual view over INBOX (\Flagged). The Local
       // Index has no distinct row for it, so serving it from the index
       // would either return zero rows or (worse) return every inbox row
@@ -1381,8 +1386,9 @@ function useMailData(session: MailSession | null) {
       // serving them from the async Local Index can show expunged UIDs,
       // duplicate rows, or stale counters. Bridge/IMAP remains authoritative.
       f !== "drafts",
-    [session, folderPaths],
+    [session],
   );
+
 
   const loadFromBridge = useCallback(
     async (reqId: number) => {
@@ -1560,9 +1566,13 @@ function useMailData(session: MailSession | null) {
     canUseIndex,
   ]);
 
+  // Counts on mount: Local-Index first (one Supabase SELECT, ~ms) instead of
+  // a blocking Bridge/IMAP STATUS sweep. `loadCountsFast` falls back to the
+  // Bridge automatically when the index has nothing for this account yet.
   useEffect(() => {
-    loadCounts();
-  }, [loadCounts]);
+    loadCountsFast();
+  }, [loadCountsFast]);
+
 
   useEffect(() => {
     loadMessages();
