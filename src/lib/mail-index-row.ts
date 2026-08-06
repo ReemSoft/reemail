@@ -14,6 +14,9 @@ export interface IndexRow {
   flagged: boolean;
   has_attachments: boolean;
   message_id: string | null;
+  in_reply_to?: string | null;
+  canonical?: string;
+  uidvalidity?: number | string | null;
 }
 
 function coerceAddress(v: unknown): MailAddress {
@@ -42,6 +45,8 @@ export function indexRowToMailMessage(folder: MailFolder, row: IndexRow): MailMe
   return {
     id: `${folder}:${row.uid}`,
     threadId: row.message_id ?? `${folder}:${row.uid}`,
+    messageId: row.message_id ?? undefined,
+    inReplyTo: row.in_reply_to ?? undefined,
     folder,
     from: coerceAddress(row.from_addr),
     to,
