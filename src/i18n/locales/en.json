@@ -450,5 +450,8 @@
   "يرث إعدادات قالب الدومين": "Inherits the domain template settings",
   "يعمل مع أي خادم بريد: Gmail، Outlook، cPanel، خوادم مخصصة.": "Works with any mail server: Gmail, Outlook, cPanel, custom servers.",
   "— اختر قالب دومين —": "— Select a domain template —",
-  "— نهاية الرسائل —": "— end of messages —"
+  "— نهاية الرسائل —": "— end of messages —",
+  "الخروج بدون حفظ الرسالة؟": "Leave without saving this message?",
+  "لديك رسالة غير محفوظة. يمكنك حفظها كمسودّة، أو حذفها، أو البقاء هنا.": "You have an unsaved message. You can save it as a draft, discard it, or stay here.",
+  "البقاء هنا": "Stay here"
 }
