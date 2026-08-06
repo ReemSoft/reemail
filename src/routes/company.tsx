@@ -79,7 +79,7 @@ function CompanyPortalPage() {
         />
         <div className="relative flex h-full flex-col justify-between p-12 text-white">
           <Link to="/" className="flex items-center gap-2.5">
-            <BrandLogo className="h-10 w-10 rounded-xl" />
+            <BrandLogo variant="white" className="h-10 w-10 rounded-xl" />
             <span className="text-xl font-bold">MailMaestro</span>
           </Link>
           <div>
