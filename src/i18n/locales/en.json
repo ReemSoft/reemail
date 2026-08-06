@@ -450,5 +450,7 @@
   "يرث إعدادات قالب الدومين": "Inherits the domain template settings",
   "يعمل مع أي خادم بريد: Gmail، Outlook، cPanel، خوادم مخصصة.": "Works with any mail server: Gmail, Outlook, cPanel, custom servers.",
   "— اختر قالب دومين —": "— Select a domain template —",
-  "— نهاية الرسائل —": "— end of messages —"
+  "— نهاية الرسائل —": "— end of messages —",
+  "الرسالة السابقة": "Previous message",
+  "إظهار جميع الرسائل": "Show all messages"
 }
