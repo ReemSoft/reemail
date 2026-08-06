@@ -21,7 +21,7 @@ import {
 import type { CidImageMapping } from "@/lib/email-viewer-security";
 
 import { buildReplyQuoteHtml, buildForwardQuoteHtml } from "@/lib/mail-quote";
-import { splitThreadSegments } from "@/lib/mail-thread-split";
+import { getMailConversation } from "@/lib/mail-conversation.functions";
 
 // Kept as a thin wrapper — the heavy lifting (DOMPurify + CSS url()/@import
 // stripping + anchor hardening) lives in `@/lib/email-viewer-security` and is
@@ -211,15 +211,7 @@ function EmailBodyFrame({
   );
 }
 
-/**
- * ThreadedEmailBody — renders a back-and-forth message as distinct turns:
- * only the newest turn is open, older turns stay collapsed behind two
- * actions ("previous message" / "show all messages"). Turns are separated by
- * a clear divider (no boxing) and keep the full available width.
- * `attachmentsSlot` belongs to the newest turn and renders at its end,
- * just before that turn's divider — the Gmail placement.
- */
-function ThreadedEmailBody({
+function SingleEmailBody({
   html,
   cidImages,
   messageIdentity,
@@ -232,58 +224,10 @@ function ThreadedEmailBody({
   className?: string;
   attachmentsSlot?: React.ReactNode;
 }) {
-  const segments = useMemo(() => splitThreadSegments(html), [html]);
-  const [visible, setVisible] = useState(1);
-
-  useEffect(() => {
-    setVisible(1);
-  }, [html]);
-
-  if (segments.length <= 1)
-    return (
-      <div className={className}>
-        <EmailBodyFrame html={html} cidImages={cidImages} messageIdentity={messageIdentity} />
-        {attachmentsSlot}
-      </div>
-    );
-
-  const shown = segments.slice(0, visible);
-  const remaining = segments.length - visible;
-
   return (
     <div className={className}>
-      {shown.map((seg, i) => (
-        <div key={`${messageIdentity}:seg:${i}`}>
-          <EmailBodyFrame
-            html={seg}
-            cidImages={cidImages}
-            messageIdentity={`${messageIdentity}:seg:${i}`}
-          />
-          {i === 0 && attachmentsSlot}
-          <hr className="my-5 border-0 border-t border-border" />
-        </div>
-      ))}
-      {remaining > 0 && (
-        <div className="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            onClick={() => setVisible((v) => Math.min(v + 1, segments.length))}
-            className="inline-flex items-center gap-2 rounded-md border border-border bg-muted/60 px-2.5 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted"
-          >
-            <span className="tracking-widest leading-none">•••</span>
-            <span>{tr("الرسالة السابقة")}</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => setVisible(segments.length)}
-            className="inline-flex items-center gap-2 rounded-md border border-border px-2.5 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted"
-          >
-            <span>
-              {tr("إظهار جميع الرسائل")} ({remaining})
-            </span>
-          </button>
-        </div>
-      )}
+      <EmailBodyFrame html={html} cidImages={cidImages} messageIdentity={messageIdentity} />
+      {attachmentsSlot}
     </div>
   );
 }
@@ -468,7 +412,7 @@ function MessageBody({
 }) {
   const cidImages = useInlineImageMappings(message, onInlineImages);
   return (
-    <ThreadedEmailBody
+    <SingleEmailBody
       html={html}
       cidImages={cidImages}
       messageIdentity={`${message.id}|${message.uidValidity ?? ""}`}
