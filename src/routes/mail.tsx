@@ -214,20 +214,23 @@ function EmailBodyFrame({
 /**
  * ThreadedEmailBody — renders a back-and-forth message as distinct turns:
  * only the newest turn is open, older turns stay collapsed behind two
- * actions ("previous message" / "show all messages") rendered right after
- * the last visible turn. Each turn is a self-contained bordered card and
- * keeps the full available width (no horizontal squeezing).
+ * actions ("previous message" / "show all messages"). Turns are separated by
+ * a clear divider (no boxing) and keep the full available width.
+ * `attachmentsSlot` belongs to the newest turn and renders at its end,
+ * just before that turn's divider — the Gmail placement.
  */
 function ThreadedEmailBody({
   html,
   cidImages,
   messageIdentity,
   className,
+  attachmentsSlot,
 }: {
   html: string;
   cidImages: CidImageMapping[];
   messageIdentity: string;
   className?: string;
+  attachmentsSlot?: React.ReactNode;
 }) {
   const segments = useMemo(() => splitThreadSegments(html), [html]);
   const [visible, setVisible] = useState(1);
@@ -238,12 +241,10 @@ function ThreadedEmailBody({
 
   if (segments.length <= 1)
     return (
-      <EmailBodyFrame
-        html={html}
-        cidImages={cidImages}
-        messageIdentity={messageIdentity}
-        className={className}
-      />
+      <div className={className}>
+        <EmailBodyFrame html={html} cidImages={cidImages} messageIdentity={messageIdentity} />
+        {attachmentsSlot}
+      </div>
     );
 
   const shown = segments.slice(0, visible);
@@ -251,22 +252,19 @@ function ThreadedEmailBody({
 
   return (
     <div className={className}>
-      <div className="space-y-3">
-        {shown.map((seg, i) => (
-          <div
-            key={`${messageIdentity}:seg:${i}`}
-            className="overflow-hidden rounded-xl border border-border bg-card shadow-[0_1px_2px_rgba(0,0,0,0.03)]"
-          >
-            <EmailBodyFrame
-              html={seg}
-              cidImages={cidImages}
-              messageIdentity={`${messageIdentity}:seg:${i}`}
-            />
-          </div>
-        ))}
-      </div>
+      {shown.map((seg, i) => (
+        <div key={`${messageIdentity}:seg:${i}`}>
+          <EmailBodyFrame
+            html={seg}
+            cidImages={cidImages}
+            messageIdentity={`${messageIdentity}:seg:${i}`}
+          />
+          {i === 0 && attachmentsSlot}
+          <hr className="my-5 border-0 border-t border-border" />
+        </div>
+      ))}
       {remaining > 0 && (
-        <div className="mt-3 flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
             onClick={() => setVisible((v) => Math.min(v + 1, segments.length))}
@@ -289,6 +287,7 @@ function ThreadedEmailBody({
     </div>
   );
 }
+
 
 
 type InlineImageFlight = {
@@ -459,11 +458,13 @@ function MessageBody({
   html,
   onInlineImages,
   className,
+  attachmentsSlot,
 }: {
   message: MailMessage;
   html: string;
   onInlineImages?: (images: NonNullable<MailMessage["inlineImages"]>) => void;
   className?: string;
+  attachmentsSlot?: React.ReactNode;
 }) {
   const cidImages = useInlineImageMappings(message, onInlineImages);
   return (
@@ -472,6 +473,7 @@ function MessageBody({
       cidImages={cidImages}
       messageIdentity={`${message.id}|${message.uidValidity ?? ""}`}
       className={className}
+      attachmentsSlot={attachmentsSlot}
     />
   );
 }
@@ -4771,21 +4773,23 @@ function MessageView({
               html={sanitizeEmailHtml(message.body || message.preview || "")}
               onInlineImages={handleInlineImages}
               className="mt-6"
+              attachmentsSlot={
+                message.attachments && message.attachments.length > 0 ? (
+                  <div className="mt-4">
+                    <p className="mb-2 text-xs font-semibold text-muted-foreground">
+                      {tr("المرفقات")} ({message.attachments.length})
+                    </p>
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      {message.attachments.map((a) => (
+                        <AttachmentCard key={a.id} attachment={a} message={message} />
+                      ))}
+                    </div>
+                  </div>
+                ) : null
+              }
             />
           )}
 
-          {!loading && message.attachments && message.attachments.length > 0 && (
-            <div className="mt-6">
-              <p className="mb-2 text-xs font-semibold text-muted-foreground">
-                {tr("المرفقات")} ({message.attachments.length})
-              </p>
-              <div className="grid gap-2 sm:grid-cols-2">
-                {message.attachments.map((a) => (
-                  <AttachmentCard key={a.id} attachment={a} message={message} />
-                ))}
-              </div>
-            </div>
-          )}
 
           <div className="mt-6 flex flex-wrap gap-2">
             <button
