@@ -56,19 +56,30 @@ export function isCacheableFolder(canonical: string): boolean {
   return !NON_CACHEABLE.has(canonical);
 }
 
+/** Provenance header rows shown under the message header (Gmail-style). */
+export interface CachedHeadersMeta {
+  mailedBy?: string;
+  signedBy?: string;
+  security?: string;
+}
+
 export interface CachedBody {
   bodyHtml: string;
   preview: string;
   inlineParts: NonNullable<MailMessage["inlineParts"]>;
   inlineImages: NonNullable<MailMessage["inlineImages"]>;
   attachments: MailAttachment[];
+  headersMeta?: CachedHeadersMeta;
   uidValidity: string;
   byteSize: number;
 }
 
 export type CacheLookup =
   | { hit: true; body: CachedBody }
-  | { hit: false; reason: "no-folder" | "no-row" | "uidvalidity" | "orphan" | "oversize" };
+  | {
+      hit: false;
+      reason: "no-folder" | "no-row" | "uidvalidity" | "orphan" | "oversize" | "no-headers";
+    };
 
 export interface CacheKey {
   companyId: string;
@@ -127,7 +138,7 @@ export async function lookupCachedBody(
     supabase
       .from("mail_message_body_cache")
       .select(
-        "uid_validity, body_html, body_text, preview, inline_parts, inline_images, attachments, byte_size, oversize",
+        "uid_validity, body_html, body_text, preview, inline_parts, inline_images, attachments, headers_meta, byte_size, oversize",
       )
       .eq("company_id", key.companyId)
       .eq("account_id", key.accountId)
@@ -148,6 +159,7 @@ export async function lookupCachedBody(
     inline_parts: unknown;
     inline_images: unknown;
     attachments: unknown;
+    headers_meta: unknown;
     byte_size: number;
     oversize: boolean;
   } | null;
@@ -158,6 +170,11 @@ export async function lookupCachedBody(
     return { hit: false, reason: "uidvalidity" };
   }
   if (row.oversize || (!row.body_html && !row.body_text)) return { hit: false, reason: "oversize" };
+  // Rows cached before provenance headers were persisted lack `headers_meta`.
+  // Treat them as a miss exactly once: the live fetch re-stores a complete
+  // row, so the mailed-by / signed-by / security lines come back for good
+  // without invalidating the whole cache.
+  if (row.headers_meta == null) return { hit: false, reason: "no-headers" };
 
   const live = await supabase
     .from("mail_messages")
@@ -182,6 +199,7 @@ export async function lookupCachedBody(
         ? (row.inline_images as CachedBody["inlineImages"])
         : [],
       attachments: Array.isArray(row.attachments) ? (row.attachments as MailAttachment[]) : [],
+      headersMeta: sanitizeHeadersMeta(row.headers_meta),
       uidValidity: String(row.uid_validity),
       byteSize: row.byte_size,
     },
@@ -210,6 +228,7 @@ export interface StoreInput extends CacheKey {
   inlineParts: NonNullable<MailMessage["inlineParts"]>;
   inlineImages?: NonNullable<MailMessage["inlineImages"]>;
   attachments: MailAttachment[];
+  headersMeta?: CachedHeadersMeta;
 }
 
 /**
@@ -263,6 +282,7 @@ export async function storeCachedBody(
       inline_parts: inlineParts,
       inline_images: keepImages ? images : [],
       attachments: input.attachments ?? [],
+      headers_meta: sanitizeHeadersMeta(input.headersMeta),
       byte_size: byteSize,
       oversize,
       cached_at: now,
@@ -278,6 +298,15 @@ export async function storeCachedBody(
     `[body-cache] store bytes=${byteSize} oversize=${oversize} inlineBytes=${imagesBytes} inlineKept=${keepImages}`,
   );
   return oversize ? "oversize" : "stored";
+}
+
+function sanitizeHeadersMeta(value: unknown): CachedHeadersMeta {
+  const v = (value ?? {}) as Record<string, unknown>;
+  const pick = (k: string): string | undefined => {
+    const raw = v[k];
+    return typeof raw === "string" && raw.trim() ? raw.slice(0, 256) : undefined;
+  };
+  return { mailedBy: pick("mailedBy"), signedBy: pick("signedBy"), security: pick("security") };
 }
 
 export function byteLength(s: string): number {

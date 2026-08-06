@@ -1,0 +1,1 @@
+ALTER TABLE public.mail_message_body_cache ADD COLUMN IF NOT EXISTS headers_meta jsonb;
