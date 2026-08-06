@@ -1,5 +1,5 @@
 import { cn } from "@/lib/utils";
-import logoAsset from "@/assets/mailmaestro-mark-v4.png.asset.json";
+import logoAsset from "@/assets/mailmaestro-mark-v8.svg.asset.json";
 
 /**
  * Official MailMaestro brand mark.
@@ -24,3 +24,4 @@ export function BrandLogo({
     />
   );
 }
+
