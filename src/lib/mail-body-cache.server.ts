@@ -56,19 +56,30 @@ export function isCacheableFolder(canonical: string): boolean {
   return !NON_CACHEABLE.has(canonical);
 }
 
+/** Provenance header rows shown under the message header (Gmail-style). */
+export interface CachedHeadersMeta {
+  mailedBy?: string;
+  signedBy?: string;
+  security?: string;
+}
+
 export interface CachedBody {
   bodyHtml: string;
   preview: string;
   inlineParts: NonNullable<MailMessage["inlineParts"]>;
   inlineImages: NonNullable<MailMessage["inlineImages"]>;
   attachments: MailAttachment[];
+  headersMeta: CachedHeadersMeta;
   uidValidity: string;
   byteSize: number;
 }
 
 export type CacheLookup =
   | { hit: true; body: CachedBody }
-  | { hit: false; reason: "no-folder" | "no-row" | "uidvalidity" | "orphan" | "oversize" };
+  | {
+      hit: false;
+      reason: "no-folder" | "no-row" | "uidvalidity" | "orphan" | "oversize" | "no-headers";
+    };
 
 export interface CacheKey {
   companyId: string;
