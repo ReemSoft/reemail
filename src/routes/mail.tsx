@@ -5240,7 +5240,7 @@ function ToolbarSelect({
           </option>
         ))}
       </select>
-      <ChevronDown className="pointer-events-none absolute end-1.5 h-3 w-3 text-muted-foreground" />
+      <ChevronDown className="pointer-events-none absolute end-2.5 h-3 w-3 text-muted-foreground" />
     </div>
   );
 }
