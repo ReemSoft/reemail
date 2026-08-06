@@ -4695,7 +4695,7 @@ function MessageView({
                       <dt className="text-foreground/70 whitespace-nowrap">{tr("المرسل:")}</dt>
                       <dd className="min-w-0 break-all">
                         {message.from.name ? (
-                          <span className="ms-1">{message.from.name}</span>
+                          <span className="me-1">{message.from.name}</span>
                         ) : null}
                         <span dir="ltr" className="text-muted-foreground">
                           &lt;{message.from.email || "—"}&gt;
