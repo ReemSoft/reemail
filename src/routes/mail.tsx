@@ -212,9 +212,11 @@ function EmailBodyFrame({
 }
 
 /**
- * ThreadedEmailBody — renders the newest part of a message on its own and
- * collapses the quoted history behind a "•••" toggle (Gmail behaviour), so a
- * long back-and-forth thread reads as distinct turns instead of one wall.
+ * ThreadedEmailBody — renders a back-and-forth message as distinct turns:
+ * only the newest turn is open, older turns stay collapsed behind two
+ * actions ("previous message" / "show all messages") rendered right after
+ * the last visible turn. Each turn is a self-contained bordered card and
+ * keeps the full available width (no horizontal squeezing).
  */
 function ThreadedEmailBody({
   html,
@@ -227,14 +229,14 @@ function ThreadedEmailBody({
   messageIdentity: string;
   className?: string;
 }) {
-  const { latest, quoted } = useMemo(() => splitQuotedHtml(html), [html]);
-  const [expanded, setExpanded] = useState(false);
+  const segments = useMemo(() => splitThreadSegments(html), [html]);
+  const [visible, setVisible] = useState(1);
 
   useEffect(() => {
-    setExpanded(false);
+    setVisible(1);
   }, [html]);
 
-  if (!quoted)
+  if (segments.length <= 1)
     return (
       <EmailBodyFrame
         html={html}
@@ -244,36 +246,50 @@ function ThreadedEmailBody({
       />
     );
 
+  const shown = segments.slice(0, visible);
+  const remaining = segments.length - visible;
+
   return (
     <div className={className}>
-      <EmailBodyFrame
-        html={latest}
-        cidImages={cidImages}
-        messageIdentity={`${messageIdentity}:latest`}
-      />
-      <div className="mt-3">
-        <button
-          type="button"
-          onClick={() => setExpanded((v) => !v)}
-          aria-expanded={expanded}
-          className="inline-flex items-center gap-2 rounded-md border border-border bg-muted/60 px-2.5 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted"
-        >
-          <span className="tracking-widest leading-none">•••</span>
-          <span>{expanded ? tr("إخفاء الرسائل السابقة") : tr("عرض الرسائل السابقة")}</span>
-        </button>
-        {expanded && (
-          <div className="mt-3 rounded-lg border border-border bg-muted/30 ps-3 pe-2 py-2 border-s-2 border-s-primary/40">
+      <div className="space-y-3">
+        {shown.map((seg, i) => (
+          <div
+            key={`${messageIdentity}:seg:${i}`}
+            className="overflow-hidden rounded-xl border border-border bg-card shadow-[0_1px_2px_rgba(0,0,0,0.03)]"
+          >
             <EmailBodyFrame
-              html={quoted}
+              html={seg}
               cidImages={cidImages}
-              messageIdentity={`${messageIdentity}:quoted`}
+              messageIdentity={`${messageIdentity}:seg:${i}`}
             />
           </div>
-        )}
+        ))}
       </div>
+      {remaining > 0 && (
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setVisible((v) => Math.min(v + 1, segments.length))}
+            className="inline-flex items-center gap-2 rounded-md border border-border bg-muted/60 px-2.5 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted"
+          >
+            <span className="tracking-widest leading-none">•••</span>
+            <span>{tr("الرسالة السابقة")}</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setVisible(segments.length)}
+            className="inline-flex items-center gap-2 rounded-md border border-border px-2.5 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted"
+          >
+            <span>
+              {tr("إظهار جميع الرسائل")} ({remaining})
+            </span>
+          </button>
+        </div>
+      )}
     </div>
   );
 }
+
 
 type InlineImageFlight = {
   promise: Promise<Awaited<ReturnType<typeof resolveMessageInlineImages>>>;
