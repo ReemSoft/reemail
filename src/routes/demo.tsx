@@ -275,7 +275,7 @@ function DemoMailApp() {
           <Menu className="h-5 w-5" />
         </button>
 
-        <Link to="/" className="flex shrink-0 items-center gap-1" dir="ltr">
+        <Link to="/" className="flex shrink-0 items-center gap-1.5" dir="ltr">
           <BrandLogo className="h-8 w-8 rounded-lg" />
           <span className="hidden text-base font-bold sm:inline">MailMaestro</span>
         </Link>

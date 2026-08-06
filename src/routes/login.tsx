@@ -79,7 +79,7 @@ function LoginPage() {
           }}
         />
         <div className="relative flex h-full flex-col justify-between p-12 text-white">
-          <Link to="/" className="flex items-center gap-1" dir="ltr">
+          <Link to="/" className="flex items-center gap-1.5" dir="ltr">
             <BrandLogo className="h-10 w-10 rounded-xl" />
             <span className="text-xl font-bold">MailMaestro</span>
           </Link>
