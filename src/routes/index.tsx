@@ -41,7 +41,7 @@ function Landing() {
       <header className="sticky top-0 z-40 border-b border-border/60 glass">
         <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 sm:px-6">
           <Link to="/" className="flex items-center gap-1.5" dir="ltr">
-            <BrandLogo className="h-9 w-9 rounded-xl shadow-brand" />
+            <BrandLogo className="h-9 w-9" />
             <span className="text-lg font-bold tracking-tight">MailMaestro</span>
           </Link>
           <nav className="hidden items-center gap-8 md:flex">

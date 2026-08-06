@@ -3650,7 +3650,7 @@ function MailApp() {
               className="h-8 w-8 rounded-lg object-cover"
             />
           ) : (
-            <BrandLogo className="h-8 w-8 rounded-lg" />
+            <BrandLogo className="h-8 w-8" />
           )}
           <span className="hidden text-base font-bold sm:inline">{brandName}</span>
         </Link>
