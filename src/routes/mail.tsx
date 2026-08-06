@@ -3657,8 +3657,9 @@ function MailApp() {
             <img
               src={session.company.logo_url}
               alt={brandName}
-              className="h-8 w-8 rounded-lg object-cover"
+              className="h-8 w-8 rounded-lg object-contain"
             />
+
           ) : (
             <BrandLogo className="h-8 w-8" />
           )}

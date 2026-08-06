@@ -299,6 +299,10 @@ function CompanyDashboard() {
 }
 
 /* -------------------------------------------------------------- Branding -- */
+const LOGO_MAX_BYTES = 512 * 1024;
+const LOGO_TYPES = ["image/png", "image/svg+xml", "image/webp"];
+const LOGO_SIGNED_URL_TTL = 60 * 60 * 24 * 365 * 10; // 10 سنوات
+
 function BrandingTab({
   company,
   setCompany,
@@ -306,6 +310,39 @@ function BrandingTab({
   company: Company;
   setCompany: (c: Company) => void;
 }) {
+  const [uploading, setUploading] = useState(false);
+
+  async function handleLogoFile(file: File | null | undefined) {
+    if (!file) return;
+    if (!LOGO_TYPES.includes(file.type)) {
+      toast.error(tr("نوع الملف غير مدعوم. استخدم PNG أو SVG أو WebP بخلفية شفافة."));
+      return;
+    }
+    if (file.size > LOGO_MAX_BYTES) {
+      toast.error(tr("حجم الملف كبير. الحد الأقصى 512 كيلوبايت."));
+      return;
+    }
+    setUploading(true);
+    try {
+      const ext = file.type === "image/svg+xml" ? "svg" : file.type === "image/webp" ? "webp" : "png";
+      const path = `${company.id}/logo-${Date.now()}.${ext}`;
+      const { error: upErr } = await supabase.storage
+        .from("company-logos")
+        .upload(path, file, { cacheControl: "31536000", upsert: true, contentType: file.type });
+      if (upErr) throw upErr;
+      const { data: signed, error: signErr } = await supabase.storage
+        .from("company-logos")
+        .createSignedUrl(path, LOGO_SIGNED_URL_TTL);
+      if (signErr || !signed?.signedUrl) throw signErr ?? new Error("signed url failed");
+      setCompany({ ...company, logo_url: signed.signedUrl });
+      toast.success(tr("تم رفع الشعار. اضغط حفظ لتطبيقه."));
+    } catch (e) {
+      toast.error(tr("تعذّر رفع الشعار. حاول مرة أخرى."));
+    } finally {
+      setUploading(false);
+    }
+  }
+
   return (
     <div className="rounded-2xl border border-border bg-card p-6 shadow-soft">
       <h2 className="text-xl font-bold">{tr("العلامة التجارية")}</h2>
@@ -344,27 +381,64 @@ function BrandingTab({
         </div>
 
         <Field label={tr("شعار الشركة")}>
-          <div className="flex items-center gap-4">
-            <div className="flex h-20 w-20 items-center justify-center rounded-2xl border-2 border-dashed border-border bg-muted/30">
+          <div className="flex flex-wrap items-center gap-4">
+            <div className="flex h-20 w-20 shrink-0 items-center justify-center overflow-hidden rounded-2xl border-2 border-dashed border-border bg-muted/30">
               {company.logo_url ? (
                 <img
                   src={company.logo_url}
                   alt="Logo"
-                  className="h-full w-full rounded-2xl object-cover"
+                  className="h-full w-full object-contain p-1.5"
                 />
               ) : (
                 <Upload className="h-6 w-6 text-muted-foreground" />
               )}
             </div>
-            <input
-              value={company.logo_url ?? ""}
-              onChange={(e) => setCompany({ ...company, logo_url: e.target.value })}
-              placeholder={tr("https://... رابط الشعار")}
-              className="flex-1 rounded-lg border border-input bg-background px-4 py-2.5 text-sm outline-none focus:border-primary"
-              dir="ltr"
-            />
+
+            <div className="min-w-0 flex-1 basis-64 space-y-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-brand-gradient px-4 py-2 text-sm font-semibold text-white shadow-soft">
+                  {uploading ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Upload className="h-4 w-4" />
+                  )}
+                  {uploading ? tr("جارٍ الرفع…") : tr("رفع شعار")}
+                  <input
+                    type="file"
+                    accept="image/png,image/svg+xml,image/webp"
+                    className="hidden"
+                    disabled={uploading}
+                    onChange={(e) => {
+                      void handleLogoFile(e.target.files?.[0]);
+                      e.target.value = "";
+                    }}
+                  />
+                </label>
+                {company.logo_url && (
+                  <button
+                    type="button"
+                    onClick={() => setCompany({ ...company, logo_url: null })}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-input px-3 py-2 text-sm text-muted-foreground hover:bg-muted"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                    {tr("إزالة")}
+                  </button>
+                )}
+              </div>
+              <p className="text-xs leading-relaxed text-muted-foreground">
+                {tr("PNG أو SVG أو WebP بخلفية شفافة · مقاس مربع مُوصى به 512×512 بكسل · الحد الأقصى للحجم 512 كيلوبايت.")}
+              </p>
+              <input
+                value={company.logo_url ?? ""}
+                onChange={(e) => setCompany({ ...company, logo_url: e.target.value || null })}
+                placeholder={tr("أو الصق رابط الشعار https://...")}
+                className="w-full rounded-lg border border-input bg-background px-4 py-2 text-xs outline-none focus:border-primary"
+                dir="ltr"
+              />
+            </div>
           </div>
         </Field>
+
       </div>
     </div>
   );
