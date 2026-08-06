@@ -57,20 +57,88 @@ export function splitQuotedHtml(html: string): ThreadSplit {
   return { latest, quoted };
 }
 
+/** Locate the outermost <blockquote> element, honouring nesting. */
+function findFirstBlockquote(
+  html: string,
+): { start: number; innerStart: number; innerEnd: number; end: number } | null {
+  const open = /<blockquote\b[^>]*>/i.exec(html);
+  if (!open) return null;
+  const innerStart = open.index + open[0].length;
+  const re = /<\/?blockquote\b[^>]*>/gi;
+  re.lastIndex = innerStart;
+  let depth = 1;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html))) {
+    if (m[0][1] === "/") {
+      depth--;
+      if (depth === 0)
+        return { start: open.index, innerStart, innerEnd: m.index, end: re.lastIndex };
+    } else depth++;
+  }
+  return { start: open.index, innerStart, innerEnd: html.length, end: html.length };
+}
+
+/** First marker position strictly after the start of the fragment, or -1. */
+function nextMarkerIndex(html: string): number {
+  let best = -1;
+  for (const re of MARKERS) {
+    const rx = new RegExp(re.source, re.flags.includes("g") ? re.flags : re.flags + "g");
+    let m: RegExpExecArray | null;
+    while ((m = rx.exec(html))) {
+      if (m.index > 0 && (best === -1 || m.index < best)) best = m.index;
+      if (m.index >= (best === -1 ? Infinity : best)) break;
+      if (rx.lastIndex === m.index) rx.lastIndex++;
+    }
+  }
+  return best;
+}
+
 /**
- * Split a body into an ordered list of thread turns (newest first) by applying
- * splitQuotedHtml repeatedly to the quoted remainder. Returns at least one
- * segment; capped to avoid pathological nesting on very long threads.
+ * Split a fragment into "this turn" (its own attribution header + content) and
+ * the attribution that introduces the next, older turn.
+ */
+function attributionSplit(head: string): { turn: string; attribution: string } {
+  const cut = nextMarkerIndex(head);
+  if (cut === -1) return { turn: head, attribution: "" };
+  return { turn: head.slice(0, cut), attribution: head.slice(cut) };
+}
+
+/**
+ * Split a body into an ordered list of thread turns (newest first).
+ *
+ * Real reply chains nest each older turn inside another <blockquote>, so a
+ * flat scan finds only the outermost quote and lumps the entire history into a
+ * single segment. Here every iteration unwraps exactly one nesting level, so
+ * each reply/forward becomes its own entity.
  */
 export function splitThreadSegments(html: string, max = 12): string[] {
   const out: string[] = [];
   let rest = html || "";
+
   for (let i = 0; i < max; i++) {
-    const { latest, quoted } = splitQuotedHtml(rest);
-    if (!quoted) break;
-    out.push(latest);
-    rest = quoted;
+    if (!rest.trim()) break;
+    const bq = findFirstBlockquote(rest);
+
+    if (bq) {
+      const head = rest.slice(0, bq.start);
+      const inner = rest.slice(bq.innerStart, bq.innerEnd);
+      const tail = rest.slice(bq.end);
+      const { turn, attribution } = attributionSplit(head);
+      const next = attribution + inner + tail;
+      if (textLength(turn) >= 1) out.push(turn);
+      if (next === rest) break;
+      rest = next;
+      continue;
+    }
+
+    const { turn, attribution } = attributionSplit(rest);
+    if (!attribution) break;
+    if (textLength(turn) >= 1) out.push(turn);
+    if (attribution === rest) break;
+    rest = attribution;
   }
-  out.push(rest);
-  return out;
+
+  if (textLength(rest) >= 1 || out.length === 0) out.push(rest);
+  return out.filter((s) => s && s.trim().length > 0);
 }
+
