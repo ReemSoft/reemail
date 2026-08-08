@@ -7082,6 +7082,14 @@ function Composer({
             {sending ? (progress > 0 ? `${progress}%` : tr("جاري الإرسال")) : tr("إرسال")}
           </button>
           <input
+            ref={imageInputRef}
+            type="file"
+            accept="image/*"
+            multiple
+            className="hidden"
+            onChange={(e) => void insertImageFiles(e.target.files)}
+          />
+          <input
             ref={fileInputRef}
             type="file"
             multiple
