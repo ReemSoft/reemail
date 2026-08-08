@@ -24,6 +24,14 @@ export interface InlineImageDragSessionOptions {
   onCleanup?: () => void;
 }
 
+export interface InlineImageSelectionListenerOptions {
+  editor: HTMLElement;
+  getActiveImage: () => HTMLImageElement | null;
+  onSelect: (image: HTMLImageElement) => void;
+  onClear: () => void;
+  beforeClear?: () => void;
+}
+
 export type InlineImageMime = (typeof INLINE_IMAGE_TYPES)[number];
 
 export interface InlineComposeImage {
@@ -297,6 +305,35 @@ function createDropMarker(target: InlineImageDropTarget): HTMLElement {
   return marker;
 }
 
+export function isInlineImageToolTarget(target: EventTarget | null): boolean {
+  return target instanceof Element && Boolean(target.closest('[data-mm-image-tool="1"]'));
+}
+
+export function installInlineImageSelectionListener(
+  options: InlineImageSelectionListenerOptions,
+): () => void {
+  const onPointerDown = (event: PointerEvent) => {
+    const activeImage = options.getActiveImage();
+    if (!activeImage) return;
+    const target = event.target instanceof Element ? event.target : null;
+    if (
+      target === activeImage ||
+      (target && activeImage.contains(target)) ||
+      isInlineImageToolTarget(target)
+    )
+      return;
+    const nextImage = target?.closest<HTMLImageElement>("img[data-mm-inline-id]") ?? null;
+    if (nextImage && options.editor.contains(nextImage)) {
+      options.onSelect(nextImage);
+      return;
+    }
+    options.beforeClear?.();
+    options.onClear();
+  };
+  document.addEventListener("pointerdown", onPointerDown, true);
+  return () => document.removeEventListener("pointerdown", onPointerDown, true);
+}
+
 /**
  * Own a complete overlay pointer gesture. The source image remains untouched
  * inside contentEditable until a successful pointerup commits the move.
@@ -316,6 +353,8 @@ export function startInlineImageDragSession(
   const offsetY = event.clientY - sourceRect.top;
   const originalOpacity = image.style.opacity;
   const originalCursor = image.style.cursor;
+  const originalSurfaceCursor = surface.style.cursor;
+  const originalBodyUserSelect = document.body.style.userSelect;
   let started = false;
   let marker: HTMLElement | null = null;
   let ghost: HTMLImageElement | null = null;
@@ -356,16 +395,19 @@ export function startInlineImageDragSession(
       "object-fit:contain",
     ].join(";");
     document.body.append(ghost);
+    document.body.style.userSelect = "none";
     image.style.opacity = "0.35";
     image.style.cursor = "grabbing";
+    surface.style.cursor = "grabbing";
   };
   const cleanup = () => {
     if (cleaned) return;
     cleaned = true;
-    window.removeEventListener("pointermove", onPointerMove);
-    window.removeEventListener("pointerup", onPointerUp);
-    window.removeEventListener("pointercancel", onPointerCancel);
-    window.removeEventListener("keydown", onKeyDown);
+    document.removeEventListener("pointermove", onPointerMove, true);
+    document.removeEventListener("pointerup", onPointerUp, true);
+    document.removeEventListener("pointercancel", onPointerCancel, true);
+    document.removeEventListener("keydown", onKeyDown, true);
+    window.removeEventListener("blur", onWindowBlur);
     if (frame) cancelAnimationFrame(frame);
     frame = 0;
     marker?.remove();
@@ -374,11 +416,8 @@ export function startInlineImageDragSession(
     ghost = null;
     image.style.opacity = originalOpacity;
     image.style.cursor = originalCursor;
-    try {
-      if (surface.hasPointerCapture?.(pointerId)) surface.releasePointerCapture(pointerId);
-    } catch {
-      /* The surface may have unmounted before cleanup. */
-    }
+    surface.style.cursor = originalSurfaceCursor;
+    document.body.style.userSelect = originalBodyUserSelect;
     options.onCleanup?.();
   };
   const onPointerMove = (moveEvent: PointerEvent) => {
@@ -424,16 +463,13 @@ export function startInlineImageDragSession(
   const onKeyDown = (keyEvent: KeyboardEvent) => {
     if (keyEvent.key === "Escape") cleanup();
   };
+  const onWindowBlur = () => cleanup();
 
-  try {
-    surface.setPointerCapture(pointerId);
-  } catch {
-    /* Window listeners own the gesture even when capture is unavailable. */
-  }
-  window.addEventListener("pointermove", onPointerMove, { passive: false });
-  window.addEventListener("pointerup", onPointerUp);
-  window.addEventListener("pointercancel", onPointerCancel);
-  window.addEventListener("keydown", onKeyDown);
+  document.addEventListener("pointermove", onPointerMove, { capture: true, passive: false });
+  document.addEventListener("pointerup", onPointerUp, true);
+  document.addEventListener("pointercancel", onPointerCancel, true);
+  document.addEventListener("keydown", onKeyDown, true);
+  window.addEventListener("blur", onWindowBlur);
   return { cancel: cleanup };
 }
 
@@ -450,6 +486,8 @@ export function moveInlineImageNode(
         ? oldWrapper
         : document.createElement("div");
     wrapper.setAttribute(INLINE_IMAGE_WRAPPER_ATTR, "1");
+    wrapper.style.display = "block";
+    wrapper.style.width = "100%";
     wrapper.style.textAlign = alignment;
     marker.replaceWith(wrapper);
     if (image.parentElement !== wrapper) wrapper.append(image);
@@ -475,11 +513,14 @@ export function alignInlineImageNode(
 ): void {
   const oldWrapper = image.closest<HTMLElement>(`[${INLINE_IMAGE_WRAPPER_ATTR}]`);
   if (oldWrapper && wrapperContainsOnlyImage(oldWrapper, image)) {
+    oldWrapper.style.display = "block";
+    oldWrapper.style.width = "100%";
     oldWrapper.style.textAlign = alignment;
   } else {
     const wrapper = document.createElement(image.parentElement === editor ? "div" : "span");
     wrapper.setAttribute(INLINE_IMAGE_WRAPPER_ATTR, "1");
     wrapper.style.display = "block";
+    wrapper.style.width = "100%";
     wrapper.style.textAlign = alignment;
     image.before(wrapper);
     wrapper.append(image);

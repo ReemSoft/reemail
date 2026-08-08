@@ -657,6 +657,7 @@ import {
   clampInlineImageWidth,
   removeInlineImageNode,
   alignInlineImageNode,
+  installInlineImageSelectionListener,
   startInlineImageDragSession,
   findInlineImageNodeByCid,
   type InlineComposeImage,
@@ -5636,6 +5637,7 @@ function Composer({
   const activeImgRef = useRef<HTMLImageElement | null>(null);
   const resizingImgRef = useRef(false);
   const imageDragSessionRef = useRef<InlineImageDragSession | null>(null);
+  const imageResizeCleanupRef = useRef<(() => void) | null>(null);
 
   const [imgBox, setImgBox] = useState<{
     top: number;
@@ -6497,29 +6499,32 @@ function Composer({
         syncImgBox(t as HTMLImageElement);
       }
     };
-    const clear = (e: MouseEvent) => {
-      if (resizingImgRef.current) return;
-      const next = e.relatedTarget as Node | null;
-      if (next && (next as HTMLElement).dataset?.mmImageTool === "1") return;
-      if (activeImgRef.current && next && activeImgRef.current.contains(next)) return;
-      syncImgBox(null);
-    };
-
     const refresh = () => syncImgBox(activeImgRef.current);
+    const removeSelectionListener = installInlineImageSelectionListener({
+      editor,
+      getActiveImage: () => activeImgRef.current,
+      onSelect: syncImgBox,
+      beforeClear: () => {
+        imageDragSessionRef.current?.cancel();
+        imageResizeCleanupRef.current?.();
+      },
+      onClear: () => syncImgBox(null),
+    });
 
     editor.addEventListener("mouseover", pick);
-    editor.addEventListener("mouseout", clear);
+    editor.addEventListener("pointerdown", pick);
     editor.addEventListener("click", pick);
     editor.addEventListener("input", refresh);
     editor.addEventListener("scroll", refresh, true);
     window.addEventListener("resize", refresh);
     return () => {
       editor.removeEventListener("mouseover", pick);
-      editor.removeEventListener("mouseout", clear);
+      editor.removeEventListener("pointerdown", pick);
       editor.removeEventListener("click", pick);
       editor.removeEventListener("input", refresh);
       editor.removeEventListener("scroll", refresh, true);
       window.removeEventListener("resize", refresh);
+      removeSelectionListener();
     };
   }, [plainMode, syncImgBox]);
 
@@ -6527,6 +6532,8 @@ function Composer({
     () => () => {
       imageDragSessionRef.current?.cancel();
       imageDragSessionRef.current = null;
+      imageResizeCleanupRef.current?.();
+      imageResizeCleanupRef.current = null;
     },
     [],
   );
@@ -6574,7 +6581,9 @@ function Composer({
     const editor = editorRef.current;
     if (!image || !editor) return;
     alignInlineImageNode(image, editor, alignment);
-    syncImgBox(image);
+    requestAnimationFrame(() => {
+      if (editor.contains(image)) syncImgBox(image);
+    });
   }
 
   function startImageResize(e: React.PointerEvent<HTMLButtonElement>) {
@@ -6597,6 +6606,7 @@ function Composer({
     const startW = img.getBoundingClientRect().width;
     const editorWidth = editorRef.current?.clientWidth ?? startW;
     let frame = 0;
+    let finished = false;
     const move = (ev: PointerEvent) => {
       const next = clampInlineImageWidth(startW + (ev.clientX - startX), editorWidth);
       img.style.width = `${next}px`;
@@ -6606,14 +6616,18 @@ function Composer({
       frame = requestAnimationFrame(() => syncImgBox(img));
     };
     const up = () => {
+      if (finished) return;
+      finished = true;
       handle.removeEventListener("pointermove", move);
       handle.removeEventListener("pointerup", up);
       handle.removeEventListener("pointercancel", up);
       cancelAnimationFrame(frame);
       resizingImgRef.current = false;
+      imageResizeCleanupRef.current = null;
       img.draggable = false;
       notifyEditorChange();
     };
+    imageResizeCleanupRef.current = up;
     handle.addEventListener("pointermove", move);
     handle.addEventListener("pointerup", up);
     handle.addEventListener("pointercancel", up);
@@ -7423,7 +7437,7 @@ function Composer({
                         onPointerDown={startImageDrag}
                         title={tr("سحب الصورة")}
                         aria-label={tr("سحب الصورة")}
-                        className="absolute z-[5] cursor-grab touch-none bg-transparent active:cursor-grabbing"
+                        className="pointer-events-auto absolute z-[5] cursor-grab touch-none bg-transparent active:cursor-grabbing"
                         style={{
                           top: imgBox.top,
                           left: imgBox.left,
@@ -7434,7 +7448,7 @@ function Composer({
                       {/* Email-safe alignment fallback. */}
                       <div
                         data-mm-image-tool="1"
-                        className="absolute z-20 inline-flex overflow-hidden rounded-md border border-border bg-card shadow-md"
+                        className="pointer-events-auto absolute z-20 inline-flex overflow-hidden rounded-md border border-border bg-card shadow-md"
                         style={{ top: imgBox.top - 30, left: imgBox.left }}
                       >
                         {(
@@ -7449,11 +7463,14 @@ function Composer({
                             type="button"
                             data-mm-image-tool="1"
                             data-mm-image-align={alignment}
-                            onMouseDown={(event) => event.preventDefault()}
-                            onClick={() => alignActiveImage(alignment)}
+                            onPointerDown={(event) => {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              alignActiveImage(alignment);
+                            }}
                             title={label}
                             aria-label={label}
-                            className="inline-flex h-6 w-7 items-center justify-center text-muted-foreground transition hover:bg-accent hover:text-foreground"
+                            className="pointer-events-auto inline-flex h-6 w-7 items-center justify-center text-muted-foreground transition hover:bg-accent hover:text-foreground"
                           >
                             <Icon className="h-3.5 w-3.5" />
                           </button>
@@ -7463,11 +7480,14 @@ function Composer({
                       <button
                         type="button"
                         data-mm-image-tool="1"
-                        onMouseDown={(e) => e.preventDefault()}
-                        onClick={deleteActiveImage}
+                        onPointerDown={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          deleteActiveImage();
+                        }}
                         title={tr("حذف الصورة")}
                         aria-label={tr("حذف الصورة")}
-                        className="absolute z-20 inline-flex h-6 w-6 items-center justify-center rounded-full bg-destructive text-white shadow-md transition hover:opacity-90"
+                        className="pointer-events-auto absolute z-20 inline-flex h-6 w-6 items-center justify-center rounded-full bg-destructive text-white shadow-md transition hover:opacity-90"
                         style={{ top: imgBox.top - 8, left: imgBox.left + imgBox.width - 16 }}
                       >
                         <X className="h-3.5 w-3.5" />
@@ -7479,7 +7499,7 @@ function Composer({
                         onPointerDown={startImageResize}
                         title={tr("تغيير حجم الصورة")}
                         aria-label={tr("تغيير حجم الصورة")}
-                        className="absolute z-20 h-3.5 w-3.5 cursor-nwse-resize rounded-full border-2 border-white bg-primary shadow-md"
+                        className="pointer-events-auto absolute z-20 h-3.5 w-3.5 cursor-nwse-resize rounded-full border-2 border-white bg-primary shadow-md"
                         style={{
                           top: imgBox.top + imgBox.height - 7,
                           left: imgBox.left + imgBox.width - 7,

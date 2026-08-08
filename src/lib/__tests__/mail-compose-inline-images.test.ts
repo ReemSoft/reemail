@@ -6,6 +6,8 @@ import {
   clampInlineImageWidth,
   createInlineComposeImage,
   insertInlineImageNode,
+  installInlineImageSelectionListener,
+  isInlineImageToolTarget,
   moveInlineImageNode,
   removeInlineImageNode,
   resolveInlineImageDropTarget,
@@ -148,6 +150,36 @@ describe("composer inline images", () => {
       releasePointerCapture,
       getSession: () => session,
       getCommits: () => commits,
+    };
+  }
+
+  function createSelectionHarness() {
+    const { editor, image } = createDropEditor();
+    let active: HTMLImageElement | null = image;
+    let clearCount = 0;
+    let selectCount = 0;
+    const cleanup = installInlineImageSelectionListener({
+      editor,
+      getActiveImage: () => active,
+      onSelect: (nextImage) => {
+        active = nextImage;
+        selectCount += 1;
+      },
+      onClear: () => {
+        active = null;
+        clearCount += 1;
+      },
+    });
+    return {
+      editor,
+      image,
+      cleanup,
+      getActive: () => active,
+      setActive: (next: HTMLImageElement | null) => {
+        active = next;
+      },
+      getClearCount: () => clearCount,
+      getSelectCount: () => selectCount,
     };
   }
 
@@ -362,6 +394,86 @@ describe("composer inline images", () => {
     expect(resolveInlineImageDropTarget(editor, image, 200, 580).usedFallback).toBe(true);
   });
 
+  it("never clears selection when moving from the image to nested SVG tool descendants", () => {
+    const harness = createSelectionHarness();
+    const tool = document.createElement("button");
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    tool.dataset.mmImageTool = "1";
+    svg.append(path);
+    tool.append(svg);
+    document.body.append(tool);
+    expect(isInlineImageToolTarget(path)).toBe(true);
+    harness.image.dispatchEvent(new MouseEvent("mouseout", { bubbles: true, relatedTarget: path }));
+    expect(harness.getActive()).toBe(harness.image);
+    path.dispatchEvent(pointer("pointerdown", { clientX: 20, clientY: 20 }));
+    expect(harness.getActive()).toBe(harness.image);
+    expect(harness.getClearCount()).toBe(0);
+    harness.cleanup();
+  });
+
+  it("clears selection exactly once on the first document pointerdown outside image tools", () => {
+    const harness = createSelectionHarness();
+    harness.editor.dispatchEvent(pointer("pointerdown", { clientX: 500, clientY: 500 }));
+    harness.editor.dispatchEvent(pointer("pointerdown", { clientX: 500, clientY: 500 }));
+    expect(harness.getActive()).toBeNull();
+    expect(harness.getClearCount()).toBe(1);
+    harness.cleanup();
+  });
+
+  it("clears selection on the first toolbar pointerdown", () => {
+    const harness = createSelectionHarness();
+    const toolbar = document.createElement("button");
+    document.body.append(toolbar);
+    toolbar.dispatchEvent(pointer("pointerdown", { clientX: 10, clientY: 10 }));
+    expect(harness.getActive()).toBeNull();
+    expect(harness.getClearCount()).toBe(1);
+    harness.cleanup();
+  });
+
+  it.each(["left", "center", "right"] as const)(
+    "runs %s alignment immediately from pointerdown on a nested SVG without clearing",
+    (alignment) => {
+      const harness = createSelectionHarness();
+      const button = document.createElement("button");
+      const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+      const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      button.dataset.mmImageTool = "1";
+      svg.append(path);
+      button.append(svg);
+      document.body.append(button);
+      const original = harness.image;
+      const originalId = original.dataset.mmInlineId;
+      const originalSrc = original.src;
+      button.addEventListener("pointerdown", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        alignInlineImageNode(original, harness.editor, alignment);
+      });
+      path.dispatchEvent(pointer("pointerdown", { clientX: 20, clientY: 20 }));
+      expect(harness.getActive()).toBe(original);
+      expect(harness.getClearCount()).toBe(0);
+      expect(harness.editor.querySelector("img")).toBe(original);
+      expect(original.dataset.mmInlineId).toBe(originalId);
+      expect(original.src).toBe(originalSrc);
+      expect(original.parentElement?.style.textAlign).toBe(alignment);
+      expect(original.parentElement?.style.width).toBe("100%");
+      harness.cleanup();
+    },
+  );
+
+  it("selects another inline image directly on its first pointerdown", () => {
+    const harness = createSelectionHarness();
+    const nextImage = document.createElement("img");
+    nextImage.dataset.mmInlineId = "next-id";
+    harness.editor.append(nextImage);
+    nextImage.dispatchEvent(pointer("pointerdown", { clientX: 200, clientY: 200 }));
+    expect(harness.getActive()).toBe(nextImage);
+    expect(harness.getSelectCount()).toBe(1);
+    expect(harness.getClearCount()).toBe(0);
+    harness.cleanup();
+  });
+
   it("runs the real overlay pointer lifecycle and moves the same node into blank lower space", () => {
     const harness = createGestureHarness();
     let bubbledPointerDown = 0;
@@ -374,9 +486,9 @@ describe("composer inline images", () => {
     expect(down.defaultPrevented).toBe(true);
     expect(bubbledPointerDown).toBe(0);
     expect(harness.getSession()).not.toBeNull();
-    expect(harness.setPointerCapture).toHaveBeenCalledWith(7);
+    expect(harness.setPointerCapture).not.toHaveBeenCalled();
 
-    window.dispatchEvent(pointer("pointermove", { clientX: 400, clientY: 580 }));
+    document.dispatchEvent(pointer("pointermove", { clientX: 400, clientY: 580 }));
     const marker = harness.editor.querySelector<HTMLElement>("[data-mm-drop-marker]");
     const ghost = document.body.querySelector<HTMLElement>("[data-mm-image-drag-ghost]");
     expect(marker).not.toBeNull();
@@ -384,7 +496,7 @@ describe("composer inline images", () => {
     expect(ghost?.style.top).toBe("560px");
     expect(harness.image.parentElement).toBe(harness.editor);
 
-    window.dispatchEvent(pointer("pointerup", { clientX: 400, clientY: 580 }));
+    document.dispatchEvent(pointer("pointerup", { clientX: 400, clientY: 580 }));
     expect(harness.getCommits()).toBe(1);
     expect(harness.editor.querySelector("img")).toBe(originalNode);
     expect(harness.image.dataset.mmInlineId).toBe(originalId);
@@ -393,7 +505,7 @@ describe("composer inline images", () => {
     expect(harness.image.parentElement?.style.textAlign).toBe("center");
     expect(document.body.querySelector("[data-mm-image-drag-ghost]")).toBeNull();
     expect(harness.editor.querySelector("[data-mm-drop-marker]")).toBeNull();
-    expect(harness.releasePointerCapture).toHaveBeenCalledWith(7);
+    expect(harness.releasePointerCapture).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -403,8 +515,8 @@ describe("composer inline images", () => {
   ] as const)("commits overlay drag X=%s with %s alignment", (clientX, alignment) => {
     const harness = createGestureHarness();
     harness.surface.dispatchEvent(pointer("pointerdown", { clientX: 150, clientY: 190 }));
-    window.dispatchEvent(pointer("pointermove", { clientX, clientY: 580 }));
-    window.dispatchEvent(pointer("pointerup", { clientX, clientY: 580 }));
+    document.dispatchEvent(pointer("pointermove", { clientX, clientY: 580 }));
+    document.dispatchEvent(pointer("pointerup", { clientX, clientY: 580 }));
     expect(harness.image.parentElement?.style.textAlign).toBe(alignment);
   });
 
@@ -413,22 +525,81 @@ describe("composer inline images", () => {
     const originalParent = harness.image.parentElement;
     const originalNext = harness.image.nextSibling;
     harness.surface.dispatchEvent(pointer("pointerdown", { clientX: 150, clientY: 190 }));
-    window.dispatchEvent(pointer("pointermove", { clientX: 650, clientY: 580 }));
+    document.dispatchEvent(pointer("pointermove", { clientX: 650, clientY: 580 }));
     expect(document.body.querySelector("[data-mm-image-drag-ghost]")).not.toBeNull();
-    window.dispatchEvent(pointer("pointercancel", { clientX: 650, clientY: 580 }));
+    expect(document.body.style.userSelect).toBe("none");
+    document.dispatchEvent(pointer("pointercancel", { clientX: 650, clientY: 580 }));
     expect(harness.getCommits()).toBe(0);
     expect(harness.image.parentElement).toBe(originalParent);
     expect(harness.image.nextSibling).toBe(originalNext);
     expect(harness.image.style.opacity).toBe("");
     expect(document.body.querySelector("[data-mm-image-drag-ghost]")).toBeNull();
     expect(harness.editor.querySelector("[data-mm-drop-marker]")).toBeNull();
+    expect(document.body.style.userSelect).toBe("");
+  });
+
+  it("cleans a document-capture drag session on window blur", () => {
+    const harness = createGestureHarness();
+    harness.surface.dispatchEvent(pointer("pointerdown", { clientX: 150, clientY: 190 }));
+    document.dispatchEvent(pointer("pointermove", { clientX: 650, clientY: 580 }));
+    window.dispatchEvent(new Event("blur"));
+    expect(harness.getCommits()).toBe(0);
+    expect(document.body.querySelector("[data-mm-image-drag-ghost]")).toBeNull();
+    expect(harness.editor.querySelector("[data-mm-drop-marker]")).toBeNull();
+    expect(document.body.style.userSelect).toBe("");
+  });
+
+  it("clears selection on the first outside pointerdown after a completed drag", () => {
+    const harness = createGestureHarness();
+    let active: HTMLImageElement | null = harness.image;
+    let clears = 0;
+    const cleanupSelection = installInlineImageSelectionListener({
+      editor: harness.editor,
+      getActiveImage: () => active,
+      onSelect: (image) => {
+        active = image;
+      },
+      onClear: () => {
+        active = null;
+        clears += 1;
+      },
+    });
+    harness.surface.dispatchEvent(pointer("pointerdown", { clientX: 150, clientY: 190 }));
+    document.dispatchEvent(pointer("pointermove", { clientX: 400, clientY: 580 }));
+    document.dispatchEvent(pointer("pointerup", { clientX: 400, clientY: 580 }));
+    harness.editor.dispatchEvent(pointer("pointerdown", { clientX: 500, clientY: 500 }));
+    expect(active).toBeNull();
+    expect(clears).toBe(1);
+    cleanupSelection();
+  });
+
+  it("deletes on the first pointerdown inside a nested delete icon", () => {
+    const harness = createSelectionHarness();
+    const button = document.createElement("button");
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    button.dataset.mmImageTool = "1";
+    svg.append(path);
+    button.append(svg);
+    document.body.append(button);
+    button.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      removeInlineImageNode(harness.image, harness.editor);
+      harness.setActive(null);
+    });
+    path.dispatchEvent(pointer("pointerdown", { clientX: 20, clientY: 20 }));
+    expect(harness.editor.querySelector("img")).toBeNull();
+    expect(harness.getActive()).toBeNull();
+    expect(harness.getClearCount()).toBe(0);
+    harness.cleanup();
   });
 
   it("keeps resize and delete behavior working after the overlay drag", () => {
     const harness = createGestureHarness();
     harness.surface.dispatchEvent(pointer("pointerdown", { clientX: 150, clientY: 190 }));
-    window.dispatchEvent(pointer("pointermove", { clientX: 400, clientY: 580 }));
-    window.dispatchEvent(pointer("pointerup", { clientX: 400, clientY: 580 }));
+    document.dispatchEvent(pointer("pointermove", { clientX: 400, clientY: 580 }));
+    document.dispatchEvent(pointer("pointerup", { clientX: 400, clientY: 580 }));
     harness.image.style.width = `${clampInlineImageWidth(360, 600)}px`;
     expect(harness.image.style.width).toBe("360px");
     const wrapper = harness.image.parentElement!;
@@ -445,6 +616,8 @@ describe("composer inline images", () => {
       alignInlineImageNode(image, editor, alignment);
       expect(editor.querySelector("img")).toBe(original);
       expect(image.parentElement?.style.textAlign).toBe(alignment);
+      expect(image.parentElement?.style.display).toBe("block");
+      expect(image.parentElement?.style.width).toBe("100%");
     },
   );
 
@@ -452,10 +625,20 @@ describe("composer inline images", () => {
     const source = readFileSync("src/routes/mail.tsx", "utf8");
     expect(source).toContain('data-mm-image-drag-surface="1"');
     expect(source).toContain("onPointerDown={startImageDrag}");
-    expect(source).not.toContain('editor.addEventListener("pointerdown"');
+    expect(source).not.toContain('editor.addEventListener("mouseout", clear)');
     expect(source).not.toMatch(/dragImg\.style\.pointerEvents|image\.style\.pointerEvents/);
     expect(source).toMatch(/e\.preventDefault\(\);\s+e\.stopPropagation\(\);/);
     expect(source.match(/data-mm-image-align=/g)).toHaveLength(1);
+    expect(source).not.toContain("onClick={() => alignActiveImage(alignment)}");
+    const helperSource = readFileSync("src/lib/mail-compose-inline-images.ts", "utf8");
+    expect(helperSource).toContain('document.addEventListener("pointerdown", onPointerDown, true)');
+    expect(helperSource).toContain('document.addEventListener("pointermove", onPointerMove');
+    expect(helperSource).toContain('document.addEventListener("pointerup", onPointerUp, true)');
+    expect(helperSource).toContain(
+      'document.addEventListener("pointercancel", onPointerCancel, true)',
+    );
+    expect(helperSource).toContain("closest('[data-mm-image-tool=\"1\"]')");
+    expect(helperSource).not.toContain("setPointerCapture(pointerId)");
   });
 
   it("wires one native picker flow without the legacy URL prompt or Base64 reader", () => {
