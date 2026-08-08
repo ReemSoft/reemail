@@ -6216,15 +6216,26 @@ function Composer({
     if (imageInputRef.current) imageInputRef.current.value = "";
     if (!picked.length) return;
 
-    // Restore the caret captured before opening the picker.
+    // Restore the caret captured before opening the picker. When the editor was
+    // never focused (very first click on the image button) there is no saved
+    // range, so place the caret at the end of the body — otherwise execCommand
+    // has no target range and the image silently goes nowhere.
     const range = imageRangeRef.current;
-    editorRef.current?.focus();
-    if (range) {
-      const sel = window.getSelection();
+    const editor = editorRef.current;
+    editor?.focus();
+    const sel = window.getSelection();
+    if (range && editor?.contains(range.startContainer)) {
       sel?.removeAllRanges();
       sel?.addRange(range);
+    } else if (editor) {
+      const end = document.createRange();
+      end.selectNodeContents(editor);
+      end.collapse(false);
+      sel?.removeAllRanges();
+      sel?.addRange(end);
     }
     imageRangeRef.current = null;
+
 
     for (const file of picked) {
       if (file.size > COMPOSE_MAX_INLINE_IMAGE) {
