@@ -6396,25 +6396,39 @@ function Composer({
     if (!img) return;
     e.preventDefault();
     e.stopPropagation();
+    const handle = e.currentTarget;
+    try {
+      handle.setPointerCapture(e.pointerId);
+    } catch {
+      /* noop */
+    }
+    // The handle always sits on the visual right edge (position is computed
+    // from getBoundingClientRect), so growth is always "drag right" — never
+    // mirror the delta for RTL, that inverted the gesture.
+    resizingImgRef.current = true;
+    img.draggable = false;
     const startX = e.clientX;
     const startW = img.getBoundingClientRect().width;
-    const rtl = getComputedStyle(img).direction === "rtl";
     const move = (ev: PointerEvent) => {
-      const delta = (ev.clientX - startX) * (rtl ? -1 : 1);
-      const next = Math.max(40, startW + delta);
+      const next = Math.max(40, startW + (ev.clientX - startX));
       img.style.width = `${Math.round(next)}px`;
       img.style.height = "auto";
       img.style.maxWidth = "100%";
       syncImgBox(img);
     };
     const up = () => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
+      handle.removeEventListener("pointermove", move);
+      handle.removeEventListener("pointerup", up);
+      handle.removeEventListener("pointercancel", up);
+      resizingImgRef.current = false;
+      img.draggable = true;
       notifyEditorChange();
     };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", up);
+    handle.addEventListener("pointercancel", up);
   }
+
 
 
 
