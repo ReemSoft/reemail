@@ -6278,15 +6278,16 @@ function Composer({
     });
   }, []);
 
-  // Track hovered/clicked image inside the editor; keep images draggable so
-  // contentEditable's native drag-and-drop can move them anywhere in the body.
+  // Track hovered/clicked images and move them with pointer events. Native
+  // HTML5 drag-and-drop is intentionally disabled: contentEditable consumes
+  // its drop event inconsistently (notably in Chromium and on touch devices).
   useEffect(() => {
     const editor = editorRef.current;
     if (!editor || plainMode) return;
     const pick = (e: Event) => {
       const t = e.target as HTMLElement | null;
       if (t && t.tagName === "IMG") {
-        (t as HTMLImageElement).draggable = true;
+        (t as HTMLImageElement).draggable = false;
         syncImgBox(t as HTMLImageElement);
       }
     };
@@ -6300,22 +6301,11 @@ function Composer({
 
     const refresh = () => syncImgBox(activeImgRef.current);
 
-    // Explicit drag-to-move for inline images (native contentEditable DnD is
-    // unreliable across browsers). Zero cost: listeners only fire while dragging.
     let dragImg: HTMLImageElement | null = null;
-    const onDragStart = (e: DragEvent) => {
-      const t = e.target as HTMLElement | null;
-      if (resizingImgRef.current) {
-        e.preventDefault();
-        return;
-      }
-      if (!t || t.tagName !== "IMG") return;
-
-      dragImg = t as HTMLImageElement;
-      e.dataTransfer?.setData("text/plain", "");
-      if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
-      syncImgBox(null);
-    };
+    let dragPointerId: number | null = null;
+    let dragStartX = 0;
+    let dragStartY = 0;
+    let didDrag = false;
     const caretAt = (x: number, y: number): Range | null => {
       const doc = document as Document & {
         caretRangeFromPoint?: (x: number, y: number) => Range | null;
@@ -6332,33 +6322,57 @@ function Composer({
       r.collapse(true);
       return r;
     };
-    const onDragOver = (e: DragEvent) => {
-      if (!dragImg) return;
-      e.preventDefault();
-      e.stopPropagation();
-      if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
-    };
-    const onDrop = (e: DragEvent) => {
-      if (!dragImg) return;
-      e.preventDefault();
-      e.stopPropagation();
-      const range = caretAt(e.clientX, e.clientY);
-      if (range && editor.contains(range.startContainer)) {
-        const img = dragImg;
-        img.remove();
-        range.insertNode(img);
-        range.setStartAfter(img);
-        range.collapse(true);
-        const sel = window.getSelection();
-        sel?.removeAllRanges();
-        sel?.addRange(range);
-        syncImgBox(img);
-        editor.dispatchEvent(new Event("input", { bubbles: true }));
+    const resetPointerDrag = () => {
+      if (dragImg) {
+        dragImg.style.opacity = "";
+        dragImg.style.cursor = "";
       }
       dragImg = null;
+      dragPointerId = null;
+      didDrag = false;
     };
-    const onDragEnd = () => {
-      dragImg = null;
+    const onPointerDown = (e: PointerEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (resizingImgRef.current || !target || target.tagName !== "IMG" || e.button !== 0) return;
+      dragImg = target as HTMLImageElement;
+      dragPointerId = e.pointerId;
+      dragStartX = e.clientX;
+      dragStartY = e.clientY;
+      didDrag = false;
+      dragImg.draggable = false;
+      syncImgBox(dragImg);
+    };
+    const onPointerMove = (e: PointerEvent) => {
+      if (!dragImg || dragPointerId !== e.pointerId) return;
+      if (!didDrag && Math.hypot(e.clientX - dragStartX, e.clientY - dragStartY) < 5) return;
+      didDrag = true;
+      e.preventDefault();
+      dragImg.style.opacity = "0.55";
+      dragImg.style.cursor = "grabbing";
+      syncImgBox(null);
+    };
+    const onPointerUp = (e: PointerEvent) => {
+      if (!dragImg || dragPointerId !== e.pointerId) return;
+      const img = dragImg;
+      if (didDrag) {
+        e.preventDefault();
+        const range = caretAt(e.clientX, e.clientY);
+        if (range && editor.contains(range.startContainer) && range.startContainer !== img) {
+          const marker = document.createComment("mailmaestro-image-drop");
+          range.insertNode(marker);
+          img.remove();
+          marker.replaceWith(img);
+          const selectionRange = document.createRange();
+          selectionRange.setStartAfter(img);
+          selectionRange.collapse(true);
+          const sel = window.getSelection();
+          sel?.removeAllRanges();
+          sel?.addRange(selectionRange);
+          editor.dispatchEvent(new Event("input", { bubbles: true }));
+        }
+      }
+      resetPointerDrag();
+      syncImgBox(img);
     };
 
     editor.addEventListener("mouseover", pick);
@@ -6366,10 +6380,10 @@ function Composer({
     editor.addEventListener("click", pick);
     editor.addEventListener("input", refresh);
     editor.addEventListener("scroll", refresh, true);
-    editor.addEventListener("dragstart", onDragStart);
-    editor.addEventListener("dragover", onDragOver);
-    editor.addEventListener("drop", onDrop);
-    editor.addEventListener("dragend", onDragEnd);
+    editor.addEventListener("pointerdown", onPointerDown);
+    window.addEventListener("pointermove", onPointerMove, { passive: false });
+    window.addEventListener("pointerup", onPointerUp);
+    window.addEventListener("pointercancel", resetPointerDrag);
     window.addEventListener("resize", refresh);
     return () => {
       editor.removeEventListener("mouseover", pick);
@@ -6377,10 +6391,10 @@ function Composer({
       editor.removeEventListener("click", pick);
       editor.removeEventListener("input", refresh);
       editor.removeEventListener("scroll", refresh, true);
-      editor.removeEventListener("dragstart", onDragStart);
-      editor.removeEventListener("dragover", onDragOver);
-      editor.removeEventListener("drop", onDrop);
-      editor.removeEventListener("dragend", onDragEnd);
+      editor.removeEventListener("pointerdown", onPointerDown);
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerUp);
+      window.removeEventListener("pointercancel", resetPointerDrag);
       window.removeEventListener("resize", refresh);
     };
   }, [plainMode, syncImgBox]);
@@ -6428,7 +6442,7 @@ function Composer({
       handle.removeEventListener("pointerup", up);
       handle.removeEventListener("pointercancel", up);
       resizingImgRef.current = false;
-      img.draggable = true;
+      img.draggable = false;
       notifyEditorChange();
     };
     handle.addEventListener("pointermove", move);
