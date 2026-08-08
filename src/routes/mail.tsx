@@ -7599,7 +7599,7 @@ function Composer({
           <button
             onClick={handleSend}
             disabled={sending || to.length === 0}
-            className="inline-flex items-center gap-2 rounded-lg bg-brand-gradient px-4 py-2 text-sm font-semibold text-white shadow-brand transition hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-60 sm:px-5 sm:py-2.5"
+            className="inline-flex items-center gap-2 rounded-lg bg-brand-gradient px-4 py-2 text-xs font-semibold text-white shadow-brand transition hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-60"
             title={tr("إرسال (Ctrl+Enter)")}
           >
             {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
