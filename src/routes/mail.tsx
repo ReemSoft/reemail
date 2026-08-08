@@ -5583,6 +5583,8 @@ function Composer({
   // Inline-image affordances (hover toolbar: delete + resize handle).
   const editorWrapRef = useRef<HTMLDivElement | null>(null);
   const activeImgRef = useRef<HTMLImageElement | null>(null);
+  const resizingImgRef = useRef(false);
+
   const [imgBox, setImgBox] = useState<{
     top: number;
     left: number;
@@ -6216,15 +6218,26 @@ function Composer({
     if (imageInputRef.current) imageInputRef.current.value = "";
     if (!picked.length) return;
 
-    // Restore the caret captured before opening the picker.
+    // Restore the caret captured before opening the picker. When the editor was
+    // never focused (very first click on the image button) there is no saved
+    // range, so place the caret at the end of the body — otherwise execCommand
+    // has no target range and the image silently goes nowhere.
     const range = imageRangeRef.current;
-    editorRef.current?.focus();
-    if (range) {
-      const sel = window.getSelection();
+    const editor = editorRef.current;
+    editor?.focus();
+    const sel = window.getSelection();
+    if (range && editor?.contains(range.startContainer)) {
       sel?.removeAllRanges();
       sel?.addRange(range);
+    } else if (editor) {
+      const end = document.createRange();
+      end.selectNodeContents(editor);
+      end.collapse(false);
+      sel?.removeAllRanges();
+      sel?.addRange(end);
     }
     imageRangeRef.current = null;
+
 
     for (const file of picked) {
       if (file.size > COMPOSE_MAX_INLINE_IMAGE) {
@@ -6278,11 +6291,13 @@ function Composer({
       }
     };
     const clear = (e: MouseEvent) => {
+      if (resizingImgRef.current) return;
       const next = e.relatedTarget as Node | null;
       if (next && (next as HTMLElement).dataset?.imgTool === "1") return;
       if (activeImgRef.current && next && activeImgRef.current.contains(next)) return;
       syncImgBox(null);
     };
+
     const refresh = () => syncImgBox(activeImgRef.current);
 
     // Explicit drag-to-move for inline images (native contentEditable DnD is
@@ -6290,7 +6305,12 @@ function Composer({
     let dragImg: HTMLImageElement | null = null;
     const onDragStart = (e: DragEvent) => {
       const t = e.target as HTMLElement | null;
+      if (resizingImgRef.current) {
+        e.preventDefault();
+        return;
+      }
       if (!t || t.tagName !== "IMG") return;
+
       dragImg = t as HTMLImageElement;
       e.dataTransfer?.setData("text/plain", "");
       if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
@@ -6383,25 +6403,39 @@ function Composer({
     if (!img) return;
     e.preventDefault();
     e.stopPropagation();
+    const handle = e.currentTarget;
+    try {
+      handle.setPointerCapture(e.pointerId);
+    } catch {
+      /* noop */
+    }
+    // The handle always sits on the visual right edge (position is computed
+    // from getBoundingClientRect), so growth is always "drag right" — never
+    // mirror the delta for RTL, that inverted the gesture.
+    resizingImgRef.current = true;
+    img.draggable = false;
     const startX = e.clientX;
     const startW = img.getBoundingClientRect().width;
-    const rtl = getComputedStyle(img).direction === "rtl";
     const move = (ev: PointerEvent) => {
-      const delta = (ev.clientX - startX) * (rtl ? -1 : 1);
-      const next = Math.max(40, startW + delta);
+      const next = Math.max(40, startW + (ev.clientX - startX));
       img.style.width = `${Math.round(next)}px`;
       img.style.height = "auto";
       img.style.maxWidth = "100%";
       syncImgBox(img);
     };
     const up = () => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
+      handle.removeEventListener("pointermove", move);
+      handle.removeEventListener("pointerup", up);
+      handle.removeEventListener("pointercancel", up);
+      resizingImgRef.current = false;
+      img.draggable = true;
       notifyEditorChange();
     };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", up);
+    handle.addEventListener("pointercancel", up);
   }
+
 
 
 
