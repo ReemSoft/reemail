@@ -5583,6 +5583,8 @@ function Composer({
   // Inline-image affordances (hover toolbar: delete + resize handle).
   const editorWrapRef = useRef<HTMLDivElement | null>(null);
   const activeImgRef = useRef<HTMLImageElement | null>(null);
+  const resizingImgRef = useRef(false);
+
   const [imgBox, setImgBox] = useState<{
     top: number;
     left: number;
