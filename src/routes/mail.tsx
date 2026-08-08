@@ -6284,11 +6284,72 @@ function Composer({
       syncImgBox(null);
     };
     const refresh = () => syncImgBox(activeImgRef.current);
+
+    // Explicit drag-to-move for inline images (native contentEditable DnD is
+    // unreliable across browsers). Zero cost: listeners only fire while dragging.
+    let dragImg: HTMLImageElement | null = null;
+    const onDragStart = (e: DragEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (!t || t.tagName !== "IMG") return;
+      dragImg = t as HTMLImageElement;
+      e.dataTransfer?.setData("text/plain", "");
+      if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
+      syncImgBox(null);
+    };
+    const caretAt = (x: number, y: number): Range | null => {
+      const doc = document as Document & {
+        caretRangeFromPoint?: (x: number, y: number) => Range | null;
+        caretPositionFromPoint?: (
+          x: number,
+          y: number,
+        ) => { offsetNode: Node; offset: number } | null;
+      };
+      if (doc.caretRangeFromPoint) return doc.caretRangeFromPoint(x, y);
+      const pos = doc.caretPositionFromPoint?.(x, y);
+      if (!pos) return null;
+      const r = document.createRange();
+      r.setStart(pos.offsetNode, pos.offset);
+      r.collapse(true);
+      return r;
+    };
+    const onDragOver = (e: DragEvent) => {
+      if (!dragImg) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+    };
+    const onDrop = (e: DragEvent) => {
+      if (!dragImg) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const range = caretAt(e.clientX, e.clientY);
+      if (range && editor.contains(range.startContainer)) {
+        const img = dragImg;
+        img.remove();
+        range.insertNode(img);
+        range.setStartAfter(img);
+        range.collapse(true);
+        const sel = window.getSelection();
+        sel?.removeAllRanges();
+        sel?.addRange(range);
+        syncImgBox(img);
+        editor.dispatchEvent(new Event("input", { bubbles: true }));
+      }
+      dragImg = null;
+    };
+    const onDragEnd = () => {
+      dragImg = null;
+    };
+
     editor.addEventListener("mouseover", pick);
     editor.addEventListener("mouseout", clear);
     editor.addEventListener("click", pick);
     editor.addEventListener("input", refresh);
     editor.addEventListener("scroll", refresh, true);
+    editor.addEventListener("dragstart", onDragStart);
+    editor.addEventListener("dragover", onDragOver);
+    editor.addEventListener("drop", onDrop);
+    editor.addEventListener("dragend", onDragEnd);
     window.addEventListener("resize", refresh);
     return () => {
       editor.removeEventListener("mouseover", pick);
@@ -6296,9 +6357,14 @@ function Composer({
       editor.removeEventListener("click", pick);
       editor.removeEventListener("input", refresh);
       editor.removeEventListener("scroll", refresh, true);
+      editor.removeEventListener("dragstart", onDragStart);
+      editor.removeEventListener("dragover", onDragOver);
+      editor.removeEventListener("drop", onDrop);
+      editor.removeEventListener("dragend", onDragEnd);
       window.removeEventListener("resize", refresh);
     };
   }, [plainMode, syncImgBox]);
+
 
   function notifyEditorChange() {
     editorRef.current?.dispatchEvent(new Event("input", { bubbles: true }));
