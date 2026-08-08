@@ -6291,11 +6291,13 @@ function Composer({
       }
     };
     const clear = (e: MouseEvent) => {
+      if (resizingImgRef.current) return;
       const next = e.relatedTarget as Node | null;
       if (next && (next as HTMLElement).dataset?.imgTool === "1") return;
       if (activeImgRef.current && next && activeImgRef.current.contains(next)) return;
       syncImgBox(null);
     };
+
     const refresh = () => syncImgBox(activeImgRef.current);
 
     // Explicit drag-to-move for inline images (native contentEditable DnD is
