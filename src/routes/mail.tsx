@@ -6245,6 +6245,100 @@ function Composer({
     }
   }
 
+  /* ---- Inline image manipulation (hover delete + drag move + resize) ---- */
+
+  const syncImgBox = useCallback((img: HTMLImageElement | null) => {
+    const wrap = editorWrapRef.current;
+    if (!img || !wrap || !wrap.contains(img)) {
+      activeImgRef.current = null;
+      setImgBox(null);
+      return;
+    }
+    const a = img.getBoundingClientRect();
+    const b = wrap.getBoundingClientRect();
+    activeImgRef.current = img;
+    setImgBox({
+      top: a.top - b.top,
+      left: a.left - b.left,
+      width: a.width,
+      height: a.height,
+    });
+  }, []);
+
+  // Track hovered/clicked image inside the editor; keep images draggable so
+  // contentEditable's native drag-and-drop can move them anywhere in the body.
+  useEffect(() => {
+    const editor = editorRef.current;
+    if (!editor || plainMode) return;
+    const pick = (e: Event) => {
+      const t = e.target as HTMLElement | null;
+      if (t && t.tagName === "IMG") {
+        (t as HTMLImageElement).draggable = true;
+        syncImgBox(t as HTMLImageElement);
+      }
+    };
+    const clear = (e: MouseEvent) => {
+      const next = e.relatedTarget as Node | null;
+      if (next && (next as HTMLElement).dataset?.imgTool === "1") return;
+      if (activeImgRef.current && next && activeImgRef.current.contains(next)) return;
+      syncImgBox(null);
+    };
+    const refresh = () => syncImgBox(activeImgRef.current);
+    editor.addEventListener("mouseover", pick);
+    editor.addEventListener("mouseout", clear);
+    editor.addEventListener("click", pick);
+    editor.addEventListener("input", refresh);
+    editor.addEventListener("scroll", refresh, true);
+    window.addEventListener("resize", refresh);
+    return () => {
+      editor.removeEventListener("mouseover", pick);
+      editor.removeEventListener("mouseout", clear);
+      editor.removeEventListener("click", pick);
+      editor.removeEventListener("input", refresh);
+      editor.removeEventListener("scroll", refresh, true);
+      window.removeEventListener("resize", refresh);
+    };
+  }, [plainMode, syncImgBox]);
+
+  function notifyEditorChange() {
+    editorRef.current?.dispatchEvent(new Event("input", { bubbles: true }));
+  }
+
+  function deleteActiveImage() {
+    const img = activeImgRef.current;
+    if (!img) return;
+    img.remove();
+    syncImgBox(null);
+    notifyEditorChange();
+  }
+
+  function startImageResize(e: React.PointerEvent<HTMLButtonElement>) {
+    const img = activeImgRef.current;
+    if (!img) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const startX = e.clientX;
+    const startW = img.getBoundingClientRect().width;
+    const rtl = getComputedStyle(img).direction === "rtl";
+    const move = (ev: PointerEvent) => {
+      const delta = (ev.clientX - startX) * (rtl ? -1 : 1);
+      const next = Math.max(40, startW + delta);
+      img.style.width = `${Math.round(next)}px`;
+      img.style.height = "auto";
+      img.style.maxWidth = "100%";
+      syncImgBox(img);
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      notifyEditorChange();
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  }
+
+
+
   const extensionContext = {
     getHtml: () => editorRef.current?.innerHTML ?? "",
     setHtml: (h: string) => {
