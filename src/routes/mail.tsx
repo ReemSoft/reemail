@@ -4866,6 +4866,7 @@ function LoadingViewer({ onBack }: { onBack: () => void }) {
 
 const COMPOSE_MAX_TOTAL_BYTES = 25 * 1024 * 1024;
 const COMPOSE_MAX_FILES = 10;
+const COMPOSE_MAX_INLINE_IMAGE = 5 * 1024 * 1024;
 
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
@@ -5575,6 +5576,8 @@ function Composer({
   );
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const imageInputRef = useRef<HTMLInputElement | null>(null);
+  const imageRangeRef = useRef<Range | null>(null);
   const editorRef = useRef<HTMLDivElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
 
@@ -6189,17 +6192,46 @@ function Composer({
     exec("insertHorizontalRule");
   }
   function promptImage() {
-    const url = window.prompt(tr("رابط الصورة (https://):"), "https://");
-    if (!url) return;
-    try {
-      const u = new URL(url);
-      if (!/^https?:$/.test(u.protocol)) {
-        toast.error(tr("رابط صورة غير مدعوم"));
-        return;
+    // Save the caret before the file dialog steals focus.
+    const sel = typeof window !== "undefined" ? window.getSelection() : null;
+    imageRangeRef.current =
+      sel && sel.rangeCount > 0 && editorRef.current?.contains(sel.anchorNode)
+        ? sel.getRangeAt(0).cloneRange()
+        : null;
+    imageInputRef.current?.click();
+  }
+
+  async function insertImageFiles(list: FileList | null) {
+    const picked = Array.from(list ?? []).filter((f) => f.type.startsWith("image/"));
+    if (imageInputRef.current) imageInputRef.current.value = "";
+    if (!picked.length) return;
+
+    // Restore the caret captured before opening the picker.
+    const range = imageRangeRef.current;
+    editorRef.current?.focus();
+    if (range) {
+      const sel = window.getSelection();
+      sel?.removeAllRanges();
+      sel?.addRange(range);
+    }
+    imageRangeRef.current = null;
+
+    for (const file of picked) {
+      if (file.size > COMPOSE_MAX_INLINE_IMAGE) {
+        toast.error(tr("حجم الصورة كبير جداً (الحد 5MB)"));
+        continue;
       }
-      insertHtmlAtCursor(`<img src="${u.toString()}" alt="" style="max-width:100%;height:auto" />`);
-    } catch {
-      toast.error(tr("رابط غير صالح"));
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result || ""));
+        reader.onerror = () => reject(reader.error);
+        reader.readAsDataURL(file);
+      }).catch(() => "");
+      if (!dataUrl.startsWith("data:image/")) {
+        toast.error(tr("تعذّر قراءة الصورة"));
+        continue;
+      }
+      insertHtmlAtCursor(`<img src="${dataUrl}" alt="" style="max-width:100%;height:auto" />`);
     }
   }
 
@@ -7049,6 +7081,14 @@ function Composer({
             {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
             {sending ? (progress > 0 ? `${progress}%` : tr("جاري الإرسال")) : tr("إرسال")}
           </button>
+          <input
+            ref={imageInputRef}
+            type="file"
+            accept="image/*"
+            multiple
+            className="hidden"
+            onChange={(e) => void insertImageFiles(e.target.files)}
+          />
           <input
             ref={fileInputRef}
             type="file"
