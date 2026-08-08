@@ -6306,6 +6306,9 @@ function Composer({
     let dragStartX = 0;
     let dragStartY = 0;
     let didDrag = false;
+    let dropMarker: HTMLSpanElement | null = null;
+    let previousPointerEvents = "";
+    let previousTouchAction = "";
     const caretAt = (x: number, y: number): Range | null => {
       const doc = document as Document & {
         caretRangeFromPoint?: (x: number, y: number) => Range | null;
@@ -6326,7 +6329,11 @@ function Composer({
       if (dragImg) {
         dragImg.style.opacity = "";
         dragImg.style.cursor = "";
+        dragImg.style.pointerEvents = previousPointerEvents;
+        dragImg.style.touchAction = previousTouchAction;
       }
+      dropMarker?.remove();
+      dropMarker = null;
       dragImg = null;
       dragPointerId = null;
       didDrag = false;
@@ -6340,26 +6347,54 @@ function Composer({
       dragStartY = e.clientY;
       didDrag = false;
       dragImg.draggable = false;
+      previousPointerEvents = dragImg.style.pointerEvents;
+      previousTouchAction = dragImg.style.touchAction;
+      dragImg.style.touchAction = "none";
+      try {
+        dragImg.setPointerCapture(e.pointerId);
+      } catch {
+        /* Window listeners remain the fallback. */
+      }
       syncImgBox(dragImg);
     };
     const onPointerMove = (e: PointerEvent) => {
       if (!dragImg || dragPointerId !== e.pointerId) return;
       if (!didDrag && Math.hypot(e.clientX - dragStartX, e.clientY - dragStartY) < 5) return;
-      didDrag = true;
+      if (!didDrag) {
+        didDrag = true;
+        dropMarker = document.createElement("span");
+        dropMarker.contentEditable = "false";
+        dropMarker.setAttribute("aria-hidden", "true");
+        dropMarker.style.cssText =
+          "display:inline-block;width:2px;height:1.4em;vertical-align:text-bottom;background:currentColor;pointer-events:none";
+        // Let caretRangeFromPoint see the editable text below the image rather
+        // than repeatedly resolving to the image being dragged.
+        dragImg.style.pointerEvents = "none";
+      }
       e.preventDefault();
       dragImg.style.opacity = "0.55";
       dragImg.style.cursor = "grabbing";
       syncImgBox(null);
+
+      const range = caretAt(e.clientX, e.clientY);
+      if (
+        range &&
+        editor.contains(range.startContainer) &&
+        range.startContainer !== dragImg &&
+        !(dropMarker && dropMarker.contains(range.startContainer))
+      ) {
+        dropMarker?.remove();
+        range.insertNode(dropMarker as HTMLSpanElement);
+      }
     };
     const onPointerUp = (e: PointerEvent) => {
       if (!dragImg || dragPointerId !== e.pointerId) return;
       const img = dragImg;
       if (didDrag) {
         e.preventDefault();
-        const range = caretAt(e.clientX, e.clientY);
-        if (range && editor.contains(range.startContainer) && range.startContainer !== img) {
-          const marker = document.createComment("mailmaestro-image-drop");
-          range.insertNode(marker);
+        if (dropMarker?.isConnected) {
+          const marker = dropMarker;
+          dropMarker = null;
           img.remove();
           marker.replaceWith(img);
           const selectionRange = document.createRange();
