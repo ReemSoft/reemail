@@ -347,10 +347,10 @@
 .composer-editor ol { list-style: decimal; padding-inline-start: 1.5rem; }
 .composer-editor a { color: hsl(var(--primary)); text-decoration: underline; }
 /* Inline images: draggable to reposition, hoverable for the delete/resize tools */
-.composer-editor img {
+.composer-editor img[data-mm-inline-id] {
   cursor: move;
+  touch-action: none;
   max-width: 100%;
   height: auto;
   border-radius: 4px;
 }
-

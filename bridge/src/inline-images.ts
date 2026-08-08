@@ -1,0 +1,100 @@
+import { z } from "zod";
+import { open } from "node:fs/promises";
+import type { SendAttachment } from "./smtp.js";
+
+export const INLINE_IMAGE_MIME_TYPES = [
+  "image/png",
+  "image/jpeg",
+  "image/gif",
+  "image/webp",
+] as const;
+export const INLINE_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
+
+export const InlineImageMetadataSchema = z
+  .array(
+    z.object({
+      uploadFilename: z.string().regex(/^mm-inline-[a-f0-9]{32}\.(?:png|jpg|gif|webp)$/),
+      cid: z.string().regex(/^mm-inline-[a-f0-9]{32}@mailmaestro$/),
+      contentType: z.enum(INLINE_IMAGE_MIME_TYPES),
+    }),
+  )
+  .max(10)
+  .superRefine((items, ctx) => {
+    const names = new Set<string>();
+    const cids = new Set<string>();
+    for (const item of items) {
+      if (names.has(item.uploadFilename) || cids.has(item.cid)) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: "DUPLICATE_INLINE_IMAGE" });
+      }
+      names.add(item.uploadFilename);
+      cids.add(item.cid);
+    }
+  });
+
+export interface UploadedInlineFile {
+  originalname: string;
+  path: string;
+  mimetype: string;
+  size: number;
+}
+
+async function readFilePrefix(path: string): Promise<Buffer> {
+  const handle = await open(path, "r");
+  try {
+    const buffer = Buffer.alloc(12);
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+    return buffer.subarray(0, bytesRead);
+  } finally {
+    await handle.close();
+  }
+}
+
+function sniffMime(prefix: Uint8Array): string | null {
+  const bytes = Buffer.from(prefix);
+  const hex = bytes.toString("hex");
+  const ascii = bytes.toString("ascii");
+  if (hex.startsWith("89504e470d0a1a0a")) return "image/png";
+  if (hex.startsWith("ffd8ff")) return "image/jpeg";
+  if (ascii.startsWith("GIF87a") || ascii.startsWith("GIF89a")) return "image/gif";
+  if (ascii.startsWith("RIFF") && ascii.slice(8, 12) === "WEBP") return "image/webp";
+  return null;
+}
+
+export async function mapUploadedAttachments(
+  files: UploadedInlineFile[],
+  rawMetadata: unknown,
+  readPrefix: (path: string) => Promise<Uint8Array> = readFilePrefix,
+): Promise<SendAttachment[]> {
+  const metadata = InlineImageMetadataSchema.parse(rawMetadata ?? []);
+  const byName = new Map(metadata.map((item) => [item.uploadFilename, item]));
+  for (const name of byName.keys()) {
+    if (files.filter((file) => file.originalname === name).length !== 1) {
+      throw new Error("INLINE_IMAGE_FILE_MISMATCH");
+    }
+  }
+  const matched = new Set<string>();
+  const attachments = await Promise.all(
+    files.map(async (file): Promise<SendAttachment> => {
+      const inline = byName.get(file.originalname);
+      if (!inline)
+        return { filename: file.originalname, path: file.path, contentType: file.mimetype };
+      if (
+        file.size > INLINE_IMAGE_MAX_BYTES ||
+        file.mimetype !== inline.contentType ||
+        (await readPrefix(file.path).then(sniffMime)) !== inline.contentType ||
+        !INLINE_IMAGE_MIME_TYPES.includes(file.mimetype as (typeof INLINE_IMAGE_MIME_TYPES)[number])
+      )
+        throw new Error("INVALID_INLINE_IMAGE");
+      matched.add(file.originalname);
+      return {
+        filename: file.originalname,
+        path: file.path,
+        contentType: file.mimetype,
+        cid: inline.cid,
+        contentDisposition: "inline",
+      };
+    }),
+  );
+  if (matched.size !== metadata.length) throw new Error("INLINE_IMAGE_FILE_MISMATCH");
+  return attachments;
+}

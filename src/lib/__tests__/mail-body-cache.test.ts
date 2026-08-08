@@ -45,7 +45,9 @@ const CACHED = {
   body_text: null,
   preview: "hello",
   inline_parts: [],
+  inline_images: [],
   attachments: [],
+  headers_meta: {},
   byte_size: 12,
   oversize: false,
 };

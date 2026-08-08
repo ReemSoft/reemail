@@ -11,6 +11,8 @@ export interface SendAttachment {
   /** On-disk path — nodemailer streams it, keeping RSS flat. */
   path?: string;
   contentType?: string;
+  cid?: string;
+  contentDisposition?: "inline" | "attachment";
 }
 
 export interface SendMessagePayload {
@@ -177,6 +179,8 @@ export async function buildMime(
       filename: a.filename,
       ...(a.path ? { path: a.path } : { content: a.content }),
       contentType: a.contentType,
+      cid: a.cid,
+      contentDisposition: a.contentDisposition,
     }));
   }
   if (extraHeaders && Object.keys(extraHeaders).length > 0) {

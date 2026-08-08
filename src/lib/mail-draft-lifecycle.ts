@@ -60,6 +60,13 @@ export interface DraftSnapshot {
   html: string;
   showCc: boolean;
   showBcc: boolean;
+  inlineImages?: Array<{
+    id: string;
+    cid: string;
+    mimeType: "image/png" | "image/jpeg" | "image/gif" | "image/webp";
+    filename: string;
+    uploadFilename: string;
+  }>;
 }
 
 export interface DraftServerRef {

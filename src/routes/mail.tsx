@@ -645,6 +645,29 @@ import {
 } from "@/lib/mail-mock";
 import type { MailFolder, MailMessage } from "@/lib/mail-types";
 import { buildEmailHtmlDocument, htmlToPlainText } from "@/lib/mail-compose-html";
+import {
+  createInlineComposeImage,
+  dataUriToFile,
+  hydrateInlineComposeImage,
+  insertInlineImageNode,
+  serializeInlineImages,
+  metadataToTransport,
+  toInlineImageMetadata,
+  validateInlineImageFile,
+  clampInlineImageWidth,
+  moveInlineImageNode,
+  removeInlineImageNode,
+  findInlineImageNodeByCid,
+  type InlineComposeImage,
+  type InlineImageMime,
+} from "@/lib/mail-compose-inline-images";
+import {
+  clearInlineImages,
+  deleteInlineImage,
+  inlineImageScope,
+  persistInlineImage,
+  readInlineImages,
+} from "@/lib/mail-compose-inline-store.browser";
 
 import { clearMailSession, getMailSession, type MailSession } from "@/lib/mail-session";
 import { MailboxSwitcher } from "@/components/mailbox-switcher";
@@ -953,6 +976,9 @@ type ComposeInitial = {
   existingAttachments?: EditDraftSource;
   /** When true, `body` is already sanitized HTML and is loaded verbatim. */
   bodyIsHtml?: boolean;
+  inlineParts?: NonNullable<MailMessage["inlineParts"]>;
+  inlineImages?: NonNullable<MailMessage["inlineImages"]>;
+  inlineMessageId?: string;
 };
 
 function stripHtml(html: string): string {
@@ -1031,9 +1057,14 @@ function buildEditDraft(message: MailMessage, draftsFolderPath?: string): Compos
         }
       : undefined;
   const rawSubject = message.subject === tr("(بدون موضوع)") ? "" : message.subject;
+  const normalAttachments = (message.attachments ?? []).filter(
+    (attachment) =>
+      attachment.disposition !== "inline" &&
+      !(message.inlineParts ?? []).some((part) => part.part === attachment.part),
+  );
   const existingAttachments =
-    message.attachments && message.attachments.length > 0
-      ? { messageId: message.id, attachments: message.attachments }
+    normalAttachments.length > 0
+      ? { messageId: message.id, attachments: normalAttachments }
       : undefined;
   return {
     to,
@@ -1044,6 +1075,9 @@ function buildEditDraft(message: MailMessage, draftsFolderPath?: string): Compos
     editDraftId,
     previousRef,
     existingAttachments,
+    inlineParts: message.inlineParts,
+    inlineImages: message.inlineImages,
+    inlineMessageId: message.id,
   };
 }
 
@@ -4866,7 +4900,6 @@ function LoadingViewer({ onBack }: { onBack: () => void }) {
 
 const COMPOSE_MAX_TOTAL_BYTES = 25 * 1024 * 1024;
 const COMPOSE_MAX_FILES = 10;
-const COMPOSE_MAX_INLINE_IMAGE = 5 * 1024 * 1024;
 
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
@@ -5393,6 +5426,7 @@ function Composer({
   const existingFilesCacheRef = useRef<Map<string, File>>(new Map());
 
   const [files, setFiles] = useState<File[]>([]);
+  const [inlineImages, setInlineImages] = useState<InlineComposeImage[]>([]);
   const [sending, setSending] = useState(false);
   const [progress, setProgress] = useState(0);
   // Composer runs inline inside the message-viewer pane (Superhuman-style).
@@ -5463,6 +5497,7 @@ function Composer({
   // Forward refs so the persistent saveRemote closure (created once at mount)
   // always reads the latest attachment state without a re-instantiation.
   const filesRef = useRef<File[]>([]);
+  const inlineImagesRef = useRef<InlineComposeImage[]>([]);
   const resolveExistingAsFilesRef = useRef<() => Promise<File[] | null>>(async () => []);
 
   const saverRef = useRef<DraftSaver | null>(null);
@@ -5485,6 +5520,15 @@ function Composer({
           return { ok: false, code: "NETWORK" };
         }
         const currentFiles = filesRef.current;
+        const currentInlineImages = inlineImagesRef.current;
+        const transport = serializeInlineImages(snapshot.html, currentInlineImages);
+        const usedUploadNames = new Set(
+          transport.inlineImages.map((image) => image.uploadFilename),
+        );
+        const transportImages = currentInlineImages.filter((image) =>
+          usedUploadNames.has(image.uploadFilename),
+        );
+        const transportHtml = sanitizeComposerHtml(transport.html);
         const form = new FormData();
         const payload = {
           mailSessionToken: token,
@@ -5499,13 +5543,17 @@ function Composer({
             .filter((r) => r.valid)
             .map((r) => ({ name: r.name ?? "", email: r.email })),
           subject: snapshot.subject,
-          bodyHtml: snapshot.html,
-          bodyText: stripHtml(snapshot.html),
+          bodyHtml: transportHtml,
+          bodyText: stripHtml(transportHtml),
           previousRef: previousRef ?? undefined,
+          inlineImages: metadataToTransport(transportImages),
         };
         form.append("payload", JSON.stringify(payload));
         for (const f of keptFiles) form.append("attachments", f, f.name);
         for (const f of currentFiles) form.append("attachments", f, f.name);
+        for (const image of transportImages) {
+          form.append("attachments", image.file, image.uploadFilename);
+        }
         try {
           const res = await bridgeSaveDraftFn({ data: form });
           if (res?.ok) {
@@ -5591,13 +5639,138 @@ function Composer({
     width: number;
     height: number;
   } | null>(null);
+  const inlineScope = useMemo(
+    () => inlineImageScope(companyId, accountId, draftId),
+    [companyId, accountId, draftId],
+  );
+  const inlineHydratedRef = useRef(false);
+  const resolveDraftInlineImages = useMailServerFn(resolveMessageInlineImages);
 
-
-  // Set initial editor HTML once
+  // Set initial editor HTML once, then hydrate durable/local or IMAP CID bytes
+  // into fresh object URLs. Neither localStorage nor outgoing HTML keeps blob URLs.
   useEffect(() => {
     if (editorRef.current && initialHtml && editorRef.current.innerHTML === "") {
       editorRef.current.innerHTML = initialHtml;
     }
+    let cancelled = false;
+    const hydrate = async () => {
+      const editor = editorRef.current;
+      if (!editor) return;
+      const hydrated: InlineComposeImage[] = [];
+      try {
+        for (const row of await readInlineImages(inlineScope)) {
+          const file = new File([row.blob], row.filename, { type: row.mimeType });
+          hydrated.push(hydrateInlineComposeImage(file, row));
+        }
+      } catch {
+        /* IndexedDB may be unavailable in private mode; remote save remains available. */
+      }
+      let remote = initial?.inlineImages ?? [];
+      const present = new Set(remote.map((item) => item.cid.toLowerCase()));
+      const missing = (initial?.inlineParts ?? []).filter(
+        (item) => !present.has(item.cid.toLowerCase()),
+      );
+      const batchParts = missing.filter((item) => item.size <= 256 * 1024);
+      const streamedParts = missing.filter((item) => item.size > 256 * 1024);
+      const parsed = initial?.inlineMessageId ? parseMessageId(initial.inlineMessageId) : null;
+      if (batchParts.length && parsed && session.mailSessionToken) {
+        try {
+          const result = await resolveDraftInlineImages({
+            data: {
+              mailSessionToken: session.mailSessionToken,
+              password: session.password,
+              folder: parsed.folder,
+              uid: parsed.uid,
+              parts: batchParts,
+            },
+          });
+          if (result.ok) remote = [...remote, ...result.images];
+        } catch {
+          /* Keep the composer usable; unresolved images remain absent rather than corrupted. */
+        }
+      }
+      const attachRemoteFile = async (sourceCid: string, file: File) => {
+        if (!validateInlineImageFile(file).ok) return;
+        const image = createInlineComposeImage(file);
+        const node = findInlineImageNodeByCid(editor, sourceCid);
+        if (!node) {
+          URL.revokeObjectURL(image.objectUrl);
+          return;
+        }
+        node.src = image.objectUrl;
+        node.dataset.mmInlineId = image.id;
+        node.draggable = false;
+        node.style.maxWidth = "100%";
+        node.style.height = "auto";
+        hydrated.push(image);
+        await persistInlineImage(inlineScope, toInlineImageMetadata(image), image.file).catch(
+          () => undefined,
+        );
+      };
+      for (const source of remote) {
+        if (
+          !(["image/png", "image/jpeg", "image/gif", "image/webp"] as string[]).includes(
+            source.mimeType,
+          )
+        )
+          continue;
+        try {
+          const file = dataUriToFile(
+            source.dataUri,
+            "inline-image",
+            source.mimeType as InlineImageMime,
+          );
+          await attachRemoteFile(source.cid, file);
+        } catch {
+          /* Ignore malformed cached bytes. */
+        }
+      }
+      if (parsed && session.mailSessionToken) {
+        for (const part of streamedParts) {
+          try {
+            const response = await fetch("/api/mail-attachment", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                mailSessionToken: session.mailSessionToken,
+                password: session.password,
+                folder: parsed.folder,
+                uid: parsed.uid,
+                part: part.part,
+              }),
+            });
+            if (!response.ok) continue;
+            const blob = await response.blob();
+            const file = new File([blob], "inline-image", { type: blob.type || part.mimeType });
+            await attachRemoteFile(part.cid, file);
+          } catch {
+            /* A failed part never corrupts the remaining draft. */
+          }
+        }
+      }
+      if (cancelled) {
+        for (const image of hydrated) URL.revokeObjectURL(image.objectUrl);
+        return;
+      }
+      // Local rows already have durable cid/src. Rebind those nodes to fresh object URLs.
+      for (const image of hydrated) {
+        const node =
+          editor.querySelector<HTMLImageElement>(`img[data-mm-inline-id="${image.id}"]`) ??
+          findInlineImageNodeByCid(editor, image.cid);
+        if (node) {
+          node.src = image.objectUrl;
+          node.dataset.mmInlineId = image.id;
+        }
+      }
+      setInlineImages(hydrated);
+      inlineHydratedRef.current = true;
+    };
+    void hydrate();
+    return () => {
+      cancelled = true;
+      for (const image of inlineImagesRef.current) URL.revokeObjectURL(image.objectUrl);
+    };
+    // Intentional mount-only hydration: Composer is keyed by draft identity.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -5711,8 +5884,9 @@ function Composer({
   }, []);
 
   const existingBytes = existingKept.reduce((acc, a) => acc + (a.size || 0), 0);
-  const totalBytes = files.reduce((acc, f) => acc + f.size, 0) + existingBytes;
-  const totalCount = files.length + existingKept.length;
+  const inlineBytes = inlineImages.reduce((acc, image) => acc + image.file.size, 0);
+  const totalBytes = files.reduce((acc, f) => acc + f.size, 0) + existingBytes + inlineBytes;
+  const totalCount = files.length + existingKept.length + inlineImages.length;
 
   // Ref mirror so the (persistent) saveRemote closure created at first mount
   // always reads the latest kept-attachment list without being torn down.
@@ -5768,6 +5942,7 @@ function Composer({
 
   // Publish the latest values to the persistent saveRemote closure refs.
   filesRef.current = files;
+  inlineImagesRef.current = inlineImages;
   resolveExistingAsFilesRef.current = resolveExistingAsFiles;
 
   // ----- Draft autosave (scheduled): local write first, then remote APPEND -----
@@ -5788,6 +5963,7 @@ function Composer({
     sending,
     existingKeptLen: existingKept.length,
     filesLen: files.length,
+    inlineLen: inlineImages.length,
   });
   snapshotInputsRef.current = {
     to,
@@ -5800,6 +5976,7 @@ function Composer({
     sending,
     existingKeptLen: existingKept.length,
     filesLen: files.length,
+    inlineLen: inlineImages.length,
   };
 
   useEffect(() => {
@@ -5809,7 +5986,15 @@ function Composer({
       onFire: () => {
         const s = snapshotInputsRef.current;
         if (s.sending) return;
-        const html = editorRef.current?.innerHTML ?? "";
+        if (!inlineHydratedRef.current) return;
+        const serialized = serializeInlineImages(
+          editorRef.current?.innerHTML ?? "",
+          inlineImagesRef.current,
+          {
+            keepEditorIds: true,
+          },
+        );
+        const html = serialized.html;
         const isEmpty = isDraftEmpty({
           toCount: s.to.length,
           ccCount: s.cc.length,
@@ -5817,7 +6002,7 @@ function Composer({
           subject: s.subject,
           htmlTrimmed: html.trim(),
           existingKeptCount: s.existingKeptLen,
-          filesCount: s.filesLen,
+          filesCount: s.filesLen + s.inlineLen,
         });
         if (isEmpty) {
           clearDraftDoc(window.localStorage, s.accountEmail);
@@ -5837,6 +6022,7 @@ function Composer({
           html,
           showCc: s.showCc,
           showBcc: s.showBcc,
+          inlineImages: serialized.inlineImages,
         };
         const persisted = writeDraftDoc(window.localStorage, s.accountEmail, {
           version: 3,
@@ -5878,6 +6064,19 @@ function Composer({
     const el = editorRef.current;
     if (!el) return;
     const disposable = attachInputListener(el, () => {
+      const ids = new Set(
+        Array.from(el.querySelectorAll<HTMLElement>("[data-mm-inline-id]"))
+          .map((node) => node.dataset.mmInlineId)
+          .filter((id): id is string => Boolean(id)),
+      );
+      const removed = inlineImagesRef.current.filter((image) => !ids.has(image.id));
+      if (removed.length) {
+        for (const image of removed) {
+          URL.revokeObjectURL(image.objectUrl);
+          void deleteInlineImage(inlineScope, image.id).catch(() => undefined);
+        }
+        setInlineImages((current) => current.filter((image) => ids.has(image.id)));
+      }
       setBodyRev((n) => n + 1);
       markEdited();
     });
@@ -5923,7 +6122,7 @@ function Composer({
       subject,
       htmlTrimmed: (editorRef.current?.textContent ?? "").trim(),
       existingKeptCount: existingKeptRef.current.length,
-      filesCount: filesRef.current.length,
+      filesCount: filesRef.current.length + inlineImagesRef.current.length,
     });
   }
   async function requestClose(): Promise<boolean> {
@@ -5959,6 +6158,7 @@ function Composer({
       try {
         if (typeof window !== "undefined") {
           clearDraftDoc(window.localStorage, accountEmail);
+          void clearInlineImages(inlineScope).catch(() => undefined);
         }
         // Best-effort server delete when a server ref exists; on failure hand
         // the delete to the pending queue for the next composer session.
@@ -6214,47 +6414,50 @@ function Composer({
   }
 
   async function insertImageFiles(list: FileList | null) {
-    const picked = Array.from(list ?? []).filter((f) => f.type.startsWith("image/"));
+    const picked = Array.from(list ?? []);
     if (imageInputRef.current) imageInputRef.current.value = "";
     if (!picked.length) return;
-
-    // Restore the caret captured before opening the picker. When the editor was
-    // never focused (very first click on the image button) there is no saved
-    // range, so place the caret at the end of the body — otherwise execCommand
-    // has no target range and the image silently goes nowhere.
-    const range = imageRangeRef.current;
     const editor = editorRef.current;
+    if (!editor) return;
     editor?.focus();
-    const sel = window.getSelection();
-    if (range && editor?.contains(range.startContainer)) {
-      sel?.removeAllRanges();
-      sel?.addRange(range);
-    } else if (editor) {
-      const end = document.createRange();
-      end.selectNodeContents(editor);
-      end.collapse(false);
-      sel?.removeAllRanges();
-      sel?.addRange(end);
+    let range = imageRangeRef.current;
+    const added: InlineComposeImage[] = [];
+    for (const file of picked) {
+      const valid = validateInlineImageFile(file);
+      if (!valid.ok) {
+        toast.error(
+          valid.reason === "size"
+            ? tr("حجم الصورة كبير جداً (الحد 5MB)")
+            : tr("نوع الصورة غير مدعوم"),
+        );
+        continue;
+      }
+      if (
+        totalCount + added.length >= COMPOSE_MAX_FILES ||
+        totalBytes + added.reduce((n, image) => n + image.file.size, 0) + file.size >
+          COMPOSE_MAX_TOTAL_BYTES
+      ) {
+        toast.error(tr("تجاوزت الصور حدود المرفقات المسموحة"));
+        continue;
+      }
+      const image = createInlineComposeImage(file);
+      try {
+        await persistInlineImage(inlineScope, toInlineImageMetadata(image), image.file);
+      } catch {
+        URL.revokeObjectURL(image.objectUrl);
+        toast.error(tr("تعذّر حفظ الصورة محلياً"));
+        continue;
+      }
+      const node = insertInlineImageNode(editor, image, range);
+      range = document.createRange();
+      range.setStartAfter(node);
+      range.collapse(true);
+      added.push(image);
     }
     imageRangeRef.current = null;
-
-
-    for (const file of picked) {
-      if (file.size > COMPOSE_MAX_INLINE_IMAGE) {
-        toast.error(tr("حجم الصورة كبير جداً (الحد 5MB)"));
-        continue;
-      }
-      const dataUrl = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(String(reader.result || ""));
-        reader.onerror = () => reject(reader.error);
-        reader.readAsDataURL(file);
-      }).catch(() => "");
-      if (!dataUrl.startsWith("data:image/")) {
-        toast.error(tr("تعذّر قراءة الصورة"));
-        continue;
-      }
-      insertHtmlAtCursor(`<img src="${dataUrl}" alt="" style="max-width:100%;height:auto" />`);
+    if (added.length) {
+      setInlineImages((current) => [...current, ...added]);
+      notifyEditorChange();
     }
   }
 
@@ -6286,7 +6489,7 @@ function Composer({
     if (!editor || plainMode) return;
     const pick = (e: Event) => {
       const t = e.target as HTMLElement | null;
-      if (t && t.tagName === "IMG") {
+      if (t && t.tagName === "IMG" && t.dataset.mmInlineId) {
         (t as HTMLImageElement).draggable = false;
         syncImgBox(t as HTMLImageElement);
       }
@@ -6294,7 +6497,7 @@ function Composer({
     const clear = (e: MouseEvent) => {
       if (resizingImgRef.current) return;
       const next = e.relatedTarget as Node | null;
-      if (next && (next as HTMLElement).dataset?.imgTool === "1") return;
+      if (next && (next as HTMLElement).dataset?.mmImageTool === "1") return;
       if (activeImgRef.current && next && activeImgRef.current.contains(next)) return;
       syncImgBox(null);
     };
@@ -6340,7 +6543,14 @@ function Composer({
     };
     const onPointerDown = (e: PointerEvent) => {
       const target = e.target as HTMLElement | null;
-      if (resizingImgRef.current || !target || target.tagName !== "IMG" || e.button !== 0) return;
+      if (
+        resizingImgRef.current ||
+        !target ||
+        target.tagName !== "IMG" ||
+        !target.dataset.mmInlineId ||
+        e.button !== 0
+      )
+        return;
       dragImg = target as HTMLImageElement;
       dragPointerId = e.pointerId;
       dragStartX = e.clientX;
@@ -6395,15 +6605,13 @@ function Composer({
         if (dropMarker?.isConnected) {
           const marker = dropMarker;
           dropMarker = null;
-          img.remove();
-          marker.replaceWith(img);
+          moveInlineImageNode(img, marker, editor);
           const selectionRange = document.createRange();
           selectionRange.setStartAfter(img);
           selectionRange.collapse(true);
           const sel = window.getSelection();
           sel?.removeAllRanges();
           sel?.addRange(selectionRange);
-          editor.dispatchEvent(new Event("input", { bubbles: true }));
         }
       }
       resetPointerDrag();
@@ -6434,7 +6642,6 @@ function Composer({
     };
   }, [plainMode, syncImgBox]);
 
-
   function notifyEditorChange() {
     editorRef.current?.dispatchEvent(new Event("input", { bubbles: true }));
   }
@@ -6442,9 +6649,10 @@ function Composer({
   function deleteActiveImage() {
     const img = activeImgRef.current;
     if (!img) return;
-    img.remove();
+    const editor = editorRef.current;
+    if (!editor) return;
+    removeInlineImageNode(img, editor);
     syncImgBox(null);
-    notifyEditorChange();
   }
 
   function startImageResize(e: React.PointerEvent<HTMLButtonElement>) {
@@ -6465,17 +6673,21 @@ function Composer({
     img.draggable = false;
     const startX = e.clientX;
     const startW = img.getBoundingClientRect().width;
+    const editorWidth = editorRef.current?.clientWidth ?? startW;
+    let frame = 0;
     const move = (ev: PointerEvent) => {
-      const next = Math.max(40, startW + (ev.clientX - startX));
-      img.style.width = `${Math.round(next)}px`;
+      const next = clampInlineImageWidth(startW + (ev.clientX - startX), editorWidth);
+      img.style.width = `${next}px`;
       img.style.height = "auto";
       img.style.maxWidth = "100%";
-      syncImgBox(img);
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => syncImgBox(img));
     };
     const up = () => {
       handle.removeEventListener("pointermove", move);
       handle.removeEventListener("pointerup", up);
       handle.removeEventListener("pointercancel", up);
+      cancelAnimationFrame(frame);
       resizingImgRef.current = false;
       img.draggable = false;
       notifyEditorChange();
@@ -6484,9 +6696,6 @@ function Composer({
     handle.addEventListener("pointerup", up);
     handle.addEventListener("pointercancel", up);
   }
-
-
-
 
   const extensionContext = {
     getHtml: () => editorRef.current?.innerHTML ?? "",
@@ -6507,7 +6716,15 @@ function Composer({
     setSending(true);
     setProgress(0);
     try {
-      const fragment = sanitizeComposerHtml(editorRef.current?.innerHTML ?? "");
+      const serialized = serializeInlineImages(
+        editorRef.current?.innerHTML ?? "",
+        inlineImagesRef.current,
+      );
+      const usedUploadNames = new Set(serialized.inlineImages.map((image) => image.uploadFilename));
+      const transportImages = inlineImagesRef.current.filter((image) =>
+        usedUploadNames.has(image.uploadFilename),
+      );
+      const fragment = sanitizeComposerHtml(serialized.html);
       // Recipients don't get the app stylesheet: carry every bit of spacing /
       // list / typography formatting inline in a standalone email document.
       const editorDir =
@@ -6525,6 +6742,7 @@ function Composer({
         subject,
         bodyHtml,
         bodyText,
+        inlineImages: metadataToTransport(transportImages),
       };
 
       // M4-C: preserve kept legacy/server attachments alongside newly added
@@ -6547,6 +6765,9 @@ function Composer({
       form.append("payload", JSON.stringify(payload));
       for (const f of keptFiles) form.append("attachments", f, f.name);
       for (const f of files) form.append("attachments", f, f.name);
+      for (const image of transportImages) {
+        form.append("attachments", image.file, image.uploadFilename);
+      }
 
       const result = await new Promise<{ ok: boolean; error?: string }>((resolve, reject) => {
         const xhr = new XMLHttpRequest();
@@ -6575,6 +6796,7 @@ function Composer({
       // with any failure re-queued so the next composer mount can retry it.
       try {
         clearDraftDoc(window.localStorage, accountEmail);
+        await clearInlineImages(inlineScope).catch(() => undefined);
       } catch {
         /* noop */
       }
@@ -6724,7 +6946,14 @@ function Composer({
     try {
       // Any pending debounced save must NOT race the explicit save.
       autosaveRef.current?.cancel();
-      const html = sanitizeComposerHtml(editorRef.current?.innerHTML ?? "");
+      const serialized = serializeInlineImages(
+        editorRef.current?.innerHTML ?? "",
+        inlineImagesRef.current,
+        {
+          keepEditorIds: true,
+        },
+      );
+      const html = serialized.html;
       // Unified emptiness contract with autosave: a draft that carries
       // attachments (new OR kept legacy) is NOT empty even without text.
       const isEmpty = isDraftEmpty({
@@ -6734,13 +6963,22 @@ function Composer({
         subject,
         htmlTrimmed: html.trim(),
         existingKeptCount: existingKeptRef.current.length,
-        filesCount: filesRef.current.length,
+        filesCount: filesRef.current.length + inlineImagesRef.current.length,
       });
       if (isEmpty) {
         toast.info(tr("لا يوجد محتوى للحفظ"));
         return "empty";
       }
-      const snapshot: DraftSnapshot = { to, cc, bcc, subject, html, showCc, showBcc };
+      const snapshot: DraftSnapshot = {
+        to,
+        cc,
+        bcc,
+        subject,
+        html,
+        showCc,
+        showBcc,
+        inlineImages: serialized.inlineImages,
+      };
       const persisted = writeDraftDoc(window.localStorage, accountEmail, {
         version: 3,
         draftId,
@@ -6806,7 +7044,10 @@ function Composer({
         });
         return { ok: Boolean(result?.ok) };
       },
-      clearLocal: () => clearDraftDoc(window.localStorage, accountEmail),
+      clearLocal: () => {
+        clearDraftDoc(window.localStorage, accountEmail);
+        void clearInlineImages(inlineScope).catch(() => undefined);
+      },
       closeWithRefresh: () => onClose({ refreshDrafts: true }),
     });
 
@@ -7220,6 +7461,7 @@ function Composer({
                   onChange={(e) => {
                     if (editorRef.current) {
                       editorRef.current.innerHTML = plainToHtml(e.target.value);
+                      notifyEditorChange();
                     }
                   }}
                   rows={16}
@@ -7242,7 +7484,7 @@ function Composer({
                     <>
                       {/* Selection frame */}
                       <div
-                        data-img-tool="1"
+                        data-mm-image-tool="1"
                         className="pointer-events-none absolute rounded-sm ring-2 ring-primary/60"
                         style={{
                           top: imgBox.top,
@@ -7254,7 +7496,7 @@ function Composer({
                       {/* Delete button (corner) */}
                       <button
                         type="button"
-                        data-img-tool="1"
+                        data-mm-image-tool="1"
                         onMouseDown={(e) => e.preventDefault()}
                         onClick={deleteActiveImage}
                         title={tr("حذف الصورة")}
@@ -7267,7 +7509,7 @@ function Composer({
                       {/* Resize handle */}
                       <button
                         type="button"
-                        data-img-tool="1"
+                        data-mm-image-tool="1"
                         onPointerDown={startImageResize}
                         title={tr("تغيير حجم الصورة")}
                         aria-label={tr("تغيير حجم الصورة")}
@@ -7281,7 +7523,6 @@ function Composer({
                   )}
                 </div>
               )}
-
             </div>
           </div>
 
@@ -7381,7 +7622,7 @@ function Composer({
           <input
             ref={imageInputRef}
             type="file"
-            accept="image/*"
+            accept="image/png,image/jpeg,image/gif,image/webp"
             multiple
             className="hidden"
             onChange={(e) => void insertImageFiles(e.target.files)}
@@ -7515,7 +7756,6 @@ function Composer({
             </button>
           </AlertDialogFooter>
         </AlertDialogContent>
-
       </AlertDialog>
     </div>
   );

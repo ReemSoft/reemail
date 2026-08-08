@@ -10,6 +10,7 @@
 //     replaced by `mailSessionToken`. All response shapes are unchanged.
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
+import { InlineUploadMetadataSchema } from "@/lib/mail-inline-upload-metadata";
 import type { MailFolder, FolderCount, MailMessage } from "@/lib/mail-types";
 import {
   classifyBridgeMessageFailure,
@@ -343,6 +344,7 @@ const DraftSaveClientSchema = z.object({
     .max(5 * 1024 * 1024)
     .optional(),
   previousRef: DraftPreviousRefSchema.optional(),
+  inlineImages: InlineUploadMetadataSchema.optional().default([]),
 });
 
 const DraftDeleteClientSchema = z.object({
@@ -477,6 +479,7 @@ export const bridgeSaveDraft = createServerFn({ method: "POST" })
       bodyHtml: parsed.bodyHtml,
       bodyText: parsed.bodyText,
       previousRef: parsed.previousRef,
+      inlineImages: parsed.inlineImages,
     };
 
     const outForm = new FormData();

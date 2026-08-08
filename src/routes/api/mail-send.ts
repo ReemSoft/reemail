@@ -1,4 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { InlineUploadMetadataSchema } from "@/lib/mail-inline-upload-metadata";
 
 /**
  * Compose+send endpoint. Accepts multipart/form-data from the browser with a
@@ -54,6 +55,17 @@ export const Route = createFileRoute("/api/mail-send")({
         // Rebuild the payload with the server-derived account and only the
         // safe message fields. Any client-supplied `account`/host/port is
         // discarded.
+        const inlineParsed = InlineUploadMetadataSchema.safeParse(payload?.inlineImages ?? []);
+        if (!inlineParsed.success) {
+          return json({ ok: false, error: "Invalid inline image metadata" }, 400);
+        }
+        const uploadFiles = Array.from(form.entries()).filter(
+          ([key, value]) => key === "attachments" && value instanceof File,
+        ) as Array<[string, File]>;
+        const uploadNames = new Set(uploadFiles.map(([, file]) => file.name));
+        if (inlineParsed.data.some((item) => !uploadNames.has(item.uploadFilename))) {
+          return json({ ok: false, error: "Inline image file mismatch" }, 400);
+        }
         const safePayload = {
           account: auth.bridgeAccount,
           password,
@@ -63,6 +75,7 @@ export const Route = createFileRoute("/api/mail-send")({
           subject: typeof payload?.subject === "string" ? payload.subject : "",
           bodyHtml: typeof payload?.bodyHtml === "string" ? payload.bodyHtml : undefined,
           bodyText: typeof payload?.bodyText === "string" ? payload.bodyText : undefined,
+          inlineImages: inlineParsed.data,
         };
 
         const outForm = new FormData();

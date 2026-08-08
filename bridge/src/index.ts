@@ -24,6 +24,7 @@ import {
 } from "./imap.js";
 import { closeAllImapConnections } from "./imap-connection.js";
 import { sendMessage } from "./smtp.js";
+import { mapUploadedAttachments } from "./inline-images.js";
 import {
   DraftSavePayloadSchema,
   DraftDeletePayloadSchema,
@@ -129,6 +130,7 @@ const SendPayloadSchema = AuthPayloadSchema.extend({
   subject: z.string().min(1),
   bodyHtml: z.string().optional(),
   bodyText: z.string().optional(),
+  inlineImages: z.unknown().optional(),
 });
 
 // --- Middleware ---
@@ -463,11 +465,7 @@ app.post(
       }
 
       // Stream from disk — never load attachment bytes into heap.
-      const attachments = files.map((f) => ({
-        filename: f.originalname,
-        path: f.path,
-        contentType: f.mimetype,
-      }));
+      const attachments = await mapUploadedAttachments(files, payload.inlineImages);
 
       const result = await saveDraft(payload.account as any, payload.password, {
         ...payload,
@@ -585,11 +583,7 @@ app.post(
 
       // Nodemailer accepts `path` — it streams from disk, so we never
       // materialise the full attachment payload in Node heap.
-      const attachments = files.map((f) => ({
-        filename: f.originalname,
-        path: f.path,
-        contentType: f.mimetype,
-      }));
+      const attachments = await mapUploadedAttachments(files, payload.inlineImages);
 
       const result = await sendMessage(payload.account as any, payload.password, {
         from: {

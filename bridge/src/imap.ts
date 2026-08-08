@@ -583,7 +583,26 @@ export async function getMessageBody(
         candidates.sort((a, b) => (a.size || 0) - (b.size || 0));
         // MAILMAESTRO_BODY_FIRST_SINGLE_BATCH_CID: the interactive open returns
         // metadata only. CID bytes are fetched after paint by one batch call.
-        const interactiveCandidates = selectInlineBatchCandidates(candidates);
+        // Composer-created drafts may contain inline images up to the existing
+        // 5 MiB per-file / 10-file / 25 MiB upload limits. Return metadata for
+        // those parts so Edit Draft can stream them through the authenticated
+        // attachment route. Normal message-open batching remains at 256 KiB.
+        const interactiveCandidates =
+          folder === "drafts"
+            ? candidates
+                .filter(
+                  (part) =>
+                    part.size >= 0 &&
+                    part.size <= 5 * 1024 * 1024 &&
+                    /^image\/(?:png|jpeg|gif|webp)$/i.test(part.mimeType),
+                )
+                .slice(0, 10)
+                .reduce<typeof candidates>((selected, part) => {
+                  const total = selected.reduce((sum, item) => sum + item.size, 0);
+                  if (total + part.size <= 25 * 1024 * 1024) selected.push(part);
+                  return selected;
+                }, [])
+            : selectInlineBatchCandidates(candidates);
         const inlinePlan = planInlineImagesForOpen(
           lane === "interactive" ? interactiveCandidates : candidates,
           lane,

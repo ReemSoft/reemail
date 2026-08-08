@@ -40,6 +40,7 @@ import {
   type SendAttachment,
 } from "./smtp.js";
 import type { MailAccount } from "./types.js";
+import { InlineImageMetadataSchema } from "./inline-images.js";
 
 export const DRAFT_ID_HEADER = "X-MailMaestro-Draft-ID";
 
@@ -139,6 +140,7 @@ export const DraftSavePayloadSchema = z
     bodyHtml: z.string().max(DRAFT_MAX_TEXT_BYTES).optional(),
     bodyText: z.string().max(DRAFT_MAX_TEXT_BYTES).optional(),
     previousRef: PreviousRefSchema.optional(),
+    inlineImages: InlineImageMetadataSchema.optional().default([]),
   })
   .superRefine((v, ctx) => {
     const combined = (v.bodyHtml?.length ?? 0) + (v.bodyText?.length ?? 0);
