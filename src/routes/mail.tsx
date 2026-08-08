@@ -655,11 +655,13 @@ import {
   toInlineImageMetadata,
   validateInlineImageFile,
   clampInlineImageWidth,
-  moveInlineImageNode,
   removeInlineImageNode,
-  resolveInlineImageDropTarget,
+  alignInlineImageNode,
+  startInlineImageDragSession,
   findInlineImageNodeByCid,
   type InlineComposeImage,
+  type InlineImageAlignment,
+  type InlineImageDragSession,
   type InlineImageMime,
 } from "@/lib/mail-compose-inline-images";
 import {
@@ -5633,6 +5635,7 @@ function Composer({
   const editorWrapRef = useRef<HTMLDivElement | null>(null);
   const activeImgRef = useRef<HTMLImageElement | null>(null);
   const resizingImgRef = useRef(false);
+  const imageDragSessionRef = useRef<InlineImageDragSession | null>(null);
 
   const [imgBox, setImgBox] = useState<{
     top: number;
@@ -6482,9 +6485,8 @@ function Composer({
     });
   }, []);
 
-  // Track hovered/clicked images and move them with pointer events. Native
-  // HTML5 drag-and-drop is intentionally disabled: contentEditable consumes
-  // its drop event inconsistently (notably in Chromium and on touch devices).
+  // Track hovered/clicked images. Dragging itself is owned by an overlay
+  // outside contentEditable so Chromium never starts a native edit gesture.
   useEffect(() => {
     const editor = editorRef.current;
     if (!editor || plainMode) return;
@@ -6505,118 +6507,11 @@ function Composer({
 
     const refresh = () => syncImgBox(activeImgRef.current);
 
-    let dragImg: HTMLImageElement | null = null;
-    let dragPointerId: number | null = null;
-    let dragStartX = 0;
-    let dragStartY = 0;
-    let didDrag = false;
-    let dropMarker: HTMLElement | null = null;
-    let previousPointerEvents = "";
-    let previousTouchAction = "";
-    const resetPointerDrag = () => {
-      if (dragImg) {
-        dragImg.style.opacity = "";
-        dragImg.style.cursor = "";
-        dragImg.style.pointerEvents = previousPointerEvents;
-        dragImg.style.touchAction = previousTouchAction;
-      }
-      dropMarker?.remove();
-      dropMarker = null;
-      dragImg = null;
-      dragPointerId = null;
-      didDrag = false;
-    };
-    const onPointerDown = (e: PointerEvent) => {
-      const target = e.target as HTMLElement | null;
-      if (
-        resizingImgRef.current ||
-        !target ||
-        target.tagName !== "IMG" ||
-        !target.dataset.mmInlineId ||
-        e.button !== 0
-      )
-        return;
-      dragImg = target as HTMLImageElement;
-      dragPointerId = e.pointerId;
-      dragStartX = e.clientX;
-      dragStartY = e.clientY;
-      didDrag = false;
-      dragImg.draggable = false;
-      previousPointerEvents = dragImg.style.pointerEvents;
-      previousTouchAction = dragImg.style.touchAction;
-      dragImg.style.touchAction = "none";
-      try {
-        dragImg.setPointerCapture(e.pointerId);
-      } catch {
-        /* Window listeners remain the fallback. */
-      }
-      syncImgBox(dragImg);
-    };
-    const onPointerMove = (e: PointerEvent) => {
-      if (!dragImg || dragPointerId !== e.pointerId) return;
-      if (!didDrag && Math.hypot(e.clientX - dragStartX, e.clientY - dragStartY) < 5) return;
-      if (!didDrag) {
-        didDrag = true;
-        // Let caretRangeFromPoint see the editable text below the image rather
-        // than repeatedly resolving to the image being dragged.
-        dragImg.style.pointerEvents = "none";
-      }
-      e.preventDefault();
-      dragImg.style.opacity = "0.55";
-      dragImg.style.cursor = "grabbing";
-      syncImgBox(null);
-
-      dropMarker?.remove();
-      const target = resolveInlineImageDropTarget(editor, dragImg, e.clientX, e.clientY);
-      dropMarker = document.createElement("span");
-      dropMarker.contentEditable = "false";
-      dropMarker.setAttribute("aria-hidden", "true");
-      dropMarker.dataset.mmDropMarker = "1";
-      dropMarker.style.cssText =
-        target.usedFallback || target.alignment
-          ? "display:block;height:3px;margin:5px 0;background:#2563eb;box-shadow:0 0 0 1px rgba(255,255,255,.9);pointer-events:none"
-          : "display:inline-block;width:3px;height:1.4em;vertical-align:text-bottom;background:#2563eb;box-shadow:0 0 0 1px rgba(255,255,255,.9);pointer-events:none";
-      dropMarker.dataset.mmDropAlignment = target.alignment ?? "";
-      target.range.insertNode(dropMarker);
-    };
-    const onPointerUp = (e: PointerEvent) => {
-      if (!dragImg || dragPointerId !== e.pointerId) return;
-      const img = dragImg;
-      if (didDrag) {
-        e.preventDefault();
-        if (dropMarker?.isConnected) {
-          const marker = dropMarker;
-          dropMarker = null;
-          const alignment = marker.dataset.mmDropAlignment;
-          moveInlineImageNode(
-            img,
-            marker,
-            editor,
-            alignment === "left" || alignment === "center" || alignment === "right"
-              ? alignment
-              : null,
-          );
-          const selectionRange = document.createRange();
-          selectionRange.setStartAfter(img);
-          selectionRange.collapse(true);
-          const sel = window.getSelection();
-          sel?.removeAllRanges();
-          sel?.addRange(selectionRange);
-        }
-      }
-      resetPointerDrag();
-      syncImgBox(img);
-    };
-
     editor.addEventListener("mouseover", pick);
     editor.addEventListener("mouseout", clear);
     editor.addEventListener("click", pick);
     editor.addEventListener("input", refresh);
     editor.addEventListener("scroll", refresh, true);
-    editor.addEventListener("pointerdown", onPointerDown);
-    window.addEventListener("pointermove", onPointerMove, { passive: false });
-    window.addEventListener("pointerup", onPointerUp);
-    window.addEventListener("pointercancel", resetPointerDrag);
     window.addEventListener("resize", refresh);
     return () => {
       editor.removeEventListener("mouseover", pick);
@@ -6624,13 +6519,17 @@ function Composer({
       editor.removeEventListener("click", pick);
       editor.removeEventListener("input", refresh);
       editor.removeEventListener("scroll", refresh, true);
-      editor.removeEventListener("pointerdown", onPointerDown);
-      window.removeEventListener("pointermove", onPointerMove);
-      window.removeEventListener("pointerup", onPointerUp);
-      window.removeEventListener("pointercancel", resetPointerDrag);
       window.removeEventListener("resize", refresh);
     };
   }, [plainMode, syncImgBox]);
+
+  useEffect(
+    () => () => {
+      imageDragSessionRef.current?.cancel();
+      imageDragSessionRef.current = null;
+    },
+    [],
+  );
 
   function notifyEditorChange() {
     editorRef.current?.dispatchEvent(new Event("input", { bubbles: true }));
@@ -6643,6 +6542,39 @@ function Composer({
     if (!editor) return;
     removeInlineImageNode(img, editor);
     syncImgBox(null);
+  }
+
+  function startImageDrag(e: React.PointerEvent<HTMLButtonElement>) {
+    const image = activeImgRef.current;
+    const editor = editorRef.current;
+    if (!image || !editor || resizingImgRef.current) return;
+    e.preventDefault();
+    e.stopPropagation();
+    imageDragSessionRef.current?.cancel();
+    imageDragSessionRef.current = startInlineImageDragSession(e.nativeEvent, {
+      editor,
+      image,
+      surface: e.currentTarget,
+      onCommit: (movedImage) => {
+        const selectionRange = document.createRange();
+        selectionRange.setStartAfter(movedImage);
+        selectionRange.collapse(true);
+        const selection = window.getSelection();
+        selection?.removeAllRanges();
+        selection?.addRange(selectionRange);
+      },
+      onCleanup: () => {
+        imageDragSessionRef.current = null;
+      },
+    });
+  }
+
+  function alignActiveImage(alignment: InlineImageAlignment) {
+    const image = activeImgRef.current;
+    const editor = editorRef.current;
+    if (!image || !editor) return;
+    alignInlineImageNode(image, editor, alignment);
+    syncImgBox(image);
   }
 
   function startImageResize(e: React.PointerEvent<HTMLButtonElement>) {
@@ -7483,6 +7415,50 @@ function Composer({
                           height: imgBox.height,
                         }}
                       />
+                      {/* Drag surface lives outside contentEditable and owns pointer capture. */}
+                      <button
+                        type="button"
+                        data-mm-image-tool="1"
+                        data-mm-image-drag-surface="1"
+                        onPointerDown={startImageDrag}
+                        title={tr("سحب الصورة")}
+                        aria-label={tr("سحب الصورة")}
+                        className="absolute z-[5] cursor-grab touch-none bg-transparent active:cursor-grabbing"
+                        style={{
+                          top: imgBox.top,
+                          left: imgBox.left,
+                          width: imgBox.width,
+                          height: imgBox.height,
+                        }}
+                      />
+                      {/* Email-safe alignment fallback. */}
+                      <div
+                        data-mm-image-tool="1"
+                        className="absolute z-20 inline-flex overflow-hidden rounded-md border border-border bg-card shadow-md"
+                        style={{ top: imgBox.top - 30, left: imgBox.left }}
+                      >
+                        {(
+                          [
+                            ["left", AlignLeft, tr("محاذاة الصورة لليسار")],
+                            ["center", AlignCenter, tr("توسيط الصورة")],
+                            ["right", AlignRight, tr("محاذاة الصورة لليمين")],
+                          ] as const
+                        ).map(([alignment, Icon, label]) => (
+                          <button
+                            key={alignment}
+                            type="button"
+                            data-mm-image-tool="1"
+                            data-mm-image-align={alignment}
+                            onMouseDown={(event) => event.preventDefault()}
+                            onClick={() => alignActiveImage(alignment)}
+                            title={label}
+                            aria-label={label}
+                            className="inline-flex h-6 w-7 items-center justify-center text-muted-foreground transition hover:bg-accent hover:text-foreground"
+                          >
+                            <Icon className="h-3.5 w-3.5" />
+                          </button>
+                        ))}
+                      </div>
                       {/* Delete button (corner) */}
                       <button
                         type="button"
@@ -7491,7 +7467,7 @@ function Composer({
                         onClick={deleteActiveImage}
                         title={tr("حذف الصورة")}
                         aria-label={tr("حذف الصورة")}
-                        className="absolute z-10 inline-flex h-6 w-6 items-center justify-center rounded-full bg-destructive text-white shadow-md transition hover:opacity-90"
+                        className="absolute z-20 inline-flex h-6 w-6 items-center justify-center rounded-full bg-destructive text-white shadow-md transition hover:opacity-90"
                         style={{ top: imgBox.top - 8, left: imgBox.left + imgBox.width - 16 }}
                       >
                         <X className="h-3.5 w-3.5" />
@@ -7503,7 +7479,7 @@ function Composer({
                         onPointerDown={startImageResize}
                         title={tr("تغيير حجم الصورة")}
                         aria-label={tr("تغيير حجم الصورة")}
-                        className="absolute z-10 h-3.5 w-3.5 cursor-nwse-resize rounded-full border-2 border-white bg-primary shadow-md"
+                        className="absolute z-20 h-3.5 w-3.5 cursor-nwse-resize rounded-full border-2 border-white bg-primary shadow-md"
                         style={{
                           top: imgBox.top + imgBox.height - 7,
                           left: imgBox.left + imgBox.width - 7,

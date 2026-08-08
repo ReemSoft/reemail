@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import {
+  alignInlineImageNode,
   clampInlineImageWidth,
   createInlineComposeImage,
   insertInlineImageNode,
@@ -9,7 +10,9 @@ import {
   removeInlineImageNode,
   resolveInlineImageDropTarget,
   serializeInlineImages,
+  startInlineImageDragSession,
   validateInlineImageFile,
+  type InlineImageDragSession,
 } from "../mail-compose-inline-images";
 import { InlineUploadMetadataSchema } from "../mail-inline-upload-metadata";
 
@@ -20,8 +23,17 @@ describe("composer inline images", () => {
       createObjectURL: vi.fn(() => "blob:preview"),
       revokeObjectURL: vi.fn(),
     });
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      callback(0);
+      return 1;
+    });
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
   });
-  afterEach(() => vi.unstubAllGlobals());
+  afterEach(() => {
+    document.body.replaceChildren();
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
 
   function setRect(
     element: Element,
@@ -81,6 +93,62 @@ describe("composer inline images", () => {
     target.range.insertNode(marker);
     moveInlineImageNode(image, marker, editor, target.alignment);
     return target;
+  }
+
+  function pointer(
+    type: string,
+    { clientX, clientY, pointerId = 7 }: { clientX: number; clientY: number; pointerId?: number },
+  ) {
+    return new PointerEvent(type, {
+      bubbles: true,
+      cancelable: true,
+      button: 0,
+      buttons: type === "pointerup" ? 0 : 1,
+      clientX,
+      clientY,
+      isPrimary: true,
+      pointerId,
+      pointerType: "mouse",
+    });
+  }
+
+  function createGestureHarness() {
+    const { editor, first, second, image } = createDropEditor();
+    const wrap = document.createElement("div");
+    const surface = document.createElement("button");
+    surface.dataset.mmImageTool = "1";
+    surface.dataset.mmImageDragSurface = "1";
+    editor.replaceWith(wrap);
+    wrap.append(editor, surface);
+    const setPointerCapture = vi.fn();
+    const releasePointerCapture = vi.fn();
+    Object.defineProperties(surface, {
+      setPointerCapture: { configurable: true, value: setPointerCapture },
+      hasPointerCapture: { configurable: true, value: vi.fn(() => true) },
+      releasePointerCapture: { configurable: true, value: releasePointerCapture },
+    });
+    let session: InlineImageDragSession | null = null;
+    let commits = 0;
+    surface.addEventListener("pointerdown", (event) => {
+      session = startInlineImageDragSession(event, {
+        editor,
+        image,
+        surface,
+        onCommit: () => commits++,
+      });
+    });
+    return {
+      editor,
+      first,
+      second,
+      image,
+      surface,
+      wrap,
+      setPointerCapture,
+      releasePointerCapture,
+      getSession: () => session,
+      getCommits: () => commits,
+    };
   }
 
   it.each(["image/png", "image/jpeg", "image/gif", "image/webp"])("accepts %s", (type) => {
@@ -292,6 +360,102 @@ describe("composer inline images", () => {
     range.collapse(true);
     setNativeCaret(range);
     expect(resolveInlineImageDropTarget(editor, image, 200, 580).usedFallback).toBe(true);
+  });
+
+  it("runs the real overlay pointer lifecycle and moves the same node into blank lower space", () => {
+    const harness = createGestureHarness();
+    let bubbledPointerDown = 0;
+    harness.wrap.addEventListener("pointerdown", () => bubbledPointerDown++);
+    const originalNode = harness.image;
+    const originalId = harness.image.dataset.mmInlineId;
+    const originalSrc = harness.image.src;
+    const down = pointer("pointerdown", { clientX: 150, clientY: 190 });
+    harness.surface.dispatchEvent(down);
+    expect(down.defaultPrevented).toBe(true);
+    expect(bubbledPointerDown).toBe(0);
+    expect(harness.getSession()).not.toBeNull();
+    expect(harness.setPointerCapture).toHaveBeenCalledWith(7);
+
+    window.dispatchEvent(pointer("pointermove", { clientX: 400, clientY: 580 }));
+    const marker = harness.editor.querySelector<HTMLElement>("[data-mm-drop-marker]");
+    const ghost = document.body.querySelector<HTMLElement>("[data-mm-image-drag-ghost]");
+    expect(marker).not.toBeNull();
+    expect(ghost?.style.left).toBe("350px");
+    expect(ghost?.style.top).toBe("560px");
+    expect(harness.image.parentElement).toBe(harness.editor);
+
+    window.dispatchEvent(pointer("pointerup", { clientX: 400, clientY: 580 }));
+    expect(harness.getCommits()).toBe(1);
+    expect(harness.editor.querySelector("img")).toBe(originalNode);
+    expect(harness.image.dataset.mmInlineId).toBe(originalId);
+    expect(harness.image.src).toBe(originalSrc);
+    expect(harness.editor.lastElementChild?.contains(harness.image)).toBe(true);
+    expect(harness.image.parentElement?.style.textAlign).toBe("center");
+    expect(document.body.querySelector("[data-mm-image-drag-ghost]")).toBeNull();
+    expect(harness.editor.querySelector("[data-mm-drop-marker]")).toBeNull();
+    expect(harness.releasePointerCapture).toHaveBeenCalledWith(7);
+  });
+
+  it.each([
+    [150, "left"],
+    [400, "center"],
+    [650, "right"],
+  ] as const)("commits overlay drag X=%s with %s alignment", (clientX, alignment) => {
+    const harness = createGestureHarness();
+    harness.surface.dispatchEvent(pointer("pointerdown", { clientX: 150, clientY: 190 }));
+    window.dispatchEvent(pointer("pointermove", { clientX, clientY: 580 }));
+    window.dispatchEvent(pointer("pointerup", { clientX, clientY: 580 }));
+    expect(harness.image.parentElement?.style.textAlign).toBe(alignment);
+  });
+
+  it("cancels an overlay drag without moving and removes every transient node", () => {
+    const harness = createGestureHarness();
+    const originalParent = harness.image.parentElement;
+    const originalNext = harness.image.nextSibling;
+    harness.surface.dispatchEvent(pointer("pointerdown", { clientX: 150, clientY: 190 }));
+    window.dispatchEvent(pointer("pointermove", { clientX: 650, clientY: 580 }));
+    expect(document.body.querySelector("[data-mm-image-drag-ghost]")).not.toBeNull();
+    window.dispatchEvent(pointer("pointercancel", { clientX: 650, clientY: 580 }));
+    expect(harness.getCommits()).toBe(0);
+    expect(harness.image.parentElement).toBe(originalParent);
+    expect(harness.image.nextSibling).toBe(originalNext);
+    expect(harness.image.style.opacity).toBe("");
+    expect(document.body.querySelector("[data-mm-image-drag-ghost]")).toBeNull();
+    expect(harness.editor.querySelector("[data-mm-drop-marker]")).toBeNull();
+  });
+
+  it("keeps resize and delete behavior working after the overlay drag", () => {
+    const harness = createGestureHarness();
+    harness.surface.dispatchEvent(pointer("pointerdown", { clientX: 150, clientY: 190 }));
+    window.dispatchEvent(pointer("pointermove", { clientX: 400, clientY: 580 }));
+    window.dispatchEvent(pointer("pointerup", { clientX: 400, clientY: 580 }));
+    harness.image.style.width = `${clampInlineImageWidth(360, 600)}px`;
+    expect(harness.image.style.width).toBe("360px");
+    const wrapper = harness.image.parentElement!;
+    removeInlineImageNode(harness.image, harness.editor);
+    expect(harness.editor.contains(wrapper)).toBe(false);
+    expect(harness.editor.querySelector("img")).toBeNull();
+  });
+
+  it.each(["left", "center", "right"] as const)(
+    "applies the %s manual alignment control without replacing the image",
+    (alignment) => {
+      const { editor, image } = createDropEditor();
+      const original = image;
+      alignInlineImageNode(image, editor, alignment);
+      expect(editor.querySelector("img")).toBe(original);
+      expect(image.parentElement?.style.textAlign).toBe(alignment);
+    },
+  );
+
+  it("wires drag only from the overlay and never disables live image pointer events", () => {
+    const source = readFileSync("src/routes/mail.tsx", "utf8");
+    expect(source).toContain('data-mm-image-drag-surface="1"');
+    expect(source).toContain("onPointerDown={startImageDrag}");
+    expect(source).not.toContain('editor.addEventListener("pointerdown"');
+    expect(source).not.toMatch(/dragImg\.style\.pointerEvents|image\.style\.pointerEvents/);
+    expect(source).toMatch(/e\.preventDefault\(\);\s+e\.stopPropagation\(\);/);
+    expect(source.match(/data-mm-image-align=/g)).toHaveLength(1);
   });
 
   it("wires one native picker flow without the legacy URL prompt or Base64 reader", () => {

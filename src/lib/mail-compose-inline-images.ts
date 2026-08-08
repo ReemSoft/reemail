@@ -12,6 +12,18 @@ export interface InlineImageDropTarget {
   usedFallback: boolean;
 }
 
+export interface InlineImageDragSession {
+  cancel: () => void;
+}
+
+export interface InlineImageDragSessionOptions {
+  editor: HTMLElement;
+  image: HTMLImageElement;
+  surface: HTMLElement;
+  onCommit?: (image: HTMLImageElement) => void;
+  onCleanup?: () => void;
+}
+
 export type InlineImageMime = (typeof INLINE_IMAGE_TYPES)[number];
 
 export interface InlineComposeImage {
@@ -227,6 +239,16 @@ export function resolveInlineImageDropTarget(
     };
   }
 
+  return resolveInlineImageBlockDropTarget(editor, image, clientX, clientY);
+}
+
+/** Geometry-only drop resolution used by the production pointer gesture. */
+export function resolveInlineImageBlockDropTarget(
+  editor: HTMLElement,
+  image: HTMLImageElement,
+  clientX: number,
+  clientY: number,
+): InlineImageDropTarget {
   const candidates = Array.from(editor.childNodes).flatMap((node, index) => {
     const bounds = nodeVerticalBounds(node);
     return bounds && !isExcludedDropNode(node, image) ? [{ node, index, bounds }] : [];
@@ -254,6 +276,165 @@ export function resolveInlineImageDropTarget(
     alignment: physicalAlignment(editor, clientX),
     usedFallback: true,
   };
+}
+
+function pointInside(element: HTMLElement, clientX: number, clientY: number): boolean {
+  const rect = element.getBoundingClientRect();
+  return (
+    clientX >= rect.left && clientX <= rect.right && clientY >= rect.top && clientY <= rect.bottom
+  );
+}
+
+function createDropMarker(target: InlineImageDropTarget): HTMLElement {
+  const marker = document.createElement("span");
+  marker.contentEditable = "false";
+  marker.setAttribute("aria-hidden", "true");
+  marker.dataset.mmDropMarker = "1";
+  marker.dataset.mmDropAlignment = target.alignment ?? "";
+  marker.style.cssText =
+    "display:block;height:3px;margin:5px 0;background:#2563eb;box-shadow:0 0 0 1px rgba(255,255,255,.9);pointer-events:none";
+  target.range.insertNode(marker);
+  return marker;
+}
+
+/**
+ * Own a complete overlay pointer gesture. The source image remains untouched
+ * inside contentEditable until a successful pointerup commits the move.
+ */
+export function startInlineImageDragSession(
+  event: PointerEvent,
+  options: InlineImageDragSessionOptions,
+): InlineImageDragSession | null {
+  if (event.button !== 0 || !event.isPrimary) return null;
+  event.preventDefault();
+  event.stopPropagation();
+
+  const { editor, image, surface } = options;
+  const pointerId = event.pointerId;
+  const sourceRect = image.getBoundingClientRect();
+  const offsetX = event.clientX - sourceRect.left;
+  const offsetY = event.clientY - sourceRect.top;
+  const originalOpacity = image.style.opacity;
+  const originalCursor = image.style.cursor;
+  let started = false;
+  let marker: HTMLElement | null = null;
+  let ghost: HTMLImageElement | null = null;
+  let frame = 0;
+  let latestX = event.clientX;
+  let latestY = event.clientY;
+  let cleaned = false;
+
+  const positionGhost = () => {
+    frame = 0;
+    if (!ghost) return;
+    ghost.style.left = `${latestX - offsetX}px`;
+    ghost.style.top = `${latestY - offsetY}px`;
+  };
+  const updateMarker = (clientX: number, clientY: number) => {
+    marker?.remove();
+    marker = null;
+    if (!pointInside(editor, clientX, clientY)) return;
+    marker = createDropMarker(resolveInlineImageBlockDropTarget(editor, image, clientX, clientY));
+  };
+  const beginVisualDrag = () => {
+    if (started) return;
+    started = true;
+    ghost = image.cloneNode(true) as HTMLImageElement;
+    delete ghost.dataset.mmInlineId;
+    ghost.dataset.mmImageDragGhost = "1";
+    ghost.setAttribute("aria-hidden", "true");
+    ghost.style.cssText = [
+      "position:fixed",
+      `left:${sourceRect.left}px`,
+      `top:${sourceRect.top}px`,
+      `width:${sourceRect.width}px`,
+      `height:${sourceRect.height}px`,
+      "max-width:none",
+      "pointer-events:none",
+      "opacity:.75",
+      "z-index:2147483647",
+      "object-fit:contain",
+    ].join(";");
+    document.body.append(ghost);
+    image.style.opacity = "0.35";
+    image.style.cursor = "grabbing";
+  };
+  const cleanup = () => {
+    if (cleaned) return;
+    cleaned = true;
+    window.removeEventListener("pointermove", onPointerMove);
+    window.removeEventListener("pointerup", onPointerUp);
+    window.removeEventListener("pointercancel", onPointerCancel);
+    window.removeEventListener("keydown", onKeyDown);
+    if (frame) cancelAnimationFrame(frame);
+    frame = 0;
+    marker?.remove();
+    marker = null;
+    ghost?.remove();
+    ghost = null;
+    image.style.opacity = originalOpacity;
+    image.style.cursor = originalCursor;
+    try {
+      if (surface.hasPointerCapture?.(pointerId)) surface.releasePointerCapture(pointerId);
+    } catch {
+      /* The surface may have unmounted before cleanup. */
+    }
+    options.onCleanup?.();
+  };
+  const onPointerMove = (moveEvent: PointerEvent) => {
+    if (moveEvent.pointerId !== pointerId) return;
+    if (
+      !started &&
+      Math.hypot(moveEvent.clientX - event.clientX, moveEvent.clientY - event.clientY) < 4
+    )
+      return;
+    moveEvent.preventDefault();
+    beginVisualDrag();
+    latestX = moveEvent.clientX;
+    latestY = moveEvent.clientY;
+    updateMarker(latestX, latestY);
+    if (frame) cancelAnimationFrame(frame);
+    frame = requestAnimationFrame(positionGhost);
+  };
+  const onPointerUp = (upEvent: PointerEvent) => {
+    if (upEvent.pointerId !== pointerId) return;
+    upEvent.preventDefault();
+    if (started && pointInside(editor, upEvent.clientX, upEvent.clientY)) {
+      updateMarker(upEvent.clientX, upEvent.clientY);
+      if (marker?.isConnected) {
+        const alignment = marker.dataset.mmDropAlignment;
+        const committedMarker = marker;
+        marker = null;
+        moveInlineImageNode(
+          image,
+          committedMarker,
+          editor,
+          alignment === "left" || alignment === "center" || alignment === "right"
+            ? alignment
+            : null,
+        );
+        options.onCommit?.(image);
+      }
+    }
+    cleanup();
+  };
+  const onPointerCancel = (cancelEvent: PointerEvent) => {
+    if (cancelEvent.pointerId === pointerId) cleanup();
+  };
+  const onKeyDown = (keyEvent: KeyboardEvent) => {
+    if (keyEvent.key === "Escape") cleanup();
+  };
+
+  try {
+    surface.setPointerCapture(pointerId);
+  } catch {
+    /* Window listeners own the gesture even when capture is unavailable. */
+  }
+  window.addEventListener("pointermove", onPointerMove, { passive: false });
+  window.addEventListener("pointerup", onPointerUp);
+  window.addEventListener("pointercancel", onPointerCancel);
+  window.addEventListener("keydown", onKeyDown);
+  return { cancel: cleanup };
 }
 
 export function moveInlineImageNode(
@@ -284,6 +465,26 @@ export function removeInlineImageNode(image: HTMLImageElement, editor: HTMLEleme
   const wrapper = image.closest<HTMLElement>(`[${INLINE_IMAGE_WRAPPER_ATTR}]`);
   if (wrapper && wrapperContainsOnlyImage(wrapper, image)) wrapper.remove();
   else image.remove();
+  editor.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
+export function alignInlineImageNode(
+  image: HTMLImageElement,
+  editor: HTMLElement,
+  alignment: InlineImageAlignment,
+): void {
+  const oldWrapper = image.closest<HTMLElement>(`[${INLINE_IMAGE_WRAPPER_ATTR}]`);
+  if (oldWrapper && wrapperContainsOnlyImage(oldWrapper, image)) {
+    oldWrapper.style.textAlign = alignment;
+  } else {
+    const wrapper = document.createElement(image.parentElement === editor ? "div" : "span");
+    wrapper.setAttribute(INLINE_IMAGE_WRAPPER_ATTR, "1");
+    wrapper.style.display = "block";
+    wrapper.style.textAlign = alignment;
+    image.before(wrapper);
+    wrapper.append(image);
+    removeEmptyWrapper(oldWrapper);
+  }
   editor.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
