@@ -12,6 +12,7 @@ import {
   hasRemoteImages,
   preparePendingCidImages,
   isAllowedInlineImageDataUri,
+  isAllowedInlineImageBlobUrl,
   isValidCidApplyPayload,
 } from "../email-viewer-security";
 
@@ -231,6 +232,38 @@ describe("MAILMAESTRO_INSTANT_NAVIGATION_R1 stable CID iframe", () => {
     expect(isValidCidApplyPayload(valid, "channel", "message", "old")).toBe(false);
     expect(isAllowedInlineImageDataUri("data:image/svg+xml;base64,AAAA")).toBe(false);
     expect(isAllowedInlineImageDataUri("data:text/html;base64,AAAA")).toBe(false);
+  });
+
+  it("accepts a separate Blob CID capability without weakening Data URI limits", () => {
+    const blob = {
+      __mm: "cid",
+      channel: "channel",
+      messageIdentity: "message",
+      generation: "generation",
+      images: [{ cid: "large", blobUrl: "blob:https://app.example.com/large-id" }],
+    };
+    expect(isAllowedInlineImageBlobUrl(blob.images[0].blobUrl)).toBe(true);
+    expect(isAllowedInlineImageBlobUrl("https://tracker.example/image.png")).toBe(false);
+    expect(isAllowedInlineImageBlobUrl("data:image/png;base64,AAAA")).toBe(false);
+    expect(isValidCidApplyPayload(blob, "channel", "message", "generation")).toBe(true);
+    expect(
+      isValidCidApplyPayload(
+        { ...blob, images: [{ cid: "large", blobUrl: "https://tracker.example/image.png" }] },
+        "channel",
+        "message",
+        "generation",
+      ),
+    ).toBe(false);
+    const doc = buildEmailSrcDoc({
+      html: `<img src="cid:large">`,
+      nonce: "n",
+      channelId: "channel",
+      messageIdentity: "message",
+      generation: "generation",
+      parentOrigin: "https://app.example.com",
+    });
+    expect(doc).toContain("validImageBlob");
+    expect(doc).toContain("item.dataUri:item.blobUrl");
   });
 
   it("enforces 256KB per image and 1MB total postMessage limits", () => {

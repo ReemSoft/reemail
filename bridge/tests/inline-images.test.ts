@@ -83,6 +83,45 @@ test("MailComposer emits Content-ID and inline disposition", async () => {
   assert.match(mime, /Content-Disposition: inline/i);
 });
 
+test("1.8 MiB Composer CID stays inline while a normal attachment stays attachment", async () => {
+  const large = Buffer.alloc(Math.round(1.8 * 1024 * 1024), 0x61);
+  Buffer.from("89504e470d0a1a0a", "hex").copy(large, 0);
+  const mapped = await mapUploadedAttachments(
+    [
+      {
+        originalname: filename,
+        path: "/tmp/large-inline",
+        mimetype: "image/png",
+        size: large.length,
+      },
+      {
+        originalname: "document.pdf",
+        path: "/tmp/document",
+        mimetype: "application/pdf",
+        size: 3,
+      },
+    ],
+    [{ uploadFilename: filename, cid, contentType: "image/png" }],
+    async (path) => (path.endsWith("large-inline") ? large : Buffer.from("pdf")),
+  );
+  const { raw } = await buildMime({
+    from: { name: "Sender", email: "sender@example.com" },
+    to: [{ name: "Receiver", email: "receiver@example.com" }],
+    subject: "large inline",
+    bodyHtml: `<p>text</p><img src="cid:${cid}">`,
+    attachments: mapped.map(({ path: _path, ...attachment }) => ({
+      ...attachment,
+      content: attachment.filename === filename ? large : Buffer.from("pdf"),
+    })),
+  });
+  const mime = raw.toString("utf8");
+  const decodedHtml = mime.replace(/=\r\n/g, "").replace(/=3D/gi, "=");
+  assert.ok(decodedHtml.includes(`<img src="cid:${cid}">`));
+  assert.ok(new RegExp(`Content-ID: <${cid}>`, "i").test(mime));
+  assert.ok(new RegExp(`Content-Disposition: inline;[\\s\\S]{0,120}${filename}`, "i").test(mime));
+  assert.ok(/Content-Disposition: attachment;[\s\S]{0,120}document\.pdf/i.test(mime));
+});
+
 test("remote draft MIME preserves the CID attachment for later edit/send", async () => {
   const payload = draftMimePayload({
     account: {

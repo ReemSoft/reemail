@@ -48,6 +48,26 @@ describe("MAILMAESTRO_BODY_FIRST_SINGLE_BATCH_CID", () => {
     expect(fetchBatch).not.toHaveBeenCalled();
   });
 
+  it("never promotes cached large metadata into the bounded resolver", async () => {
+    const fetchBatch = vi.fn();
+    const cached = hit([]);
+    cached.body.inlineParts = [
+      {
+        cid: "mm-inline-large@mailmaestro",
+        part: "22",
+        mimeType: "image/png",
+        size: Math.round(1.8 * 1024 * 1024),
+      },
+    ];
+    const result = await resolveInlineImageBatch([], {
+      lookup: async () => cached,
+      fetchBatch,
+      store: vi.fn(),
+    });
+    expect(result.source).toBe("cache");
+    expect(fetchBatch).not.toHaveBeenCalled();
+  });
+
   it("fetches six images with exactly one Bridge batch", async () => {
     const fetchBatch = vi.fn(async (parts: InlinePart[]) => ({
       images: parts.map(image),

@@ -22,10 +22,9 @@ export async function resolveInlineImageBatch(
   deps: InlineBatchDependencies,
 ): Promise<InlineBatchResolution> {
   let cached = await deps.lookup().catch(() => null);
-  const parts = cached?.hit ? cached.body.inlineParts : requestedParts;
   const cachedImages = cached?.hit ? cached.body.inlineImages : [];
   const byCid = new Map(cachedImages.map((image) => [image.cid.toLowerCase(), image]));
-  const pending = parts.filter((part) => !byCid.has(part.cid.toLowerCase()));
+  const pending = requestedParts.filter((part) => !byCid.has(part.cid.toLowerCase()));
 
   if (!pending.length) {
     return {

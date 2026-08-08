@@ -5,6 +5,8 @@ import {
   downloadInlinePartsInMailbox,
   planInlineImagesForOpen,
   selectInlineBatchCandidates,
+  selectInlineMetadataCandidates,
+  visibleMessageAttachments,
   type InlinePartMetadata,
 } from "../src/imap.js";
 
@@ -45,6 +47,64 @@ test("CID metadata preserves count, per-image, and total byte limits", () => {
     1000 * 1024,
   );
   assert.ok(selected.every((part) => part.size <= 256 * 1024));
+});
+
+test("interactive metadata retains a 1.8 MiB referenced CID without downloading it", () => {
+  const large = {
+    cid: "mm-inline-large@mailmaestro",
+    part: "2",
+    mimeType: "image/png",
+    size: Math.round(1.8 * 1024 * 1024),
+  };
+  const selected = selectInlineMetadataCandidates([large], "inbox");
+  assert.deepEqual(selected, [large]);
+  assert.deepEqual(planInlineImagesForOpen(selected, "interactive"), {
+    deferred: [large],
+    toDownload: [],
+  });
+});
+
+test("referenced deferred CIDs are body resources while a normal PDF remains visible", () => {
+  const cid = "mm-inline-large@mailmaestro";
+  const smallCid = "logo-small@mailmaestro";
+  const attachments = [
+    {
+      id: "inline",
+      part: "2",
+      filename: "mm-inline-large.png",
+      size: Math.round(1.8 * 1024 * 1024),
+      mimeType: "image/png",
+      disposition: "inline",
+      contentId: `<${cid}>`,
+    },
+    {
+      id: "small-inline",
+      part: "2.1",
+      filename: "logo.png",
+      size: 40 * 1024,
+      mimeType: "image/png",
+      disposition: "inline",
+      contentId: `<${smallCid}>`,
+    },
+    {
+      id: "pdf",
+      part: "3",
+      filename: "document.pdf",
+      size: 1000,
+      mimeType: "application/pdf",
+      disposition: "attachment",
+    },
+  ];
+  const visible = visibleMessageAttachments(attachments, new Set([cid, smallCid]));
+  assert.deepEqual(
+    visible.map((attachment) => attachment.id),
+    ["pdf"],
+  );
+  assert.equal(visible.length > 0, true);
+  assert.equal(
+    visibleMessageAttachments(attachments.slice(0, 2), new Set([cid, smallCid])).length > 0,
+    false,
+  );
 });
 
 test("one mailbox client downloads six CID parts as one batch without flag mutation", async () => {

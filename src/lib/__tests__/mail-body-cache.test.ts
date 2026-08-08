@@ -155,7 +155,14 @@ describe("storeCachedBody", () => {
         inlineParts: [],
         attachments: [],
       },
-      { maxBytes: 100, maxAgeDays: 14, maxRowsPerAccount: 100, warmBatch: 5, warmWindow: 100, inlineMaxBytes: 1536 * 1024 },
+      {
+        maxBytes: 100,
+        maxAgeDays: 14,
+        maxRowsPerAccount: 100,
+        warmBatch: 5,
+        warmWindow: 100,
+        inlineMaxBytes: 1536 * 1024,
+      },
     );
     expect(out).toBe("oversize");
     const row = spy.upserts[0] as Record<string, unknown>;
@@ -170,11 +177,17 @@ describe("storeCachedBody", () => {
     const out = await storeCachedBody(db, {
       ...KEY,
       uidValidity: "100",
-      bodyHtml: "<p>hi <img src=\"cid:logo\"></p>",
+      bodyHtml: '<p>hi <img src="cid:logo"></p>',
       preview: "hi",
       inlineParts: [],
       inlineImages: [
-        { cid: "logo", part: "2", mimeType: "image/png", size: 4, dataUri: "data:image/png;base64,AAAA" },
+        {
+          cid: "logo",
+          part: "2",
+          mimeType: "image/png",
+          size: 4,
+          dataUri: "data:image/png;base64,AAAA",
+        },
       ],
       attachments: [],
     });
@@ -182,6 +195,30 @@ describe("storeCachedBody", () => {
     const row = spy.upserts[0] as Record<string, unknown>;
     expect(row["inline_images"]).toHaveLength(1);
     expect(row["inline_parts"]).toEqual([]);
+  });
+
+  it("persists large CID metadata without storing its bytes", async () => {
+    const spy = { upserts: [] as unknown[] };
+    const db = fakeSupabase({}, spy);
+    const largePart = {
+      cid: "mm-inline-large@mailmaestro",
+      part: "2",
+      mimeType: "image/png",
+      size: Math.round(1.8 * 1024 * 1024),
+    };
+    const out = await storeCachedBody(db, {
+      ...KEY,
+      uidValidity: "100",
+      bodyHtml: `<p>text</p><img src="cid:${largePart.cid}">`,
+      preview: "text",
+      inlineParts: [largePart],
+      inlineImages: [],
+      attachments: [],
+    });
+    expect(out).toBe("stored");
+    const row = spy.upserts[0] as Record<string, unknown>;
+    expect(row["inline_parts"]).toEqual([largePart]);
+    expect(row["inline_images"]).toEqual([]);
   });
 
   it("demotes oversized inline images to lazy metadata instead of dropping them", async () => {

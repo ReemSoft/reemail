@@ -14,6 +14,7 @@
 // account identifier is ever printed.
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { MailAttachment, MailMessage } from "@/lib/mail-types";
+import { INLINE_CID_MAX_COUNT, partitionInlineCidParts } from "@/lib/mail-inline-cid-policy";
 
 /** Bump when the HTML/body pipeline changes: invalidates every stored body. */
 export const BODY_CACHE_VERSION = 2;
@@ -90,26 +91,16 @@ export interface CacheKey {
 
 function boundedInlineParts(value: unknown): CachedBody["inlineParts"] {
   if (!Array.isArray(value)) return [];
-  let totalBytes = 0;
-  const output: CachedBody["inlineParts"] = [];
-  for (const candidate of value as CachedBody["inlineParts"]) {
-    if (output.length >= 20) break;
-    if (
-      !candidate ||
-      typeof candidate.cid !== "string" ||
-      !/^\d+(?:\.\d+)*$/.test(candidate.part) ||
-      !/^image\//i.test(candidate.mimeType) ||
-      !Number.isInteger(candidate.size) ||
-      candidate.size < 0 ||
-      candidate.size > 256 * 1024 ||
-      totalBytes + candidate.size > 1024 * 1024
-    ) {
-      continue;
-    }
-    totalBytes += candidate.size;
-    output.push(candidate);
-  }
-  return output;
+  const candidates = value.filter(
+    (candidate): candidate is CachedBody["inlineParts"][number] =>
+      Boolean(candidate) && typeof candidate === "object",
+  );
+  const partition = partitionInlineCidParts(candidates);
+  return [
+    ...partition.smallBatchParts,
+    ...partition.largeStreamParts,
+    ...partition.overflowStreamParts,
+  ].slice(0, INLINE_CID_MAX_COUNT);
 }
 
 /**

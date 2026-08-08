@@ -133,12 +133,21 @@ function jsonSafe(value: string): string {
 
 const INLINE_IMAGE_DATA_RE = /^data:image\/(?:png|jpe?g|gif|webp);base64,[a-z0-9+/=\s]+$/i;
 
-export interface CidImageMapping {
+export interface CidDataImageMapping {
   cid: string;
   dataUri: string;
   width?: number;
   height?: number;
 }
+
+export interface CidBlobImageMapping {
+  cid: string;
+  blobUrl: string;
+  width?: number;
+  height?: number;
+}
+
+export type CidImageMapping = CidDataImageMapping | CidBlobImageMapping;
 
 export interface CidApplyMessage {
   __mm: "cid";
@@ -155,6 +164,16 @@ export function isAllowedInlineImageDataUri(value: unknown): value is string {
   const base64 = value.slice(value.indexOf(",") + 1).replace(/\s/g, "");
   const padding = base64.endsWith("==") ? 2 : base64.endsWith("=") ? 1 : 0;
   return Math.floor((base64.length * 3) / 4) - padding <= 256 * 1024;
+}
+
+/** Blob capabilities are created by the authenticated parent stream path only. */
+export function isAllowedInlineImageBlobUrl(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 5 &&
+    value.length <= 2048 &&
+    /^blob:(?:https?:\/\/[^/\s]+|null)\/[^\s<>"']+$/.test(value)
+  );
 }
 
 export function isValidCidApplyPayload(
@@ -187,16 +206,21 @@ export function isValidCidApplyPayload(
         Number(image.height) > 0 &&
         Number(image.width) <= 20_000 &&
         Number(image.height) <= 20_000);
+    const dataValid = isAllowedInlineImageDataUri(image.dataUri);
+    const blobValid = isAllowedInlineImageBlobUrl(image.blobUrl);
     if (
       dimensionsValid &&
       typeof image.cid === "string" &&
       image.cid.length > 0 &&
       image.cid.length <= 998 &&
-      isAllowedInlineImageDataUri(image.dataUri)
+      dataValid !== blobValid
     ) {
-      const base64 = image.dataUri.slice(image.dataUri.indexOf(",") + 1).replace(/\s/g, "");
-      const padding = base64.endsWith("==") ? 2 : base64.endsWith("=") ? 1 : 0;
-      totalBytes += Math.floor((base64.length * 3) / 4) - padding;
+      if (dataValid) {
+        const dataUri = image.dataUri as string;
+        const base64 = dataUri.slice(dataUri.indexOf(",") + 1).replace(/\s/g, "");
+        const padding = base64.endsWith("==") ? 2 : base64.endsWith("=") ? 1 : 0;
+        totalBytes += Math.floor((base64.length * 3) / 4) - padding;
+      }
       return totalBytes <= 1024 * 1024;
     }
     return false;
@@ -358,6 +382,10 @@ export function buildEmailSrcDoc({
         return typeof value==='string' && value.length<=350000 &&
           /^data:image\\/(?:png|jpe?g|gif|webp);base64,[a-z0-9+\\/=\\s]+$/i.test(value);
       }
+      function validImageBlob(value){
+        return typeof value==='string' && value.length>5 && value.length<=2048 &&
+          /^blob:(?:https?:\\/\\/[^\\/\\s]+|null)\\/[^\\s<>"']+$/.test(value);
+      }
       window.addEventListener('message', function(event){
         try{
           if(event.source!==parent || event.origin!==origin) return;
@@ -367,11 +395,14 @@ export function buildEmailSrcDoc({
           var total=0;
           for(var i=0;i<data.images.length;i++){
             var item=data.images[i];
-            if(!item || typeof item.cid!=='string' || item.cid.length<1 || item.cid.length>998 || !validImageData(item.dataUri)) continue;
+            var dataValid=item&&validImageData(item.dataUri), blobValid=item&&validImageBlob(item.blobUrl);
+            if(!item || typeof item.cid!=='string' || item.cid.length<1 || item.cid.length>998 || dataValid===blobValid) continue;
             if((item.width!==undefined || item.height!==undefined) &&
               (!Number.isInteger(item.width) || !Number.isInteger(item.height) || item.width<1 || item.height<1 || item.width>20000 || item.height>20000)) continue;
-            var encoded=item.dataUri.slice(item.dataUri.indexOf(',')+1).replace(/\\s/g,'');
-            total+=Math.floor(encoded.length*3/4)-(encoded.endsWith('==')?2:encoded.endsWith('=')?1:0);
+            if(dataValid){
+              var encoded=item.dataUri.slice(item.dataUri.indexOf(',')+1).replace(/\\s/g,'');
+              total+=Math.floor(encoded.length*3/4)-(encoded.endsWith('==')?2:encoded.endsWith('=')?1:0);
+            }
             if(total>1048576) return;
             mapping[item.cid.toLowerCase()]=item;
           }
@@ -392,7 +423,7 @@ export function buildEmailSrcDoc({
               var img=nodes[n], cid=(img.getAttribute('data-mm-cid')||'').toLowerCase();
               var item=mapping[cid];
               if(!item) continue;
-              var src=item.dataUri;
+              var src=validImageData(item.dataUri)?item.dataUri:item.blobUrl;
               if(item.width && item.height){
                 if(item.width<=1 && item.height<=1){
                   img.style.display='none';

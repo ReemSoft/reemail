@@ -13,40 +13,49 @@ export const Route = createFileRoute("/api/mail-attachment")({
   server: {
     handlers: {
       POST: async ({ request }) => {
-        let body: any;
+        let body: unknown;
         try {
           body = await request.json();
         } catch {
           return json({ error: "Invalid JSON" }, 400);
         }
+        const candidate = body as Record<string, unknown> | null;
         if (
-          !body ||
-          typeof body !== "object" ||
-          typeof body.mailSessionToken !== "string" ||
-          typeof body.password !== "string" ||
-          typeof body.folder !== "string" ||
-          typeof body.uid !== "number" ||
-          typeof body.part !== "string"
+          !candidate ||
+          typeof candidate !== "object" ||
+          typeof candidate.mailSessionToken !== "string" ||
+          typeof candidate.password !== "string" ||
+          typeof candidate.folder !== "string" ||
+          typeof candidate.uid !== "number" ||
+          typeof candidate.part !== "string"
         ) {
           return json({ error: "Invalid payload" }, 400);
         }
+        const payload = candidate as {
+          mailSessionToken: string;
+          password: string;
+          folder: string;
+          uid: number;
+          part: string;
+        };
 
         const { resolveBridgeAuth } = await import("@/lib/mail-bridge-auth.server");
-        const auth = await resolveBridgeAuth(body.mailSessionToken);
+        const auth = await resolveBridgeAuth(payload.mailSessionToken);
         if (!auth.ok) return json({ error: auth.error }, auth.status);
 
         const upstream = await fetch(`${auth.bridgeUrl}/api/attachment`, {
           method: "POST",
+          signal: request.signal,
           headers: {
             "Content-Type": "application/json",
             "X-Bridge-Key": auth.bridgeKey,
           },
           body: JSON.stringify({
             account: auth.bridgeAccount,
-            password: body.password,
-            folder: body.folder,
-            uid: body.uid,
-            part: body.part,
+            password: payload.password,
+            folder: payload.folder,
+            uid: payload.uid,
+            part: payload.part,
           }),
         });
 

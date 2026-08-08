@@ -11,6 +11,7 @@ import {
   sanitizeAndHardenEmailHtml,
   buildEmailSrcDoc,
   isAllowedInlineImageDataUri,
+  isAllowedInlineImageBlobUrl,
   isValidCidApplyPayload,
   isValidHeightPayload,
   randomToken,
@@ -19,6 +20,10 @@ import {
   setAlwaysShowRemoteImages,
 } from "@/lib/email-viewer-security";
 import type { CidImageMapping } from "@/lib/email-viewer-security";
+import {
+  partitionInlineCidParts,
+  streamInlineCidPartsSequential,
+} from "@/lib/mail-inline-cid-policy";
 
 import { buildReplyQuoteHtml, buildForwardQuoteHtml } from "@/lib/mail-quote";
 import { splitQuotedHtml } from "@/lib/mail-thread-split";
@@ -66,11 +71,13 @@ function EmailBodyFrame({
   cidImages,
   messageIdentity,
   className,
+  onReady,
 }: {
   html: string;
   cidImages: CidImageMapping[];
   messageIdentity: string;
   className?: string;
+  onReady?: () => void;
 }) {
   const ref = useRef<HTMLIFrameElement | null>(null);
   const nonce = useMemo(() => rotatingToken(`${messageIdentity}|${html}`), [html, messageIdentity]);
@@ -87,6 +94,7 @@ function EmailBodyFrame({
   const [frameReady, setFrameReady] = useState(false);
   const appliedCidSignatureRef = useRef("");
   const cidRafRef = useRef<number | null>(null);
+  const readyRafRef = useRef<number | null>(null);
 
   useEffect(() => {
     mailPerf("iframe-created", { count: 1 });
@@ -126,12 +134,28 @@ function EmailBodyFrame({
   useEffect(() => {
     setFrameReady(false);
     appliedCidSignatureRef.current = "";
+    if (readyRafRef.current !== null) cancelAnimationFrame(readyRafRef.current);
+    readyRafRef.current = null;
   }, [srcDoc]);
+
+  useEffect(
+    () => () => {
+      if (readyRafRef.current !== null) cancelAnimationFrame(readyRafRef.current);
+    },
+    [],
+  );
 
   useEffect(() => {
     if (!frameReady || cidImages.length === 0 || !ref.current?.contentWindow) return;
-    const safeImages = cidImages.filter((image) => isAllowedInlineImageDataUri(image.dataUri));
-    const signature = `${safeImages.length}:${safeImages.reduce((sum, image) => sum + image.dataUri.length, 0)}`;
+    const safeImages = cidImages.filter((image) =>
+      "dataUri" in image
+        ? isAllowedInlineImageDataUri(image.dataUri)
+        : isAllowedInlineImageBlobUrl(image.blobUrl),
+    );
+    const signature = `${safeImages.length}:${safeImages.reduce(
+      (sum, image) => sum + ("dataUri" in image ? image.dataUri.length : image.blobUrl.length),
+      0,
+    )}`;
     if (signature === appliedCidSignatureRef.current) return;
     const payload = {
       __mm: "cid" as const,
@@ -204,7 +228,14 @@ function EmailBodyFrame({
         sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
         referrerPolicy="no-referrer"
         scrolling="no"
-        onLoad={() => setFrameReady(true)}
+        onLoad={() => {
+          setFrameReady(true);
+          if (readyRafRef.current !== null) cancelAnimationFrame(readyRafRef.current);
+          readyRafRef.current = requestAnimationFrame(() => {
+            readyRafRef.current = null;
+            onReady?.();
+          });
+        }}
         style={{ width: "100%", height, border: 0, display: "block", overflow: "hidden" }}
       />
     </div>
@@ -221,11 +252,13 @@ function ThreadedEmailBody({
   cidImages,
   messageIdentity,
   className,
+  onReady,
 }: {
   html: string;
   cidImages: CidImageMapping[];
   messageIdentity: string;
   className?: string;
+  onReady?: () => void;
 }) {
   const { latest, quoted } = useMemo(() => splitQuotedHtml(html), [html]);
   const [expanded, setExpanded] = useState(false);
@@ -241,6 +274,7 @@ function ThreadedEmailBody({
         cidImages={cidImages}
         messageIdentity={messageIdentity}
         className={className}
+        onReady={onReady}
       />
     );
 
@@ -250,6 +284,7 @@ function ThreadedEmailBody({
         html={latest}
         cidImages={cidImages}
         messageIdentity={`${messageIdentity}:latest`}
+        onReady={onReady}
       />
       <div className="mt-3">
         <button
@@ -289,6 +324,7 @@ function abortInlineImageFlights(): void {
 async function decodeInlineMappings(images: CidImageMapping[]): Promise<CidImageMapping[]> {
   const decoded = await Promise.all(
     images.map(async (image) => {
+      if (!("dataUri" in image)) return image;
       if (!isAllowedInlineImageDataUri(image.dataUri)) return null;
       if (typeof Image === "undefined") return image;
       const candidate = new Image();
@@ -313,11 +349,12 @@ async function decodeInlineMappings(images: CidImageMapping[]): Promise<CidImage
 }
 
 /**
- * Renders cached CID bytes immediately. Missing bytes are fetched after the
- * body paints by one protected batch and applied in one state update.
+ * Renders cached CID bytes immediately. Missing small bytes use one protected
+ * batch; large CID streams start only after the body iframe reports ready.
  */
 function useInlineImageMappings(
   message: MailMessage,
+  largeReady: boolean,
   onResolved?: (images: NonNullable<MailMessage["inlineImages"]>) => void,
 ): CidImageMapping[] {
   const resolveInlineImages = useMailServerFn(resolveMessageInlineImages);
@@ -333,6 +370,18 @@ function useInlineImageMappings(
         .filter((image) => isAllowedInlineImageDataUri(image.dataUri))
         .map((image) => ({ cid: image.cid, dataUri: image.dataUri })),
     [message.inlineImages],
+  );
+  const smallPartition = useMemo(
+    () =>
+      partitionInlineCidParts(
+        message.inlineParts ?? [],
+        (message.inlineImages ?? []).map((image) => image.cid),
+      ),
+    [message.inlineImages, message.inlineParts],
+  );
+  const largeStreamParts = useMemo(
+    () => partitionInlineCidParts(message.inlineParts ?? []).largeStreamParts,
+    [message.inlineParts],
   );
   const [resolved, setResolved] = useState<{ key: string; images: CidImageMapping[] }>({
     key: messageKey,
@@ -357,22 +406,12 @@ function useInlineImageMappings(
       });
     });
 
-    const parts = message.inlineParts;
-    if (!parts?.length || !messageKey) {
+    const parts = smallPartition.smallBatchParts;
+    if (!parts.length || !messageKey) {
       return () => {
         cancelled = true;
       };
     }
-    const embeddedCids = new Set(
-      (message.inlineImages ?? []).map((image) => image.cid.toLowerCase()),
-    );
-    const pending = parts.filter((part) => !embeddedCids.has(part.cid.toLowerCase()));
-    if (!pending.length) {
-      return () => {
-        cancelled = true;
-      };
-    }
-
     void (async () => {
       const session = getMailSession();
       const parsed = parseMessageId(message.id);
@@ -429,10 +468,66 @@ function useInlineImageMappings(
     embedded,
     message.id,
     message.inlineImages,
-    message.inlineParts,
     messageKey,
+    smallPartition.smallBatchParts,
     resolveInlineImages,
   ]);
+
+  useEffect(() => {
+    if (!largeReady || !messageKey) return;
+    const session = getMailSession();
+    const parsed = parseMessageId(message.id);
+    if (!session?.mailSessionToken || !parsed) return;
+    const parts = largeStreamParts;
+    if (parts.length === 0) return;
+
+    const controller = new AbortController();
+    const objectUrls = new Map<string, string>();
+    void streamInlineCidPartsSequential(parts, {
+      signal: controller.signal,
+      fetchPart: (part, signal) =>
+        fetch("/api/mail-attachment", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            mailSessionToken: session.mailSessionToken,
+            password: session.password,
+            folder: parsed.folder,
+            uid: parsed.uid,
+            part: part.part,
+          }),
+          signal,
+        }),
+      createObjectURL: (blob) => URL.createObjectURL(blob),
+      revokeObjectURL: (url) => URL.revokeObjectURL(url),
+      onMapping: (mapping) => {
+        if (controller.signal.aborted) {
+          URL.revokeObjectURL(mapping.blobUrl);
+          return;
+        }
+        const cid = mapping.cid.toLowerCase();
+        const previous = objectUrls.get(cid);
+        if (previous) URL.revokeObjectURL(previous);
+        objectUrls.set(cid, mapping.blobUrl);
+        setResolved((current) => {
+          if (controller.signal.aborted || current.key !== messageKey) {
+            URL.revokeObjectURL(mapping.blobUrl);
+            objectUrls.delete(cid);
+            return current;
+          }
+          const byCid = new Map(current.images.map((image) => [image.cid.toLowerCase(), image]));
+          byCid.set(cid, mapping);
+          return { key: messageKey, images: [...byCid.values()] };
+        });
+      },
+    });
+
+    return () => {
+      controller.abort();
+      for (const url of objectUrls.values()) URL.revokeObjectURL(url);
+      objectUrls.clear();
+    };
+  }, [largeReady, largeStreamParts, message.id, messageKey]);
 
   return resolved.key === messageKey ? resolved.images : [];
 }
@@ -449,13 +544,20 @@ function MessageBody({
   onInlineImages?: (images: NonNullable<MailMessage["inlineImages"]>) => void;
   className?: string;
 }) {
-  const cidImages = useInlineImageMappings(message, onInlineImages);
+  const bodyIdentity = `${message.id}|${message.uidValidity ?? ""}`;
+  const [readyIdentity, setReadyIdentity] = useState("");
+  const cidImages = useInlineImageMappings(
+    message,
+    readyIdentity === bodyIdentity,
+    onInlineImages,
+  );
   return (
     <ThreadedEmailBody
       html={html}
       cidImages={cidImages}
-      messageIdentity={`${message.id}|${message.uidValidity ?? ""}`}
+      messageIdentity={bodyIdentity}
       className={className}
+      onReady={() => setReadyIdentity(bodyIdentity)}
     />
   );
 }
@@ -2207,7 +2309,7 @@ function MailApp() {
                   mailedBy: result.body.mailedBy ?? base.mailedBy,
                   signedBy: result.body.signedBy ?? base.signedBy,
                   security: result.body.security ?? base.security,
-                  hasAttachments: result.body.attachments.length > 0 ? true : base.hasAttachments,
+                  hasAttachments: result.body.attachments.length > 0,
                   uidValidity: base.uidValidity ?? result.body.uidValidity,
                 }
               : result.ok && result.source === "imap"
@@ -2286,7 +2388,7 @@ function MailApp() {
     async (message: MailMessage, signal?: AbortSignal): Promise<void> => {
       if (!session || !message.inlineParts?.length) return;
       const present = new Set((message.inlineImages ?? []).map((image) => image.cid.toLowerCase()));
-      const parts = message.inlineParts.filter((part) => !present.has(part.cid.toLowerCase()));
+      const parts = partitionInlineCidParts(message.inlineParts, present).smallBatchParts;
       if (parts.length === 0) return;
       const parsed = parseMessageId(message.id);
       const uidValidity = validUidValidity(message.uidValidity);
@@ -5676,8 +5778,12 @@ function Composer({
       const missing = (initial?.inlineParts ?? []).filter(
         (item) => !present.has(item.cid.toLowerCase()),
       );
-      const batchParts = missing.filter((item) => item.size <= 256 * 1024);
-      const streamedParts = missing.filter((item) => item.size > 256 * 1024);
+      const draftPartition = partitionInlineCidParts(missing);
+      const batchParts = draftPartition.smallBatchParts;
+      const streamedParts = [
+        ...draftPartition.largeStreamParts,
+        ...draftPartition.overflowStreamParts,
+      ];
       const parsed = initial?.inlineMessageId ? parseMessageId(initial.inlineMessageId) : null;
       if (batchParts.length && parsed && session.mailSessionToken) {
         try {

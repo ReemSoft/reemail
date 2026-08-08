@@ -8,6 +8,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import type { MailAttachment, MailMessage } from "@/lib/mail-types";
 import { classifyBridgeMessageFailure, type BridgeMessageErrorCode } from "@/lib/mail-bridge-error";
+import { partitionInlineCidParts } from "@/lib/mail-inline-cid-policy";
 
 const FolderSchema = z.enum([
   "inbox",
@@ -171,11 +172,7 @@ const InlinePartSchema = z.object({
   cid: z.string().min(1).max(998),
   part: z.string().regex(/^\d+(?:\.\d+)*$/),
   mimeType: z.string().regex(/^image\//i),
-  size: z
-    .number()
-    .int()
-    .min(0)
-    .max(256 * 1024),
+  size: z.number().int().min(0),
 });
 
 const InlineBatchSchema = z.object({
@@ -199,6 +196,15 @@ export type ResolveInlineImagesResult =
 export const resolveMessageInlineImages = createServerFn({ method: "POST" })
   .inputValidator((value: z.input<typeof InlineBatchSchema>) => InlineBatchSchema.parse(value))
   .handler(async ({ data }): Promise<ResolveInlineImagesResult> => {
+    const partition = partitionInlineCidParts(data.parts);
+    if (partition.smallBatchParts.length !== data.parts.length) {
+      return {
+        ok: false,
+        images: [],
+        failedCids: data.parts.map((part) => part.cid),
+        error: "INLINE_BATCH_PART_OUT_OF_BOUNDS",
+      };
+    }
     const { resolveBridgeAuth } = await import("@/lib/mail-bridge-auth.server");
     const { bridgeCallResolved } = await import("@/lib/mail-bridge-call.server");
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
@@ -218,7 +224,7 @@ export const resolveMessageInlineImages = createServerFn({ method: "POST" })
 
     try {
       const result = await resolver.resolveInlineImageBatchSingleFlight(messageKey, () =>
-        resolver.resolveInlineImageBatch(data.parts, {
+        resolver.resolveInlineImageBatch(partition.smallBatchParts, {
           lookup: () => cache.lookupCachedBody(supabaseAdmin, key),
           fetchBatch: async (parts) => {
             const response = await bridgeCallResolved(

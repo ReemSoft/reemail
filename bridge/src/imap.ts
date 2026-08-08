@@ -26,6 +26,8 @@ function envInt(name: string, fallback: number): number {
 const INLINE_IMAGE_MAX_BYTES = envInt("INLINE_IMAGE_MAX_BYTES", 256 * 1024);
 const INLINE_IMAGE_TOTAL_BYTES = envInt("INLINE_IMAGE_TOTAL_BYTES", 1024 * 1024);
 const INLINE_IMAGE_MAX_COUNT = envInt("INLINE_IMAGE_MAX_COUNT", 20);
+const INLINE_IMAGE_STREAM_MAX_BYTES = 5 * 1024 * 1024;
+const INLINE_IMAGE_SAFE_MIME = /^image\/(?:png|jpe?g|gif|webp)$/i;
 
 const WELL_KNOWN_FOLDERS: Record<MailFolder, string[]> = {
   inbox: ["INBOX"],
@@ -439,6 +441,36 @@ export function selectInlineBatchCandidates(
     .slice(0, INLINE_IMAGE_MAX_COUNT);
 }
 
+export function selectInlineMetadataCandidates(
+  candidates: NonNullable<MailMessage["inlineParts"]>,
+  folder: MailFolder,
+): NonNullable<MailMessage["inlineParts"]> {
+  const safe = candidates.filter(
+    (part) =>
+      part.size >= 0 &&
+      part.size <= INLINE_IMAGE_STREAM_MAX_BYTES &&
+      INLINE_IMAGE_SAFE_MIME.test(part.mimeType),
+  );
+  if (folder !== "drafts") return safe.slice(0, INLINE_IMAGE_MAX_COUNT);
+  return safe.slice(0, 10).reduce<typeof safe>((selected, part) => {
+    const total = selected.reduce((sum, item) => sum + item.size, 0);
+    if (total + part.size <= 25 * 1024 * 1024) selected.push(part);
+    return selected;
+  }, []);
+}
+
+export function visibleMessageAttachments(
+  attachments: MailAttachment[],
+  referencedCids: ReadonlySet<string>,
+): MailAttachment[] {
+  return attachments.filter((attachment) => {
+    const cid = (attachment.contentId || "").replace(/^<|>$/g, "").toLowerCase();
+    if (cid && referencedCids.has(cid)) return false;
+    if (attachment.disposition === "inline" && attachment.contentId) return false;
+    return true;
+  });
+}
+
 export function planInlineImagesForOpen(
   candidates: NonNullable<MailMessage["inlineParts"]>,
   lane: ImapLane,
@@ -559,14 +591,14 @@ export async function getMessageBody(
       const structural = collectAttachmentParts(msg.bodyStructure);
       const deferredInline: NonNullable<MailMessage["inlineParts"]> = [];
       const embedded: NonNullable<MailMessage["inlineImages"]> = [];
+      const referencedCids = new Set<string>();
 
       if (html) {
-        const referenced = new Set<string>();
         for (const m of html.matchAll(/cid:([^"'\s>)\\]+)/gi)) {
-          referenced.add(m[1].replace(/^<|>$/g, "").toLowerCase());
+          referencedCids.add(m[1].replace(/^<|>$/g, "").toLowerCase());
         }
         const candidates: NonNullable<MailMessage["inlineParts"]> = [];
-        for (const cid of referenced) {
+        for (const cid of referencedCids) {
           const partInfo = structural.find(
             (a) => (a.contentId || "").replace(/^<|>$/g, "").toLowerCase() === cid,
           );
@@ -587,22 +619,7 @@ export async function getMessageBody(
         // 5 MiB per-file / 10-file / 25 MiB upload limits. Return metadata for
         // those parts so Edit Draft can stream them through the authenticated
         // attachment route. Normal message-open batching remains at 256 KiB.
-        const interactiveCandidates =
-          folder === "drafts"
-            ? candidates
-                .filter(
-                  (part) =>
-                    part.size >= 0 &&
-                    part.size <= 5 * 1024 * 1024 &&
-                    /^image\/(?:png|jpeg|gif|webp)$/i.test(part.mimeType),
-                )
-                .slice(0, 10)
-                .reduce<typeof candidates>((selected, part) => {
-                  const total = selected.reduce((sum, item) => sum + item.size, 0);
-                  if (total + part.size <= 25 * 1024 * 1024) selected.push(part);
-                  return selected;
-                }, [])
-            : selectInlineBatchCandidates(candidates);
+        const interactiveCandidates = selectInlineMetadataCandidates(candidates, folder);
         const inlinePlan = planInlineImagesForOpen(
           lane === "interactive" ? interactiveCandidates : candidates,
           lane,
@@ -648,18 +665,10 @@ export async function getMessageBody(
           );
       }
 
-      // ---- attachments: unchanged contract ---------------------------------
-      // Deferred cids stay reachable (the lazy route still needs them); cids we
-      // already embedded are rendered in the body, so they are not listed twice.
-      const embeddedCids = new Set(embedded.map((d) => d.cid));
-      const deferredCids = new Set(deferredInline.map((d) => d.cid));
-      const visible = structural.filter((a) => {
-        const cid = (a.contentId || "").replace(/^<|>$/g, "").toLowerCase();
-        if (cid && embeddedCids.has(cid)) return false;
-        if (cid && deferredCids.has(cid)) return true;
-        if (a.disposition === "inline" && a.contentId) return false;
-        return true;
-      });
+      // ---- attachments ------------------------------------------------------
+      // HTML-referenced CIDs are body resources. Their inlineParts metadata is
+      // sufficient for lazy access; exposing them as attachments duplicates UI.
+      const visible = visibleMessageAttachments(structural, referencedCids);
 
       parsed.attachments = visible;
       parsed.hasAttachments = visible.length > 0;
