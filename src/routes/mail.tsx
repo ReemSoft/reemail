@@ -6305,7 +6305,12 @@ function Composer({
     let dragImg: HTMLImageElement | null = null;
     const onDragStart = (e: DragEvent) => {
       const t = e.target as HTMLElement | null;
+      if (resizingImgRef.current) {
+        e.preventDefault();
+        return;
+      }
       if (!t || t.tagName !== "IMG") return;
+
       dragImg = t as HTMLImageElement;
       e.dataTransfer?.setData("text/plain", "");
       if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
