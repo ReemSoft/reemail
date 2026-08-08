@@ -400,23 +400,39 @@ export async function downloadPartBuffer(
   part: string,
   maxBytes: number,
   onPoisoned?: () => void,
+  signal?: AbortSignal,
 ): Promise<{ buf: Buffer; meta: any } | null> {
   const dl = await client.download(String(uid), part, { uid: true, maxBytes });
   if (!dl?.content) return null;
+  const content = dl.content as Readable;
   const chunks: Buffer[] = [];
+  let poisoned = false;
+  const poison = () => {
+    if (poisoned) return;
+    poisoned = true;
+    onPoisoned?.();
+  };
+  const onAbort = () => {
+    const error = Object.assign(new Error("Inline image request aborted"), { code: "ABORT_ERR" });
+    content.destroy(error);
+  };
+  signal?.addEventListener("abort", onAbort, { once: true });
+  if (signal?.aborted) onAbort();
   try {
     // Consume the stream to the end — ImapFlow already caps it at maxBytes.
-    for await (const chunk of dl.content as any) {
+    for await (const chunk of content) {
       chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
     }
   } catch (err) {
     try {
-      (dl.content as any)?.destroy?.();
+      content.destroy();
     } catch {
       /* already gone */
     }
-    onPoisoned?.();
+    poison();
     throw err;
+  } finally {
+    signal?.removeEventListener("abort", onAbort);
   }
   return { buf: Buffer.concat(chunks), meta: dl.meta };
 }
@@ -769,6 +785,73 @@ export async function getInlineImagesBatch(
     (client) => downloadInlinePartsInMailbox(client, uid, candidates),
     "interactive",
   );
+}
+
+export const LARGE_INLINE_PART_MAX_BYTES = 5 * 1024 * 1024;
+
+export interface LargeInlinePartResult {
+  bytes: Buffer;
+  mimeType: string;
+}
+
+export interface LargeInlinePartDependencies {
+  getMailboxes: typeof getMailboxesCached;
+  withMailbox: typeof withAccountMailbox;
+  dropConnection: typeof dropAccountConnection;
+}
+
+const largeInlinePartDependencies: LargeInlinePartDependencies = {
+  getMailboxes: getMailboxesCached,
+  withMailbox: withAccountMailbox,
+  dropConnection: dropAccountConnection,
+};
+
+/** Fetches one automatic large CID through the reused interactive connection. */
+export async function getLargeInlinePart(
+  account: MailAccount,
+  password: string,
+  folder: MailFolder,
+  uid: number,
+  part: string,
+  signal?: AbortSignal,
+  dependencies: LargeInlinePartDependencies = largeInlinePartDependencies,
+): Promise<LargeInlinePartResult | null> {
+  if (!Number.isInteger(uid) || uid <= 0 || !/^\d+(?:\.\d+)*$/.test(part)) return null;
+  const mailboxes = await dependencies.getMailboxes(account, password, "interactive");
+  const path = resolveFolderPath(mailboxes, folder);
+  if (!path || signal?.aborted) return null;
+
+  const startedAt = Date.now();
+  const result = await dependencies.withMailbox(
+    account,
+    password,
+    path,
+    (client) =>
+      downloadPartBuffer(
+        client,
+        uid,
+        part,
+        LARGE_INLINE_PART_MAX_BYTES,
+        () => dependencies.dropConnection(account, "interactive"),
+        signal,
+      ),
+    "interactive",
+  );
+  if (!result?.buf.length || result.buf.length > LARGE_INLINE_PART_MAX_BYTES) return null;
+  const expectedSize = Number(result.meta?.expectedSize);
+  if (Number.isFinite(expectedSize) && expectedSize > LARGE_INLINE_PART_MAX_BYTES) return null;
+  const rawMimeType = String(result.meta?.contentType || "")
+    .split(";", 1)[0]
+    .trim()
+    .toLowerCase();
+  const mimeType = rawMimeType === "image/jpg" ? "image/jpeg" : rawMimeType;
+  if (!INLINE_IMAGE_SAFE_MIME.test(mimeType)) return null;
+  if (TIMING_ENABLED) {
+    console.log(
+      `[imap-timing] lane=interactive large-inline-part ${Date.now() - startedAt}ms ${result.buf.length}B`,
+    );
+  }
+  return { bytes: result.buf, mimeType };
 }
 
 /**

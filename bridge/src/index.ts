@@ -14,6 +14,7 @@ import {
   getMessages,
   getMessageBody,
   getInlineImagesBatch,
+  getLargeInlinePart,
   markRead,
   starMessage,
   moveMessage,
@@ -103,6 +104,10 @@ const InlinePartSchema = z.object({
 
 const InlineBatchPayloadSchema = MessagePayloadSchema.extend({
   parts: z.array(InlinePartSchema).max(20),
+});
+
+const LargeInlinePartPayloadSchema = MessagePayloadSchema.extend({
+  part: z.string().regex(/^\d+(?:\.\d+)*$/),
 });
 
 const MarkReadPayloadSchema = MessagePayloadSchema.extend({
@@ -267,6 +272,45 @@ app.post("/api/message-inline-images", requireKey, imapGate("interactive"), asyn
     }
     console.error("[bridge] /api/message-inline-images error:", err);
     return res.status(500).json({ ok: false, error: "Failed to fetch inline images" });
+  }
+});
+
+app.post("/api/message-inline-part", requireKey, imapGate("interactive"), async (req, res) => {
+  const controller = new AbortController();
+  const abort = () => {
+    if (!res.writableEnded) controller.abort();
+  };
+  req.once("aborted", abort);
+  res.once("close", abort);
+  try {
+    const payload = LargeInlinePartPayloadSchema.parse(req.body);
+    const result = await getLargeInlinePart(
+      payload.account as MailAccount,
+      payload.password,
+      payload.folder,
+      payload.uid,
+      payload.part,
+      controller.signal,
+    );
+    if (controller.signal.aborted) return;
+    if (!result) {
+      return res.status(404).json({ ok: false, error: "INLINE_IMAGE_UNAVAILABLE" });
+    }
+    res.setHeader("Content-Type", result.mimeType);
+    res.setHeader("Content-Length", String(result.bytes.length));
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("Cache-Control", "private, no-store");
+    return res.send(result.bytes);
+  } catch (err: unknown) {
+    if (controller.signal.aborted) return;
+    if (err instanceof z.ZodError) {
+      return res.status(400).json({ ok: false, error: "INVALID_PAYLOAD" });
+    }
+    console.error("[bridge] /api/message-inline-part error:", err);
+    return res.status(500).json({ ok: false, error: "Failed to fetch inline image" });
+  } finally {
+    req.off("aborted", abort);
+    res.off("close", abort);
   }
 });
 

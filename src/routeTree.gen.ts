@@ -17,6 +17,7 @@ import { Route as CompanyRouteImport } from './routes/company'
 import { Route as AuthenticatedRouteRouteImport } from './routes/_authenticated/route'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as ApiMailSendRouteImport } from './routes/api/mail-send'
+import { Route as ApiMailInlinePartRouteImport } from './routes/api/mail-inline-part'
 import { Route as ApiMailAttachmentRouteImport } from './routes/api/mail-attachment'
 import { Route as AuthenticatedDashboardRouteImport } from './routes/_authenticated/dashboard'
 import { Route as ApiPublicHooksMailSyncTickRouteImport } from './routes/api/public/hooks/mail-sync-tick'
@@ -60,6 +61,11 @@ const ApiMailSendRoute = ApiMailSendRouteImport.update({
   path: '/api/mail-send',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiMailInlinePartRoute = ApiMailInlinePartRouteImport.update({
+  id: '/api/mail-inline-part',
+  path: '/api/mail-inline-part',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiMailAttachmentRoute = ApiMailAttachmentRouteImport.update({
   id: '/api/mail-attachment',
   path: '/api/mail-attachment',
@@ -86,6 +92,7 @@ export interface FileRoutesByFullPath {
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/dashboard': typeof AuthenticatedDashboardRoute
   '/api/mail-attachment': typeof ApiMailAttachmentRoute
+  '/api/mail-inline-part': typeof ApiMailInlinePartRoute
   '/api/mail-send': typeof ApiMailSendRoute
   '/api/public/hooks/mail-sync-tick': typeof ApiPublicHooksMailSyncTickRoute
 }
@@ -98,6 +105,7 @@ export interface FileRoutesByTo {
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/dashboard': typeof AuthenticatedDashboardRoute
   '/api/mail-attachment': typeof ApiMailAttachmentRoute
+  '/api/mail-inline-part': typeof ApiMailInlinePartRoute
   '/api/mail-send': typeof ApiMailSendRoute
   '/api/public/hooks/mail-sync-tick': typeof ApiPublicHooksMailSyncTickRoute
 }
@@ -112,6 +120,7 @@ export interface FileRoutesById {
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/_authenticated/dashboard': typeof AuthenticatedDashboardRoute
   '/api/mail-attachment': typeof ApiMailAttachmentRoute
+  '/api/mail-inline-part': typeof ApiMailInlinePartRoute
   '/api/mail-send': typeof ApiMailSendRoute
   '/api/public/hooks/mail-sync-tick': typeof ApiPublicHooksMailSyncTickRoute
 }
@@ -126,6 +135,7 @@ export interface FileRouteTypes {
     | '/sitemap.xml'
     | '/dashboard'
     | '/api/mail-attachment'
+    | '/api/mail-inline-part'
     | '/api/mail-send'
     | '/api/public/hooks/mail-sync-tick'
   fileRoutesByTo: FileRoutesByTo
@@ -138,6 +148,7 @@ export interface FileRouteTypes {
     | '/sitemap.xml'
     | '/dashboard'
     | '/api/mail-attachment'
+    | '/api/mail-inline-part'
     | '/api/mail-send'
     | '/api/public/hooks/mail-sync-tick'
   id:
@@ -151,6 +162,7 @@ export interface FileRouteTypes {
     | '/sitemap.xml'
     | '/_authenticated/dashboard'
     | '/api/mail-attachment'
+    | '/api/mail-inline-part'
     | '/api/mail-send'
     | '/api/public/hooks/mail-sync-tick'
   fileRoutesById: FileRoutesById
@@ -164,6 +176,7 @@ export interface RootRouteChildren {
   MailRoute: typeof MailRoute
   SitemapDotxmlRoute: typeof SitemapDotxmlRoute
   ApiMailAttachmentRoute: typeof ApiMailAttachmentRoute
+  ApiMailInlinePartRoute: typeof ApiMailInlinePartRoute
   ApiMailSendRoute: typeof ApiMailSendRoute
   ApiPublicHooksMailSyncTickRoute: typeof ApiPublicHooksMailSyncTickRoute
 }
@@ -226,6 +239,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiMailSendRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/mail-inline-part': {
+      id: '/api/mail-inline-part'
+      path: '/api/mail-inline-part'
+      fullPath: '/api/mail-inline-part'
+      preLoaderRoute: typeof ApiMailInlinePartRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/mail-attachment': {
       id: '/api/mail-attachment'
       path: '/api/mail-attachment'
@@ -270,6 +290,7 @@ const rootRouteChildren: RootRouteChildren = {
   MailRoute: MailRoute,
   SitemapDotxmlRoute: SitemapDotxmlRoute,
   ApiMailAttachmentRoute: ApiMailAttachmentRoute,
+  ApiMailInlinePartRoute: ApiMailInlinePartRoute,
   ApiMailSendRoute: ApiMailSendRoute,
   ApiPublicHooksMailSyncTickRoute: ApiPublicHooksMailSyncTickRoute,
 }

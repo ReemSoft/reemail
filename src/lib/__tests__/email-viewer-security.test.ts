@@ -3,7 +3,9 @@
  *
  * Contract tests for the hardened email viewer security helpers.
  */
-import { describe, it, expect } from "vitest";
+// @ts-expect-error jsdom is provided by the test runtime without bundled declarations.
+import { JSDOM } from "jsdom";
+import { describe, it, expect, vi } from "vitest";
 import {
   sanitizeAndHardenEmailHtml,
   buildEmailSrcDoc,
@@ -12,8 +14,8 @@ import {
   hasRemoteImages,
   preparePendingCidImages,
   isAllowedInlineImageDataUri,
-  isAllowedInlineImageBlobUrl,
   isValidCidApplyPayload,
+  isValidLargeCidApplyPayload,
 } from "../email-viewer-security";
 
 // Extract the img-src directive from a built srcDoc's CSP meta.
@@ -234,21 +236,38 @@ describe("MAILMAESTRO_INSTANT_NAVIGATION_R1 stable CID iframe", () => {
     expect(isAllowedInlineImageDataUri("data:text/html;base64,AAAA")).toBe(false);
   });
 
-  it("accepts a separate Blob CID capability without weakening Data URI limits", () => {
-    const blob = {
-      __mm: "cid",
+  it("accepts only bounded raster ArrayBuffer payloads for large CID", () => {
+    const large = {
+      __mm: "cid-large",
       channel: "channel",
       messageIdentity: "message",
       generation: "generation",
-      images: [{ cid: "large", blobUrl: "blob:https://app.example.com/large-id" }],
+      images: [{ cid: "large", mimeType: "image/png", bytes: new ArrayBuffer(1024) }],
     };
-    expect(isAllowedInlineImageBlobUrl(blob.images[0].blobUrl)).toBe(true);
-    expect(isAllowedInlineImageBlobUrl("https://tracker.example/image.png")).toBe(false);
-    expect(isAllowedInlineImageBlobUrl("data:image/png;base64,AAAA")).toBe(false);
-    expect(isValidCidApplyPayload(blob, "channel", "message", "generation")).toBe(true);
+    expect(isValidLargeCidApplyPayload(large, "channel", "message", "generation")).toBe(true);
     expect(
-      isValidCidApplyPayload(
-        { ...blob, images: [{ cid: "large", blobUrl: "https://tracker.example/image.png" }] },
+      isValidLargeCidApplyPayload(
+        {
+          ...large,
+          images: [{ cid: "large", mimeType: "image/svg+xml", bytes: new ArrayBuffer(1) }],
+        },
+        "channel",
+        "message",
+        "generation",
+      ),
+    ).toBe(false);
+    expect(
+      isValidLargeCidApplyPayload(
+        {
+          ...large,
+          images: [
+            {
+              cid: "large",
+              mimeType: "image/png",
+              bytes: new ArrayBuffer(5 * 1024 * 1024 + 1),
+            },
+          ],
+        },
         "channel",
         "message",
         "generation",
@@ -262,8 +281,103 @@ describe("MAILMAESTRO_INSTANT_NAVIGATION_R1 stable CID iframe", () => {
       generation: "generation",
       parentOrigin: "https://app.example.com",
     });
-    expect(doc).toContain("validImageBlob");
-    expect(doc).toContain("item.dataUri:item.blobUrl");
+    expect(doc).toContain("new Blob([item.bytes]");
+    expect(doc).toContain("URL.createObjectURL(blob)");
+    expect(doc).not.toContain("item.blobUrl");
+  });
+
+  it("creates the Blob URL inside the iframe and reveals only after load", async () => {
+    const createObjectURL = vi.fn((_blob: unknown) => "blob:null/iframe-local");
+    const revokeObjectURL = vi.fn();
+    const doc = buildEmailSrcDoc({
+      html: `<p>Thanks and regards</p><img alt="ChatGPT Image" src="cid:mm-inline-large@mailmaestro">`,
+      nonce: "n",
+      channelId: "channel",
+      messageIdentity: "inbox:42",
+      generation: "g1",
+      parentOrigin: "https://app.example.com",
+    });
+    const runtime = new JSDOM(doc, {
+      runScripts: "dangerously",
+      pretendToBeVisual: true,
+      url: "https://app.example.com",
+      beforeParse(window: Window & typeof globalThis) {
+        window.URL.createObjectURL = createObjectURL;
+        window.URL.revokeObjectURL = revokeObjectURL;
+      },
+    });
+    const { window } = runtime;
+    const bytes = new window.ArrayBuffer(Math.round(1.8 * 1024 * 1024));
+    window.dispatchEvent(
+      new window.MessageEvent("message", {
+        origin: "https://app.example.com",
+        source: window,
+        data: {
+          __mm: "cid-large",
+          channel: "channel",
+          messageIdentity: "inbox:42",
+          generation: "g1",
+          images: [{ cid: "mm-inline-large@mailmaestro", mimeType: "image/png", bytes }],
+        },
+      }),
+    );
+    await new Promise((resolve) => window.requestAnimationFrame(resolve));
+    const image = window.document.querySelector("img") as HTMLImageElement;
+    expect(createObjectURL).toHaveBeenCalledOnce();
+    expect(createObjectURL.mock.calls[0][0]).toBeInstanceOf(window.Blob);
+    expect(image.src).toBe("blob:null/iframe-local");
+    expect(image.hasAttribute("data-mm-cid")).toBe(true);
+    expect(image.style.visibility).toBe("hidden");
+
+    image.dispatchEvent(new window.Event("load"));
+    expect(image.hasAttribute("data-mm-cid")).toBe(false);
+    expect(image.hasAttribute("aria-busy")).toBe(false);
+    expect(image.style.visibility).toBe("");
+    expect(revokeObjectURL).not.toHaveBeenCalled();
+    runtime.window.close();
+  });
+
+  it("keeps a failed large CID hidden and removes its broken src", async () => {
+    const revokeObjectURL = vi.fn();
+    const doc = buildEmailSrcDoc({
+      html: `<img src="cid:large">`,
+      nonce: "n",
+      channelId: "channel",
+      messageIdentity: "inbox:42",
+      generation: "g1",
+      parentOrigin: "https://app.example.com",
+    });
+    const runtime = new JSDOM(doc, {
+      runScripts: "dangerously",
+      pretendToBeVisual: true,
+      url: "https://app.example.com",
+      beforeParse(window: Window & typeof globalThis) {
+        window.URL.createObjectURL = () => "blob:null/fails";
+        window.URL.revokeObjectURL = revokeObjectURL;
+      },
+    });
+    const { window } = runtime;
+    window.dispatchEvent(
+      new window.MessageEvent("message", {
+        origin: "https://app.example.com",
+        source: window,
+        data: {
+          __mm: "cid-large",
+          channel: "channel",
+          messageIdentity: "inbox:42",
+          generation: "g1",
+          images: [{ cid: "large", mimeType: "image/png", bytes: new window.ArrayBuffer(64) }],
+        },
+      }),
+    );
+    await new Promise((resolve) => window.requestAnimationFrame(resolve));
+    const image = window.document.querySelector("img") as HTMLImageElement;
+    image.dispatchEvent(new window.Event("error"));
+    expect(image.hasAttribute("src")).toBe(false);
+    expect(image.style.visibility).toBe("hidden");
+    expect(image.getAttribute("data-mm-cid-failed")).toBe("1");
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:null/fails");
+    runtime.window.close();
   });
 
   it("enforces 256KB per image and 1MB total postMessage limits", () => {
@@ -296,7 +410,7 @@ describe("MAILMAESTRO_INSTANT_NAVIGATION_R1 stable CID iframe", () => {
     });
     expect(doc).toContain("event.source!==parent");
     expect(doc).toContain("event.origin!==origin");
-    expect(doc.match(/querySelectorAll\('img\[data-mm-cid\]'\)/g)).toHaveLength(1);
+    expect(doc.match(/querySelectorAll\('img\[data-mm-cid\]'\)/g)).toHaveLength(2);
   });
 
   it("does not reserve 320x240 for an image without dimensions", () => {

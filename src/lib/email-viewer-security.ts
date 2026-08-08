@@ -140,14 +140,13 @@ export interface CidDataImageMapping {
   height?: number;
 }
 
-export interface CidBlobImageMapping {
+export interface LargeCidByteMapping {
   cid: string;
-  blobUrl: string;
-  width?: number;
-  height?: number;
+  mimeType: string;
+  bytes: ArrayBuffer;
 }
 
-export type CidImageMapping = CidDataImageMapping | CidBlobImageMapping;
+export type CidImageMapping = CidDataImageMapping;
 
 export interface CidApplyMessage {
   __mm: "cid";
@@ -164,16 +163,6 @@ export function isAllowedInlineImageDataUri(value: unknown): value is string {
   const base64 = value.slice(value.indexOf(",") + 1).replace(/\s/g, "");
   const padding = base64.endsWith("==") ? 2 : base64.endsWith("=") ? 1 : 0;
   return Math.floor((base64.length * 3) / 4) - padding <= 256 * 1024;
-}
-
-/** Blob capabilities are created by the authenticated parent stream path only. */
-export function isAllowedInlineImageBlobUrl(value: unknown): value is string {
-  return (
-    typeof value === "string" &&
-    value.length > 5 &&
-    value.length <= 2048 &&
-    /^blob:(?:https?:\/\/[^/\s]+|null)\/[^\s<>"']+$/.test(value)
-  );
 }
 
 export function isValidCidApplyPayload(
@@ -207,13 +196,12 @@ export function isValidCidApplyPayload(
         Number(image.width) <= 20_000 &&
         Number(image.height) <= 20_000);
     const dataValid = isAllowedInlineImageDataUri(image.dataUri);
-    const blobValid = isAllowedInlineImageBlobUrl(image.blobUrl);
     if (
       dimensionsValid &&
       typeof image.cid === "string" &&
       image.cid.length > 0 &&
       image.cid.length <= 998 &&
-      dataValid !== blobValid
+      dataValid
     ) {
       if (dataValid) {
         const dataUri = image.dataUri as string;
@@ -226,6 +214,46 @@ export function isValidCidApplyPayload(
     return false;
   });
   return valid;
+}
+
+export interface LargeCidApplyMessage {
+  __mm: "cid-large";
+  channel: string;
+  messageIdentity: string;
+  generation: string;
+  images: LargeCidByteMapping[];
+}
+
+export function isValidLargeCidApplyPayload(
+  data: unknown,
+  channelId: string,
+  messageIdentity: string,
+  generation: string,
+): data is LargeCidApplyMessage {
+  if (!data || typeof data !== "object") return false;
+  const value = data as Record<string, unknown>;
+  if (
+    value.__mm !== "cid-large" ||
+    value.channel !== channelId ||
+    value.messageIdentity !== messageIdentity ||
+    value.generation !== generation ||
+    !Array.isArray(value.images) ||
+    value.images.length !== 1
+  ) {
+    return false;
+  }
+  const image = value.images[0] as Record<string, unknown> | undefined;
+  return Boolean(
+    image &&
+    typeof image.cid === "string" &&
+    image.cid.length > 0 &&
+    image.cid.length <= 998 &&
+    typeof image.mimeType === "string" &&
+    /^image\/(?:png|jpe?g|gif|webp)$/i.test(image.mimeType.split(";", 1)[0].trim()) &&
+    image.bytes instanceof ArrayBuffer &&
+    image.bytes.byteLength > 0 &&
+    image.bytes.byteLength <= 5 * 1024 * 1024,
+  );
 }
 
 /**
@@ -382,21 +410,92 @@ export function buildEmailSrcDoc({
         return typeof value==='string' && value.length<=350000 &&
           /^data:image\\/(?:png|jpe?g|gif|webp);base64,[a-z0-9+\\/=\\s]+$/i.test(value);
       }
-      function validImageBlob(value){
-        return typeof value==='string' && value.length>5 && value.length<=2048 &&
-          /^blob:(?:https?:\\/\\/[^\\/\\s]+|null)\\/[^\\s<>"']+$/.test(value);
+      function validLargeMime(value){
+        return typeof value==='string' &&
+          /^image\\/(?:png|jpe?g|gif|webp)$/i.test(value.split(';',1)[0].trim());
       }
+      var largeUrls=Object.create(null);
+      function revokeLarge(cid, url){
+        try{ URL.revokeObjectURL(url); }catch(e){}
+        if(largeUrls[cid]===url) delete largeUrls[cid];
+      }
+      function bindLargeImage(img, cid, localUrl, done){
+        img.style.visibility='hidden';
+        img.setAttribute('aria-busy','true');
+        img.removeAttribute('data-mm-cid-failed');
+        img.addEventListener('load', function(){
+          if(largeUrls[cid]!==localUrl) return done();
+          img.removeAttribute('data-mm-cid');
+          img.removeAttribute('aria-busy');
+          img.removeAttribute('data-mm-cid-failed');
+          img.style.visibility='';
+          done();
+        }, {once:true});
+        img.addEventListener('error', function(){
+          if(img.src===localUrl) img.removeAttribute('src');
+          img.style.visibility='hidden';
+          img.setAttribute('aria-busy','false');
+          img.setAttribute('data-mm-cid-failed','1');
+          revokeLarge(cid, localUrl);
+          done();
+        }, {once:true});
+        img.src=localUrl;
+      }
+      function applyLarge(data){
+        if(!data || data.__mm!=='cid-large' || data.channel!==channel || data.messageIdentity!==messageIdentity || data.generation!==generation || !Array.isArray(data.images) || data.images.length!==1) return;
+        var item=data.images[0];
+        if(!item || typeof item.cid!=='string' || item.cid.length<1 || item.cid.length>998 || !validLargeMime(item.mimeType) || !(item.bytes instanceof ArrayBuffer) || item.bytes.byteLength<1 || item.bytes.byteLength>5242880) return;
+        var cid=item.cid.toLowerCase();
+        var blob=new Blob([item.bytes], {type:item.mimeType.split(';',1)[0].trim().toLowerCase()});
+        if(blob.size<1 || blob.size>5242880) return;
+        var localUrl=URL.createObjectURL(blob);
+        var previous=largeUrls[cid];
+        if(previous) revokeLarge(cid, previous);
+        largeUrls[cid]=localUrl;
+        batching=true;
+        requestAnimationFrame(function(){
+          var nodes=document.querySelectorAll('img[data-mm-cid]');
+          var waiting=0, finished=false;
+          function done(){
+            if(finished) return;
+            waiting--;
+            if(waiting<=0){
+              finished=true;
+              batching=false;
+              requestAnimationFrame(function(){ send(true); });
+            }
+          }
+          for(var n=0;n<nodes.length;n++){
+            var img=nodes[n], nodeCid=(img.getAttribute('data-mm-cid')||'').toLowerCase();
+            if(nodeCid!==cid) continue;
+            waiting++;
+            bindLargeImage(img, cid, localUrl, done);
+          }
+          if(waiting===0){
+            revokeLarge(cid, localUrl);
+            finished=true;
+            batching=false;
+            send(true);
+          }
+        });
+      }
+      function revokeAllLarge(){
+        for(var cid in largeUrls) revokeLarge(cid, largeUrls[cid]);
+      }
+      window.addEventListener('pagehide', revokeAllLarge);
+      window.addEventListener('beforeunload', revokeAllLarge);
       window.addEventListener('message', function(event){
         try{
           if(event.source!==parent || event.origin!==origin) return;
           var data=event.data;
+          if(data && data.__mm==='cid-large') return applyLarge(data);
           if(!data || data.__mm!=='cid' || data.channel!==channel || data.messageIdentity!==messageIdentity || data.generation!==generation || !Array.isArray(data.images) || data.images.length>20) return;
           var mapping=Object.create(null);
           var total=0;
           for(var i=0;i<data.images.length;i++){
             var item=data.images[i];
-            var dataValid=item&&validImageData(item.dataUri), blobValid=item&&validImageBlob(item.blobUrl);
-            if(!item || typeof item.cid!=='string' || item.cid.length<1 || item.cid.length>998 || dataValid===blobValid) continue;
+            var dataValid=item&&validImageData(item.dataUri);
+            if(!item || typeof item.cid!=='string' || item.cid.length<1 || item.cid.length>998 || !dataValid) continue;
             if((item.width!==undefined || item.height!==undefined) &&
               (!Number.isInteger(item.width) || !Number.isInteger(item.height) || item.width<1 || item.height<1 || item.width>20000 || item.height>20000)) continue;
             if(dataValid){
@@ -423,7 +522,7 @@ export function buildEmailSrcDoc({
               var img=nodes[n], cid=(img.getAttribute('data-mm-cid')||'').toLowerCase();
               var item=mapping[cid];
               if(!item) continue;
-              var src=validImageData(item.dataUri)?item.dataUri:item.blobUrl;
+              var src=item.dataUri;
               if(item.width && item.height){
                 if(item.width<=1 && item.height<=1){
                   img.style.display='none';

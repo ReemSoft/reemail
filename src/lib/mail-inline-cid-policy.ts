@@ -93,17 +93,24 @@ export function partitionInlineCidParts(
   return result;
 }
 
-export interface InlineCidBlobMapping {
+export interface InlineCidBytesMapping {
   cid: string;
-  blobUrl: string;
+  mimeType: string;
+  bytes: ArrayBuffer;
 }
 
 export interface StreamInlineCidDependencies {
   signal: AbortSignal;
   fetchPart: (part: InlineCidPart, signal: AbortSignal) => Promise<Response>;
-  createObjectURL: (blob: Blob) => string;
-  revokeObjectURL: (url: string) => void;
-  onMapping: (mapping: InlineCidBlobMapping) => void;
+  onMapping: (mapping: InlineCidBytesMapping) => void;
+  onTiming?: (
+    event:
+      | "large-cid-request-start"
+      | "large-cid-response-ready"
+      | "large-cid-complete"
+      | "large-cid-bytes",
+    fields: { elapsedMs: number; bytes: number },
+  ) => void;
 }
 
 /** Low-priority, strictly sequential streaming. A failed CID never fails the message. */
@@ -113,8 +120,14 @@ export async function streamInlineCidPartsSequential(
 ): Promise<void> {
   for (const part of parts) {
     if (dependencies.signal.aborted) return;
+    const startedAt = performance.now();
     try {
+      dependencies.onTiming?.("large-cid-request-start", { elapsedMs: 0, bytes: 0 });
       const response = await dependencies.fetchPart(part, dependencies.signal);
+      dependencies.onTiming?.("large-cid-response-ready", {
+        elapsedMs: Math.round(performance.now() - startedAt),
+        bytes: 0,
+      });
       if (!response.ok || dependencies.signal.aborted) continue;
       const responseMime = response.headers.get("Content-Type") ?? "";
       if (!areInlineImageMimesCompatible(part.mimeType, responseMime)) continue;
@@ -124,24 +137,15 @@ export async function streamInlineCidPartsSequential(
         if (!Number.isFinite(declared) || declared < 0 || declared > INLINE_CID_STREAM_MAX_BYTES)
           continue;
       }
-      const blob = await response.blob();
+      const bytes = await response.arrayBuffer();
       if (dependencies.signal.aborted) return;
-      if (
-        blob.size === 0 ||
-        blob.size > INLINE_CID_STREAM_MAX_BYTES ||
-        (blob.type && !areInlineImageMimesCompatible(part.mimeType, blob.type))
-      )
-        continue;
-      const blobUrl = dependencies.createObjectURL(blob);
-      if (dependencies.signal.aborted) {
-        dependencies.revokeObjectURL(blobUrl);
-        return;
-      }
-      try {
-        dependencies.onMapping({ cid: part.cid, blobUrl });
-      } catch {
-        dependencies.revokeObjectURL(blobUrl);
-      }
+      if (bytes.byteLength === 0 || bytes.byteLength > INLINE_CID_STREAM_MAX_BYTES) continue;
+      dependencies.onMapping({ cid: part.cid, mimeType: responseMime, bytes });
+      dependencies.onTiming?.("large-cid-complete", {
+        elapsedMs: Math.round(performance.now() - startedAt),
+        bytes: bytes.byteLength,
+      });
+      dependencies.onTiming?.("large-cid-bytes", { elapsedMs: 0, bytes: bytes.byteLength });
     } catch {
       if (dependencies.signal.aborted) return;
     }

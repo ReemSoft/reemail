@@ -11,15 +11,15 @@ import {
   sanitizeAndHardenEmailHtml,
   buildEmailSrcDoc,
   isAllowedInlineImageDataUri,
-  isAllowedInlineImageBlobUrl,
   isValidCidApplyPayload,
+  isValidLargeCidApplyPayload,
   isValidHeightPayload,
   randomToken,
   hasRemoteImages,
   getAlwaysShowRemoteImages,
   setAlwaysShowRemoteImages,
 } from "@/lib/email-viewer-security";
-import type { CidImageMapping } from "@/lib/email-viewer-security";
+import type { CidImageMapping, LargeCidByteMapping } from "@/lib/email-viewer-security";
 import {
   partitionInlineCidParts,
   streamInlineCidPartsSequential,
@@ -72,12 +72,14 @@ function EmailBodyFrame({
   messageIdentity,
   className,
   onReady,
+  largeCidDispatcherRef,
 }: {
   html: string;
   cidImages: CidImageMapping[];
   messageIdentity: string;
   className?: string;
   onReady?: () => void;
+  largeCidDispatcherRef?: { current: ((image: LargeCidByteMapping) => void) | null };
 }) {
   const ref = useRef<HTMLIFrameElement | null>(null);
   const nonce = useMemo(() => rotatingToken(`${messageIdentity}|${html}`), [html, messageIdentity]);
@@ -147,13 +149,9 @@ function EmailBodyFrame({
 
   useEffect(() => {
     if (!frameReady || cidImages.length === 0 || !ref.current?.contentWindow) return;
-    const safeImages = cidImages.filter((image) =>
-      "dataUri" in image
-        ? isAllowedInlineImageDataUri(image.dataUri)
-        : isAllowedInlineImageBlobUrl(image.blobUrl),
-    );
+    const safeImages = cidImages.filter((image) => isAllowedInlineImageDataUri(image.dataUri));
     const signature = `${safeImages.length}:${safeImages.reduce(
-      (sum, image) => sum + ("dataUri" in image ? image.dataUri.length : image.blobUrl.length),
+      (sum, image) => sum + image.dataUri.length,
       0,
     )}`;
     if (signature === appliedCidSignatureRef.current) return;
@@ -178,6 +176,29 @@ function EmailBodyFrame({
       cidRafRef.current = null;
     };
   }, [cidImages, channelId, frameReady, generation, messageIdentity]);
+
+  useEffect(() => {
+    if (!largeCidDispatcherRef) return;
+    const dispatch = (image: LargeCidByteMapping) => {
+      const target = ref.current?.contentWindow;
+      if (!target || !frameReady) return;
+      const payload = {
+        __mm: "cid-large" as const,
+        channel: channelId,
+        messageIdentity,
+        generation,
+        images: [image],
+      };
+      if (!isValidLargeCidApplyPayload(payload, channelId, messageIdentity, generation)) return;
+      const byteLength = image.bytes.byteLength;
+      target.postMessage(payload, "*", [image.bytes]);
+      mailPerf("large-cid-applied", { count: 1, bytes: byteLength });
+    };
+    largeCidDispatcherRef.current = dispatch;
+    return () => {
+      if (largeCidDispatcherRef.current === dispatch) largeCidDispatcherRef.current = null;
+    };
+  }, [channelId, frameReady, generation, largeCidDispatcherRef, messageIdentity]);
 
   useEffect(() => {
     function onMsg(e: MessageEvent) {
@@ -253,12 +274,14 @@ function ThreadedEmailBody({
   messageIdentity,
   className,
   onReady,
+  largeCidDispatcherRef,
 }: {
   html: string;
   cidImages: CidImageMapping[];
   messageIdentity: string;
   className?: string;
   onReady?: () => void;
+  largeCidDispatcherRef?: { current: ((image: LargeCidByteMapping) => void) | null };
 }) {
   const { latest, quoted } = useMemo(() => splitQuotedHtml(html), [html]);
   const [expanded, setExpanded] = useState(false);
@@ -275,6 +298,7 @@ function ThreadedEmailBody({
         messageIdentity={messageIdentity}
         className={className}
         onReady={onReady}
+        largeCidDispatcherRef={largeCidDispatcherRef}
       />
     );
 
@@ -285,6 +309,7 @@ function ThreadedEmailBody({
         cidImages={cidImages}
         messageIdentity={`${messageIdentity}:latest`}
         onReady={onReady}
+        largeCidDispatcherRef={largeCidDispatcherRef}
       />
       <div className="mt-3">
         <button
@@ -356,6 +381,7 @@ function useInlineImageMappings(
   message: MailMessage,
   largeReady: boolean,
   onResolved?: (images: NonNullable<MailMessage["inlineImages"]>) => void,
+  onLargeCid?: (image: LargeCidByteMapping) => void,
 ): CidImageMapping[] {
   const resolveInlineImages = useMailServerFn(resolveMessageInlineImages);
   const activeSession = getMailSession();
@@ -482,11 +508,10 @@ function useInlineImageMappings(
     if (parts.length === 0) return;
 
     const controller = new AbortController();
-    const objectUrls = new Map<string, string>();
     void streamInlineCidPartsSequential(parts, {
       signal: controller.signal,
       fetchPart: (part, signal) =>
-        fetch("/api/mail-attachment", {
+        fetch("/api/mail-inline-part", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -498,36 +523,16 @@ function useInlineImageMappings(
           }),
           signal,
         }),
-      createObjectURL: (blob) => URL.createObjectURL(blob),
-      revokeObjectURL: (url) => URL.revokeObjectURL(url),
       onMapping: (mapping) => {
-        if (controller.signal.aborted) {
-          URL.revokeObjectURL(mapping.blobUrl);
-          return;
-        }
-        const cid = mapping.cid.toLowerCase();
-        const previous = objectUrls.get(cid);
-        if (previous) URL.revokeObjectURL(previous);
-        objectUrls.set(cid, mapping.blobUrl);
-        setResolved((current) => {
-          if (controller.signal.aborted || current.key !== messageKey) {
-            URL.revokeObjectURL(mapping.blobUrl);
-            objectUrls.delete(cid);
-            return current;
-          }
-          const byCid = new Map(current.images.map((image) => [image.cid.toLowerCase(), image]));
-          byCid.set(cid, mapping);
-          return { key: messageKey, images: [...byCid.values()] };
-        });
+        if (!controller.signal.aborted) onLargeCid?.(mapping);
       },
+      onTiming: (event, fields) => mailPerf(event, fields),
     });
 
     return () => {
       controller.abort();
-      for (const url of objectUrls.values()) URL.revokeObjectURL(url);
-      objectUrls.clear();
     };
-  }, [largeReady, largeStreamParts, message.id, messageKey]);
+  }, [largeReady, largeStreamParts, message.id, messageKey, onLargeCid]);
 
   return resolved.key === messageKey ? resolved.images : [];
 }
@@ -546,10 +551,15 @@ function MessageBody({
 }) {
   const bodyIdentity = `${message.id}|${message.uidValidity ?? ""}`;
   const [readyIdentity, setReadyIdentity] = useState("");
+  const largeCidDispatcherRef = useRef<((image: LargeCidByteMapping) => void) | null>(null);
+  const dispatchLargeCid = useCallback((image: LargeCidByteMapping) => {
+    largeCidDispatcherRef.current?.(image);
+  }, []);
   const cidImages = useInlineImageMappings(
     message,
     readyIdentity === bodyIdentity,
     onInlineImages,
+    dispatchLargeCid,
   );
   return (
     <ThreadedEmailBody
@@ -558,6 +568,7 @@ function MessageBody({
       messageIdentity={bodyIdentity}
       className={className}
       onReady={() => setReadyIdentity(bodyIdentity)}
+      largeCidDispatcherRef={largeCidDispatcherRef}
     />
   );
 }
@@ -1529,7 +1540,6 @@ function useMailData(session: MailSession | null) {
     [session],
   );
 
-
   const loadFromBridge = useCallback(
     async (reqId: number) => {
       if (!session) return;
@@ -1712,7 +1722,6 @@ function useMailData(session: MailSession | null) {
   useEffect(() => {
     loadCountsFast();
   }, [loadCountsFast]);
-
 
   useEffect(() => {
     loadMessages();
@@ -3802,7 +3811,6 @@ function MailApp() {
               alt={brandName}
               className="h-8 w-8 rounded-lg object-contain"
             />
-
           ) : (
             <BrandLogo className="h-8 w-8" />
           )}
@@ -4578,10 +4586,13 @@ function MessageView({
   const toSummary =
     recipientsAll.length > 0 ? recipientsAll.map((r) => r.email).join(tr("،")) : "—";
 
-  const fullDate = new Date(message.date).toLocaleString(getCurrentLang() === "ar" ? "ar-SA" : "en-GB", {
-    dateStyle: "full",
-    timeStyle: "short",
-  });
+  const fullDate = new Date(message.date).toLocaleString(
+    getCurrentLang() === "ar" ? "ar-SA" : "en-GB",
+    {
+      dateStyle: "full",
+      timeStyle: "short",
+    },
+  );
   const isTrash = message.folder === "trash";
   const canRestore = message.folder === "trash" || message.folder === "archive";
   const canArchive = message.folder !== "archive" && message.folder !== "trash";
