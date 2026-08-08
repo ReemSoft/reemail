@@ -135,7 +135,6 @@ describe("composer inline images", () => {
       session = startInlineImageDragSession(event, {
         editor,
         image,
-        surface,
         onCommit: () => commits++,
       });
     });
@@ -150,6 +149,7 @@ describe("composer inline images", () => {
       releasePointerCapture,
       getSession: () => session,
       getCommits: () => commits,
+      getShield: () => document.body.querySelector<HTMLElement>("[data-mm-image-drag-shield]")!,
     };
   }
 
@@ -366,20 +366,29 @@ describe("composer inline images", () => {
     expect(wrapper.textContent).toBe("keep me");
   });
 
-  it("serializes width and alignment to inert CID HTML without mutating the live blob preview", () => {
+  it("serializes width and position to inert CID HTML without mutating the live blob preview", () => {
     const composeImage = createInlineComposeImage(
       new File(["image"], "aligned.png", { type: "image/png" }),
     );
     const editor = document.createElement("div");
-    editor.innerHTML = `<div data-mm-inline-wrapper="1" style="text-align:right"><img src="${composeImage.objectUrl}" data-mm-inline-id="${composeImage.id}" style="width:280px;height:auto"></div>`;
+    editor.innerHTML = `<div data-mm-inline-wrapper="1" data-mm-image-position="1" data-mm-position-x="137" data-mm-position-y="241" style="display:block;width:100%;box-sizing:border-box;padding-top:241px;padding-left:137px;text-align:left"><img src="${composeImage.objectUrl}" data-mm-inline-id="${composeImage.id}" style="width:280px;height:auto"></div>`;
     const before = editor.innerHTML;
     const result = serializeInlineImages(editor.innerHTML, [composeImage]);
-    expect(result.html).toMatch(/text-align:\s*right/);
+    expect(result.html).toMatch(/padding-left:\s*137px/);
+    expect(result.html).toMatch(/padding-top:\s*241px/);
     expect(result.html).toContain('width="280"');
     expect(result.html).toContain(`src="cid:${composeImage.cid}"`);
+    expect(result.html).not.toContain("data-mm-");
     expect(result.html).not.toContain("base64");
     expect(editor.innerHTML).toBe(before);
     expect(editor.querySelector("img")?.getAttribute("src")).toBe(composeImage.objectUrl);
+
+    const draft = serializeInlineImages(editor.innerHTML, [composeImage], {
+      keepEditorIds: true,
+    });
+    expect(draft.html).toContain('data-mm-image-position="1"');
+    expect(draft.html).toContain('data-mm-position-x="137"');
+    expect(draft.html).toContain(`data-mm-inline-id="${composeImage.id}"`);
   });
 
   it("rejects native targets inside the dragged image controls and marker", () => {
@@ -456,7 +465,9 @@ describe("composer inline images", () => {
       expect(harness.editor.querySelector("img")).toBe(original);
       expect(original.dataset.mmInlineId).toBe(originalId);
       expect(original.src).toBe(originalSrc);
-      expect(original.parentElement?.style.textAlign).toBe(alignment);
+      expect(original.parentElement?.style.paddingLeft).toBe(
+        alignment === "left" ? "0px" : alignment === "center" ? "200px" : "400px",
+      );
       expect(original.parentElement?.style.width).toBe("100%");
       harness.cleanup();
     },
@@ -488,7 +499,7 @@ describe("composer inline images", () => {
     expect(harness.getSession()).not.toBeNull();
     expect(harness.setPointerCapture).not.toHaveBeenCalled();
 
-    document.dispatchEvent(pointer("pointermove", { clientX: 400, clientY: 580 }));
+    harness.getShield().dispatchEvent(pointer("pointermove", { clientX: 400, clientY: 580 }));
     const marker = harness.editor.querySelector<HTMLElement>("[data-mm-drop-marker]");
     const ghost = document.body.querySelector<HTMLElement>("[data-mm-image-drag-ghost]");
     expect(marker).not.toBeNull();
@@ -496,28 +507,105 @@ describe("composer inline images", () => {
     expect(ghost?.style.top).toBe("560px");
     expect(harness.image.parentElement).toBe(harness.editor);
 
-    document.dispatchEvent(pointer("pointerup", { clientX: 400, clientY: 580 }));
+    harness.getShield().dispatchEvent(pointer("pointerup", { clientX: 400, clientY: 580 }));
     expect(harness.getCommits()).toBe(1);
     expect(harness.editor.querySelector("img")).toBe(originalNode);
     expect(harness.image.dataset.mmInlineId).toBe(originalId);
     expect(harness.image.src).toBe(originalSrc);
     expect(harness.editor.lastElementChild?.contains(harness.image)).toBe(true);
-    expect(harness.image.parentElement?.style.textAlign).toBe("center");
+    expect(harness.image.parentElement?.style.paddingLeft).toBe("250px");
+    expect(harness.image.parentElement?.style.paddingTop).toBe("160px");
     expect(document.body.querySelector("[data-mm-image-drag-ghost]")).toBeNull();
     expect(harness.editor.querySelector("[data-mm-drop-marker]")).toBeNull();
     expect(harness.releasePointerCapture).not.toHaveBeenCalled();
   });
 
+  it("positions the same RTL image continuously in a tall blank editor", () => {
+    const editor = document.createElement("div");
+    const line = document.createElement("p");
+    const image = document.createElement("img");
+    const surface = document.createElement("button");
+    editor.dir = "rtl";
+    line.textContent = "سطر واحد";
+    image.src = "blob:preview";
+    image.dataset.mmInlineId = "same-id";
+    editor.append(line, image);
+    document.body.append(editor, surface);
+    setRect(editor, { left: 0, top: 0, width: 500, height: 600 });
+    setRect(line, { left: 0, top: 20, width: 500, height: 30 });
+    vi.spyOn(image, "getBoundingClientRect").mockImplementation(() => {
+      const wrapper = image.closest<HTMLElement>("[data-mm-image-position]");
+      const left = wrapper ? Number.parseFloat(wrapper.style.paddingLeft) : 400;
+      const top = wrapper ? 50 + Number.parseFloat(wrapper.style.paddingTop) : 130;
+      return {
+        left,
+        top,
+        width: 100,
+        height: 100,
+        right: left + 100,
+        bottom: top + 100,
+        x: left,
+        y: top,
+        toJSON: () => ({}),
+      };
+    });
+    const original = image;
+    const originalSrc = image.src;
+    const drag = (fromY: number, toY: number) => {
+      const session = startInlineImageDragSession(
+        pointer("pointerdown", { clientX: 200, clientY: fromY }),
+        { editor, image },
+      );
+      expect(session).not.toBeNull();
+      const shield = document.body.querySelector<HTMLElement>("[data-mm-image-drag-shield]")!;
+      shield.dispatchEvent(pointer("pointermove", { clientX: 200, clientY: toY }));
+      shield.dispatchEvent(pointer("pointerup", { clientX: 200, clientY: toY }));
+    };
+
+    const firstSession = startInlineImageDragSession(
+      pointer("pointerdown", { clientX: 500, clientY: 180 }),
+      { editor, image },
+    );
+    expect(firstSession).not.toBeNull();
+    const shield = document.body.querySelector<HTMLElement>("[data-mm-image-drag-shield]")!;
+    shield.dispatchEvent(pointer("pointermove", { clientX: 200, clientY: 430 }));
+    shield.dispatchEvent(pointer("pointerup", { clientX: 200, clientY: 430 }));
+    expect(editor.querySelector("img")).toBe(original);
+    expect(image.src).toBe(originalSrc);
+    expect(image.dataset.mmInlineId).toBe("same-id");
+    expect(image.parentElement?.style.paddingLeft).toBe("100px");
+    expect(image.parentElement?.style.paddingTop).toBe("330px");
+    const positionedX = Number.parseFloat(image.parentElement!.style.paddingLeft);
+    const positionedY = 50 + Number.parseFloat(image.parentElement!.style.paddingTop);
+    expect(positionedX + 100).toBe(200);
+    expect(positionedY + 50).toBe(430);
+
+    drag(430, 530);
+    expect(image.parentElement?.style.paddingLeft).toBe("100px");
+    expect(image.parentElement?.style.paddingTop).toBe("430px");
+  });
+
   it.each([
-    [150, "left"],
-    [400, "center"],
-    [650, "right"],
-  ] as const)("commits overlay drag X=%s with %s alignment", (clientX, alignment) => {
+    [150, "0px"],
+    [333, "183px"],
+    [400, "250px"],
+    [650, "400px"],
+  ] as const)("commits overlay drag X=%s with continuous offset %s", (clientX, offset) => {
     const harness = createGestureHarness();
     harness.surface.dispatchEvent(pointer("pointerdown", { clientX: 150, clientY: 190 }));
-    document.dispatchEvent(pointer("pointermove", { clientX, clientY: 580 }));
-    document.dispatchEvent(pointer("pointerup", { clientX, clientY: 580 }));
-    expect(harness.image.parentElement?.style.textAlign).toBe(alignment);
+    harness.getShield().dispatchEvent(pointer("pointermove", { clientX, clientY: 580 }));
+    harness.getShield().dispatchEvent(pointer("pointerup", { clientX, clientY: 580 }));
+    expect(harness.image.parentElement?.style.paddingLeft).toBe(offset);
+  });
+
+  it("moves above the first text block with a continuous local gap", () => {
+    const harness = createGestureHarness();
+    harness.surface.dispatchEvent(pointer("pointerdown", { clientX: 150, clientY: 190 }));
+    harness.getShield().dispatchEvent(pointer("pointermove", { clientX: 175, clientY: 125 }));
+    harness.getShield().dispatchEvent(pointer("pointerup", { clientX: 175, clientY: 125 }));
+    expect(harness.editor.firstElementChild?.contains(harness.image)).toBe(true);
+    expect(harness.image.parentElement?.style.paddingTop).toBe("5px");
+    expect(harness.image.parentElement?.style.paddingLeft).toBe("25px");
   });
 
   it("cancels an overlay drag without moving and removes every transient node", () => {
@@ -525,10 +613,10 @@ describe("composer inline images", () => {
     const originalParent = harness.image.parentElement;
     const originalNext = harness.image.nextSibling;
     harness.surface.dispatchEvent(pointer("pointerdown", { clientX: 150, clientY: 190 }));
-    document.dispatchEvent(pointer("pointermove", { clientX: 650, clientY: 580 }));
+    harness.getShield().dispatchEvent(pointer("pointermove", { clientX: 650, clientY: 580 }));
     expect(document.body.querySelector("[data-mm-image-drag-ghost]")).not.toBeNull();
     expect(document.body.style.userSelect).toBe("none");
-    document.dispatchEvent(pointer("pointercancel", { clientX: 650, clientY: 580 }));
+    harness.getShield().dispatchEvent(pointer("pointercancel", { clientX: 650, clientY: 580 }));
     expect(harness.getCommits()).toBe(0);
     expect(harness.image.parentElement).toBe(originalParent);
     expect(harness.image.nextSibling).toBe(originalNext);
@@ -541,7 +629,7 @@ describe("composer inline images", () => {
   it("cleans a document-capture drag session on window blur", () => {
     const harness = createGestureHarness();
     harness.surface.dispatchEvent(pointer("pointerdown", { clientX: 150, clientY: 190 }));
-    document.dispatchEvent(pointer("pointermove", { clientX: 650, clientY: 580 }));
+    harness.getShield().dispatchEvent(pointer("pointermove", { clientX: 650, clientY: 580 }));
     window.dispatchEvent(new Event("blur"));
     expect(harness.getCommits()).toBe(0);
     expect(document.body.querySelector("[data-mm-image-drag-ghost]")).toBeNull();
@@ -565,8 +653,8 @@ describe("composer inline images", () => {
       },
     });
     harness.surface.dispatchEvent(pointer("pointerdown", { clientX: 150, clientY: 190 }));
-    document.dispatchEvent(pointer("pointermove", { clientX: 400, clientY: 580 }));
-    document.dispatchEvent(pointer("pointerup", { clientX: 400, clientY: 580 }));
+    harness.getShield().dispatchEvent(pointer("pointermove", { clientX: 400, clientY: 580 }));
+    harness.getShield().dispatchEvent(pointer("pointerup", { clientX: 400, clientY: 580 }));
     harness.editor.dispatchEvent(pointer("pointerdown", { clientX: 500, clientY: 500 }));
     expect(active).toBeNull();
     expect(clears).toBe(1);
@@ -598,8 +686,8 @@ describe("composer inline images", () => {
   it("keeps resize and delete behavior working after the overlay drag", () => {
     const harness = createGestureHarness();
     harness.surface.dispatchEvent(pointer("pointerdown", { clientX: 150, clientY: 190 }));
-    document.dispatchEvent(pointer("pointermove", { clientX: 400, clientY: 580 }));
-    document.dispatchEvent(pointer("pointerup", { clientX: 400, clientY: 580 }));
+    harness.getShield().dispatchEvent(pointer("pointermove", { clientX: 400, clientY: 580 }));
+    harness.getShield().dispatchEvent(pointer("pointerup", { clientX: 400, clientY: 580 }));
     harness.image.style.width = `${clampInlineImageWidth(360, 600)}px`;
     expect(harness.image.style.width).toBe("360px");
     const wrapper = harness.image.parentElement!;
@@ -615,7 +703,9 @@ describe("composer inline images", () => {
       const original = image;
       alignInlineImageNode(image, editor, alignment);
       expect(editor.querySelector("img")).toBe(original);
-      expect(image.parentElement?.style.textAlign).toBe(alignment);
+      expect(image.parentElement?.style.paddingLeft).toBe(
+        alignment === "left" ? "0px" : alignment === "center" ? "200px" : "400px",
+      );
       expect(image.parentElement?.style.display).toBe("block");
       expect(image.parentElement?.style.width).toBe("100%");
     },
@@ -632,13 +722,15 @@ describe("composer inline images", () => {
     expect(source).not.toContain("onClick={() => alignActiveImage(alignment)}");
     const helperSource = readFileSync("src/lib/mail-compose-inline-images.ts", "utf8");
     expect(helperSource).toContain('document.addEventListener("pointerdown", onPointerDown, true)');
-    expect(helperSource).toContain('document.addEventListener("pointermove", onPointerMove');
-    expect(helperSource).toContain('document.addEventListener("pointerup", onPointerUp, true)');
-    expect(helperSource).toContain(
-      'document.addEventListener("pointercancel", onPointerCancel, true)',
-    );
+    expect(helperSource).toContain('shield.addEventListener("pointermove", onPointerMove');
+    expect(helperSource).toContain('shield.addEventListener("pointerup", onPointerUp)');
+    expect(helperSource).toContain('shield.addEventListener("pointercancel", onPointerCancel)');
     expect(helperSource).toContain("closest('[data-mm-image-tool=\"1\"]')");
     expect(helperSource).not.toContain("setPointerCapture(pointerId)");
+    expect(helperSource).toContain("target.offsetX, target.offsetY");
+    expect(helperSource).toContain("wrapper.style.paddingTop = `${y}px`");
+    expect(helperSource).toContain("wrapper.style.paddingLeft = `${x}px`");
+    expect(helperSource).not.toContain('wrapper.style.position = "absolute"');
   });
 
   it("wires one native picker flow without the legacy URL prompt or Base64 reader", () => {

@@ -3,6 +3,8 @@ export const INLINE_IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif", "imag
 export const INLINE_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
 export const INLINE_IMAGE_MIN_WIDTH = 40;
 export const INLINE_IMAGE_WRAPPER_ATTR = "data-mm-inline-wrapper";
+export const INLINE_IMAGE_POSITION_ATTR = "data-mm-image-position";
+export const INLINE_IMAGE_MAX_VERTICAL_GAP = 1200;
 
 export type InlineImageAlignment = "left" | "center" | "right";
 
@@ -12,6 +14,15 @@ export interface InlineImageDropTarget {
   usedFallback: boolean;
 }
 
+export interface InlineImagePositionTarget {
+  range: Range;
+  offsetX: number;
+  offsetY: number;
+  anchorY: number;
+  desiredLeft: number;
+  desiredTop: number;
+}
+
 export interface InlineImageDragSession {
   cancel: () => void;
 }
@@ -19,7 +30,6 @@ export interface InlineImageDragSession {
 export interface InlineImageDragSessionOptions {
   editor: HTMLElement;
   image: HTMLImageElement;
-  surface: HTMLElement;
   onCommit?: (image: HTMLImageElement) => void;
   onCleanup?: () => void;
 }
@@ -286,6 +296,55 @@ export function resolveInlineImageBlockDropTarget(
   };
 }
 
+/** Resolve a logical flow anchor plus continuous physical X/Y offsets. */
+export function resolveInlineImagePosition(
+  editor: HTMLElement,
+  image: HTMLImageElement,
+  clientX: number,
+  clientY: number,
+  pointerOffsetX: number,
+  pointerOffsetY: number,
+  editorRect = editor.getBoundingClientRect(),
+  imageRect = image.getBoundingClientRect(),
+): InlineImagePositionTarget {
+  const availableWidth = Math.max(0, editorRect.width - imageRect.width);
+  const desiredLeft = Math.max(
+    0,
+    Math.min(availableWidth, clientX - editorRect.left - pointerOffsetX),
+  );
+  const maxTop = Math.max(editorRect.top, editorRect.bottom - imageRect.height);
+  const desiredTop = Math.max(editorRect.top, Math.min(maxTop, clientY - pointerOffsetY));
+  const candidates = Array.from(editor.childNodes).flatMap((node, index) => {
+    const bounds = nodeVerticalBounds(node);
+    return bounds && !isExcludedDropNode(node, image) ? [{ index, bounds }] : [];
+  });
+  const boundaries = candidates.length
+    ? [
+        { offset: candidates[0].index, y: editorRect.top },
+        ...candidates.map((candidate) => ({
+          offset: candidate.index + 1,
+          y: candidate.bounds.bottom,
+        })),
+      ]
+    : [{ offset: editor.childNodes.length, y: editorRect.top }];
+  const anchor = boundaries.reduce((selected, boundary) =>
+    boundary.y <= desiredTop && boundary.y >= selected.y ? boundary : selected,
+  );
+  const range = document.createRange();
+  range.setStart(editor, anchor.offset);
+  range.collapse(true);
+  return {
+    range,
+    offsetX: Math.round(desiredLeft),
+    offsetY: Math.round(
+      Math.max(0, Math.min(INLINE_IMAGE_MAX_VERTICAL_GAP, desiredTop - anchor.y)),
+    ),
+    anchorY: anchor.y,
+    desiredLeft,
+    desiredTop,
+  };
+}
+
 function pointInside(element: HTMLElement, clientX: number, clientY: number): boolean {
   const rect = element.getBoundingClientRect();
   return (
@@ -293,14 +352,16 @@ function pointInside(element: HTMLElement, clientX: number, clientY: number): bo
   );
 }
 
-function createDropMarker(target: InlineImageDropTarget): HTMLElement {
+function createDropMarker(target: InlineImagePositionTarget): HTMLElement {
   const marker = document.createElement("span");
   marker.contentEditable = "false";
   marker.setAttribute("aria-hidden", "true");
   marker.dataset.mmDropMarker = "1";
-  marker.dataset.mmDropAlignment = target.alignment ?? "";
+  marker.dataset.mmPositionX = String(target.offsetX);
+  marker.dataset.mmPositionY = String(target.offsetY);
   marker.style.cssText =
     "display:block;height:3px;margin:5px 0;background:#2563eb;box-shadow:0 0 0 1px rgba(255,255,255,.9);pointer-events:none";
+  marker.style.marginTop = `${target.offsetY}px`;
   target.range.insertNode(marker);
   return marker;
 }
@@ -346,15 +407,22 @@ export function startInlineImageDragSession(
   event.preventDefault();
   event.stopPropagation();
 
-  const { editor, image, surface } = options;
+  const { editor, image } = options;
   const pointerId = event.pointerId;
   const sourceRect = image.getBoundingClientRect();
+  const editorRect = editor.getBoundingClientRect();
   const offsetX = event.clientX - sourceRect.left;
   const offsetY = event.clientY - sourceRect.top;
   const originalOpacity = image.style.opacity;
   const originalCursor = image.style.cursor;
-  const originalSurfaceCursor = surface.style.cursor;
   const originalBodyUserSelect = document.body.style.userSelect;
+  const shield = document.createElement("div");
+  shield.dataset.mmImageDragShield = "1";
+  shield.setAttribute("aria-hidden", "true");
+  shield.style.cssText =
+    "position:fixed;inset:0;z-index:2147483646;cursor:grabbing;background:transparent;touch-action:none;user-select:none";
+  document.body.append(shield);
+  document.body.style.userSelect = "none";
   let started = false;
   let marker: HTMLElement | null = null;
   let ghost: HTMLImageElement | null = null;
@@ -373,7 +441,18 @@ export function startInlineImageDragSession(
     marker?.remove();
     marker = null;
     if (!pointInside(editor, clientX, clientY)) return;
-    marker = createDropMarker(resolveInlineImageBlockDropTarget(editor, image, clientX, clientY));
+    marker = createDropMarker(
+      resolveInlineImagePosition(
+        editor,
+        image,
+        clientX,
+        clientY,
+        offsetX,
+        offsetY,
+        editorRect,
+        sourceRect,
+      ),
+    );
   };
   const beginVisualDrag = () => {
     if (started) return;
@@ -395,17 +474,15 @@ export function startInlineImageDragSession(
       "object-fit:contain",
     ].join(";");
     document.body.append(ghost);
-    document.body.style.userSelect = "none";
     image.style.opacity = "0.35";
     image.style.cursor = "grabbing";
-    surface.style.cursor = "grabbing";
   };
   const cleanup = () => {
     if (cleaned) return;
     cleaned = true;
-    document.removeEventListener("pointermove", onPointerMove, true);
-    document.removeEventListener("pointerup", onPointerUp, true);
-    document.removeEventListener("pointercancel", onPointerCancel, true);
+    shield.removeEventListener("pointermove", onPointerMove);
+    shield.removeEventListener("pointerup", onPointerUp);
+    shield.removeEventListener("pointercancel", onPointerCancel);
     document.removeEventListener("keydown", onKeyDown, true);
     window.removeEventListener("blur", onWindowBlur);
     if (frame) cancelAnimationFrame(frame);
@@ -414,9 +491,9 @@ export function startInlineImageDragSession(
     marker = null;
     ghost?.remove();
     ghost = null;
+    shield.remove();
     image.style.opacity = originalOpacity;
     image.style.cursor = originalCursor;
-    surface.style.cursor = originalSurfaceCursor;
     document.body.style.userSelect = originalBodyUserSelect;
     options.onCleanup?.();
   };
@@ -439,21 +516,23 @@ export function startInlineImageDragSession(
     if (upEvent.pointerId !== pointerId) return;
     upEvent.preventDefault();
     if (started && pointInside(editor, upEvent.clientX, upEvent.clientY)) {
-      updateMarker(upEvent.clientX, upEvent.clientY);
-      if (marker?.isConnected) {
-        const alignment = marker.dataset.mmDropAlignment;
-        const committedMarker = marker;
-        marker = null;
-        moveInlineImageNode(
-          image,
-          committedMarker,
-          editor,
-          alignment === "left" || alignment === "center" || alignment === "right"
-            ? alignment
-            : null,
-        );
-        options.onCommit?.(image);
-      }
+      marker?.remove();
+      marker = null;
+      const target = resolveInlineImagePosition(
+        editor,
+        image,
+        upEvent.clientX,
+        upEvent.clientY,
+        offsetX,
+        offsetY,
+        editorRect,
+        sourceRect,
+      );
+      marker = createDropMarker(target);
+      const committedMarker = marker;
+      marker = null;
+      positionInlineImageNode(image, committedMarker, editor, target.offsetX, target.offsetY);
+      options.onCommit?.(image);
     }
     cleanup();
   };
@@ -465,12 +544,46 @@ export function startInlineImageDragSession(
   };
   const onWindowBlur = () => cleanup();
 
-  document.addEventListener("pointermove", onPointerMove, { capture: true, passive: false });
-  document.addEventListener("pointerup", onPointerUp, true);
-  document.addEventListener("pointercancel", onPointerCancel, true);
+  shield.addEventListener("pointermove", onPointerMove, { passive: false });
+  shield.addEventListener("pointerup", onPointerUp);
+  shield.addEventListener("pointercancel", onPointerCancel);
   document.addEventListener("keydown", onKeyDown, true);
   window.addEventListener("blur", onWindowBlur);
   return { cancel: cleanup };
+}
+
+function applyPositionStyles(wrapper: HTMLElement, offsetX: number, offsetY: number): void {
+  const x = Math.max(0, Math.round(offsetX));
+  const y = Math.max(0, Math.min(INLINE_IMAGE_MAX_VERTICAL_GAP, Math.round(offsetY)));
+  wrapper.setAttribute(INLINE_IMAGE_WRAPPER_ATTR, "1");
+  wrapper.setAttribute(INLINE_IMAGE_POSITION_ATTR, "1");
+  wrapper.dataset.mmPositionX = String(x);
+  wrapper.dataset.mmPositionY = String(y);
+  wrapper.style.display = "block";
+  wrapper.style.width = "100%";
+  wrapper.style.boxSizing = "border-box";
+  wrapper.style.paddingTop = `${y}px`;
+  wrapper.style.paddingLeft = `${x}px`;
+  wrapper.style.textAlign = "left";
+}
+
+export function positionInlineImageNode(
+  image: HTMLImageElement,
+  marker: HTMLElement,
+  editor: HTMLElement,
+  offsetX: number,
+  offsetY: number,
+): void {
+  const oldWrapper = image.closest<HTMLElement>(`[${INLINE_IMAGE_WRAPPER_ATTR}]`);
+  const wrapper =
+    oldWrapper && wrapperContainsOnlyImage(oldWrapper, image)
+      ? oldWrapper
+      : document.createElement("div");
+  applyPositionStyles(wrapper, offsetX, offsetY);
+  marker.replaceWith(wrapper);
+  if (image.parentElement !== wrapper) wrapper.append(image);
+  if (oldWrapper !== wrapper) removeEmptyWrapper(oldWrapper);
+  editor.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
 export function moveInlineImageNode(
@@ -512,20 +625,22 @@ export function alignInlineImageNode(
   alignment: InlineImageAlignment,
 ): void {
   const oldWrapper = image.closest<HTMLElement>(`[${INLINE_IMAGE_WRAPPER_ATTR}]`);
+  let wrapper: HTMLElement;
   if (oldWrapper && wrapperContainsOnlyImage(oldWrapper, image)) {
-    oldWrapper.style.display = "block";
-    oldWrapper.style.width = "100%";
-    oldWrapper.style.textAlign = alignment;
+    wrapper = oldWrapper;
   } else {
-    const wrapper = document.createElement(image.parentElement === editor ? "div" : "span");
-    wrapper.setAttribute(INLINE_IMAGE_WRAPPER_ATTR, "1");
-    wrapper.style.display = "block";
-    wrapper.style.width = "100%";
-    wrapper.style.textAlign = alignment;
+    wrapper = document.createElement(image.parentElement === editor ? "div" : "span");
     image.before(wrapper);
     wrapper.append(image);
     removeEmptyWrapper(oldWrapper);
   }
+  const editorWidth = editor.getBoundingClientRect().width || editor.clientWidth;
+  const imageWidth = image.getBoundingClientRect().width || image.width;
+  const availableWidth = Math.max(0, editorWidth - imageWidth);
+  const offsetX =
+    alignment === "left" ? 0 : alignment === "center" ? availableWidth / 2 : availableWidth;
+  const offsetY = Number.parseFloat(wrapper.style.paddingTop) || 0;
+  applyPositionStyles(wrapper, offsetX, offsetY);
   editor.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
@@ -583,7 +698,13 @@ export function serializeInlineImages(
     node.remove();
   if (!options.keepEditorIds) {
     for (const wrapper of root.querySelectorAll<HTMLElement>(`[${INLINE_IMAGE_WRAPPER_ATTR}]`))
-      wrapper.removeAttribute(INLINE_IMAGE_WRAPPER_ATTR);
+      for (const attribute of [
+        INLINE_IMAGE_WRAPPER_ATTR,
+        INLINE_IMAGE_POSITION_ATTR,
+        "data-mm-position-x",
+        "data-mm-position-y",
+      ])
+        wrapper.removeAttribute(attribute);
   }
   return { html: template.innerHTML, inlineImages: used.map(toInlineImageMetadata) };
 }

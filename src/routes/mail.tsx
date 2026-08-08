@@ -6561,7 +6561,6 @@ function Composer({
     imageDragSessionRef.current = startInlineImageDragSession(e.nativeEvent, {
       editor,
       image,
-      surface: e.currentTarget,
       onCommit: (movedImage) => {
         const selectionRange = document.createRange();
         selectionRange.setStartAfter(movedImage);
