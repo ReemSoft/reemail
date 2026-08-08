@@ -2,6 +2,15 @@ export const INLINE_IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif", "imag
 
 export const INLINE_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
 export const INLINE_IMAGE_MIN_WIDTH = 40;
+export const INLINE_IMAGE_WRAPPER_ATTR = "data-mm-inline-wrapper";
+
+export type InlineImageAlignment = "left" | "center" | "right";
+
+export interface InlineImageDropTarget {
+  range: Range;
+  alignment: InlineImageAlignment | null;
+  usedFallback: boolean;
+}
 
 export type InlineImageMime = (typeof INLINE_IMAGE_TYPES)[number];
 
@@ -129,18 +138,152 @@ export function clampInlineImageWidth(width: number, editorWidth: number): numbe
   );
 }
 
+function nodeElement(node: Node): Element | null {
+  return node.nodeType === Node.ELEMENT_NODE ? (node as Element) : node.parentElement;
+}
+
+function isExcludedDropNode(node: Node, image: HTMLImageElement): boolean {
+  const element = nodeElement(node);
+  if (!element) return false;
+  return (
+    element === image ||
+    image.contains(element) ||
+    Boolean(element.closest("[data-mm-image-tool],[data-mm-drop-marker]")) ||
+    Boolean(element.closest(`[${INLINE_IMAGE_WRAPPER_ATTR}]`)?.contains(image))
+  );
+}
+
+function nativeCaretRange(x: number, y: number): Range | null {
+  const doc = document as Document & {
+    caretRangeFromPoint?: (clientX: number, clientY: number) => Range | null;
+    caretPositionFromPoint?: (
+      clientX: number,
+      clientY: number,
+    ) => { offsetNode: Node; offset: number } | null;
+  };
+  const direct = doc.caretRangeFromPoint?.(x, y);
+  if (direct) return direct;
+  const position = doc.caretPositionFromPoint?.(x, y);
+  if (!position) return null;
+  const range = document.createRange();
+  range.setStart(position.offsetNode, position.offset);
+  range.collapse(true);
+  return range;
+}
+
+function physicalAlignment(editor: HTMLElement, clientX: number): InlineImageAlignment {
+  const rect = editor.getBoundingClientRect();
+  const relativeX = Math.max(0, Math.min(rect.width, clientX - rect.left));
+  if (relativeX < rect.width / 3) return "left";
+  if (relativeX < (rect.width * 2) / 3) return "center";
+  return "right";
+}
+
+function nodeVerticalBounds(node: Node): { top: number; bottom: number } | null {
+  if (node instanceof Element) {
+    const rect = node.getBoundingClientRect();
+    return { top: rect.top, bottom: rect.bottom };
+  }
+  const range = document.createRange();
+  range.selectNode(node);
+  const rect = range.getBoundingClientRect();
+  return rect ? { top: rect.top, bottom: rect.bottom } : null;
+}
+
+function isIgnorableWrapperNode(node: Node): boolean {
+  return (
+    (node.nodeType === Node.TEXT_NODE && !node.textContent?.trim()) ||
+    (node instanceof HTMLElement && node.tagName === "BR")
+  );
+}
+
+function wrapperContainsOnlyImage(wrapper: HTMLElement, image: HTMLImageElement): boolean {
+  return Array.from(wrapper.childNodes).every(
+    (node) => node === image || isIgnorableWrapperNode(node),
+  );
+}
+
+function removeEmptyWrapper(wrapper: HTMLElement | null): void {
+  if (wrapper && Array.from(wrapper.childNodes).every(isIgnorableWrapperNode)) wrapper.remove();
+}
+
+/** Resolve a native caret first, then a deterministic top-level block boundary. */
+export function resolveInlineImageDropTarget(
+  editor: HTMLElement,
+  image: HTMLImageElement,
+  clientX: number,
+  clientY: number,
+): InlineImageDropTarget {
+  const native = nativeCaretRange(clientX, clientY);
+  if (
+    native &&
+    editor.contains(native.startContainer) &&
+    !isExcludedDropNode(native.startContainer, image)
+  ) {
+    return {
+      range: native,
+      alignment: native.startContainer === editor ? physicalAlignment(editor, clientX) : null,
+      usedFallback: false,
+    };
+  }
+
+  const candidates = Array.from(editor.childNodes).flatMap((node, index) => {
+    const bounds = nodeVerticalBounds(node);
+    return bounds && !isExcludedDropNode(node, image) ? [{ node, index, bounds }] : [];
+  });
+  let offset = editor.childNodes.length;
+  if (candidates.length) {
+    const boundaries = [{ offset: candidates[0].index, y: candidates[0].bounds.top }];
+    for (let index = 0; index < candidates.length; index += 1) {
+      const current = candidates[index];
+      const next = candidates[index + 1];
+      boundaries.push({
+        offset: current.index + 1,
+        y: next ? (current.bounds.bottom + next.bounds.top) / 2 : current.bounds.bottom,
+      });
+    }
+    offset = boundaries.reduce((nearest, boundary) =>
+      Math.abs(boundary.y - clientY) < Math.abs(nearest.y - clientY) ? boundary : nearest,
+    ).offset;
+  }
+  const range = document.createRange();
+  range.setStart(editor, offset);
+  range.collapse(true);
+  return {
+    range,
+    alignment: physicalAlignment(editor, clientX),
+    usedFallback: true,
+  };
+}
+
 export function moveInlineImageNode(
   image: HTMLImageElement,
   marker: HTMLElement,
   editor: HTMLElement,
+  alignment: InlineImageAlignment | null = null,
 ): void {
-  image.remove();
-  marker.replaceWith(image);
+  const oldWrapper = image.closest<HTMLElement>(`[${INLINE_IMAGE_WRAPPER_ATTR}]`);
+  if (alignment) {
+    const wrapper =
+      oldWrapper && wrapperContainsOnlyImage(oldWrapper, image)
+        ? oldWrapper
+        : document.createElement("div");
+    wrapper.setAttribute(INLINE_IMAGE_WRAPPER_ATTR, "1");
+    wrapper.style.textAlign = alignment;
+    marker.replaceWith(wrapper);
+    if (image.parentElement !== wrapper) wrapper.append(image);
+    if (oldWrapper !== wrapper) removeEmptyWrapper(oldWrapper);
+  } else {
+    marker.replaceWith(image);
+    removeEmptyWrapper(oldWrapper);
+  }
   editor.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
 export function removeInlineImageNode(image: HTMLImageElement, editor: HTMLElement): void {
-  image.remove();
+  const wrapper = image.closest<HTMLElement>(`[${INLINE_IMAGE_WRAPPER_ATTR}]`);
+  if (wrapper && wrapperContainsOnlyImage(wrapper, image)) wrapper.remove();
+  else image.remove();
   editor.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
@@ -163,8 +306,9 @@ export function serializeInlineImages(
   images: readonly InlineComposeImage[],
   options: { keepEditorIds?: boolean } = {},
 ): { html: string; inlineImages: InlineImageMetadata[] } {
-  const root = document.createElement("div");
-  root.innerHTML = html;
+  const template = document.createElement("template");
+  template.innerHTML = html;
+  const root = template.content;
   const byId = new Map(images.map((image) => [image.id, image]));
   const used: InlineComposeImage[] = [];
   for (const img of root.querySelectorAll<HTMLImageElement>("img[data-mm-inline-id]")) {
@@ -174,7 +318,7 @@ export function serializeInlineImages(
       img.remove();
       continue;
     }
-    img.src = `cid:${image.cid}`;
+    img.setAttribute("src", `cid:${image.cid}`);
     const measured = Number.parseInt(img.style.width || img.getAttribute("width") || "", 10);
     if (Number.isFinite(measured) && measured >= INLINE_IMAGE_MIN_WIDTH) {
       img.width = measured;
@@ -195,7 +339,11 @@ export function serializeInlineImages(
     "[data-mm-image-tool],[data-mm-drop-marker]",
   ))
     node.remove();
-  return { html: root.innerHTML, inlineImages: used.map(toInlineImageMetadata) };
+  if (!options.keepEditorIds) {
+    for (const wrapper of root.querySelectorAll<HTMLElement>(`[${INLINE_IMAGE_WRAPPER_ATTR}]`))
+      wrapper.removeAttribute(INLINE_IMAGE_WRAPPER_ATTR);
+  }
+  return { html: template.innerHTML, inlineImages: used.map(toInlineImageMetadata) };
 }
 
 export function metadataToTransport(images: readonly InlineComposeImage[]) {

@@ -7,6 +7,7 @@ import {
   insertInlineImageNode,
   moveInlineImageNode,
   removeInlineImageNode,
+  resolveInlineImageDropTarget,
   serializeInlineImages,
   validateInlineImageFile,
 } from "../mail-compose-inline-images";
@@ -21,6 +22,66 @@ describe("composer inline images", () => {
     });
   });
   afterEach(() => vi.unstubAllGlobals());
+
+  function setRect(
+    element: Element,
+    { left = 0, top = 0, width = 600, height = 40 }: Partial<DOMRect> = {},
+  ) {
+    vi.spyOn(element, "getBoundingClientRect").mockReturnValue({
+      left,
+      top,
+      width,
+      height,
+      right: left + width,
+      bottom: top + height,
+      x: left,
+      y: top,
+      toJSON: () => ({}),
+    });
+  }
+
+  function setNativeCaret(range: Range | null) {
+    Object.defineProperty(document, "caretRangeFromPoint", {
+      configurable: true,
+      value: vi.fn(() => range),
+    });
+    Object.defineProperty(document, "caretPositionFromPoint", {
+      configurable: true,
+      value: vi.fn(() => null),
+    });
+  }
+
+  function createDropEditor() {
+    const editor = document.createElement("div");
+    const first = document.createElement("p");
+    const second = document.createElement("p");
+    const image = document.createElement("img");
+    first.textContent = "first";
+    second.textContent = "second";
+    image.src = "blob:preview";
+    image.dataset.mmInlineId = "same-id";
+    editor.append(first, image, second);
+    document.body.append(editor);
+    setRect(editor, { left: 100, top: 100, width: 600, height: 500 });
+    setRect(first, { left: 100, top: 120, width: 600, height: 40 });
+    setRect(image, { left: 100, top: 170, width: 200, height: 100 });
+    setRect(second, { left: 100, top: 300, width: 600, height: 40 });
+    return { editor, first, second, image };
+  }
+
+  function applyDrop(
+    editor: HTMLElement,
+    image: HTMLImageElement,
+    clientX: number,
+    clientY: number,
+  ) {
+    const target = resolveInlineImageDropTarget(editor, image, clientX, clientY);
+    const marker = document.createElement("span");
+    marker.dataset.mmDropMarker = "1";
+    target.range.insertNode(marker);
+    moveInlineImageNode(image, marker, editor, target.alignment);
+    return target;
+  }
 
   it.each(["image/png", "image/jpeg", "image/gif", "image/webp"])("accepts %s", (type) => {
     expect(validateInlineImageFile({ type, size: 12 })).toEqual({ ok: true, mimeType: type });
@@ -91,6 +152,146 @@ describe("composer inline images", () => {
     removeInlineImageNode(image, editor);
     expect(editor.querySelector("img")).toBeNull();
     expect(changes).toBe(2);
+  });
+
+  it("uses a valid native caret target and moves the same image there", () => {
+    const { editor, first, image } = createDropEditor();
+    const range = document.createRange();
+    range.setStart(first.firstChild!, 2);
+    range.collapse(true);
+    setNativeCaret(range);
+    const target = applyDrop(editor, image, 200, 130);
+    expect(target.usedFallback).toBe(false);
+    expect(first.childNodes[1]).toBe(image);
+    expect(image.dataset.mmInlineId).toBe("same-id");
+  });
+
+  it("falls back to the editor end when native caret lookup is null in blank space", () => {
+    const { editor, second, image } = createDropEditor();
+    setNativeCaret(null);
+    const target = applyDrop(editor, image, 400, 580);
+    expect(target.usedFallback).toBe(true);
+    expect(editor.lastElementChild?.contains(image)).toBe(true);
+    expect(second.nextElementSibling).toBe(editor.lastElementChild);
+  });
+
+  it("falls back before the first content block above the editor content", () => {
+    const { editor, first, image } = createDropEditor();
+    setNativeCaret(null);
+    applyDrop(editor, image, 150, 105);
+    expect(editor.firstElementChild?.contains(image)).toBe(true);
+    expect(editor.firstElementChild?.nextElementSibling).toBe(first);
+  });
+
+  it("falls back to the nearest boundary between top-level blocks", () => {
+    const { editor, first, second, image } = createDropEditor();
+    setNativeCaret(null);
+    applyDrop(editor, image, 150, 230);
+    expect(first.nextElementSibling?.contains(image)).toBe(true);
+    expect(first.nextElementSibling?.nextElementSibling).toBe(second);
+  });
+
+  it.each([
+    [150, "left"],
+    [400, "center"],
+    [650, "right"],
+  ] as const)("uses physical drop X=%s for %s alignment", (clientX, alignment) => {
+    const { editor, image } = createDropEditor();
+    setNativeCaret(null);
+    applyDrop(editor, image, clientX, 580);
+    expect(image.parentElement?.style.textAlign).toBe(alignment);
+  });
+
+  it("does not invert physical horizontal thirds in an RTL editor", () => {
+    const { editor, image } = createDropEditor();
+    editor.dir = "rtl";
+    setNativeCaret(null);
+    applyDrop(editor, image, 150, 580);
+    expect(image.parentElement?.style.textAlign).toBe("left");
+  });
+
+  it("aligns a native editor-boundary drop in otherwise empty horizontal space", () => {
+    const { editor, image } = createDropEditor();
+    const range = document.createRange();
+    range.setStart(editor, editor.childNodes.length);
+    range.collapse(true);
+    setNativeCaret(range);
+    const target = applyDrop(editor, image, 650, 580);
+    expect(target.usedFallback).toBe(false);
+    expect(image.parentElement?.style.textAlign).toBe("right");
+  });
+
+  it("preserves image identity, object URL, CID metadata, and resize behavior after moving", () => {
+    const { editor, image } = createDropEditor();
+    const composeImage = createInlineComposeImage(
+      new File(["image"], "identity.png", { type: "image/png" }),
+    );
+    image.src = composeImage.objectUrl;
+    image.dataset.mmInlineId = composeImage.id;
+    const originalNode = image;
+    const originalMetadata = {
+      id: composeImage.id,
+      cid: composeImage.cid,
+      objectUrl: composeImage.objectUrl,
+    };
+    setNativeCaret(null);
+    applyDrop(editor, image, 400, 580);
+    image.style.width = `${clampInlineImageWidth(320, 600)}px`;
+    expect(editor.querySelector("img")).toBe(originalNode);
+    expect(image.dataset.mmInlineId).toBe(originalMetadata.id);
+    expect(image.src).toBe(originalMetadata.objectUrl);
+    expect(composeImage.cid).toBe(originalMetadata.cid);
+    expect(image.style.width).toBe("320px");
+  });
+
+  it("deletes a moved image and its now-empty alignment wrapper", () => {
+    const { editor, image } = createDropEditor();
+    setNativeCaret(null);
+    applyDrop(editor, image, 400, 580);
+    const wrapper = image.parentElement!;
+    expect(wrapper.dataset.mmInlineWrapper).toBe("1");
+    removeInlineImageNode(image, editor);
+    expect(editor.contains(wrapper)).toBe(false);
+    expect(editor.querySelector("img")).toBeNull();
+  });
+
+  it("does not delete meaningful text that was added beside a moved image", () => {
+    const { editor, image } = createDropEditor();
+    setNativeCaret(null);
+    applyDrop(editor, image, 400, 580);
+    const wrapper = image.parentElement!;
+    wrapper.append("keep me");
+    removeInlineImageNode(image, editor);
+    expect(editor.contains(wrapper)).toBe(true);
+    expect(wrapper.textContent).toBe("keep me");
+  });
+
+  it("serializes width and alignment to inert CID HTML without mutating the live blob preview", () => {
+    const composeImage = createInlineComposeImage(
+      new File(["image"], "aligned.png", { type: "image/png" }),
+    );
+    const editor = document.createElement("div");
+    editor.innerHTML = `<div data-mm-inline-wrapper="1" style="text-align:right"><img src="${composeImage.objectUrl}" data-mm-inline-id="${composeImage.id}" style="width:280px;height:auto"></div>`;
+    const before = editor.innerHTML;
+    const result = serializeInlineImages(editor.innerHTML, [composeImage]);
+    expect(result.html).toMatch(/text-align:\s*right/);
+    expect(result.html).toContain('width="280"');
+    expect(result.html).toContain(`src="cid:${composeImage.cid}"`);
+    expect(result.html).not.toContain("base64");
+    expect(editor.innerHTML).toBe(before);
+    expect(editor.querySelector("img")?.getAttribute("src")).toBe(composeImage.objectUrl);
+  });
+
+  it("rejects native targets inside the dragged image controls and marker", () => {
+    const { editor, image } = createDropEditor();
+    const controls = document.createElement("span");
+    controls.dataset.mmImageTool = "1";
+    editor.append(controls);
+    const range = document.createRange();
+    range.setStart(controls, 0);
+    range.collapse(true);
+    setNativeCaret(range);
+    expect(resolveInlineImageDropTarget(editor, image, 200, 580).usedFallback).toBe(true);
   });
 
   it("wires one native picker flow without the legacy URL prompt or Base64 reader", () => {

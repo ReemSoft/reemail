@@ -657,6 +657,7 @@ import {
   clampInlineImageWidth,
   moveInlineImageNode,
   removeInlineImageNode,
+  resolveInlineImageDropTarget,
   findInlineImageNodeByCid,
   type InlineComposeImage,
   type InlineImageMime,
@@ -6509,25 +6510,9 @@ function Composer({
     let dragStartX = 0;
     let dragStartY = 0;
     let didDrag = false;
-    let dropMarker: HTMLSpanElement | null = null;
+    let dropMarker: HTMLElement | null = null;
     let previousPointerEvents = "";
     let previousTouchAction = "";
-    const caretAt = (x: number, y: number): Range | null => {
-      const doc = document as Document & {
-        caretRangeFromPoint?: (x: number, y: number) => Range | null;
-        caretPositionFromPoint?: (
-          x: number,
-          y: number,
-        ) => { offsetNode: Node; offset: number } | null;
-      };
-      if (doc.caretRangeFromPoint) return doc.caretRangeFromPoint(x, y);
-      const pos = doc.caretPositionFromPoint?.(x, y);
-      if (!pos) return null;
-      const r = document.createRange();
-      r.setStart(pos.offsetNode, pos.offset);
-      r.collapse(true);
-      return r;
-    };
     const resetPointerDrag = () => {
       if (dragImg) {
         dragImg.style.opacity = "";
@@ -6572,11 +6557,6 @@ function Composer({
       if (!didDrag && Math.hypot(e.clientX - dragStartX, e.clientY - dragStartY) < 5) return;
       if (!didDrag) {
         didDrag = true;
-        dropMarker = document.createElement("span");
-        dropMarker.contentEditable = "false";
-        dropMarker.setAttribute("aria-hidden", "true");
-        dropMarker.style.cssText =
-          "display:inline-block;width:2px;height:1.4em;vertical-align:text-bottom;background:currentColor;pointer-events:none";
         // Let caretRangeFromPoint see the editable text below the image rather
         // than repeatedly resolving to the image being dragged.
         dragImg.style.pointerEvents = "none";
@@ -6586,16 +6566,18 @@ function Composer({
       dragImg.style.cursor = "grabbing";
       syncImgBox(null);
 
-      const range = caretAt(e.clientX, e.clientY);
-      if (
-        range &&
-        editor.contains(range.startContainer) &&
-        range.startContainer !== dragImg &&
-        !(dropMarker && dropMarker.contains(range.startContainer))
-      ) {
-        dropMarker?.remove();
-        range.insertNode(dropMarker as HTMLSpanElement);
-      }
+      dropMarker?.remove();
+      const target = resolveInlineImageDropTarget(editor, dragImg, e.clientX, e.clientY);
+      dropMarker = document.createElement("span");
+      dropMarker.contentEditable = "false";
+      dropMarker.setAttribute("aria-hidden", "true");
+      dropMarker.dataset.mmDropMarker = "1";
+      dropMarker.style.cssText =
+        target.usedFallback || target.alignment
+          ? "display:block;height:3px;margin:5px 0;background:#2563eb;box-shadow:0 0 0 1px rgba(255,255,255,.9);pointer-events:none"
+          : "display:inline-block;width:3px;height:1.4em;vertical-align:text-bottom;background:#2563eb;box-shadow:0 0 0 1px rgba(255,255,255,.9);pointer-events:none";
+      dropMarker.dataset.mmDropAlignment = target.alignment ?? "";
+      target.range.insertNode(dropMarker);
     };
     const onPointerUp = (e: PointerEvent) => {
       if (!dragImg || dragPointerId !== e.pointerId) return;
@@ -6605,7 +6587,15 @@ function Composer({
         if (dropMarker?.isConnected) {
           const marker = dropMarker;
           dropMarker = null;
-          moveInlineImageNode(img, marker, editor);
+          const alignment = marker.dataset.mmDropAlignment;
+          moveInlineImageNode(
+            img,
+            marker,
+            editor,
+            alignment === "left" || alignment === "center" || alignment === "right"
+              ? alignment
+              : null,
+          );
           const selectionRange = document.createRange();
           selectionRange.setStartAfter(img);
           selectionRange.collapse(true);
