@@ -7078,17 +7078,61 @@ function Composer({
                   className="min-h-[320px] w-full resize-none bg-transparent px-4 py-3 text-sm outline-none"
                 />
               ) : (
-                <div
-                  ref={editorRef}
-                  contentEditable
-                  suppressContentEditableWarning
-                  role="textbox"
-                  aria-multiline="true"
-                  aria-label={tr("نص الرسالة")}
-                  data-placeholder={tr("اكتب رسالتك هنا...")}
-                  className="composer-editor min-h-[320px] w-full whitespace-pre-wrap break-words px-4 py-3 text-sm outline-none"
-                />
+                <div ref={editorWrapRef} className="relative">
+                  <div
+                    ref={editorRef}
+                    contentEditable
+                    suppressContentEditableWarning
+                    role="textbox"
+                    aria-multiline="true"
+                    aria-label={tr("نص الرسالة")}
+                    data-placeholder={tr("اكتب رسالتك هنا...")}
+                    className="composer-editor min-h-[320px] w-full whitespace-pre-wrap break-words px-4 py-3 text-sm outline-none"
+                  />
+                  {imgBox && (
+                    <>
+                      {/* Selection frame */}
+                      <div
+                        data-img-tool="1"
+                        className="pointer-events-none absolute rounded-sm ring-2 ring-primary/60"
+                        style={{
+                          top: imgBox.top,
+                          left: imgBox.left,
+                          width: imgBox.width,
+                          height: imgBox.height,
+                        }}
+                      />
+                      {/* Delete button (corner) */}
+                      <button
+                        type="button"
+                        data-img-tool="1"
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={deleteActiveImage}
+                        title={tr("حذف الصورة")}
+                        aria-label={tr("حذف الصورة")}
+                        className="absolute z-10 inline-flex h-6 w-6 items-center justify-center rounded-full bg-destructive text-white shadow-md transition hover:opacity-90"
+                        style={{ top: imgBox.top - 8, left: imgBox.left + imgBox.width - 16 }}
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                      {/* Resize handle */}
+                      <button
+                        type="button"
+                        data-img-tool="1"
+                        onPointerDown={startImageResize}
+                        title={tr("تغيير حجم الصورة")}
+                        aria-label={tr("تغيير حجم الصورة")}
+                        className="absolute z-10 h-3.5 w-3.5 cursor-nwse-resize rounded-full border-2 border-white bg-primary shadow-md"
+                        style={{
+                          top: imgBox.top + imgBox.height - 7,
+                          left: imgBox.left + imgBox.width - 7,
+                        }}
+                      />
+                    </>
+                  )}
+                </div>
               )}
+
             </div>
           </div>
 
