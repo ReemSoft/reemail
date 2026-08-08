@@ -5580,6 +5580,16 @@ function Composer({
   const imageRangeRef = useRef<Range | null>(null);
   const editorRef = useRef<HTMLDivElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
+  // Inline-image affordances (hover toolbar: delete + resize handle).
+  const editorWrapRef = useRef<HTMLDivElement | null>(null);
+  const activeImgRef = useRef<HTMLImageElement | null>(null);
+  const [imgBox, setImgBox] = useState<{
+    top: number;
+    left: number;
+    width: number;
+    height: number;
+  } | null>(null);
+
 
   // Set initial editor HTML once
   useEffect(() => {
