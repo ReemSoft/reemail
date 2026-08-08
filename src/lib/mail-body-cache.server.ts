@@ -89,18 +89,79 @@ export interface CacheKey {
   uid: number;
 }
 
-function boundedInlineParts(value: unknown): CachedBody["inlineParts"] {
+function boundedInlineParts(
+  value: unknown,
+  embeddedCids: Iterable<string> = [],
+): CachedBody["inlineParts"] {
   if (!Array.isArray(value)) return [];
   const candidates = value.filter(
     (candidate): candidate is CachedBody["inlineParts"][number] =>
       Boolean(candidate) && typeof candidate === "object",
   );
-  const partition = partitionInlineCidParts(candidates);
+  const partition = partitionInlineCidParts(candidates, embeddedCids);
   return [
     ...partition.smallBatchParts,
     ...partition.largeStreamParts,
     ...partition.overflowStreamParts,
   ].slice(0, INLINE_CID_MAX_COUNT);
+}
+
+function normalizeCid(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().replace(/^<|>$/g, "").trim().toLowerCase();
+  return normalized || null;
+}
+
+function referencedImageCids(bodyHtml: string): Set<string> {
+  const cids = new Set<string>();
+  const imageCidSource =
+    /<img\b[^>]*\bsrc\s*=\s*(?:"\s*cid:([^"]*)"|'\s*cid:([^']*)'|cid:([^\s>]+))/gi;
+  for (const match of bodyHtml.matchAll(imageCidSource)) {
+    const cid = normalizeCid(match[1] ?? match[2] ?? match[3]);
+    if (cid) cids.add(cid);
+  }
+  return cids;
+}
+
+function normalizeCachedInlineMetadata(
+  bodyHtml: string,
+  inlinePartsValue: unknown,
+  attachmentsValue: unknown,
+): Pick<CachedBody, "inlineParts" | "attachments"> {
+  const inlineParts = boundedInlineParts(inlinePartsValue);
+  const attachments = Array.isArray(attachmentsValue) ? (attachmentsValue as MailAttachment[]) : [];
+  const referencedCids = referencedImageCids(bodyHtml);
+  if (referencedCids.size === 0 || attachments.length === 0) {
+    return { inlineParts, attachments };
+  }
+
+  const legacyCandidates: CachedBody["inlineParts"] = [];
+  for (const attachment of attachments) {
+    const cid = normalizeCid(attachment.contentId);
+    if (!cid || !referencedCids.has(cid)) continue;
+    legacyCandidates.push({
+      cid,
+      part: attachment.part ?? "",
+      mimeType: attachment.mimeType,
+      size: attachment.size,
+    });
+  }
+
+  const recoveredInlineParts = boundedInlineParts(
+    legacyCandidates,
+    inlineParts.map((part) => part.cid),
+  ).slice(0, Math.max(0, INLINE_CID_MAX_COUNT - inlineParts.length));
+  const mergedInlineParts = boundedInlineParts([...inlineParts, ...recoveredInlineParts]);
+  const acceptedCids = new Set(
+    mergedInlineParts.map((part) => normalizeCid(part.cid)).filter((cid): cid is string => !!cid),
+  );
+  return {
+    inlineParts: mergedInlineParts,
+    attachments: attachments.filter((attachment) => {
+      const cid = normalizeCid(attachment.contentId);
+      return !cid || !referencedCids.has(cid) || !acceptedCids.has(cid);
+    }),
+  };
 }
 
 /**
@@ -180,16 +241,23 @@ export async function lookupCachedBody(
     .maybeSingle();
   if (!live.data) return { hit: false, reason: "orphan" };
 
+  const bodyHtml = row.body_html ?? row.body_text ?? "";
+  const normalizedInlineMetadata = normalizeCachedInlineMetadata(
+    bodyHtml,
+    row.inline_parts,
+    row.attachments,
+  );
+
   return {
     hit: true,
     body: {
-      bodyHtml: row.body_html ?? row.body_text ?? "",
+      bodyHtml,
       preview: row.preview ?? "",
-      inlineParts: boundedInlineParts(row.inline_parts),
+      inlineParts: normalizedInlineMetadata.inlineParts,
       inlineImages: Array.isArray(row.inline_images)
         ? (row.inline_images as CachedBody["inlineImages"])
         : [],
-      attachments: Array.isArray(row.attachments) ? (row.attachments as MailAttachment[]) : [],
+      attachments: normalizedInlineMetadata.attachments,
       headersMeta: sanitizeHeadersMeta(row.headers_meta),
       uidValidity: String(row.uid_validity),
       byteSize: row.byte_size,

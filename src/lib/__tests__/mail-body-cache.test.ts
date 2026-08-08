@@ -102,6 +102,196 @@ describe("lookupCachedBody", () => {
     const res = await lookupCachedBody(db, KEY);
     expect(res).toEqual({ hit: false, reason: "oversize" });
   });
+
+  it("recovers a referenced 1.8 MiB CID image from legacy cached attachments", async () => {
+    const largeSize = Math.round(1.8 * 1024 * 1024);
+    const db = fakeSupabase({
+      mail_folders: { id: "f1", uidvalidity: 100 },
+      mail_message_body_cache: {
+        ...CACHED,
+        body_html: '<p>text</p><img src="cid:mm-inline-large@mailmaestro">',
+        inline_parts: [],
+        attachments: [
+          {
+            id: "inline-image",
+            filename: "mm-inline-large.png",
+            contentId: "<mm-inline-large@mailmaestro>",
+            part: "2",
+            mimeType: "image/png",
+            size: largeSize,
+            disposition: "inline",
+          },
+          {
+            id: "document",
+            filename: "document.pdf",
+            part: "3",
+            mimeType: "application/pdf",
+            size: 1000,
+            disposition: "attachment",
+          },
+        ],
+      },
+      mail_messages: { id: "m1" },
+    });
+
+    const res = await lookupCachedBody(db, KEY);
+
+    expect(res.hit).toBe(true);
+    if (!res.hit) return;
+    expect(res.body.inlineParts).toEqual([
+      {
+        cid: "mm-inline-large@mailmaestro",
+        part: "2",
+        mimeType: "image/png",
+        size: largeSize,
+      },
+    ]);
+    expect(res.body.attachments).toEqual([
+      expect.objectContaining({ filename: "document.pdf", mimeType: "application/pdf" }),
+    ]);
+  });
+
+  it("keeps unreferenced CID images and normal attachments unchanged", async () => {
+    const attachments = [
+      {
+        id: "image",
+        filename: "photo.png",
+        contentId: "unreferenced@example",
+        part: "2",
+        mimeType: "image/png",
+        size: 200,
+      },
+      {
+        id: "document",
+        filename: "document.pdf",
+        part: "3",
+        mimeType: "application/pdf",
+        size: 1000,
+      },
+    ];
+    const db = fakeSupabase({
+      mail_folders: { id: "f1", uidvalidity: 100 },
+      mail_message_body_cache: { ...CACHED, attachments },
+      mail_messages: { id: "m1" },
+    });
+
+    const res = await lookupCachedBody(db, KEY);
+
+    expect(res.hit).toBe(true);
+    if (!res.hit) return;
+    expect(res.body.inlineParts).toEqual([]);
+    expect(res.body.attachments).toEqual(attachments);
+  });
+
+  it("preserves an existing valid new-format inline part", async () => {
+    const inlineParts = [{ cid: "current@example", part: "2", mimeType: "image/png", size: 400 }];
+    const attachments = [
+      {
+        id: "document",
+        filename: "document.pdf",
+        part: "3",
+        mimeType: "application/pdf",
+        size: 1000,
+      },
+    ];
+    const db = fakeSupabase({
+      mail_folders: { id: "f1", uidvalidity: 100 },
+      mail_message_body_cache: {
+        ...CACHED,
+        body_html: '<img src="cid:current@example">',
+        inline_parts: inlineParts,
+        attachments,
+      },
+      mail_messages: { id: "m1" },
+    });
+
+    const res = await lookupCachedBody(db, KEY);
+
+    expect(res.hit).toBe(true);
+    if (!res.hit) return;
+    expect(res.body.inlineParts).toEqual(inlineParts);
+    expect(res.body.attachments).toEqual(attachments);
+  });
+
+  it("deduplicates existing metadata and matches bracketed CIDs case-insensitively", async () => {
+    const existingPart = {
+      cid: "Logo@Example",
+      part: "2",
+      mimeType: "image/png",
+      size: 300,
+    };
+    const db = fakeSupabase({
+      mail_folders: { id: "f1", uidvalidity: 100 },
+      mail_message_body_cache: {
+        ...CACHED,
+        body_html: '<img alt="logo" src="CID:logo@example">',
+        inline_parts: [existingPart],
+        attachments: [
+          {
+            id: "legacy-duplicate",
+            filename: "logo.png",
+            contentId: "<LOGO@EXAMPLE>",
+            part: "2",
+            mimeType: "image/png",
+            size: 300,
+          },
+        ],
+      },
+      mail_messages: { id: "m1" },
+    });
+
+    const res = await lookupCachedBody(db, KEY);
+
+    expect(res.hit).toBe(true);
+    if (!res.hit) return;
+    expect(res.body.inlineParts).toEqual([existingPart]);
+    expect(res.body.attachments).toEqual([]);
+  });
+
+  it("does not promote malformed, disallowed, or over-5-MiB legacy metadata", async () => {
+    const attachments = [
+      {
+        id: "bad-part",
+        filename: "bad-part.png",
+        contentId: "bad-part",
+        part: "2.x",
+        mimeType: "image/png",
+        size: 100,
+      },
+      {
+        id: "bad-mime",
+        filename: "vector.svg",
+        contentId: "bad-mime",
+        part: "3",
+        mimeType: "image/svg+xml",
+        size: 100,
+      },
+      {
+        id: "too-large",
+        filename: "too-large.png",
+        contentId: "too-large",
+        part: "4",
+        mimeType: "image/png",
+        size: 5 * 1024 * 1024 + 1,
+      },
+    ];
+    const db = fakeSupabase({
+      mail_folders: { id: "f1", uidvalidity: 100 },
+      mail_message_body_cache: {
+        ...CACHED,
+        body_html: '<img src="cid:bad-part"><img src="cid:bad-mime"><img src="cid:too-large">',
+        attachments,
+      },
+      mail_messages: { id: "m1" },
+    });
+
+    const res = await lookupCachedBody(db, KEY);
+
+    expect(res.hit).toBe(true);
+    if (!res.hit) return;
+    expect(res.body.inlineParts).toEqual([]);
+    expect(res.body.attachments).toEqual(attachments);
+  });
 });
 
 describe("storeCachedBody", () => {
