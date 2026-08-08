@@ -5580,6 +5580,16 @@ function Composer({
   const imageRangeRef = useRef<Range | null>(null);
   const editorRef = useRef<HTMLDivElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
+  // Inline-image affordances (hover toolbar: delete + resize handle).
+  const editorWrapRef = useRef<HTMLDivElement | null>(null);
+  const activeImgRef = useRef<HTMLImageElement | null>(null);
+  const [imgBox, setImgBox] = useState<{
+    top: number;
+    left: number;
+    width: number;
+    height: number;
+  } | null>(null);
+
 
   // Set initial editor HTML once
   useEffect(() => {
@@ -6234,6 +6244,100 @@ function Composer({
       insertHtmlAtCursor(`<img src="${dataUrl}" alt="" style="max-width:100%;height:auto" />`);
     }
   }
+
+  /* ---- Inline image manipulation (hover delete + drag move + resize) ---- */
+
+  const syncImgBox = useCallback((img: HTMLImageElement | null) => {
+    const wrap = editorWrapRef.current;
+    if (!img || !wrap || !wrap.contains(img)) {
+      activeImgRef.current = null;
+      setImgBox(null);
+      return;
+    }
+    const a = img.getBoundingClientRect();
+    const b = wrap.getBoundingClientRect();
+    activeImgRef.current = img;
+    setImgBox({
+      top: a.top - b.top,
+      left: a.left - b.left,
+      width: a.width,
+      height: a.height,
+    });
+  }, []);
+
+  // Track hovered/clicked image inside the editor; keep images draggable so
+  // contentEditable's native drag-and-drop can move them anywhere in the body.
+  useEffect(() => {
+    const editor = editorRef.current;
+    if (!editor || plainMode) return;
+    const pick = (e: Event) => {
+      const t = e.target as HTMLElement | null;
+      if (t && t.tagName === "IMG") {
+        (t as HTMLImageElement).draggable = true;
+        syncImgBox(t as HTMLImageElement);
+      }
+    };
+    const clear = (e: MouseEvent) => {
+      const next = e.relatedTarget as Node | null;
+      if (next && (next as HTMLElement).dataset?.imgTool === "1") return;
+      if (activeImgRef.current && next && activeImgRef.current.contains(next)) return;
+      syncImgBox(null);
+    };
+    const refresh = () => syncImgBox(activeImgRef.current);
+    editor.addEventListener("mouseover", pick);
+    editor.addEventListener("mouseout", clear);
+    editor.addEventListener("click", pick);
+    editor.addEventListener("input", refresh);
+    editor.addEventListener("scroll", refresh, true);
+    window.addEventListener("resize", refresh);
+    return () => {
+      editor.removeEventListener("mouseover", pick);
+      editor.removeEventListener("mouseout", clear);
+      editor.removeEventListener("click", pick);
+      editor.removeEventListener("input", refresh);
+      editor.removeEventListener("scroll", refresh, true);
+      window.removeEventListener("resize", refresh);
+    };
+  }, [plainMode, syncImgBox]);
+
+  function notifyEditorChange() {
+    editorRef.current?.dispatchEvent(new Event("input", { bubbles: true }));
+  }
+
+  function deleteActiveImage() {
+    const img = activeImgRef.current;
+    if (!img) return;
+    img.remove();
+    syncImgBox(null);
+    notifyEditorChange();
+  }
+
+  function startImageResize(e: React.PointerEvent<HTMLButtonElement>) {
+    const img = activeImgRef.current;
+    if (!img) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const startX = e.clientX;
+    const startW = img.getBoundingClientRect().width;
+    const rtl = getComputedStyle(img).direction === "rtl";
+    const move = (ev: PointerEvent) => {
+      const delta = (ev.clientX - startX) * (rtl ? -1 : 1);
+      const next = Math.max(40, startW + delta);
+      img.style.width = `${Math.round(next)}px`;
+      img.style.height = "auto";
+      img.style.maxWidth = "100%";
+      syncImgBox(img);
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      notifyEditorChange();
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  }
+
+
 
   const extensionContext = {
     getHtml: () => editorRef.current?.innerHTML ?? "",
@@ -6974,17 +7078,61 @@ function Composer({
                   className="min-h-[320px] w-full resize-none bg-transparent px-4 py-3 text-sm outline-none"
                 />
               ) : (
-                <div
-                  ref={editorRef}
-                  contentEditable
-                  suppressContentEditableWarning
-                  role="textbox"
-                  aria-multiline="true"
-                  aria-label={tr("نص الرسالة")}
-                  data-placeholder={tr("اكتب رسالتك هنا...")}
-                  className="composer-editor min-h-[320px] w-full whitespace-pre-wrap break-words px-4 py-3 text-sm outline-none"
-                />
+                <div ref={editorWrapRef} className="relative">
+                  <div
+                    ref={editorRef}
+                    contentEditable
+                    suppressContentEditableWarning
+                    role="textbox"
+                    aria-multiline="true"
+                    aria-label={tr("نص الرسالة")}
+                    data-placeholder={tr("اكتب رسالتك هنا...")}
+                    className="composer-editor min-h-[320px] w-full whitespace-pre-wrap break-words px-4 py-3 text-sm outline-none"
+                  />
+                  {imgBox && (
+                    <>
+                      {/* Selection frame */}
+                      <div
+                        data-img-tool="1"
+                        className="pointer-events-none absolute rounded-sm ring-2 ring-primary/60"
+                        style={{
+                          top: imgBox.top,
+                          left: imgBox.left,
+                          width: imgBox.width,
+                          height: imgBox.height,
+                        }}
+                      />
+                      {/* Delete button (corner) */}
+                      <button
+                        type="button"
+                        data-img-tool="1"
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={deleteActiveImage}
+                        title={tr("حذف الصورة")}
+                        aria-label={tr("حذف الصورة")}
+                        className="absolute z-10 inline-flex h-6 w-6 items-center justify-center rounded-full bg-destructive text-white shadow-md transition hover:opacity-90"
+                        style={{ top: imgBox.top - 8, left: imgBox.left + imgBox.width - 16 }}
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                      {/* Resize handle */}
+                      <button
+                        type="button"
+                        data-img-tool="1"
+                        onPointerDown={startImageResize}
+                        title={tr("تغيير حجم الصورة")}
+                        aria-label={tr("تغيير حجم الصورة")}
+                        className="absolute z-10 h-3.5 w-3.5 cursor-nwse-resize rounded-full border-2 border-white bg-primary shadow-md"
+                        style={{
+                          top: imgBox.top + imgBox.height - 7,
+                          left: imgBox.left + imgBox.width - 7,
+                        }}
+                      />
+                    </>
+                  )}
+                </div>
               )}
+
             </div>
           </div>
 
