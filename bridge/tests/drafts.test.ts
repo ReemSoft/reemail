@@ -3,7 +3,7 @@
  *
  * These tests lock every guarantee promised by bridge/src/drafts.ts. They
  * use dependency-injected IMAP fakes exclusively — no network, no real
- * imapflow, no MailComposer stubbing (buildMime runs for real so we can
+ * imapflow, no MailComposer stubbing (the MIME spool runs for real so we can
  * assert the X-MailMaestro-Draft-ID header actually reaches the wire).
  */
 import { test } from "node:test";
@@ -103,6 +103,14 @@ interface Recorder {
   hasMoveCalls: number;
 }
 
+async function readStream(raw: NodeJS.ReadableStream): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of raw) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks);
+}
+
 function mkClient(opts: FakeOpts): { client: ImapDraftClient; rec: Recorder } {
   const rec: Recorder = {
     connects: 0,
@@ -153,7 +161,7 @@ function mkClient(opts: FakeOpts): { client: ImapDraftClient; rec: Recorder } {
       return result;
     },
     async append(path, raw, flags) {
-      rec.appends.push({ path, raw, flags });
+      rec.appends.push({ path, raw: await readStream(raw), flags });
       if (opts.appendFail) throw new Error("append failed");
       return {
         uid: opts.appendUid ?? 100,
@@ -659,7 +667,7 @@ function mkSharedDeps(
       },
       async append(_path, raw) {
         if (hook?.beforeAppend) await hook.beforeAppend();
-        const mime = raw.toString("utf8");
+        const mime = (await readStream(raw)).toString("utf8");
         // Pull the draftId out of the header we know is present.
         const m = mime.match(new RegExp(`${DRAFT_ID_HEADER}:\\s*([^\\r\\n]+)`, "i"));
         const id = m ? m[1].trim() : "";
@@ -806,7 +814,7 @@ test("mutex: retry after cleanup interruption converges to a single canonical co
           return out.sort((a, b) => a - b);
         },
         async append(_p, raw) {
-          const m = raw
+          const m = (await readStream(raw))
             .toString("utf8")
             .match(new RegExp(`${DRAFT_ID_HEADER}:\\s*([^\\r\\n]+)`, "i"));
           const uid = server.nextUid++;
@@ -870,7 +878,7 @@ test("mutex: different UIDVALIDITY between pre-probe and APPEND does not leak st
         return out.sort((a, b) => a - b);
       },
       async append(_p, raw) {
-        const m = raw
+        const m = (await readStream(raw))
           .toString("utf8")
           .match(new RegExp(`${DRAFT_ID_HEADER}:\\s*([^\\r\\n]+)`, "i"));
         const uid = 50; // NEW uidvalidity => low uid space
@@ -1143,19 +1151,10 @@ test("resolveTrashPath prefers SPECIAL-USE \\Trash over any well-known name", ()
 });
 
 test("resolveTrashPath matches Deleted Items / Deleted / Gmail Trash / Bin", () => {
-  assert.equal(
-    resolveTrashPath([box("Deleted Items")] as unknown as never),
-    "Deleted Items",
-  );
+  assert.equal(resolveTrashPath([box("Deleted Items")] as unknown as never), "Deleted Items");
   assert.equal(resolveTrashPath([box("Deleted")] as unknown as never), "Deleted");
-  assert.equal(
-    resolveTrashPath([box("[Gmail]/Trash")] as unknown as never),
-    "[Gmail]/Trash",
-  );
-  assert.equal(
-    resolveTrashPath([box("[Gmail]/Bin")] as unknown as never),
-    "[Gmail]/Bin",
-  );
+  assert.equal(resolveTrashPath([box("[Gmail]/Trash")] as unknown as never), "[Gmail]/Trash");
+  assert.equal(resolveTrashPath([box("[Gmail]/Bin")] as unknown as never), "[Gmail]/Bin");
 });
 
 test("resolveTrashPath returns undefined when no Trash-like folder exists", () => {
@@ -1198,7 +1197,10 @@ test("MOVE fallback: canonical (highest UID) is NEVER moved to Trash", async () 
     hasUidPlus: false,
     hasMove: true,
     appendUid: 300,
-    searchResults: [[100, 200], [100, 200, 300]],
+    searchResults: [
+      [100, 200],
+      [100, 200, 300],
+    ],
   });
   const r = await executeDraftSave(client, BASE_INPUT);
   assert.equal(r.ok, true);
@@ -1317,7 +1319,7 @@ test("MOVE fallback: retry after MOVE failure converges to a single canonical", 
         return out.sort((a, b) => a - b);
       },
       async append(_p, raw) {
-        const m = raw
+        const m = (await readStream(raw))
           .toString("utf8")
           .match(new RegExp(`${DRAFT_ID_HEADER}:\\s*([^\\r\\n]+)`, "i"));
         const uid = server.nextUid++;

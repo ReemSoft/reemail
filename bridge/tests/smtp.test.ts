@@ -84,6 +84,14 @@ interface Recorder {
   lastRaw?: Buffer;
 }
 
+async function readStream(raw: NodeJS.ReadableStream): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of raw) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks);
+}
+
 function mkDeps(opts: {
   smtpFail?: string;
   mailboxes: Array<{ path: string; specialUse?: string }>;
@@ -105,7 +113,7 @@ function mkDeps(opts: {
   const transport: SmtpTransport = {
     async sendMail(o) {
       rec.sendMailCalls++;
-      rec.lastRaw = o.raw;
+      rec.lastRaw = await readStream(o.raw);
       if (opts.smtpFail) throw new Error(opts.smtpFail);
     },
     close() {
@@ -129,7 +137,7 @@ function mkDeps(opts: {
       return result;
     },
     async append(folder, raw, flags) {
-      rec.appendCalls.push({ folder, raw, flags });
+      rec.appendCalls.push({ folder, raw: await readStream(raw), flags });
       if (opts.appendFail) throw new Error(opts.appendFail);
     },
     async logout() {

@@ -1,7 +1,8 @@
 import { createTransport } from "nodemailer";
-import MailComposer from "nodemailer/lib/mail-composer/index.js";
 import type { ImapFlow, ListResponse } from "imapflow";
+import type { Readable } from "node:stream";
 import { makeImapClient, listMailboxes } from "./imap.js";
+import { createMimeSpool, type MimeSpool } from "./mime-spool.js";
 import type { MailAccount } from "./types.js";
 
 export interface SendAttachment {
@@ -147,59 +148,6 @@ async function messageExistsInFolder(
 }
 
 /**
- * Build a MIME message. Optional `extraHeaders` are injected as top-level
- * headers on the outer message (used by the drafts flow to stamp
- * `X-MailMaestro-Draft-ID` so IMAP header search can locate the copy for
- * idempotent APPEND + selective delete). Exported for the drafts module and
- * the drafts test suite; not part of the public HTTP contract.
- */
-export async function buildMime(
-  payload: SendMessagePayload,
-  extraHeaders?: Record<string, string>,
-): Promise<{ raw: Buffer; messageId: string }> {
-  const composerOpts: Record<string, unknown> = {
-    from: payload.from.name ? `"${payload.from.name}" <${payload.from.email}>` : payload.from.email,
-    to: payload.to.map((t) => (t.name ? `"${t.name}" <${t.email}>` : t.email)).join(", "),
-    subject: payload.subject,
-    text: payload.bodyText || "",
-    html: payload.bodyHtml || "",
-  };
-  if (payload.cc && payload.cc.length > 0) {
-    composerOpts.cc = payload.cc
-      .map((c) => (c.name ? `"${c.name}" <${c.email}>` : c.email))
-      .join(", ");
-  }
-  if (payload.bcc && payload.bcc.length > 0) {
-    composerOpts.bcc = payload.bcc
-      .map((b) => (b.name ? `"${b.name}" <${b.email}>` : b.email))
-      .join(", ");
-  }
-  if (payload.attachments && payload.attachments.length > 0) {
-    composerOpts.attachments = payload.attachments.map((a) => ({
-      filename: a.filename,
-      ...(a.path ? { path: a.path } : { content: a.content }),
-      contentType: a.contentType,
-      cid: a.cid,
-      contentDisposition: a.contentDisposition,
-    }));
-  }
-  if (extraHeaders && Object.keys(extraHeaders).length > 0) {
-    composerOpts.headers = { ...extraHeaders };
-  }
-
-  const mc = new MailComposer(composerOpts);
-  const compiled = mc.compile();
-  const messageId: string = compiled.messageId();
-  const raw: Buffer = await new Promise((resolve, reject) => {
-    compiled.build((err: Error | null, msg: Buffer) => {
-      if (err) reject(err);
-      else resolve(msg);
-    });
-  });
-  return { raw, messageId };
-}
-
-/**
  * Send the message via SMTP, then best-effort save a copy in Sent:
  *   1) resolve Sent path via SPECIAL-USE / existing well-known names
  *   2) search Sent for our Message-ID (up to 3 × 500ms) — the provider may
@@ -219,20 +167,25 @@ export async function buildMime(
  * path stops calling Search or APPEND.
  */
 export interface SmtpTransport {
-  sendMail(opts: { raw: Buffer; envelope: { from: string; to: string[] } }): Promise<unknown>;
+  sendMail(opts: { raw: Readable; envelope: { from: string; to: string[] } }): Promise<unknown>;
   close(): void;
 }
 export interface ImapSentClient {
   connect(): Promise<void>;
   list(): Promise<ListResponse[]>;
   searchMessageId(folderPath: string, messageId: string): Promise<boolean>;
-  append(folderPath: string, raw: Buffer, flags: string[]): Promise<void>;
+  append(folderPath: string, raw: Readable, flags: string[]): Promise<void>;
   logout(): Promise<void>;
 }
 export interface SendMessageDeps {
   createTransport: (account: MailAccount, password: string) => SmtpTransport;
   createImapSentClient: (account: MailAccount, password: string) => ImapSentClient;
+  createMimeSpool?: (payload: SendMessagePayload) => Promise<MimeSpool>;
   sleep?: (ms: number) => Promise<void>;
+}
+
+export function smtpRejectUnauthorized(env = process.env): boolean {
+  return !/^(1|true|yes|on)$/i.test(env.MAIL_ALLOW_INSECURE_TLS || "");
 }
 
 /** Production deps — real nodemailer + imapflow. Kept out of module scope so
@@ -246,7 +199,9 @@ function defaultDeps(): SendMessageDeps {
         port: account.smtp_port,
         secure: account.smtp_secure,
         auth: { user: account.email_address, pass: password },
-        tls: { rejectUnauthorized: false },
+        tls: {
+          rejectUnauthorized: smtpRejectUnauthorized(),
+        },
       });
       return {
         sendMail: (opts) => t.sendMail(opts),
@@ -261,7 +216,7 @@ function defaultDeps(): SendMessageDeps {
         searchMessageId: (folderPath, messageId) =>
           messageExistsInFolder(client, folderPath, messageId),
         append: async (folderPath, raw, flags) => {
-          await client.append(folderPath, raw, flags);
+          await client.append(folderPath, raw as never, flags);
         },
         logout: () => client.logout().catch(() => {}) as unknown as Promise<void>,
       };
@@ -276,71 +231,74 @@ export async function sendMessage(
   payload: SendMessagePayload,
   deps: SendMessageDeps = defaultDeps(),
 ): Promise<SendMessageOk | SendMessageErr> {
-  // Build the MIME once so SMTP send and IMAP APPEND use byte-identical bytes.
-  let raw: Buffer;
-  let messageId: string;
+  // Generate the MIME once into a bounded disk spool. SMTP and IMAP each
+  // consume a fresh stream over the same byte-identical RFC822 file.
+  let spool: MimeSpool;
   try {
-    ({ raw, messageId } = await buildMime(payload));
+    spool = await (deps.createMimeSpool ?? createMimeSpool)(payload);
   } catch (err) {
     const msg = err instanceof Error ? err.message : "failed to build MIME";
     return { ok: false, error: msg };
   }
 
-  // 1) SMTP send (single connection).
-  const transporter = deps.createTransport(account, password);
   try {
-    const envelopeRecipients = [...payload.to, ...(payload.cc || []), ...(payload.bcc || [])].map(
-      (r) => r.email,
-    );
-    await transporter.sendMail({
-      raw,
-      envelope: { from: payload.from.email, to: envelopeRecipients },
-    });
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : "فشل إرسال الرسالة";
-    transporter.close();
-    return { ok: false, error: msg };
-  } finally {
-    transporter.close();
-  }
-
-  // 2) Best-effort Sent copy. NEVER fails the send.
-  let sentCopySaved = false;
-  const client = deps.createImapSentClient(account, password);
-  const sleep = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
-  try {
-    await client.connect();
-    const mailboxes = await client.list();
-    const sentPath = resolveSentPath(mailboxes);
-    if (sentPath) {
-      // Search for our Message-ID with short retries — the provider may have
-      // auto-saved a copy already (Gmail, most managed hosts).
-      for (let i = 0; i < SENT_SEARCH_RETRIES; i++) {
-        if (await client.searchMessageId(sentPath, messageId)) {
-          sentCopySaved = true;
-          break;
-        }
-        if (i < SENT_SEARCH_RETRIES - 1) {
-          await sleep(SENT_SEARCH_INTERVAL_MS);
-        }
-      }
-      // No auto-saved copy → APPEND the exact MIME with \Seen.
-      if (!sentCopySaved) {
-        try {
-          await client.append(sentPath, raw, ["\\Seen"]);
-          sentCopySaved = true;
-        } catch (appendErr) {
-          const m = appendErr instanceof Error ? appendErr.message : String(appendErr);
-          console.error("[bridge] APPEND to Sent failed:", m);
-        }
-      }
+    // 1) SMTP send (single connection).
+    const transporter = deps.createTransport(account, password);
+    try {
+      const envelopeRecipients = [...payload.to, ...(payload.cc || []), ...(payload.bcc || [])].map(
+        (r) => r.email,
+      );
+      await transporter.sendMail({
+        raw: spool.openReadStream() as Readable,
+        envelope: { from: payload.from.email, to: envelopeRecipients },
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "فشل إرسال الرسالة";
+      return { ok: false, error: msg };
+    } finally {
+      transporter.close();
     }
-  } catch (err) {
-    const m = err instanceof Error ? err.message : String(err);
-    console.error("[bridge] Sent-copy step failed:", m);
-  } finally {
-    await client.logout().catch(() => {});
-  }
 
-  return { ok: true, messageId, sentCopySaved };
+    // 2) Best-effort Sent copy. NEVER fails the send.
+    let sentCopySaved = false;
+    const client = deps.createImapSentClient(account, password);
+    const sleep = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+    try {
+      await client.connect();
+      const mailboxes = await client.list();
+      const sentPath = resolveSentPath(mailboxes);
+      if (sentPath) {
+        // Search for our Message-ID with short retries — the provider may have
+        // auto-saved a copy already (Gmail, most managed hosts).
+        for (let i = 0; i < SENT_SEARCH_RETRIES; i++) {
+          if (await client.searchMessageId(sentPath, spool.messageId)) {
+            sentCopySaved = true;
+            break;
+          }
+          if (i < SENT_SEARCH_RETRIES - 1) {
+            await sleep(SENT_SEARCH_INTERVAL_MS);
+          }
+        }
+        // No auto-saved copy → APPEND the exact MIME with \Seen.
+        if (!sentCopySaved) {
+          try {
+            await client.append(sentPath, spool.openReadStream() as Readable, ["\\Seen"]);
+            sentCopySaved = true;
+          } catch (appendErr) {
+            const m = appendErr instanceof Error ? appendErr.message : String(appendErr);
+            console.error("[bridge] APPEND to Sent failed:", m);
+          }
+        }
+      }
+    } catch (err) {
+      const m = err instanceof Error ? err.message : String(err);
+      console.error("[bridge] Sent-copy step failed:", m);
+    } finally {
+      await client.logout().catch(() => {});
+    }
+
+    return { ok: true, messageId: spool.messageId, sentCopySaved };
+  } finally {
+    await spool.cleanup().catch(() => undefined);
+  }
 }

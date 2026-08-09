@@ -3,6 +3,7 @@ import express from "express";
 import cors from "cors";
 import multer from "multer";
 import { uploadStorage, cleanupFiles, startupCleanup } from "./uploads.js";
+import { cleanupStaleMimeSpools } from "./mime-spool.js";
 import { createSendGates } from "./concurrency.js";
 import { createImapGates, loadImapGatesConfigFromEnv, type ImapPriority } from "./imap-gates.js";
 import { createImapGateMiddleware } from "./imap-gate-middleware.js";
@@ -837,5 +838,8 @@ app.listen(PORT, HOST, () => {
   // Best-effort sweep of stale uploads from a previous crashed run.
   startupCleanup()
     .then((n) => n > 0 && console.log(`[bridge] cleaned ${n} stale upload(s)`))
+    .catch(() => {});
+  cleanupStaleMimeSpools()
+    .then((n) => n > 0 && console.log(`[bridge] cleaned ${n} stale MIME spool(s)`))
     .catch(() => {});
 });

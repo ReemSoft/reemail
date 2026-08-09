@@ -1,12 +1,24 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { mapUploadedAttachments } from "../src/inline-images.js";
-import { buildMime } from "../src/smtp.js";
+import { compileMime } from "../src/mime-spool.js";
+import type { SendMessagePayload } from "../src/smtp.js";
 import { draftMimePayload } from "../src/drafts.js";
 
 const id = "0123456789abcdef0123456789abcdef";
 const filename = `mm-inline-${id}.png`;
 const cid = `mm-inline-${id}@mailmaestro`;
+
+async function buildMime(payload: SendMessagePayload): Promise<{ raw: Buffer }> {
+  const compiled = compileMime(payload);
+  const raw = await new Promise<Buffer>((resolve, reject) => {
+    compiled.build((error: Error | null, message: Buffer) => {
+      if (error) reject(error);
+      else resolve(message);
+    });
+  });
+  return { raw };
+}
 
 test("maps only matching uploads to CID inline attachments", async () => {
   const mapped = await mapUploadedAttachments(

@@ -31,14 +31,15 @@
  */
 import { z } from "zod";
 import type { ListResponse } from "imapflow";
+import type { Readable } from "node:stream";
 import { makeImapClient, listMailboxes } from "./imap.js";
 import {
-  buildMime,
   resolveDraftsPath,
   resolveTrashPath,
   type SendMessagePayload,
   type SendAttachment,
 } from "./smtp.js";
+import { createMimeSpool, type MimeSpool } from "./mime-spool.js";
 import type { MailAccount } from "./types.js";
 import { InlineImageMetadataSchema } from "./inline-images.js";
 
@@ -56,12 +57,7 @@ export const DRAFT_ID_HEADER = "X-MailMaestro-Draft-ID";
 // explicitly `false`. Never logs the capability list — the account/server is
 // PII in this codebase's threat model.
 export function hasImapCapability(
-  capabilities:
-    | Map<string, boolean | number>
-    | Set<string>
-    | Iterable<unknown>
-    | undefined
-    | null,
+  capabilities: Map<string, boolean | number> | Set<string> | Iterable<unknown> | undefined | null,
   capability: string,
 ): boolean {
   if (!capabilities) return false;
@@ -221,7 +217,7 @@ export interface ImapDraftClient {
    */
   append(
     path: string,
-    raw: Buffer,
+    raw: Readable,
     flags: string[],
   ): Promise<{ uid: number | null; uidValidity: string | null }>;
   /**
@@ -298,6 +294,7 @@ export async function executeDraftSave(
   now: () => Date = () => new Date(),
 ): Promise<DraftSaveOk | DraftErr> {
   await client.connect();
+  let spool: MimeSpool | null = null;
   try {
     const mailboxes = await client.list();
     const folderPath = resolveDraftsPath(mailboxes);
@@ -309,12 +306,11 @@ export async function executeDraftSave(
     // never creates a folder, and MUST differ from the Drafts folder itself
     // (otherwise the "move stale to Trash" step would be a no-op).
     const rawTrashPath = resolveTrashPath(mailboxes);
-    const trashPath =
-      rawTrashPath && rawTrashPath !== folderPath ? rawTrashPath : undefined;
+    const trashPath = rawTrashPath && rawTrashPath !== folderPath ? rawTrashPath : undefined;
 
     // Build MIME (with the sticky draft id header) BEFORE we take any locks
     // so IMAP holds nothing while nodemailer compiles.
-    const { raw, messageId } = await buildMime(draftMimePayload(input), {
+    spool = await createMimeSpool(draftMimePayload(input), {
       [DRAFT_ID_HEADER]: input.draftId,
     });
 
@@ -357,7 +353,10 @@ export async function executeDraftSave(
     let appendUid: number | null;
     let appendUidValidity: string;
     try {
-      const appendRes = await client.append(folderPath, raw, ["\\Draft", "\\Seen"]);
+      const appendRes = await client.append(folderPath, spool.openReadStream() as Readable, [
+        "\\Draft",
+        "\\Seen",
+      ]);
       appendUid = appendRes.uid ?? null;
       appendUidValidity = appendRes.uidValidity ?? "";
     } catch {
@@ -451,13 +450,14 @@ export async function executeDraftSave(
         folderPath,
         uid: canonical,
         uidValidity,
-        messageId,
+        messageId: spool.messageId,
         savedAt: now().toISOString(),
       };
     } finally {
       opened.release();
     }
   } finally {
+    await spool?.cleanup().catch(() => undefined);
     await client.logout().catch(() => {});
   }
 }
@@ -528,8 +528,7 @@ function defaultDeps(): DraftDeps {
       // like "UIDPLUS,true", which was the SAFE_DRAFT_REPLACE_UNSUPPORTED
       // root cause on UIDPLUS-capable servers.
       const getCaps = () =>
-        (client as unknown as { capabilities?: Map<string, boolean | number> })
-          .capabilities;
+        (client as unknown as { capabilities?: Map<string, boolean | number> }).capabilities;
       return {
         connect: () => client.connect(),
         list: () => listMailboxes(client),
@@ -551,7 +550,7 @@ function defaultDeps(): DraftDeps {
           return Array.isArray(res) ? res : [];
         },
         async append(path, raw, flags) {
-          const res = (await client.append(path, raw, flags)) as unknown as {
+          const res = (await client.append(path, raw as never, flags)) as unknown as {
             uid?: number;
             uidValidity?: string | number | bigint;
           } | null;
