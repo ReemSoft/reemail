@@ -6,11 +6,13 @@ import { uploadStorage, cleanupFiles, startupCleanup } from "./uploads.js";
 import { cleanupStaleMimeSpools } from "./mime-spool.js";
 import { accountBinding, openTransferTicket, sealTransferTicket } from "./transfer-tickets.js";
 import {
+  cleanupSendStagedAttachments,
   cleanupStagedAttachments,
   resolveStagedAttachment,
   stageAttachmentStream,
   stagedAttachmentStats,
 } from "./staged-attachments.js";
+import { configuredAppOrigins, isAllowedAppOrigin, publicBridgeBase } from "./public-bridge-url.js";
 import { TransferConcurrency } from "./transfer-concurrency.js";
 import { stageServerAttachmentSources } from "./server-attachment-sources.js";
 import { pipeline } from "node:stream/promises";
@@ -69,20 +71,11 @@ if (!BRIDGE_API_KEY) {
   console.warn("[bridge] Warning: BRIDGE_API_KEY is not set. Server will reject all requests.");
 }
 
-const allowedOrigins = new Set(
-  (process.env.MAIL_APP_ORIGINS || "https://reemail.lovable.app")
-    .split(",")
-    .map((value) => value.trim())
-    .filter(Boolean),
-);
+const allowedOrigins = configuredAppOrigins();
 app.use(
   cors({
     origin(origin, callback) {
-      if (
-        !origin ||
-        allowedOrigins.has(origin) ||
-        /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)
-      ) {
+      if (isAllowedAppOrigin(origin, allowedOrigins)) {
         callback(null, true);
       } else {
         callback(new Error("CORS_ORIGIN_DENIED"));
@@ -619,9 +612,7 @@ app.post("/api/attachment-upload-ticket", requireKey, (req, res) => {
         kind: payload.kind,
       },
     });
-    const publicBase = (
-      process.env.MAIL_BRIDGE_PUBLIC_URL || `${req.protocol}://${req.get("host")}`
-    ).replace(/\/$/, "");
+    const publicBase = publicBridgeBase(req);
     return res.json({
       ok: true,
       uploadUrl: `${publicBase}/api/direct/attachment-upload`,
@@ -677,9 +668,18 @@ app.post("/api/direct/attachment-upload", async (req, res) => {
 app.post("/api/send-v2", requireKey, async (req, res) => {
   let gateKey: string | null = null;
   let gateAcquired = false;
+  let stagedAccount: string | null = null;
+  let clientHandles: string[] = [];
+  let sourceHandles: string[] = [];
+  let sendSucceeded = false;
   try {
     const payload = SendV2PayloadSchema.parse(req.body);
     const account = accountBinding(payload.account as MailAccount);
+    stagedAccount = account;
+    clientHandles = [
+      ...payload.attachmentHandles,
+      ...payload.stagedInlineImages.map(({ handle }) => handle),
+    ];
     const normal = await Promise.all(
       payload.attachmentHandles.map((handle) =>
         resolveStagedAttachment(BRIDGE_API_KEY, handle, account),
@@ -706,6 +706,7 @@ app.post("/api/send-v2", requireKey, async (req, res) => {
       })),
       maxBytes: SEND_MAX_TOTAL_BYTES,
     });
+    sourceHandles = sourceAttachments.map(({ staged }) => staged.handle);
     if (normal.some((item) => item.kind !== "attachment")) {
       return res.status(400).json({ ok: false, error: "ATTACHMENT_KIND_MISMATCH" });
     }
@@ -757,6 +758,7 @@ app.post("/api/send-v2", requireKey, async (req, res) => {
       attachments,
     });
     if (!result.ok) return res.status(500).json(result);
+    sendSucceeded = true;
     return res.json(result);
   } catch (error) {
     const code =
@@ -767,6 +769,15 @@ app.post("/api/send-v2", requireKey, async (req, res) => {
           : "SEND_FAILED";
     return res.status(400).json({ ok: false, error: code });
   } finally {
+    if (stagedAccount) {
+      await cleanupSendStagedAttachments({
+        secret: BRIDGE_API_KEY,
+        account: stagedAccount,
+        clientHandles,
+        sourceHandles,
+        sendSucceeded,
+      }).catch(() => undefined);
+    }
     if (gateAcquired && gateKey) sendGates.release(gateKey);
   }
 });
@@ -1081,9 +1092,7 @@ app.post("/api/attachment-download-ticket", requireKey, (req, res) => {
       exp: expiresAt,
       data: payload,
     });
-    const publicBase = (
-      process.env.MAIL_BRIDGE_PUBLIC_URL || `${req.protocol}://${req.get("host")}`
-    ).replace(/\/$/, "");
+    const publicBase = publicBridgeBase(req);
     return res.json({
       ok: true,
       downloadUrl: `${publicBase}/api/direct/attachment-download?t=${encodeURIComponent(ticket)}`,

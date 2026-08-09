@@ -49,6 +49,53 @@ function safePath(id: string): string {
   return resolved;
 }
 
+function readStagedTicket(
+  secret: string,
+  handle: string,
+  account: string,
+  now: number,
+): {
+  id: string;
+  filename: string;
+  size: number;
+  mimeType: string;
+  kind: "attachment" | "inline-image";
+} {
+  const ticket = openTransferTicket(secret, handle, {
+    purpose: "staged-attachment",
+    account,
+    now,
+  });
+  const data = ticket.data as Record<string, unknown>;
+  if (
+    typeof data.id !== "string" ||
+    typeof data.filename !== "string" ||
+    typeof data.mimeType !== "string" ||
+    typeof data.size !== "number" ||
+    (data.kind !== "attachment" && data.kind !== "inline-image")
+  ) {
+    throw new Error("INVALID_STAGE_HANDLE");
+  }
+  return {
+    id: data.id,
+    filename: data.filename,
+    size: data.size,
+    mimeType: data.mimeType,
+    kind: data.kind,
+  };
+}
+
+function decrementTrackedUsage(account: string, bytes: number) {
+  trackedGlobalBytes = Math.max(0, trackedGlobalBytes - bytes);
+  trackedGlobalFiles = Math.max(0, trackedGlobalFiles - 1);
+  const nextAccountBytes = Math.max(0, (accountBytes.get(account) ?? 0) - bytes);
+  const nextAccountFiles = Math.max(0, (accountFiles.get(account) ?? 0) - 1);
+  if (nextAccountBytes === 0) accountBytes.delete(account);
+  else accountBytes.set(account, nextAccountBytes);
+  if (nextAccountFiles === 0) accountFiles.delete(account);
+  else accountFiles.set(account, nextAccountFiles);
+}
+
 export async function stageAttachmentStream(input: {
   secret: string;
   account: string;
@@ -127,21 +174,7 @@ export async function resolveStagedAttachment(
   account: string,
   now = Date.now(),
 ): Promise<ResolvedStagedAttachment> {
-  const ticket = openTransferTicket(secret, handle, {
-    purpose: "staged-attachment",
-    account,
-    now,
-  });
-  const data = ticket.data as Record<string, unknown>;
-  if (
-    typeof data.id !== "string" ||
-    typeof data.filename !== "string" ||
-    typeof data.mimeType !== "string" ||
-    typeof data.size !== "number" ||
-    (data.kind !== "attachment" && data.kind !== "inline-image")
-  ) {
-    throw new Error("INVALID_STAGE_HANDLE");
-  }
+  const data = readStagedTicket(secret, handle, account, now);
   const filePath = safePath(data.id);
   const info = await stat(filePath).catch(() => null);
   if (!info?.isFile()) throw new Error("STAGED_FILE_MISSING");
@@ -153,6 +186,49 @@ export async function resolveStagedAttachment(
     mimeType: data.mimeType,
     kind: data.kind,
   };
+}
+
+export async function releaseStagedAttachment(
+  secret: string,
+  handle: string,
+  account: string,
+  now = Date.now(),
+): Promise<boolean> {
+  const data = readStagedTicket(secret, handle, account, now);
+  const filePath = safePath(data.id);
+  try {
+    await unlink(filePath);
+    decrementTrackedUsage(account, data.size);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+}
+
+export async function releaseStagedAttachments(
+  secret: string,
+  handles: string[],
+  account: string,
+): Promise<number> {
+  let released = 0;
+  for (const handle of new Set(handles)) {
+    if (await releaseStagedAttachment(secret, handle, account)) released += 1;
+  }
+  return released;
+}
+
+export async function cleanupSendStagedAttachments(input: {
+  secret: string;
+  account: string;
+  clientHandles: string[];
+  sourceHandles: string[];
+  sendSucceeded: boolean;
+}): Promise<void> {
+  await releaseStagedAttachments(input.secret, input.sourceHandles, input.account);
+  if (input.sendSucceeded) {
+    await releaseStagedAttachments(input.secret, input.clientHandles, input.account);
+  }
 }
 
 export async function cleanupStagedAttachments(

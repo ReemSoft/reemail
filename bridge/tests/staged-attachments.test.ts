@@ -2,7 +2,14 @@ import assert from "node:assert/strict";
 import { unlink } from "node:fs/promises";
 import { Readable } from "node:stream";
 import test from "node:test";
-import { resolveStagedAttachment, stageAttachmentStream } from "../src/staged-attachments.js";
+import {
+  cleanupSendStagedAttachments,
+  cleanupStagedAttachments,
+  releaseStagedAttachment,
+  resolveStagedAttachment,
+  stageAttachmentStream,
+  stagedAttachmentStats,
+} from "../src/staged-attachments.js";
 
 const secret = "stage-test-secret";
 const account = "a".repeat(64);
@@ -21,7 +28,7 @@ test("staged attachment round-trips metadata without exposing a path", async () 
   const resolved = await resolveStagedAttachment(secret, staged.handle, account);
   assert.equal(resolved.size, 4);
   assert.equal(resolved.filename, "report.pdf");
-  await unlink(resolved.path);
+  assert.equal(await releaseStagedAttachment(secret, staged.handle, account), true);
 });
 
 test("staging removes declared-size mismatches", async () => {
@@ -64,8 +71,92 @@ test("staged handle rejects wrong account, expiry, missing file, and tampering",
     resolveStagedAttachment(secret, staged.handle, account, 2),
     /STAGED_FILE_MISSING/,
   );
+  await cleanupStagedAttachments();
   await assert.rejects(
     resolveStagedAttachment(secret, `${staged.handle}x`, account, 2),
     /INVALID_TICKET/,
   );
+});
+
+async function stageTestFile(
+  filename: string,
+  body: string,
+  kind: "attachment" | "inline-image" = "attachment",
+) {
+  return stageAttachmentStream({
+    secret,
+    account,
+    filename,
+    mimeType: kind === "inline-image" ? "image/png" : "application/octet-stream",
+    kind,
+    declaredSize: Buffer.byteLength(body),
+    stream: Readable.from(Buffer.from(body)),
+  });
+}
+
+test("successful send releases normal, inline, and temporary source handles", async () => {
+  const before = stagedAttachmentStats();
+  const normal = await stageTestFile("normal.bin", "normal");
+  const inline = await stageTestFile("inline.png", "inline", "inline-image");
+  const source = await stageTestFile("source.bin", "source");
+  const stagedBytes = normal.size + inline.size + source.size;
+  assert.deepEqual(stagedAttachmentStats(), {
+    stagedBytes: before.stagedBytes + stagedBytes,
+    stagedFiles: before.stagedFiles + 3,
+    trackedAccounts: before.trackedAccounts + (before.trackedAccounts === 0 ? 1 : 0),
+  });
+
+  await cleanupSendStagedAttachments({
+    secret,
+    account,
+    clientHandles: [normal.handle, inline.handle, normal.handle],
+    sourceHandles: [source.handle, source.handle],
+    sendSucceeded: true,
+  });
+
+  assert.equal(stagedAttachmentStats().stagedBytes, before.stagedBytes);
+  assert.equal(stagedAttachmentStats().stagedFiles, before.stagedFiles);
+  await assert.rejects(
+    resolveStagedAttachment(secret, normal.handle, account),
+    /STAGED_FILE_MISSING/,
+  );
+  await assert.rejects(
+    resolveStagedAttachment(secret, inline.handle, account),
+    /STAGED_FILE_MISSING/,
+  );
+  await assert.rejects(
+    resolveStagedAttachment(secret, source.handle, account),
+    /STAGED_FILE_MISSING/,
+  );
+});
+
+test("failed send retains client handles but always releases temporary source handles", async () => {
+  const client = await stageTestFile("retry.bin", "retry");
+  const source = await stageTestFile("temporary.bin", "temporary");
+  await cleanupSendStagedAttachments({
+    secret,
+    account,
+    clientHandles: [client.handle],
+    sourceHandles: [source.handle],
+    sendSucceeded: false,
+  });
+  assert.equal((await resolveStagedAttachment(secret, client.handle, account)).size, client.size);
+  await assert.rejects(
+    resolveStagedAttachment(secret, source.handle, account),
+    /STAGED_FILE_MISSING/,
+  );
+  await releaseStagedAttachment(secret, client.handle, account);
+});
+
+test("release is idempotent and quota counters never become negative", async () => {
+  const before = stagedAttachmentStats();
+  const staged = await stageTestFile("once.bin", "once");
+  assert.equal(stagedAttachmentStats().stagedBytes, before.stagedBytes + staged.size);
+  assert.equal(stagedAttachmentStats().stagedFiles, before.stagedFiles + 1);
+  assert.equal(await releaseStagedAttachment(secret, staged.handle, account), true);
+  assert.equal(await releaseStagedAttachment(secret, staged.handle, account), false);
+  assert.equal(stagedAttachmentStats().stagedBytes, before.stagedBytes);
+  assert.equal(stagedAttachmentStats().stagedFiles, before.stagedFiles);
+  assert.ok(stagedAttachmentStats().stagedBytes >= 0);
+  assert.ok(stagedAttachmentStats().stagedFiles >= 0);
 });
