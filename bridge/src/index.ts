@@ -4,6 +4,14 @@ import cors from "cors";
 import multer from "multer";
 import { uploadStorage, cleanupFiles, startupCleanup } from "./uploads.js";
 import { cleanupStaleMimeSpools } from "./mime-spool.js";
+import { accountBinding, openTransferTicket, sealTransferTicket } from "./transfer-tickets.js";
+import {
+  cleanupStagedAttachments,
+  resolveStagedAttachment,
+  stageAttachmentStream,
+  stagedAttachmentStats,
+} from "./staged-attachments.js";
+import { TransferConcurrency } from "./transfer-concurrency.js";
 import { createSendGates } from "./concurrency.js";
 import { createImapGates, loadImapGatesConfigFromEnv, type ImapPriority } from "./imap-gates.js";
 import { createImapGateMiddleware } from "./imap-gate-middleware.js";
@@ -52,9 +60,38 @@ if (!BRIDGE_API_KEY) {
   console.warn("[bridge] Warning: BRIDGE_API_KEY is not set. Server will reject all requests.");
 }
 
-app.use(cors());
-app.use(express.json({ limit: "25mb" }));
-app.use(express.urlencoded({ extended: true, limit: "25mb" }));
+const allowedOrigins = new Set(
+  (process.env.MAIL_APP_ORIGINS || "https://reemsoft-reemail.lovable.app")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean),
+);
+app.use(
+  cors({
+    origin(origin, callback) {
+      if (
+        !origin ||
+        allowedOrigins.has(origin) ||
+        /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)
+      ) {
+        callback(null, true);
+      } else {
+        callback(new Error("CORS_ORIGIN_DENIED"));
+      }
+    },
+    methods: ["GET", "POST", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization", "X-Bridge-Key"],
+    credentials: false,
+  }),
+);
+const jsonParser = express.json({ limit: "25mb" });
+const urlencodedParser = express.urlencoded({ extended: true, limit: "25mb" });
+app.use((req, res, next) =>
+  req.path === "/api/direct/attachment-upload" ? next() : jsonParser(req, res, next),
+);
+app.use((req, res, next) =>
+  req.path === "/api/direct/attachment-upload" ? next() : urlencodedParser(req, res, next),
+);
 
 // --- Validation schemas ---
 const AccountSchema = z.object({
@@ -139,6 +176,41 @@ const SendPayloadSchema = AuthPayloadSchema.extend({
   inlineImages: z.unknown().optional(),
 });
 
+const UploadTicketPayloadSchema = z.object({
+  account: AccountSchema,
+  filename: z.string().min(1).max(255),
+  size: z
+    .number()
+    .int()
+    .positive()
+    .max(25 * 1024 * 1024),
+  mimeType: z.string().min(1).max(255),
+  kind: z.enum(["attachment", "inline-image"]),
+});
+
+const StagedInlineSchema = z.object({
+  handle: z
+    .string()
+    .min(20)
+    .max(32 * 1024),
+  uploadFilename: z.string().min(1).max(255),
+  cid: z.string().min(1).max(998),
+  contentType: z.string().min(1).max(255),
+});
+
+const SendV2PayloadSchema = SendPayloadSchema.extend({
+  attachmentHandles: z
+    .array(
+      z
+        .string()
+        .min(20)
+        .max(32 * 1024),
+    )
+    .max(10)
+    .default([]),
+  stagedInlineImages: z.array(StagedInlineSchema).max(10).default([]),
+});
+
 // --- Middleware ---
 function requireKey(req: express.Request, res: express.Response, next: express.NextFunction) {
   const key = req.headers["x-bridge-key"] || req.headers["authorization"];
@@ -177,7 +249,12 @@ app.get("/health", (_req, res) => {
 // Bounded, side-effect-free limiter metrics. No PII (no emails, no company ids
 // beyond aggregated in-flight counts by host). Auth-gated to keep it internal.
 app.get("/api/metrics/imap-gates", requireKey, (_req, res) => {
-  res.json({ ok: true, gates: imapGates.stats() });
+  res.json({
+    ok: true,
+    gates: imapGates.stats(),
+    uploads: directUploadGate.stats(),
+    staging: stagedAttachmentStats(),
+  });
 });
 
 app.post("/api/verify", requireKey, imapGate("interactive"), async (req, res) => {
@@ -458,6 +535,7 @@ const sendGates = createSendGates({
   globalMax: SEND_GLOBAL_MAX,
   perKeyMax: SEND_PER_ACCOUNT_MAX,
 });
+const directUploadGate = new TransferConcurrency(Number(process.env.MAIL_UPLOAD_CONCURRENCY || 8));
 
 const sendUpload = multer({
   storage: uploadStorage,
@@ -467,6 +545,161 @@ const sendUpload = multer({
     fields: 20,
     fieldSize: 5 * 1024 * 1024, // body HTML can be up to 5MB
   },
+});
+
+app.post("/api/attachment-upload-ticket", requireKey, (req, res) => {
+  try {
+    const payload = UploadTicketPayloadSchema.parse(req.body);
+    if (payload.kind === "inline-image" && payload.size > 5 * 1024 * 1024) {
+      return res.status(413).json({ ok: false, error: "ATTACHMENT_TOO_LARGE" });
+    }
+    const account = accountBinding(payload.account as MailAccount);
+    const expiresAt = Date.now() + 60_000;
+    const ticket = sealTransferTicket(BRIDGE_API_KEY, {
+      purpose: "attachment-upload",
+      account,
+      exp: expiresAt,
+      data: {
+        filename: payload.filename,
+        size: payload.size,
+        mimeType: payload.mimeType,
+        kind: payload.kind,
+      },
+    });
+    const publicBase = (
+      process.env.MAIL_BRIDGE_PUBLIC_URL || `${req.protocol}://${req.get("host")}`
+    ).replace(/\/$/, "");
+    return res.json({
+      ok: true,
+      uploadUrl: `${publicBase}/api/direct/attachment-upload`,
+      ticket,
+      expiresAt,
+    });
+  } catch {
+    return res.status(400).json({ ok: false, error: "INVALID_PAYLOAD" });
+  }
+});
+
+app.post("/api/direct/attachment-upload", async (req, res) => {
+  const release = directUploadGate.tryAcquire();
+  if (!release) return res.status(429).json({ ok: false, error: "UPLOAD_BUSY" });
+  try {
+    const header = req.headers.authorization || "";
+    const token = header.startsWith("Bearer ") ? header.slice(7) : "";
+    const ticket = openTransferTicket(BRIDGE_API_KEY, token, {
+      purpose: "attachment-upload",
+    });
+    const data = ticket.data as Record<string, unknown>;
+    if (
+      typeof data.filename !== "string" ||
+      typeof data.size !== "number" ||
+      typeof data.mimeType !== "string" ||
+      (data.kind !== "attachment" && data.kind !== "inline-image")
+    ) {
+      return res.status(400).json({ ok: false, error: "INVALID_TICKET" });
+    }
+    const contentLength = Number(req.headers["content-length"] || 0);
+    if (contentLength && contentLength !== data.size) {
+      return res.status(400).json({ ok: false, error: "UPLOAD_SIZE_MISMATCH" });
+    }
+    const staged = await stageAttachmentStream({
+      secret: BRIDGE_API_KEY,
+      account: ticket.account,
+      filename: data.filename,
+      mimeType: data.mimeType,
+      kind: data.kind,
+      declaredSize: data.size,
+      stream: req,
+    });
+    return res.json({ ok: true, ...staged });
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "UPLOAD_FAILED";
+    const status = code.includes("TOO_LARGE") || code.includes("QUOTA") ? 413 : 400;
+    return res.status(status).json({ ok: false, error: code });
+  } finally {
+    release();
+  }
+});
+
+app.post("/api/send-v2", requireKey, async (req, res) => {
+  let gateKey: string | null = null;
+  let gateAcquired = false;
+  try {
+    const payload = SendV2PayloadSchema.parse(req.body);
+    const account = accountBinding(payload.account as MailAccount);
+    const normal = await Promise.all(
+      payload.attachmentHandles.map((handle) =>
+        resolveStagedAttachment(BRIDGE_API_KEY, handle, account),
+      ),
+    );
+    const inline = await Promise.all(
+      payload.stagedInlineImages.map(async (item) => ({
+        item,
+        staged: await resolveStagedAttachment(BRIDGE_API_KEY, item.handle, account),
+      })),
+    );
+    if (normal.some((item) => item.kind !== "attachment")) {
+      return res.status(400).json({ ok: false, error: "ATTACHMENT_KIND_MISMATCH" });
+    }
+    if (
+      inline.some(
+        ({ item, staged }) =>
+          staged.kind !== "inline-image" || staged.filename !== item.uploadFilename,
+      )
+    ) {
+      return res.status(400).json({ ok: false, error: "ATTACHMENT_KIND_MISMATCH" });
+    }
+    const all = [...normal, ...inline.map(({ staged }) => staged)];
+    if (
+      all.length > SEND_MAX_FILES ||
+      all.reduce((sum, item) => sum + item.size, 0) > SEND_MAX_TOTAL_BYTES
+    ) {
+      return res.status(413).json({ ok: false, error: "ATTACHMENTS_TOO_LARGE" });
+    }
+    gateKey = payload.account.email_address.toLowerCase();
+    if (!sendGates.tryAcquire(gateKey)) {
+      return res.status(429).json({ ok: false, error: "SEND_BUSY" });
+    }
+    gateAcquired = true;
+    const attachments = await mapUploadedAttachments(
+      all.map((item) => ({
+        originalname: item.filename,
+        path: item.path,
+        mimetype: item.mimeType,
+        size: item.size,
+      })),
+      payload.stagedInlineImages.map(({ uploadFilename, cid, contentType }) => ({
+        uploadFilename,
+        cid,
+        contentType,
+      })),
+    );
+    const result = await sendMessage(payload.account as MailAccount, payload.password, {
+      from: {
+        name: payload.account.display_name || payload.account.email_address,
+        email: payload.account.email_address,
+      },
+      to: payload.to.map((item) => ({ name: item.name, email: item.email })),
+      cc: payload.cc.map((item) => ({ name: item.name, email: item.email })),
+      bcc: payload.bcc.map((item) => ({ name: item.name, email: item.email })),
+      subject: payload.subject,
+      bodyHtml: payload.bodyHtml,
+      bodyText: payload.bodyText,
+      attachments,
+    });
+    if (!result.ok) return res.status(500).json(result);
+    return res.json(result);
+  } catch (error) {
+    const code =
+      error instanceof z.ZodError
+        ? "INVALID_PAYLOAD"
+        : error instanceof Error
+          ? error.message
+          : "SEND_FAILED";
+    return res.status(400).json({ ok: false, error: code });
+  } finally {
+    if (gateAcquired && gateKey) sendGates.release(gateKey);
+  }
 });
 
 // ---- Drafts (MAILMAESTRO_DRAFT_APPEND_R1) ----
@@ -842,4 +1075,8 @@ app.listen(PORT, HOST, () => {
   cleanupStaleMimeSpools()
     .then((n) => n > 0 && console.log(`[bridge] cleaned ${n} stale MIME spool(s)`))
     .catch(() => {});
+  cleanupStagedAttachments()
+    .then((n) => n > 0 && console.log(`[bridge] cleaned ${n} stale staged attachment(s)`))
+    .catch(() => {});
+  setInterval(() => cleanupStagedAttachments().catch(() => {}), 15 * 60_000).unref();
 });

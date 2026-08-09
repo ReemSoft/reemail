@@ -31,6 +31,11 @@ import {
   prepareQuotedEmailForComposer,
 } from "@/lib/mail-compose-quote";
 import { splitQuotedHtml } from "@/lib/mail-thread-split";
+import {
+  uploadAttachmentDirect,
+  type StagedAttachmentKind,
+  type StagedAttachmentResult,
+} from "@/lib/mail-attachment-staging";
 
 // Kept as a thin wrapper — the heavy lifting (DOMPurify + CSS url()/@import
 // stripping + anchor hardening) lives in `@/lib/email-viewer-security` and is
@@ -5575,6 +5580,9 @@ function Composer({
 
   const [files, setFiles] = useState<File[]>([]);
   const [inlineImages, setInlineImages] = useState<InlineComposeImage[]>([]);
+  const [uploadState, setUploadState] = useState<
+    Map<File, { status: "uploading" | "ready" | "failed"; progress: number }>
+  >(new Map());
   const [sending, setSending] = useState(false);
   const [progress, setProgress] = useState(0);
   // Composer runs inline inside the message-viewer pane (Superhuman-style).
@@ -5646,9 +5654,35 @@ function Composer({
   // always reads the latest attachment state without a re-instantiation.
   const filesRef = useRef<File[]>([]);
   const inlineImagesRef = useRef<InlineComposeImage[]>([]);
+  const stagedUploadsRef = useRef<WeakMap<File, Promise<StagedAttachmentResult>>>(new WeakMap());
   const resolveExistingAsFilesRef = useRef<() => Promise<File[] | null>>(async () => []);
 
   const saverRef = useRef<DraftSaver | null>(null);
+
+  function ensureStaged(file: File, kind: StagedAttachmentKind) {
+    const existing = stagedUploadsRef.current.get(file);
+    if (existing) return existing;
+    setUploadState((current) => new Map(current).set(file, { status: "uploading", progress: 0 }));
+    const promise = uploadAttachmentDirect(file, {
+      mailSessionToken: session.mailSessionToken ?? "",
+      kind,
+      onProgress: (progressValue) => {
+        setUploadState((current) =>
+          new Map(current).set(file, { status: "uploading", progress: progressValue }),
+        );
+      },
+    })
+      .then((result) => {
+        setUploadState((current) => new Map(current).set(file, { status: "ready", progress: 100 }));
+        return result;
+      })
+      .catch((error) => {
+        setUploadState((current) => new Map(current).set(file, { status: "failed", progress: 0 }));
+        throw error;
+      });
+    stagedUploadsRef.current.set(file, promise);
+    return promise;
+  }
 
   if (!saverRef.current) {
     saverRef.current = createDraftSaver(draftId, {
@@ -6123,6 +6157,17 @@ function Composer({
   // Publish the latest values to the persistent saveRemote closure refs.
   filesRef.current = files;
   inlineImagesRef.current = inlineImages;
+  useEffect(() => {
+    for (const file of files) void ensureStaged(file, "attachment").catch(() => undefined);
+    // ensureStaged is intentionally stable through stagedUploadsRef identity.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [files]);
+  useEffect(() => {
+    for (const image of inlineImages) {
+      void ensureStaged(image.file, "inline-image").catch(() => undefined);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inlineImages]);
   resolveExistingAsFilesRef.current = resolveExistingAsFiles;
 
   // ----- Draft autosave (scheduled): local write first, then remote APPEND -----
@@ -6843,18 +6888,6 @@ function Composer({
       const bodyHtml = buildEmailHtmlDocument(fragment, { dir: editorDir });
       const bodyText = htmlToPlainText(fragment);
 
-      const payload = {
-        mailSessionToken: session.mailSessionToken ?? "",
-        password: session.password,
-        to: to.filter((r) => r.valid).map((r) => ({ name: r.name ?? "", email: r.email })),
-        cc: cc.filter((r) => r.valid).map((r) => ({ name: r.name ?? "", email: r.email })),
-        bcc: bcc.filter((r) => r.valid).map((r) => ({ name: r.name ?? "", email: r.email })),
-        subject,
-        bodyHtml,
-        bodyText,
-        inlineImages: metadataToTransport(transportImages),
-      };
-
       // M4-C: preserve kept legacy/server attachments alongside newly added
       // files. If any kept attachment can't be streamed we ABORT rather than
       // silently sending a message with missing attachments.
@@ -6871,32 +6904,44 @@ function Composer({
         return;
       }
 
-      const form = new FormData();
-      form.append("payload", JSON.stringify(payload));
-      for (const f of keptFiles) form.append("attachments", f, f.name);
-      for (const f of files) form.append("attachments", f, f.name);
-      for (const image of transportImages) {
-        form.append("attachments", image.file, image.uploadFilename);
+      let stagedNormal: StagedAttachmentResult[];
+      let stagedInline: StagedAttachmentResult[];
+      try {
+        stagedNormal = await Promise.all(
+          [...keptFiles, ...files].map((file) => ensureStaged(file, "attachment")),
+        );
+        stagedInline = await Promise.all(
+          transportImages.map((image) => ensureStaged(image.file, "inline-image")),
+        );
+      } catch {
+        toast.error(tr("تعذّر رفع أحد المرفقات"));
+        return;
       }
-
-      const result = await new Promise<{ ok: boolean; error?: string }>((resolve, reject) => {
-        const xhr = new XMLHttpRequest();
-        xhr.open("POST", "/api/mail-send");
-        xhr.upload.onprogress = (e) => {
-          if (e.lengthComputable) setProgress(Math.round((e.loaded / e.total) * 100));
-        };
-        xhr.onload = () => {
-          try {
-            const json = JSON.parse(xhr.responseText || "{}");
-            if (xhr.status >= 200 && xhr.status < 300 && json.ok) resolve({ ok: true });
-            else resolve({ ok: false, error: json.error || `HTTP ${xhr.status}` });
-          } catch {
-            resolve({ ok: false, error: `HTTP ${xhr.status}` });
-          }
-        };
-        xhr.onerror = () => reject(new Error("Network error"));
-        xhr.send(form);
+      const inlineMetadata = metadataToTransport(transportImages);
+      const response = await fetch("/api/mail-send-v2", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mailSessionToken: session.mailSessionToken ?? "",
+          password: session.password,
+          to: to.filter((r) => r.valid).map((r) => ({ name: r.name ?? "", email: r.email })),
+          cc: cc.filter((r) => r.valid).map((r) => ({ name: r.name ?? "", email: r.email })),
+          bcc: bcc.filter((r) => r.valid).map((r) => ({ name: r.name ?? "", email: r.email })),
+          subject,
+          bodyHtml,
+          bodyText,
+          attachmentHandles: stagedNormal.map((item) => item.handle),
+          stagedInlineImages: stagedInline.map((item, index) => ({
+            handle: item.handle,
+            ...inlineMetadata[index],
+          })),
+        }),
       });
+      const result = (await response.json().catch(() => ({
+        ok: false,
+        error: `HTTP ${response.status}`,
+      }))) as { ok: boolean; error?: string };
+      setProgress(100);
 
       if (!result.ok) {
         toast.error(result.error || tr("فشل إرسال الرسالة"));
@@ -7726,6 +7771,7 @@ function Composer({
                 })}
                 {files.map((f, i) => {
                   const { Icon, tint } = getAttachmentIcon(f.type, f.name);
+                  const stage = uploadState.get(f);
                   return (
                     <div
                       key={`new-${f.name}-${i}`}
@@ -7739,7 +7785,11 @@ function Composer({
                       <div className="flex flex-col leading-tight">
                         <span className="max-w-[180px] truncate font-medium">{f.name}</span>
                         <span className="text-[10px] text-muted-foreground">
-                          {formatBytes(f.size)}
+                          {stage?.status === "uploading"
+                            ? `${formatBytes(f.size)} · ${stage.progress}%`
+                            : stage?.status === "failed"
+                              ? tr("فشل الرفع")
+                              : formatBytes(f.size)}
                         </span>
                       </div>
                       <button

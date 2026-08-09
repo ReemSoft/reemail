@@ -16,8 +16,10 @@ import { Route as DemoRouteImport } from './routes/demo'
 import { Route as CompanyRouteImport } from './routes/company'
 import { Route as AuthenticatedRouteRouteImport } from './routes/_authenticated/route'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as ApiMailSendV2RouteImport } from './routes/api/mail-send-v2'
 import { Route as ApiMailSendRouteImport } from './routes/api/mail-send'
 import { Route as ApiMailInlinePartRouteImport } from './routes/api/mail-inline-part'
+import { Route as ApiMailAttachmentUploadTicketRouteImport } from './routes/api/mail-attachment-upload-ticket'
 import { Route as ApiMailAttachmentRouteImport } from './routes/api/mail-attachment'
 import { Route as AuthenticatedDashboardRouteImport } from './routes/_authenticated/dashboard'
 import { Route as ApiPublicHooksMailSyncTickRouteImport } from './routes/api/public/hooks/mail-sync-tick'
@@ -56,6 +58,11 @@ const IndexRoute = IndexRouteImport.update({
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiMailSendV2Route = ApiMailSendV2RouteImport.update({
+  id: '/api/mail-send-v2',
+  path: '/api/mail-send-v2',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiMailSendRoute = ApiMailSendRouteImport.update({
   id: '/api/mail-send',
   path: '/api/mail-send',
@@ -66,6 +73,12 @@ const ApiMailInlinePartRoute = ApiMailInlinePartRouteImport.update({
   path: '/api/mail-inline-part',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiMailAttachmentUploadTicketRoute =
+  ApiMailAttachmentUploadTicketRouteImport.update({
+    id: '/api/mail-attachment-upload-ticket',
+    path: '/api/mail-attachment-upload-ticket',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ApiMailAttachmentRoute = ApiMailAttachmentRouteImport.update({
   id: '/api/mail-attachment',
   path: '/api/mail-attachment',
@@ -92,8 +105,10 @@ export interface FileRoutesByFullPath {
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/dashboard': typeof AuthenticatedDashboardRoute
   '/api/mail-attachment': typeof ApiMailAttachmentRoute
+  '/api/mail-attachment-upload-ticket': typeof ApiMailAttachmentUploadTicketRoute
   '/api/mail-inline-part': typeof ApiMailInlinePartRoute
   '/api/mail-send': typeof ApiMailSendRoute
+  '/api/mail-send-v2': typeof ApiMailSendV2Route
   '/api/public/hooks/mail-sync-tick': typeof ApiPublicHooksMailSyncTickRoute
 }
 export interface FileRoutesByTo {
@@ -105,8 +120,10 @@ export interface FileRoutesByTo {
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/dashboard': typeof AuthenticatedDashboardRoute
   '/api/mail-attachment': typeof ApiMailAttachmentRoute
+  '/api/mail-attachment-upload-ticket': typeof ApiMailAttachmentUploadTicketRoute
   '/api/mail-inline-part': typeof ApiMailInlinePartRoute
   '/api/mail-send': typeof ApiMailSendRoute
+  '/api/mail-send-v2': typeof ApiMailSendV2Route
   '/api/public/hooks/mail-sync-tick': typeof ApiPublicHooksMailSyncTickRoute
 }
 export interface FileRoutesById {
@@ -120,8 +137,10 @@ export interface FileRoutesById {
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/_authenticated/dashboard': typeof AuthenticatedDashboardRoute
   '/api/mail-attachment': typeof ApiMailAttachmentRoute
+  '/api/mail-attachment-upload-ticket': typeof ApiMailAttachmentUploadTicketRoute
   '/api/mail-inline-part': typeof ApiMailInlinePartRoute
   '/api/mail-send': typeof ApiMailSendRoute
+  '/api/mail-send-v2': typeof ApiMailSendV2Route
   '/api/public/hooks/mail-sync-tick': typeof ApiPublicHooksMailSyncTickRoute
 }
 export interface FileRouteTypes {
@@ -135,8 +154,10 @@ export interface FileRouteTypes {
     | '/sitemap.xml'
     | '/dashboard'
     | '/api/mail-attachment'
+    | '/api/mail-attachment-upload-ticket'
     | '/api/mail-inline-part'
     | '/api/mail-send'
+    | '/api/mail-send-v2'
     | '/api/public/hooks/mail-sync-tick'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -148,8 +169,10 @@ export interface FileRouteTypes {
     | '/sitemap.xml'
     | '/dashboard'
     | '/api/mail-attachment'
+    | '/api/mail-attachment-upload-ticket'
     | '/api/mail-inline-part'
     | '/api/mail-send'
+    | '/api/mail-send-v2'
     | '/api/public/hooks/mail-sync-tick'
   id:
     | '__root__'
@@ -162,8 +185,10 @@ export interface FileRouteTypes {
     | '/sitemap.xml'
     | '/_authenticated/dashboard'
     | '/api/mail-attachment'
+    | '/api/mail-attachment-upload-ticket'
     | '/api/mail-inline-part'
     | '/api/mail-send'
+    | '/api/mail-send-v2'
     | '/api/public/hooks/mail-sync-tick'
   fileRoutesById: FileRoutesById
 }
@@ -176,8 +201,10 @@ export interface RootRouteChildren {
   MailRoute: typeof MailRoute
   SitemapDotxmlRoute: typeof SitemapDotxmlRoute
   ApiMailAttachmentRoute: typeof ApiMailAttachmentRoute
+  ApiMailAttachmentUploadTicketRoute: typeof ApiMailAttachmentUploadTicketRoute
   ApiMailInlinePartRoute: typeof ApiMailInlinePartRoute
   ApiMailSendRoute: typeof ApiMailSendRoute
+  ApiMailSendV2Route: typeof ApiMailSendV2Route
   ApiPublicHooksMailSyncTickRoute: typeof ApiPublicHooksMailSyncTickRoute
 }
 
@@ -232,6 +259,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/mail-send-v2': {
+      id: '/api/mail-send-v2'
+      path: '/api/mail-send-v2'
+      fullPath: '/api/mail-send-v2'
+      preLoaderRoute: typeof ApiMailSendV2RouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/mail-send': {
       id: '/api/mail-send'
       path: '/api/mail-send'
@@ -244,6 +278,13 @@ declare module '@tanstack/react-router' {
       path: '/api/mail-inline-part'
       fullPath: '/api/mail-inline-part'
       preLoaderRoute: typeof ApiMailInlinePartRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/mail-attachment-upload-ticket': {
+      id: '/api/mail-attachment-upload-ticket'
+      path: '/api/mail-attachment-upload-ticket'
+      fullPath: '/api/mail-attachment-upload-ticket'
+      preLoaderRoute: typeof ApiMailAttachmentUploadTicketRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/mail-attachment': {
@@ -290,8 +331,10 @@ const rootRouteChildren: RootRouteChildren = {
   MailRoute: MailRoute,
   SitemapDotxmlRoute: SitemapDotxmlRoute,
   ApiMailAttachmentRoute: ApiMailAttachmentRoute,
+  ApiMailAttachmentUploadTicketRoute: ApiMailAttachmentUploadTicketRoute,
   ApiMailInlinePartRoute: ApiMailInlinePartRoute,
   ApiMailSendRoute: ApiMailSendRoute,
+  ApiMailSendV2Route: ApiMailSendV2Route,
   ApiPublicHooksMailSyncTickRoute: ApiPublicHooksMailSyncTickRoute,
 }
 export const routeTree = rootRouteImport
