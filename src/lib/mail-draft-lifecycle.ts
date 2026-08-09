@@ -66,6 +66,13 @@ export interface DraftSnapshot {
     mimeType: "image/png" | "image/jpeg" | "image/gif" | "image/webp";
     filename: string;
     uploadFilename: string;
+    stagedHandle?: string;
+  }>;
+  stagedAttachments?: Array<{
+    handle: string;
+    filename: string;
+    size: number;
+    mimeType: string;
   }>;
 }
 

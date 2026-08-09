@@ -36,6 +36,7 @@ export const Route = createFileRoute("/api/mail-send-v2")({
             stagedInlineImages: Array.isArray(body?.stagedInlineImages)
               ? body.stagedInlineImages
               : [],
+            sourceAttachments: Array.isArray(body?.sourceAttachments) ? body.sourceAttachments : [],
           };
           const upstream = await fetch(`${auth.bridgeUrl}/api/send-v2`, {
             method: "POST",

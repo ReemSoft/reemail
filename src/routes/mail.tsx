@@ -683,7 +683,6 @@ import {
   bridgeMove,
   bridgeDelete,
   bridgeSearch,
-  bridgeSaveDraft,
   bridgeDeleteDraft,
 } from "@/lib/mail-bridge.functions";
 import { openMailMessage, resolveMessageInlineImages } from "@/lib/mail-message-open.functions";
@@ -5570,14 +5569,21 @@ function Composer({
   // Drafts message. Each entry stays as metadata until first save/send, at
   // which point we lazily stream its bytes from the bridge (server proxy,
   // never base64 in JSON) and cache the resulting File.
+  const restoredStaged = restored?.stagedAttachments ?? [];
+  const restoredHandleByAttachmentIdRef = useRef(
+    new Map(restoredStaged.map((item, index) => [`staged:${index}`, item.handle])),
+  );
   const [existingKept, setExistingKept] = useState<import("@/lib/mail-types").MailAttachment[]>(
-    () => initial?.existingAttachments?.attachments ?? [],
+    () => [
+      ...(initial?.existingAttachments?.attachments ?? []),
+      ...restoredStaged.map((item, index) => ({
+        id: `staged:${index}`,
+        filename: item.filename,
+        size: item.size,
+        mimeType: item.mimeType,
+      })),
+    ],
   );
-  const existingSourceIdRef = useRef<string | null>(
-    initial?.existingAttachments?.messageId ?? null,
-  );
-  const existingFilesCacheRef = useRef<Map<string, File>>(new Map());
-
   const [files, setFiles] = useState<File[]>([]);
   const [inlineImages, setInlineImages] = useState<InlineComposeImage[]>([]);
   const [uploadState, setUploadState] = useState<
@@ -5617,7 +5623,6 @@ function Composer({
   } | null>(null);
 
   // ----- Server-side draft saver (bridge APPEND) + pending-delete queue -----
-  const bridgeSaveDraftFn = useMailServerFn(bridgeSaveDraft);
   const bridgeDeleteDraftFn = useMailServerFn(bridgeDeleteDraft);
 
   const pendingQueueRef = useRef<PendingDeleteQueue | null>(null);
@@ -5655,13 +5660,38 @@ function Composer({
   const filesRef = useRef<File[]>([]);
   const inlineImagesRef = useRef<InlineComposeImage[]>([]);
   const stagedUploadsRef = useRef<WeakMap<File, Promise<StagedAttachmentResult>>>(new WeakMap());
-  const resolveExistingAsFilesRef = useRef<() => Promise<File[] | null>>(async () => []);
+  const stagedReadyRef = useRef<WeakMap<File, StagedAttachmentResult>>(new WeakMap());
+  const restoredInlineHandlesRef = useRef(
+    new Map(
+      (restored?.inlineImages ?? [])
+        .filter((image) => image.stagedHandle)
+        .map((image) => [image.uploadFilename, image.stagedHandle!]),
+    ),
+  );
+  const preservedSourceHandlesRef = useRef<Map<string, string>>(new Map());
+  const sourcePreviousRef = useRef(initial?.previousRef ?? null);
+  const autosaveRef = useRef<ReturnType<typeof createAutosaveScheduler> | null>(null);
 
   const saverRef = useRef<DraftSaver | null>(null);
 
   function ensureStaged(file: File, kind: StagedAttachmentKind) {
     const existing = stagedUploadsRef.current.get(file);
     if (existing) return existing;
+    const restoredHandle =
+      kind === "inline-image" ? restoredInlineHandlesRef.current.get(file.name) : undefined;
+    if (restoredHandle) {
+      const ready = Promise.resolve({
+        handle: restoredHandle,
+        filename: file.name,
+        size: file.size,
+        mimeType: file.type,
+        kind,
+        expiresAt: Number.MAX_SAFE_INTEGER,
+      });
+      stagedUploadsRef.current.set(file, ready);
+      ready.then((result) => stagedReadyRef.current.set(file, result));
+      return ready;
+    }
     setUploadState((current) => new Map(current).set(file, { status: "uploading", progress: 0 }));
     const promise = uploadAttachmentDirect(file, {
       mailSessionToken: session.mailSessionToken ?? "",
@@ -5673,7 +5703,9 @@ function Composer({
       },
     })
       .then((result) => {
+        stagedReadyRef.current.set(file, result);
         setUploadState((current) => new Map(current).set(file, { status: "ready", progress: 100 }));
+        autosaveRef.current?.schedule();
         return result;
       })
       .catch((error) => {
@@ -5689,18 +5721,6 @@ function Composer({
       saveRemote: async ({ snapshot, previousRef }) => {
         const token = session.mailSessionToken;
         if (!token) return { ok: false, code: "SESSION_REQUIRED" };
-        // M4-C: every save must carry the CURRENT attachment set so the
-        // bridge's APPEND-then-delete cycle preserves both kept legacy
-        // attachments and newly added files. A failed download aborts the
-        // save rather than silently producing an attachment-less draft.
-        let keptFiles: File[] = [];
-        try {
-          const resolved = await resolveExistingAsFilesRef.current();
-          if (resolved === null) return { ok: false, code: "NETWORK" };
-          keptFiles = resolved;
-        } catch {
-          return { ok: false, code: "NETWORK" };
-        }
         const currentFiles = filesRef.current;
         const currentInlineImages = inlineImagesRef.current;
         const transport = serializeInlineImages(snapshot.html, currentInlineImages);
@@ -5711,47 +5731,110 @@ function Composer({
           usedUploadNames.has(image.uploadFilename),
         );
         const transportHtml = sanitizeComposerHtml(transport.html);
-        const form = new FormData();
-        const payload = {
-          mailSessionToken: token,
-          draftId,
-          to: snapshot.to
-            .filter((r) => r.valid)
-            .map((r) => ({ name: r.name ?? "", email: r.email })),
-          cc: snapshot.cc
-            .filter((r) => r.valid)
-            .map((r) => ({ name: r.name ?? "", email: r.email })),
-          bcc: snapshot.bcc
-            .filter((r) => r.valid)
-            .map((r) => ({ name: r.name ?? "", email: r.email })),
-          subject: snapshot.subject,
-          bodyHtml: transportHtml,
-          bodyText: stripHtml(transportHtml),
-          previousRef: previousRef ?? undefined,
-          inlineImages: metadataToTransport(transportImages),
-        };
-        form.append("payload", JSON.stringify(payload));
-        for (const f of keptFiles) form.append("attachments", f, f.name);
-        for (const f of currentFiles) form.append("attachments", f, f.name);
-        for (const image of transportImages) {
-          form.append("attachments", image.file, image.uploadFilename);
-        }
         try {
-          const res = await bridgeSaveDraftFn({ data: form });
+          const stagedFiles = await Promise.all(
+            currentFiles.map((file) => ensureStaged(file, "attachment")),
+          );
+          const stagedInline = await Promise.all(
+            transportImages.map((image) => ensureStaged(image.file, "inline-image")),
+          );
+          const restoredHandles = existingKeptRef.current
+            .map((attachment) => restoredHandleByAttachmentIdRef.current.get(attachment.id))
+            .filter((handle): handle is string => Boolean(handle));
+          const sourceRef = sourcePreviousRef.current;
+          const sourceCandidates =
+            preservedSourceHandlesRef.current.size || !sourceRef
+              ? []
+              : existingKeptRef.current
+                  .filter(
+                    (attachment) =>
+                      !restoredHandleByAttachmentIdRef.current.has(attachment.id) &&
+                      Boolean(attachment.part),
+                  )
+                  .map((attachment) => ({
+                    id: attachment.id,
+                    folderPath: sourceRef.folderPath,
+                    uid: sourceRef.uid,
+                    uidValidity: sourceRef.uidValidity,
+                    part: attachment.part!,
+                    filename: attachment.filename,
+                    size: attachment.size,
+                    mimeType: attachment.mimeType || "application/octet-stream",
+                  }));
+          const sourceAttachments = sourceCandidates.map(({ id: _id, ...source }) => source);
+          const inlineMetadata = metadataToTransport(transportImages);
+          const response = await fetch("/api/mail-draft-save-v2", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              mailSessionToken: token,
+              password: session.password,
+              draftId,
+              to: snapshot.to
+                .filter((r) => r.valid)
+                .map((r) => ({ name: r.name ?? "", email: r.email })),
+              cc: snapshot.cc
+                .filter((r) => r.valid)
+                .map((r) => ({ name: r.name ?? "", email: r.email })),
+              bcc: snapshot.bcc
+                .filter((r) => r.valid)
+                .map((r) => ({ name: r.name ?? "", email: r.email })),
+              subject: snapshot.subject,
+              bodyHtml: transportHtml,
+              bodyText: stripHtml(transportHtml),
+              previousRef: previousRef ?? undefined,
+              attachmentHandles: [
+                ...restoredHandles,
+                ...preservedSourceHandlesRef.current.values(),
+                ...stagedFiles.map((item) => item.handle),
+              ],
+              stagedInlineImages: stagedInline.map((item, index) => ({
+                handle: item.handle,
+                ...inlineMetadata[index],
+              })),
+              sourceAttachments,
+            }),
+          });
+          const res = await response.json().catch(() => null);
           if (res?.ok) {
+            if (
+              sourceCandidates.length &&
+              (!Array.isArray(res.sourceAttachmentHandles) ||
+                res.sourceAttachmentHandles.length !== sourceCandidates.length)
+            ) {
+              return { ok: false, code: "SOURCE_ATTACHMENT_HANDLE_MISMATCH" };
+            }
+            if (sourceCandidates.length) {
+              sourceCandidates.forEach((source, index) => {
+                const handle = res.sourceAttachmentHandles[index];
+                if (typeof handle === "string") {
+                  preservedSourceHandlesRef.current.set(source.id, handle);
+                }
+              });
+            }
             if (typeof res.uid === "number" && res.uid > 0 && res.uidValidity && res.folderPath) {
+              const nextServerRef = {
+                folderPath: res.folderPath as string,
+                uid: res.uid as number,
+                uidValidity: res.uidValidity as string,
+              };
+              if (typeof window !== "undefined") {
+                writeDraftDoc(window.localStorage, accountEmail, {
+                  version: 3,
+                  draftId,
+                  snapshot: addStagedMetadata(snapshot),
+                  serverRef: nextServerRef,
+                  updatedAt: Date.now(),
+                });
+              }
               return {
                 ok: true,
-                serverRef: {
-                  folderPath: res.folderPath,
-                  uid: res.uid,
-                  uidValidity: res.uidValidity,
-                },
+                serverRef: nextServerRef,
               };
             }
             return { ok: true };
           }
-          return { ok: false, code: res?.code };
+          return { ok: false, code: res?.code ?? res?.error };
         } catch {
           return { ok: false, code: "NETWORK" };
         }
@@ -6109,6 +6192,52 @@ function Composer({
     existingKeptRef.current = existingKept;
   }, [existingKept]);
 
+  function addStagedMetadata(snapshot: DraftSnapshot): DraftSnapshot {
+    const restored = existingKeptRef.current.flatMap((attachment) => {
+      const handle = restoredHandleByAttachmentIdRef.current.get(attachment.id);
+      return handle
+        ? [
+            {
+              handle,
+              filename: attachment.filename,
+              size: attachment.size,
+              mimeType: attachment.mimeType,
+            },
+          ]
+        : [];
+    });
+    const preserved = existingKeptRef.current.flatMap((attachment) => {
+      const handle = preservedSourceHandlesRef.current.get(attachment.id);
+      return handle
+        ? [
+            {
+              handle,
+              filename: attachment.filename,
+              size: attachment.size,
+              mimeType: attachment.mimeType,
+            },
+          ]
+        : [];
+    });
+    const added = filesRef.current.flatMap((file) => {
+      const staged = stagedReadyRef.current.get(file);
+      return staged
+        ? [{ handle: staged.handle, filename: file.name, size: file.size, mimeType: file.type }]
+        : [];
+    });
+    return {
+      ...snapshot,
+      stagedAttachments: [...restored, ...preserved, ...added],
+      inlineImages: snapshot.inlineImages?.map((metadata) => {
+        const image = inlineImagesRef.current.find(
+          (candidate) => candidate.uploadFilename === metadata.uploadFilename,
+        );
+        const staged = image ? stagedReadyRef.current.get(image.file) : undefined;
+        return staged ? { ...metadata, stagedHandle: staged.handle } : metadata;
+      }),
+    };
+  }
+
   /**
    * Lazily fetch every kept existing attachment as a File, streaming bytes
    * from the bridge via the authenticated proxy (never base64 in JSON). All
@@ -6116,44 +6245,6 @@ function Composer({
    * the first save. Returns `null` when any attachment fails so the caller
    * can abort — we never silently drop a kept attachment.
    */
-  async function resolveExistingAsFiles(): Promise<File[] | null> {
-    const kept = existingKeptRef.current;
-    if (kept.length === 0) return [];
-    const sourceId = existingSourceIdRef.current;
-    if (!sourceId) return null;
-    const parsed = parseMessageId(sourceId);
-    if (!parsed) return null;
-    const cache = existingFilesCacheRef.current;
-    const out: File[] = [];
-    for (const att of kept) {
-      const cached = cache.get(att.id);
-      if (cached) {
-        out.push(cached);
-        continue;
-      }
-      if (!att.part) return null;
-      const res = await fetch("/api/mail-attachment", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          mailSessionToken: session.mailSessionToken ?? "",
-          password: session.password,
-          folder: parsed.folder,
-          uid: parsed.uid,
-          part: att.part,
-        }),
-      });
-      if (!res.ok) return null;
-      const blob = await res.blob();
-      const file = new File([blob], att.filename || "attachment", {
-        type: att.mimeType || blob.type || "application/octet-stream",
-      });
-      cache.set(att.id, file);
-      out.push(file);
-    }
-    return out;
-  }
-
   // Publish the latest values to the persistent saveRemote closure refs.
   filesRef.current = files;
   inlineImagesRef.current = inlineImages;
@@ -6164,17 +6255,32 @@ function Composer({
   }, [files]);
   useEffect(() => {
     for (const image of inlineImages) {
+      const restoredHandle = restoredInlineHandlesRef.current.get(image.uploadFilename);
+      if (restoredHandle && !stagedUploadsRef.current.has(image.file)) {
+        const ready = Promise.resolve({
+          handle: restoredHandle,
+          filename: image.uploadFilename,
+          size: image.file.size,
+          mimeType: image.file.type,
+          kind: "inline-image" as const,
+          expiresAt: Number.MAX_SAFE_INTEGER,
+        });
+        stagedUploadsRef.current.set(image.file, ready);
+        ready.then((result) => stagedReadyRef.current.set(image.file, result));
+      }
       void ensureStaged(image.file, "inline-image").catch(() => undefined);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [inlineImages]);
-  resolveExistingAsFilesRef.current = resolveExistingAsFiles;
-
   // ----- Draft autosave (scheduled): local write first, then remote APPEND -----
   // Persistent, disposable scheduler + input/beforeunload guards. All three
   // helpers expose idempotent .dispose() and are torn down inside useEffect
   // cleanup so no callback runs after unmount.
-  const autosaveRef = useRef<ReturnType<typeof createAutosaveScheduler> | null>(null);
+  const remoteAutosaveTimerRef = useRef<number | null>(null);
+  const pendingRemoteSaveRef = useRef<{
+    snapshot: DraftSnapshot;
+    generation: number;
+  } | null>(null);
   // Latest snapshot fields captured for the scheduler's callback (avoids
   // stale-closure reads without re-instantiating the scheduler each render).
   const snapshotInputsRef = useRef({
@@ -6239,7 +6345,7 @@ function Composer({
           recomputeDirty();
           return;
         }
-        const snapshot: DraftSnapshot = {
+        const snapshot = addStagedMetadata({
           to: s.to,
           cc: s.cc,
           bcc: s.bcc,
@@ -6248,7 +6354,7 @@ function Composer({
           showCc: s.showCc,
           showBcc: s.showBcc,
           inlineImages: serialized.inlineImages,
-        };
+        });
         const persisted = writeDraftDoc(window.localStorage, s.accountEmail, {
           version: 3,
           draftId,
@@ -6266,13 +6372,32 @@ function Composer({
         // this exact value (or a newer coalesced one) — a stale response
         // can never mark newer content clean.
         const genAtFire = generationRef.current;
-        void saverRef.current?.requestSave(snapshot, serverRefRef.current, genAtFire);
+        pendingRemoteSaveRef.current = { snapshot, generation: genAtFire };
+        if (remoteAutosaveTimerRef.current !== null) {
+          window.clearTimeout(remoteAutosaveTimerRef.current);
+        }
+        remoteAutosaveTimerRef.current = window.setTimeout(() => {
+          remoteAutosaveTimerRef.current = null;
+          const pending = pendingRemoteSaveRef.current;
+          pendingRemoteSaveRef.current = null;
+          if (pending) {
+            void saverRef.current?.requestSave(
+              pending.snapshot,
+              serverRefRef.current,
+              pending.generation,
+            );
+          }
+        }, 5_000);
       },
     });
     autosaveRef.current = scheduler;
     return () => {
       scheduler.dispose();
       autosaveRef.current = null;
+      if (remoteAutosaveTimerRef.current !== null) {
+        window.clearTimeout(remoteAutosaveTimerRef.current);
+        remoteAutosaveTimerRef.current = null;
+      }
     };
   }, [draftId]);
 
@@ -6480,7 +6605,8 @@ function Composer({
 
   function removeExistingAttachment(id: string) {
     setExistingKept((prev) => prev.filter((a) => a.id !== id));
-    existingFilesCacheRef.current.delete(id);
+    restoredHandleByAttachmentIdRef.current.delete(id);
+    preservedSourceHandlesRef.current.delete(id);
   }
 
   function removeFile(index: number) {
@@ -6888,28 +7014,10 @@ function Composer({
       const bodyHtml = buildEmailHtmlDocument(fragment, { dir: editorDir });
       const bodyText = htmlToPlainText(fragment);
 
-      // M4-C: preserve kept legacy/server attachments alongside newly added
-      // files. If any kept attachment can't be streamed we ABORT rather than
-      // silently sending a message with missing attachments.
-      let keptFiles: File[] = [];
-      try {
-        const resolved = await resolveExistingAsFiles();
-        if (resolved === null) {
-          toast.error(tr("تعذّر تحميل مرفق من المسودة الأصلية"));
-          return;
-        }
-        keptFiles = resolved;
-      } catch {
-        toast.error(tr("تعذّر تحميل مرفق من المسودة الأصلية"));
-        return;
-      }
-
       let stagedNormal: StagedAttachmentResult[];
       let stagedInline: StagedAttachmentResult[];
       try {
-        stagedNormal = await Promise.all(
-          [...keptFiles, ...files].map((file) => ensureStaged(file, "attachment")),
-        );
+        stagedNormal = await Promise.all(files.map((file) => ensureStaged(file, "attachment")));
         stagedInline = await Promise.all(
           transportImages.map((image) => ensureStaged(image.file, "inline-image")),
         );
@@ -6918,6 +7026,28 @@ function Composer({
         return;
       }
       const inlineMetadata = metadataToTransport(transportImages);
+      const restoredHandles = existingKeptRef.current
+        .map((attachment) => restoredHandleByAttachmentIdRef.current.get(attachment.id))
+        .filter((handle): handle is string => Boolean(handle));
+      const sourceRef = sourcePreviousRef.current;
+      const sourceAttachments =
+        preservedSourceHandlesRef.current.size || !sourceRef
+          ? []
+          : existingKeptRef.current
+              .filter(
+                (attachment) =>
+                  !restoredHandleByAttachmentIdRef.current.has(attachment.id) &&
+                  Boolean(attachment.part),
+              )
+              .map((attachment) => ({
+                folderPath: sourceRef.folderPath,
+                uid: sourceRef.uid,
+                uidValidity: sourceRef.uidValidity,
+                part: attachment.part!,
+                filename: attachment.filename,
+                size: attachment.size,
+                mimeType: attachment.mimeType || "application/octet-stream",
+              }));
       const response = await fetch("/api/mail-send-v2", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -6930,11 +7060,16 @@ function Composer({
           subject,
           bodyHtml,
           bodyText,
-          attachmentHandles: stagedNormal.map((item) => item.handle),
+          attachmentHandles: [
+            ...restoredHandles,
+            ...preservedSourceHandlesRef.current.values(),
+            ...stagedNormal.map((item) => item.handle),
+          ],
           stagedInlineImages: stagedInline.map((item, index) => ({
             handle: item.handle,
             ...inlineMetadata[index],
           })),
+          sourceAttachments,
         }),
       });
       const result = (await response.json().catch(() => ({
@@ -7125,7 +7260,7 @@ function Composer({
         toast.info(tr("لا يوجد محتوى للحفظ"));
         return "empty";
       }
-      const snapshot: DraftSnapshot = {
+      const snapshot = addStagedMetadata({
         to,
         cc,
         bcc,
@@ -7134,7 +7269,7 @@ function Composer({
         showCc,
         showBcc,
         inlineImages: serialized.inlineImages,
-      };
+      });
       const persisted = writeDraftDoc(window.localStorage, accountEmail, {
         version: 3,
         draftId,
@@ -7149,6 +7284,11 @@ function Composer({
       }
       setHasLocalDraft(true);
       const genAtRequest = generationRef.current;
+      if (remoteAutosaveTimerRef.current !== null) {
+        window.clearTimeout(remoteAutosaveTimerRef.current);
+        remoteAutosaveTimerRef.current = null;
+      }
+      pendingRemoteSaveRef.current = null;
       await saverRef.current?.requestSave(snapshot, serverRefRef.current, genAtRequest);
       const st = saverRef.current?.getStatus();
       if (st === "saved") {

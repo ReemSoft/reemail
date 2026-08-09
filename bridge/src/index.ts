@@ -12,6 +12,7 @@ import {
   stagedAttachmentStats,
 } from "./staged-attachments.js";
 import { TransferConcurrency } from "./transfer-concurrency.js";
+import { stageServerAttachmentSources } from "./server-attachment-sources.js";
 import { createSendGates } from "./concurrency.js";
 import { createImapGates, loadImapGatesConfigFromEnv, type ImapPriority } from "./imap-gates.js";
 import { createImapGateMiddleware } from "./imap-gate-middleware.js";
@@ -198,6 +199,20 @@ const StagedInlineSchema = z.object({
   contentType: z.string().min(1).max(255),
 });
 
+const ServerAttachmentSourceSchema = z.object({
+  folderPath: z.string().min(1).max(500),
+  uid: z.number().int().positive(),
+  uidValidity: z.string().min(1).max(64),
+  part: z.string().regex(/^\d+(?:\.\d+)*$/),
+  filename: z.string().min(1).max(255),
+  size: z
+    .number()
+    .int()
+    .min(0)
+    .max(25 * 1024 * 1024),
+  mimeType: z.string().min(1).max(255),
+});
+
 const SendV2PayloadSchema = SendPayloadSchema.extend({
   attachmentHandles: z
     .array(
@@ -209,6 +224,21 @@ const SendV2PayloadSchema = SendPayloadSchema.extend({
     .max(10)
     .default([]),
   stagedInlineImages: z.array(StagedInlineSchema).max(10).default([]),
+  sourceAttachments: z.array(ServerAttachmentSourceSchema).max(10).default([]),
+});
+
+const DraftV2AttachmentSchema = z.object({
+  attachmentHandles: z
+    .array(
+      z
+        .string()
+        .min(20)
+        .max(32 * 1024),
+    )
+    .max(10)
+    .default([]),
+  stagedInlineImages: z.array(StagedInlineSchema).max(10).default([]),
+  sourceAttachments: z.array(ServerAttachmentSourceSchema).max(10).default([]),
 });
 
 // --- Middleware ---
@@ -638,6 +668,21 @@ app.post("/api/send-v2", requireKey, async (req, res) => {
         staged: await resolveStagedAttachment(BRIDGE_API_KEY, item.handle, account),
       })),
     );
+    const sourceAttachments = await stageServerAttachmentSources({
+      secret: BRIDGE_API_KEY,
+      account: payload.account as MailAccount,
+      password: payload.password,
+      sources: payload.sourceAttachments.map((source) => ({
+        folderPath: source.folderPath,
+        uid: source.uid,
+        uidValidity: source.uidValidity,
+        part: source.part,
+        filename: source.filename,
+        size: source.size,
+        mimeType: source.mimeType,
+      })),
+      maxBytes: SEND_MAX_TOTAL_BYTES,
+    });
     if (normal.some((item) => item.kind !== "attachment")) {
       return res.status(400).json({ ok: false, error: "ATTACHMENT_KIND_MISMATCH" });
     }
@@ -650,6 +695,7 @@ app.post("/api/send-v2", requireKey, async (req, res) => {
       return res.status(400).json({ ok: false, error: "ATTACHMENT_KIND_MISMATCH" });
     }
     const all = [...normal, ...inline.map(({ staged }) => staged)];
+    all.push(...sourceAttachments.map(({ resolved }) => resolved));
     if (
       all.length > SEND_MAX_FILES ||
       all.reduce((sum, item) => sum + item.size, 0) > SEND_MAX_TOTAL_BYTES
@@ -699,6 +745,92 @@ app.post("/api/send-v2", requireKey, async (req, res) => {
     return res.status(400).json({ ok: false, error: code });
   } finally {
     if (gateAcquired && gateKey) sendGates.release(gateKey);
+  }
+});
+
+app.post("/api/draft-save-v2", requireKey, imapGate("interactive"), async (req, res) => {
+  try {
+    const payload = DraftSavePayloadSchema.parse(req.body);
+    const contract = DraftV2AttachmentSchema.parse(req.body);
+    const account = accountBinding(payload.account as MailAccount);
+    const resolvedNormal = await Promise.all(
+      contract.attachmentHandles.map((handle) =>
+        resolveStagedAttachment(BRIDGE_API_KEY, handle, account),
+      ),
+    );
+    if (resolvedNormal.some((item) => item.kind !== "attachment")) {
+      return res.status(400).json({ ok: false, error: "ATTACHMENT_KIND_MISMATCH" });
+    }
+    const resolvedInline = await Promise.all(
+      contract.stagedInlineImages.map(async (item) => ({
+        item,
+        staged: await resolveStagedAttachment(BRIDGE_API_KEY, item.handle, account),
+      })),
+    );
+    const preserved = await stageServerAttachmentSources({
+      secret: BRIDGE_API_KEY,
+      account: payload.account as MailAccount,
+      password: payload.password,
+      sources: contract.sourceAttachments.map((source) => ({
+        folderPath: source.folderPath,
+        uid: source.uid,
+        uidValidity: source.uidValidity,
+        part: source.part,
+        filename: source.filename,
+        size: source.size,
+        mimeType: source.mimeType,
+      })),
+      maxBytes: SEND_MAX_TOTAL_BYTES,
+    });
+    const all = [
+      ...resolvedNormal,
+      ...preserved.map(({ resolved }) => resolved),
+      ...resolvedInline.map(({ staged }) => staged),
+    ];
+    if (
+      all.length > SEND_MAX_FILES ||
+      all.reduce((sum, item) => sum + item.size, 0) > SEND_MAX_TOTAL_BYTES
+    ) {
+      return res.status(413).json({ ok: false, error: "ATTACHMENTS_TOO_LARGE" });
+    }
+    const attachments = await mapUploadedAttachments(
+      all.map((item) => ({
+        originalname: item.filename,
+        path: item.path,
+        mimetype: item.mimeType,
+        size: item.size,
+      })),
+      contract.stagedInlineImages.map(({ uploadFilename, cid, contentType }) => ({
+        uploadFilename,
+        cid,
+        contentType,
+      })),
+    );
+    const result = await saveDraft(payload.account as MailAccount, payload.password, {
+      ...payload,
+      attachments,
+    });
+    if (result.ok === false) {
+      const status =
+        result.error === "NO_DRAFTS_FOLDER"
+          ? 422
+          : result.error === "SAFE_DRAFT_REPLACE_UNSUPPORTED"
+            ? 409
+            : 500;
+      return res.status(status).json(result);
+    }
+    return res.json({
+      ...result,
+      sourceAttachmentHandles: preserved.map(({ staged }) => staged.handle),
+    });
+  } catch (error) {
+    const code =
+      error instanceof z.ZodError
+        ? "INVALID_PAYLOAD"
+        : error instanceof Error
+          ? error.message
+          : "IMAP_ERROR";
+    return res.status(400).json({ ok: false, error: code });
   }
 });
 

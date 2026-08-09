@@ -56,15 +56,19 @@ export async function stageAttachmentStream(input: {
   mimeType: string;
   kind: "attachment" | "inline-image";
   declaredSize: number;
+  maxSize?: number;
+  exactSize?: boolean;
   stream: Readable;
   now?: number;
 }): Promise<StagedAttachment> {
   await ensureDir();
   const currentAccount = accountBytes.get(input.account) ?? 0;
   const currentAccountFiles = accountFiles.get(input.account) ?? 0;
+  const reservationSize =
+    input.exactSize === false ? (input.maxSize ?? input.declaredSize) : input.declaredSize;
   if (
-    trackedGlobalBytes + input.declaredSize > STAGE_GLOBAL_BYTES ||
-    currentAccount + input.declaredSize > STAGE_ACCOUNT_BYTES ||
+    trackedGlobalBytes + reservationSize > STAGE_GLOBAL_BYTES ||
+    currentAccount + reservationSize > STAGE_ACCOUNT_BYTES ||
     trackedGlobalFiles >= STAGE_GLOBAL_FILES ||
     currentAccountFiles >= STAGE_ACCOUNT_FILES
   ) {
@@ -76,12 +80,15 @@ export async function stageAttachmentStream(input: {
   const limiter = new Transform({
     transform(chunk: Buffer, _encoding, callback) {
       bytes += chunk.length;
-      callback(bytes > input.declaredSize ? new Error("UPLOAD_TOO_LARGE") : null, chunk);
+      const maximum = input.maxSize ?? input.declaredSize;
+      callback(bytes > maximum ? new Error("UPLOAD_TOO_LARGE") : null, chunk);
     },
   });
   try {
     await pipeline(input.stream, limiter, createWriteStream(target, { flags: "wx", mode: 0o600 }));
-    if (bytes !== input.declaredSize) throw new Error("UPLOAD_SIZE_MISMATCH");
+    if (input.exactSize !== false && bytes !== input.declaredSize) {
+      throw new Error("UPLOAD_SIZE_MISMATCH");
+    }
     trackedGlobalBytes += bytes;
     trackedGlobalFiles += 1;
     accountBytes.set(input.account, currentAccount + bytes);
