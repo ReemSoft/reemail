@@ -17,6 +17,7 @@ import { TransferConcurrency } from "./transfer-concurrency.js";
 import { stageServerAttachmentSources } from "./server-attachment-sources.js";
 import { pipeline } from "node:stream/promises";
 import { attachmentContentDisposition, sanitizeAttachmentFilename } from "./attachment-transfer.js";
+import { DownloadByteCounter, parseDownloadChunkBytes } from "./download-performance.js";
 import { createSendGates } from "./concurrency.js";
 import { createImapGates, loadImapGatesConfigFromEnv, type ImapPriority } from "./imap-gates.js";
 import { createImapGateMiddleware } from "./imap-gate-middleware.js";
@@ -1106,6 +1107,7 @@ app.post(
 
 // ---- Attachment download (streamed) ----
 const ATTACHMENT_MAX_BYTES = Number(process.env.ATTACHMENT_MAX_BYTES || 50 * 1024 * 1024);
+const DOWNLOAD_CHUNK_BYTES = parseDownloadChunkBytes(process.env.MAIL_DOWNLOAD_CHUNK_BYTES);
 const AttachmentPayloadSchema = MessagePayloadSchema.extend({
   part: z.string().min(1).max(50),
 });
@@ -1137,6 +1139,7 @@ app.post("/api/attachment-download-ticket", requireKey, (req, res) => {
 });
 
 app.get("/api/direct/attachment-download", async (req, res) => {
+  const requestStartedAt = performance.now();
   let gateKey = "";
   let acquired = false;
   let capabilityValidated = false;
@@ -1175,7 +1178,9 @@ app.get("/api/direct/attachment-download", async (req, res) => {
         const download = await client.download(payload.uid.toString(), payload.part, {
           uid: true,
           maxBytes: ATTACHMENT_MAX_BYTES,
+          chunkSize: DOWNLOAD_CHUNK_BYTES,
         });
+        const openMs = performance.now() - requestStartedAt;
         if (!download?.content) {
           res.status(404).end("Attachment not found");
           return;
@@ -1205,16 +1210,42 @@ app.get("/api/direct/attachment-download", async (req, res) => {
         res.setHeader("X-Content-Type-Options", "nosniff");
         res.setHeader("Cache-Control", "private, no-store");
         res.setHeader("Referrer-Policy", "no-referrer");
+        res.setHeader("X-MailMaestro-Download-Chunk-Bytes", String(DOWNLOAD_CHUNK_BYTES));
+        const byteCounter = new DownloadByteCounter(requestStartedAt);
         let completed = false;
+        let aborted = false;
+        let logged = false;
+        const logDownload = (status: "complete" | "aborted" | "failed") => {
+          if (logged) return;
+          logged = true;
+          const fields = {
+            bytes: byteCounter.bytes,
+            chunkBytes: DOWNLOAD_CHUNK_BYTES,
+            openMs: Math.round(openMs),
+            firstByteMs:
+              byteCounter.firstByteMs === null ? null : Math.round(byteCounter.firstByteMs),
+            totalMs: Math.round(performance.now() - requestStartedAt),
+            completed,
+            aborted,
+          };
+          if (status === "failed") console.error("[bridge] Direct download failed", fields);
+          else console.info(`[bridge] Direct download ${status}`, fields);
+        };
         const abort = () => {
           if (completed || res.writableEnded) return;
+          aborted = true;
           download.content.destroy();
           dropAccountConnection(payload.account as MailAccount, "transfer");
+          logDownload("aborted");
         };
         res.once("close", abort);
         try {
-          await pipeline(download.content, res);
+          await pipeline(download.content, byteCounter, res);
           completed = true;
+          logDownload("complete");
+        } catch (error) {
+          logDownload(aborted ? "aborted" : "failed");
+          throw error;
         } finally {
           res.off("close", abort);
         }
