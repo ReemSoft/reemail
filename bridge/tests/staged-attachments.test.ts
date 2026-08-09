@@ -1,18 +1,63 @@
 import assert from "node:assert/strict";
-import { unlink } from "node:fs/promises";
+import { readFileSync } from "node:fs";
+import { mkdtemp, readdir, rm, unlink } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { Readable } from "node:stream";
-import test from "node:test";
-import {
+import test, { after } from "node:test";
+
+const productionDefaultStageDir = path.resolve("/tmp/mailmaestro-stage");
+const inheritedStageDir = process.env.MAIL_STAGE_DIR;
+const configuredProductionStageDir = path.resolve(inheritedStageDir || "/tmp/mailmaestro-stage");
+const testStageDir = await mkdtemp(path.join(tmpdir(), "mailmaestro-stage-test-"));
+assert.notEqual(path.resolve(testStageDir), productionDefaultStageDir);
+assert.notEqual(path.resolve(testStageDir), configuredProductionStageDir);
+process.env.MAIL_STAGE_DIR = testStageDir;
+
+const {
+  STAGE_DIR,
   cleanupSendStagedAttachments,
   cleanupStagedAttachments,
   releaseStagedAttachment,
   resolveStagedAttachment,
   stageAttachmentStream,
   stagedAttachmentStats,
-} from "../src/staged-attachments.js";
+} = await import("../src/staged-attachments.js");
+
+assert.equal(path.resolve(STAGE_DIR), path.resolve(testStageDir));
+assert.notEqual(path.resolve(STAGE_DIR), productionDefaultStageDir);
+assert.notEqual(path.resolve(STAGE_DIR), configuredProductionStageDir);
+assert.deepEqual(stagedAttachmentStats(), {
+  stagedBytes: 0,
+  stagedFiles: 0,
+  trackedAccounts: 0,
+});
+
+after(async () => {
+  assert.equal(path.resolve(STAGE_DIR), path.resolve(testStageDir));
+  assert.notEqual(path.resolve(STAGE_DIR), productionDefaultStageDir);
+  assert.notEqual(path.resolve(STAGE_DIR), configuredProductionStageDir);
+  await rm(testStageDir, { recursive: true, force: true });
+  if (inheritedStageDir === undefined) delete process.env.MAIL_STAGE_DIR;
+  else process.env.MAIL_STAGE_DIR = inheritedStageDir;
+});
 
 const secret = "stage-test-secret";
 const account = "a".repeat(64);
+
+function assertInsideTestStageDir(filePath: string) {
+  const root = `${path.resolve(testStageDir)}${path.sep}`;
+  assert.ok(path.resolve(filePath).startsWith(root));
+}
+
+test("test staging is unique and production default remains unchanged", async () => {
+  assert.notEqual(path.resolve(STAGE_DIR), productionDefaultStageDir);
+  assert.notEqual(path.resolve(STAGE_DIR), configuredProductionStageDir);
+  assert.match(path.basename(STAGE_DIR), /^mailmaestro-stage-test-/);
+  assert.deepEqual(await readdir(STAGE_DIR), []);
+  const source = readFileSync(new URL("../src/staged-attachments.ts", import.meta.url), "utf8");
+  assert.match(source, /: "\/tmp\/mailmaestro-stage"/);
+});
 
 test("staged attachment round-trips metadata without exposing a path", async () => {
   const staged = await stageAttachmentStream({
@@ -26,6 +71,7 @@ test("staged attachment round-trips metadata without exposing a path", async () 
   });
   assert.equal("path" in staged, false);
   const resolved = await resolveStagedAttachment(secret, staged.handle, account);
+  assertInsideTestStageDir(resolved.path);
   assert.equal(resolved.size, 4);
   assert.equal(resolved.filename, "report.pdf");
   assert.equal(await releaseStagedAttachment(secret, staged.handle, account), true);
@@ -95,16 +141,24 @@ async function stageTestFile(
 }
 
 test("successful send releases normal, inline, and temporary source handles", async () => {
-  const before = stagedAttachmentStats();
+  assert.deepEqual(stagedAttachmentStats(), {
+    stagedBytes: 0,
+    stagedFiles: 0,
+    trackedAccounts: 0,
+  });
   const normal = await stageTestFile("normal.bin", "normal");
   const inline = await stageTestFile("inline.png", "inline", "inline-image");
   const source = await stageTestFile("source.bin", "source");
   const stagedBytes = normal.size + inline.size + source.size;
   assert.deepEqual(stagedAttachmentStats(), {
-    stagedBytes: before.stagedBytes + stagedBytes,
-    stagedFiles: before.stagedFiles + 3,
-    trackedAccounts: before.trackedAccounts + (before.trackedAccounts === 0 ? 1 : 0),
+    stagedBytes,
+    stagedFiles: 3,
+    trackedAccounts: 1,
   });
+  for (const staged of [normal, inline, source]) {
+    const resolved = await resolveStagedAttachment(secret, staged.handle, account);
+    assertInsideTestStageDir(resolved.path);
+  }
 
   await cleanupSendStagedAttachments({
     secret,
@@ -114,8 +168,11 @@ test("successful send releases normal, inline, and temporary source handles", as
     sendSucceeded: true,
   });
 
-  assert.equal(stagedAttachmentStats().stagedBytes, before.stagedBytes);
-  assert.equal(stagedAttachmentStats().stagedFiles, before.stagedFiles);
+  assert.deepEqual(stagedAttachmentStats(), {
+    stagedBytes: 0,
+    stagedFiles: 0,
+    trackedAccounts: 0,
+  });
   await assert.rejects(
     resolveStagedAttachment(secret, normal.handle, account),
     /STAGED_FILE_MISSING/,
@@ -149,16 +206,21 @@ test("failed send retains client handles but always releases temporary source ha
 });
 
 test("release is idempotent and quota counters never become negative", async () => {
-  const before = stagedAttachmentStats();
+  assert.deepEqual(stagedAttachmentStats(), {
+    stagedBytes: 0,
+    stagedFiles: 0,
+    trackedAccounts: 0,
+  });
   const staged = await stageTestFile("once.bin", "once");
-  assert.equal(stagedAttachmentStats().stagedBytes, before.stagedBytes + staged.size);
-  assert.equal(stagedAttachmentStats().stagedFiles, before.stagedFiles + 1);
+  assert.equal(stagedAttachmentStats().stagedBytes, staged.size);
+  assert.equal(stagedAttachmentStats().stagedFiles, 1);
   assert.equal(await releaseStagedAttachment(secret, staged.handle, account), true);
   assert.equal(await releaseStagedAttachment(secret, staged.handle, account), false);
-  assert.equal(stagedAttachmentStats().stagedBytes, before.stagedBytes);
-  assert.equal(stagedAttachmentStats().stagedFiles, before.stagedFiles);
-  assert.ok(stagedAttachmentStats().stagedBytes >= 0);
-  assert.ok(stagedAttachmentStats().stagedFiles >= 0);
+  assert.deepEqual(stagedAttachmentStats(), {
+    stagedBytes: 0,
+    stagedFiles: 0,
+    trackedAccounts: 0,
+  });
 });
 
 test("local staging throughput benchmark streams 1/4/10/25 MiB with bounded chunks", async () => {
