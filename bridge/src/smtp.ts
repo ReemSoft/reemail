@@ -2,7 +2,7 @@ import { createTransport } from "nodemailer";
 import type { ImapFlow, ListResponse } from "imapflow";
 import type { Readable } from "node:stream";
 import { makeImapClient, listMailboxes } from "./imap.js";
-import { createMimeSpool, type MimeSpool } from "./mime-spool.js";
+import { createMimeSpool, withMimeSpoolReadStream, type MimeSpool } from "./mime-spool.js";
 import type { MailAccount } from "./types.js";
 
 export interface SendAttachment {
@@ -248,10 +248,12 @@ export async function sendMessage(
       const envelopeRecipients = [...payload.to, ...(payload.cc || []), ...(payload.bcc || [])].map(
         (r) => r.email,
       );
-      await transporter.sendMail({
-        raw: spool.openReadStream() as Readable,
-        envelope: { from: payload.from.email, to: envelopeRecipients },
-      });
+      await withMimeSpoolReadStream(spool, (raw) =>
+        transporter.sendMail({
+          raw,
+          envelope: { from: payload.from.email, to: envelopeRecipients },
+        }),
+      );
     } catch (err) {
       const msg = err instanceof Error ? err.message : "فشل إرسال الرسالة";
       return { ok: false, error: msg };
@@ -282,7 +284,7 @@ export async function sendMessage(
         // No auto-saved copy → APPEND the exact MIME with \Seen.
         if (!sentCopySaved) {
           try {
-            await client.append(sentPath, spool.openReadStream() as Readable, ["\\Seen"]);
+            await withMimeSpoolReadStream(spool, (raw) => client.append(sentPath, raw, ["\\Seen"]));
             sentCopySaved = true;
           } catch (appendErr) {
             const m = appendErr instanceof Error ? appendErr.message : String(appendErr);

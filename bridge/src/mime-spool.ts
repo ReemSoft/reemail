@@ -2,6 +2,8 @@ import crypto from "node:crypto";
 import { createReadStream, createWriteStream } from "node:fs";
 import { chmod, mkdir, readdir, stat, unlink } from "node:fs/promises";
 import path from "node:path";
+import type { Readable } from "node:stream";
+import { finished } from "node:stream/promises";
 import { pipeline } from "node:stream/promises";
 import MailComposer from "nodemailer/lib/mail-composer/index.js";
 import type { SendMessagePayload } from "./smtp.js";
@@ -17,8 +19,34 @@ export interface MimeSpool {
   path: string;
   messageId: string;
   size: number;
-  openReadStream: () => NodeJS.ReadableStream;
+  openReadStream: () => Readable;
   cleanup: () => Promise<void>;
+}
+
+export async function withMimeSpoolReadStream<T>(
+  spool: MimeSpool,
+  consume: (raw: Readable) => Promise<T>,
+): Promise<T> {
+  const raw = spool.openReadStream();
+  let streamFailure: unknown;
+  const streamSettled = finished(raw, { cleanup: true }).catch((error: unknown) => {
+    streamFailure = error;
+  });
+  let consumerFailed = false;
+  let consumerFailure: unknown;
+  let result: T | undefined;
+  try {
+    result = await consume(raw);
+  } catch (error) {
+    consumerFailed = true;
+    consumerFailure = error;
+  } finally {
+    if (!raw.destroyed) raw.destroy();
+    await streamSettled;
+  }
+  if (consumerFailed) throw consumerFailure;
+  if (streamFailure) throw streamFailure;
+  return result as T;
 }
 
 function composerOptions(

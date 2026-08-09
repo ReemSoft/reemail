@@ -39,7 +39,7 @@ import {
   type SendMessagePayload,
   type SendAttachment,
 } from "./smtp.js";
-import { createMimeSpool, type MimeSpool } from "./mime-spool.js";
+import { createMimeSpool, withMimeSpoolReadStream, type MimeSpool } from "./mime-spool.js";
 import type { MailAccount } from "./types.js";
 import { InlineImageMetadataSchema } from "./inline-images.js";
 
@@ -246,6 +246,7 @@ export interface ImapDraftClient {
 
 export interface DraftDeps {
   createImapDraftClient: (account: MailAccount, password: string) => ImapDraftClient;
+  createMimeSpool?: typeof createMimeSpool;
   now?: () => Date;
 }
 
@@ -292,6 +293,7 @@ export async function executeDraftSave(
   client: ImapDraftClient,
   input: DraftSavePayload,
   now: () => Date = () => new Date(),
+  createSpool: typeof createMimeSpool = createMimeSpool,
 ): Promise<DraftSaveOk | DraftErr> {
   await client.connect();
   let spool: MimeSpool | null = null;
@@ -310,7 +312,7 @@ export async function executeDraftSave(
 
     // Build MIME (with the sticky draft id header) BEFORE we take any locks
     // so IMAP holds nothing while nodemailer compiles.
-    spool = await createMimeSpool(draftMimePayload(input), {
+    spool = await createSpool(draftMimePayload(input), {
       [DRAFT_ID_HEADER]: input.draftId,
     });
 
@@ -353,10 +355,9 @@ export async function executeDraftSave(
     let appendUid: number | null;
     let appendUidValidity: string;
     try {
-      const appendRes = await client.append(folderPath, spool.openReadStream() as Readable, [
-        "\\Draft",
-        "\\Seen",
-      ]);
+      const appendRes = await withMimeSpoolReadStream(spool, (raw) =>
+        client.append(folderPath, raw, ["\\Draft", "\\Seen"]),
+      );
       appendUid = appendRes.uid ?? null;
       appendUidValidity = appendRes.uidValidity ?? "";
     } catch {
@@ -637,7 +638,7 @@ export async function saveDraft(
   return withDraftMutex(key, async () => {
     const client = deps.createImapDraftClient(account, password);
     try {
-      return await executeDraftSave(client, payload, deps.now);
+      return await executeDraftSave(client, payload, deps.now, deps.createMimeSpool);
     } catch {
       return { ok: false, error: "IMAP_ERROR" };
     }

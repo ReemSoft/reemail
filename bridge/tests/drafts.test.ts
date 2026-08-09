@@ -8,6 +8,9 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { access } from "node:fs/promises";
+import type { Readable } from "node:stream";
+import { createMimeSpool } from "../src/mime-spool.js";
 import { resolveDraftsPath, resolveTrashPath } from "../src/smtp.js";
 import {
   executeDraftSave,
@@ -240,6 +243,61 @@ test("save: APPEND failure returns APPEND_FAILED and NEVER deletes old copies", 
   assert.equal(rec.deletes.length, 0);
   assert.equal(rec.searches.length, 1, "only the pre-APPEND probe runs; no post search on failure");
   assert.equal(rec.logouts, 1);
+});
+
+test("draft APPEND immediate rejection closes its stream before removing the spool", async () => {
+  const { client } = mkClient({ mailboxes: [box("Drafts")], searchResults: [[]] });
+  let raw: Readable | null = null;
+  let spoolPath = "";
+  client.append = async (_path, input) => {
+    raw = input;
+    throw new Error("immediate append failure");
+  };
+  const result = await executeDraftSave(
+    client,
+    BASE_INPUT,
+    () => new Date(),
+    async (...args) => {
+      const spool = await createMimeSpool(...args);
+      spoolPath = spool.path;
+      return spool;
+    },
+  );
+  assert.deepEqual(result, { ok: false, error: "APPEND_FAILED" });
+  assert.equal(raw?.destroyed, true);
+  await assert.rejects(access(spoolPath), /ENOENT/);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+});
+
+test("draft APPEND partial-read rejection destroys its producer before spool cleanup", async () => {
+  const { client } = mkClient({ mailboxes: [box("Drafts")], searchResults: [[]] });
+  let raw: Readable | null = null;
+  let spoolPath = "";
+  client.append = async (_path, input) => {
+    raw = input;
+    await new Promise<void>((resolve, reject) => {
+      input.once("data", () => {
+        input.pause();
+        resolve();
+      });
+      input.once("error", reject);
+    });
+    throw new Error("partial append failure");
+  };
+  const result = await executeDraftSave(
+    client,
+    BASE_INPUT,
+    () => new Date(),
+    async (...args) => {
+      const spool = await createMimeSpool(...args);
+      spoolPath = spool.path;
+      return spool;
+    },
+  );
+  assert.deepEqual(result, { ok: false, error: "APPEND_FAILED" });
+  assert.equal(raw?.destroyed, true);
+  await assert.rejects(access(spoolPath), /ENOENT/);
+  await new Promise<void>((resolve) => setImmediate(resolve));
 });
 
 test("save: ordering — APPEND happens BEFORE any delete of the old copy", async () => {

@@ -3,6 +3,9 @@
 // well-known Sent-folder fallback list.
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { access } from "node:fs/promises";
+import type { Readable } from "node:stream";
+import { createMimeSpool } from "../src/mime-spool.js";
 import { resolveSentPath } from "../src/smtp.js";
 
 // The imapflow ListResponse we care about is loosely shaped: { path,
@@ -82,6 +85,8 @@ interface Recorder {
   logoutCalls: number;
   sleeps: number[];
   lastRaw?: Buffer;
+  smtpRaw?: Readable;
+  appendRaw?: Readable;
 }
 
 async function readStream(raw: NodeJS.ReadableStream): Promise<Buffer> {
@@ -94,10 +99,12 @@ async function readStream(raw: NodeJS.ReadableStream): Promise<Buffer> {
 
 function mkDeps(opts: {
   smtpFail?: string;
+  smtpRejectBeforeRead?: string;
   mailboxes: Array<{ path: string; specialUse?: string }>;
   /** For each search attempt, return true when the message is "found". */
   searchAttempts?: boolean[];
   appendFail?: string;
+  appendRejectBeforeRead?: string;
   imapConnectFail?: string;
 }): { deps: SendMessageDeps; rec: Recorder } {
   const rec: Recorder = {
@@ -113,6 +120,8 @@ function mkDeps(opts: {
   const transport: SmtpTransport = {
     async sendMail(o) {
       rec.sendMailCalls++;
+      rec.smtpRaw = o.raw;
+      if (opts.smtpRejectBeforeRead) throw new Error(opts.smtpRejectBeforeRead);
       rec.lastRaw = await readStream(o.raw);
       if (opts.smtpFail) throw new Error(opts.smtpFail);
     },
@@ -137,6 +146,8 @@ function mkDeps(opts: {
       return result;
     },
     async append(folder, raw, flags) {
+      rec.appendRaw = raw;
+      if (opts.appendRejectBeforeRead) throw new Error(opts.appendRejectBeforeRead);
       rec.appendCalls.push({ folder, raw: await readStream(raw), flags });
       if (opts.appendFail) throw new Error(opts.appendFail);
     },
@@ -316,4 +327,43 @@ test("SPECIAL-USE \\Sent wins over well-known 'Sent' during full sendMessage", a
   const r = await sendMessage(ACCT, "pw", BASE_PAYLOAD, deps);
   assert.equal(r.ok, true);
   assert.equal(rec.appendCalls[0].folder, "Custom/Outbox");
+});
+
+test("SMTP immediate rejection closes raw stream before spool cleanup", async () => {
+  const { deps, rec } = mkDeps({
+    smtpRejectBeforeRead: "connection rejected",
+    mailboxes: [{ path: "Sent" }],
+  });
+  let spoolPath = "";
+  deps.createMimeSpool = async (payload) => {
+    const spool = await createMimeSpool(payload);
+    spoolPath = spool.path;
+    return spool;
+  };
+  const result = await sendMessage(ACCT, "pw", BASE_PAYLOAD, deps);
+  assert.equal(result.ok, false);
+  assert.equal(rec.smtpRaw?.destroyed, true);
+  await assert.rejects(access(spoolPath), /ENOENT/);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+});
+
+test("Sent APPEND immediate rejection closes raw stream and preserves SMTP success", async () => {
+  const { deps, rec } = mkDeps({
+    mailboxes: [{ path: "Sent" }],
+    searchAttempts: [false, false, false],
+    appendRejectBeforeRead: "append rejected",
+  });
+  let spoolPath = "";
+  deps.createMimeSpool = async (payload) => {
+    const spool = await createMimeSpool(payload);
+    spoolPath = spool.path;
+    return spool;
+  };
+  const result = await sendMessage(ACCT, "pw", BASE_PAYLOAD, deps);
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.sentCopySaved, false);
+  assert.equal(rec.appendRaw?.destroyed, true);
+  await assert.rejects(access(spoolPath), /ENOENT/);
+  await new Promise<void>((resolve) => setImmediate(resolve));
 });
