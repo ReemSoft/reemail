@@ -34,7 +34,8 @@ const STYLE_RE = /<style[\s\S]*?<\/style>/gi;
 const SCRIPT_RE = /<script[\s\S]*?<\/script>/gi;
 const COMMENT_RE = /<!--[\s\S]*?-->/g;
 const BODY_RE = /<body[^>]*>([\s\S]*?)<\/body>/i;
-const HTML_TAGS_RE = /<\/?(?:p|div|br|table|span|a|img|ul|ol|li|h[1-6]|blockquote|strong|b|em|i)\b/i;
+const HTML_TAGS_RE =
+  /<\/?(?:p|div|br|table|span|a|img|ul|ol|li|h[1-6]|blockquote|strong|b|em|i)\b/i;
 
 /** True when the string looks like HTML rather than plain text. */
 export function looksLikeHtml(input: string): boolean {
@@ -91,7 +92,9 @@ function formatDate(date: string, locale: string): string {
 export const QUOTE_CLASS = "mm_quote";
 
 const BLOCKQUOTE_STYLE =
-  "margin:0;padding-inline-start:12px;border-inline-start:2px solid #d4d4d8;color:#3f3f46";
+  "margin:0;padding-inline-start:12px;border-inline-start:2px solid #d4d4d8;color:#3f3f46;white-space:normal";
+
+export const QUOTED_CONTENT_ATTR = "data-mm-quoted-content";
 
 /**
  * Reply body: two empty lines for the user's answer, then an attribution
@@ -111,7 +114,7 @@ export function buildReplyQuoteHtml(
     "<div><br></div><div><br></div>",
     `<div class="${QUOTE_CLASS}">`,
     `<div style="color:#71717a;font-size:12px;margin:0 0 8px">${attribution}</div>`,
-    `<blockquote style="${BLOCKQUOTE_STYLE}">${fragment}</blockquote>`,
+    `<blockquote style="${BLOCKQUOTE_STYLE}"><div ${QUOTED_CONTENT_ATTR}="1" style="white-space:normal">${fragment}</div></blockquote>`,
     "</div>",
   ].join("");
 }
@@ -151,7 +154,7 @@ export function buildForwardQuoteHtml(
     `<div class="${QUOTE_CLASS}">`,
     `<div style="color:#71717a;font-size:12px;margin:0 0 8px">${escapeHtml(labels.header)}</div>`,
     `<div style="color:#3f3f46;font-size:12px;margin:0 0 12px">${rows.join("<br>")}</div>`,
-    `<blockquote style="${BLOCKQUOTE_STYLE}">${fragment}</blockquote>`,
+    `<blockquote style="${BLOCKQUOTE_STYLE}"><div ${QUOTED_CONTENT_ATTR}="1" style="white-space:normal">${fragment}</div></blockquote>`,
     "</div>",
   ].join("");
 }

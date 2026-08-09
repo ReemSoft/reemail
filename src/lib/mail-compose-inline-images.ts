@@ -650,11 +650,32 @@ export function findInlineImageNodeByCid(
 ): HTMLImageElement | null {
   const wanted = cid.trim().replace(/^<|>$/g, "").toLowerCase();
   return (
-    Array.from(editor.querySelectorAll<HTMLImageElement>('img[src^="cid:"]')).find(
-      (image) =>
-        image.getAttribute("src")?.slice(4).trim().replace(/^<|>$/g, "").toLowerCase() === wanted,
-    ) ?? null
+    Array.from(
+      editor.querySelectorAll<HTMLImageElement>('img[src^="cid:" i],img[data-mm-source-cid]'),
+    ).find((image) => {
+      const pending = image.dataset.mmSourceCid;
+      const source = pending ?? image.getAttribute("src")?.slice(4) ?? "";
+      return source.trim().replace(/^<|>$/g, "").toLowerCase() === wanted;
+    }) ?? null
   );
+}
+
+export function applyInlineImageToCidNode(
+  editor: HTMLElement,
+  sourceCid: string,
+  image: InlineComposeImage,
+): boolean {
+  const node = findInlineImageNodeByCid(editor, sourceCid);
+  if (!node) return false;
+  node.src = image.objectUrl;
+  node.dataset.mmInlineId = image.id;
+  delete node.dataset.mmSourceCid;
+  node.removeAttribute("aria-busy");
+  node.style.removeProperty("visibility");
+  node.draggable = false;
+  node.style.maxWidth = "100%";
+  node.style.height = "auto";
+  return true;
 }
 
 /** Produce recipient-safe HTML and a bounded metadata list. */
@@ -668,6 +689,7 @@ export function serializeInlineImages(
   const root = template.content;
   const byId = new Map(images.map((image) => [image.id, image]));
   const used: InlineComposeImage[] = [];
+  const serializedNodes = new Set<HTMLImageElement>();
   for (const img of root.querySelectorAll<HTMLImageElement>("img[data-mm-inline-id]")) {
     const id = img.dataset.mmInlineId || "";
     const image = byId.get(id);
@@ -676,6 +698,9 @@ export function serializeInlineImages(
       continue;
     }
     img.setAttribute("src", `cid:${image.cid}`);
+    delete img.dataset.mmSourceCid;
+    img.removeAttribute("aria-busy");
+    img.style.removeProperty("visibility");
     const measured = Number.parseInt(img.style.width || img.getAttribute("width") || "", 10);
     if (Number.isFinite(measured) && measured >= INLINE_IMAGE_MIN_WIDTH) {
       img.width = measured;
@@ -687,11 +712,12 @@ export function serializeInlineImages(
     img.style.removeProperty("touch-action");
     if (!options.keepEditorIds) delete img.dataset.mmInlineId;
     used.push(image);
+    serializedNodes.add(img);
   }
   for (const unsafe of root.querySelectorAll<HTMLImageElement>(
-    'img[src^="blob:"],img[src^="data:"]',
+    'img[src^="blob:"],img[src^="data:"],img[src^="cid:" i],img[data-mm-source-cid]',
   ))
-    unsafe.remove();
+    if (!serializedNodes.has(unsafe)) unsafe.remove();
   for (const node of root.querySelectorAll<HTMLElement>(
     "[data-mm-image-tool],[data-mm-drop-marker]",
   ))

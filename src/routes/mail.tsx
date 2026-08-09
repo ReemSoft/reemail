@@ -26,6 +26,10 @@ import {
 } from "@/lib/mail-inline-cid-policy";
 
 import { buildReplyQuoteHtml, buildForwardQuoteHtml } from "@/lib/mail-quote";
+import {
+  markQuotedCidImagesPending,
+  prepareQuotedEmailForComposer,
+} from "@/lib/mail-compose-quote";
 import { splitQuotedHtml } from "@/lib/mail-thread-split";
 
 // Kept as a thin wrapper — the heavy lifting (DOMPurify + CSS url()/@import
@@ -773,6 +777,7 @@ import {
   installInlineImageSelectionListener,
   startInlineImageDragSession,
   findInlineImageNodeByCid,
+  applyInlineImageToCidNode,
   type InlineComposeImage,
   type InlineImageAlignment,
   type InlineImageDragSession,
@@ -1096,6 +1101,8 @@ type ComposeInitial = {
   inlineParts?: NonNullable<MailMessage["inlineParts"]>;
   inlineImages?: NonNullable<MailMessage["inlineImages"]>;
   inlineMessageId?: string;
+  /** Hardened source retained briefly for post-paint quote style isolation. */
+  quoteSourceHtml?: string;
 };
 
 function stripHtml(html: string): string {
@@ -1119,30 +1126,55 @@ function buildReply(message: MailMessage, myEmail: string, all: boolean): Compos
     );
     cc = Array.from(new Set(others)).join(", ");
   }
-  const body = buildReplyQuoteHtml(
-    sanitizeEmailHtml(message.body || message.preview || ""),
-    { from: message.from, date: message.date },
-    getCurrentLang(),
-    tr("كتب:"),
+  const quoteSourceHtml = sanitizeEmailHtml(message.body || message.preview || "");
+  const body = markQuotedCidImagesPending(
+    buildReplyQuoteHtml(
+      quoteSourceHtml,
+      { from: message.from, date: message.date },
+      getCurrentLang(),
+      tr("كتب:"),
+    ),
   );
-  return { to, cc, subject, body, bodyIsHtml: true };
+  return {
+    to,
+    cc,
+    subject,
+    body,
+    bodyIsHtml: true,
+    inlineParts: message.inlineParts,
+    inlineImages: message.inlineImages,
+    inlineMessageId: message.id,
+    quoteSourceHtml,
+  };
 }
 
 function buildForward(message: MailMessage): ComposeInitial {
   const subject = message.subject.startsWith("Fwd:") ? message.subject : `Fwd: ${message.subject}`;
-  const body = buildForwardQuoteHtml(
-    sanitizeEmailHtml(message.body || message.preview || ""),
-    { from: message.from, to: message.to, subject: message.subject, date: message.date },
-    getCurrentLang(),
-    {
-      header: `---------- ${tr("رسالة معاد توجيهها")} ----------`,
-      from: `${tr("من:")}`,
-      date: `${tr("التاريخ:")}`,
-      subject: `${tr("الموضوع:")}`,
-      to: `${tr("إلى:")}`,
-    },
+  const quoteSourceHtml = sanitizeEmailHtml(message.body || message.preview || "");
+  const body = markQuotedCidImagesPending(
+    buildForwardQuoteHtml(
+      quoteSourceHtml,
+      { from: message.from, to: message.to, subject: message.subject, date: message.date },
+      getCurrentLang(),
+      {
+        header: `---------- ${tr("رسالة معاد توجيهها")} ----------`,
+        from: `${tr("من:")}`,
+        date: `${tr("التاريخ:")}`,
+        subject: `${tr("الموضوع:")}`,
+        to: `${tr("إلى:")}`,
+      },
+    ),
   );
-  return { to: "", subject, body, bodyIsHtml: true };
+  return {
+    to: "",
+    subject,
+    body,
+    bodyIsHtml: true,
+    inlineParts: message.inlineParts,
+    inlineImages: message.inlineImages,
+    inlineMessageId: message.id,
+    quoteSourceHtml,
+  };
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -5763,7 +5795,8 @@ function Composer({
     [companyId, accountId, draftId],
   );
   const inlineHydratedRef = useRef(false);
-  const resolveDraftInlineImages = useMailServerFn(resolveMessageInlineImages);
+  const inlineReadinessRef = useRef<Promise<void>>(Promise.resolve());
+  const resolveSourceInlineImages = useMailServerFn(resolveMessageInlineImages);
 
   // Set initial editor HTML once, then hydrate durable/local or IMAP CID bytes
   // into fresh object URLs. Neither localStorage nor outgoing HTML keeps blob URLs.
@@ -5772,10 +5805,35 @@ function Composer({
       editorRef.current.innerHTML = initialHtml;
     }
     let cancelled = false;
+    const streamController = new AbortController();
     const hydrate = async () => {
       const editor = editorRef.current;
       if (!editor) return;
       const hydrated: InlineComposeImage[] = [];
+      if (initial?.quoteSourceHtml) {
+        await new Promise<void>((resolve) => {
+          let settled = false;
+          let timeout = 0;
+          const finish = () => {
+            if (settled) return;
+            settled = true;
+            window.clearTimeout(timeout);
+            resolve();
+          };
+          requestAnimationFrame(finish);
+          timeout = window.setTimeout(finish, 100);
+        });
+        if (cancelled) return;
+        try {
+          const prepared = await prepareQuotedEmailForComposer(initial.quoteSourceHtml);
+          if (!cancelled) {
+            const quote = editor.querySelector<HTMLElement>("[data-mm-quoted-content]");
+            if (quote) quote.innerHTML = prepared;
+          }
+        } catch {
+          // The already-safe fallback quote remains visible with normal whitespace.
+        }
+      }
       try {
         for (const row of await readInlineImages(inlineScope)) {
           const file = new File([row.blob], row.filename, { type: row.mimeType });
@@ -5798,7 +5856,7 @@ function Composer({
       const parsed = initial?.inlineMessageId ? parseMessageId(initial.inlineMessageId) : null;
       if (batchParts.length && parsed && session.mailSessionToken) {
         try {
-          const result = await resolveDraftInlineImages({
+          const result = await resolveSourceInlineImages({
             data: {
               mailSessionToken: session.mailSessionToken,
               password: session.password,
@@ -5815,16 +5873,10 @@ function Composer({
       const attachRemoteFile = async (sourceCid: string, file: File) => {
         if (!validateInlineImageFile(file).ok) return;
         const image = createInlineComposeImage(file);
-        const node = findInlineImageNodeByCid(editor, sourceCid);
-        if (!node) {
+        if (!applyInlineImageToCidNode(editor, sourceCid, image)) {
           URL.revokeObjectURL(image.objectUrl);
           return;
         }
-        node.src = image.objectUrl;
-        node.dataset.mmInlineId = image.id;
-        node.draggable = false;
-        node.style.maxWidth = "100%";
-        node.style.height = "auto";
         hydrated.push(image);
         await persistInlineImage(inlineScope, toInlineImageMetadata(image), image.file).catch(
           () => undefined,
@@ -5849,11 +5901,14 @@ function Composer({
         }
       }
       if (parsed && session.mailSessionToken) {
-        for (const part of streamedParts) {
-          try {
-            const response = await fetch("/api/mail-attachment", {
+        const attachmentTasks: Promise<void>[] = [];
+        await streamInlineCidPartsSequential(streamedParts, {
+          signal: streamController.signal,
+          fetchPart: (part, signal) =>
+            fetch("/api/mail-inline-part", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
+              signal,
               body: JSON.stringify({
                 mailSessionToken: session.mailSessionToken,
                 password: session.password,
@@ -5861,15 +5916,17 @@ function Composer({
                 uid: parsed.uid,
                 part: part.part,
               }),
-            });
-            if (!response.ok) continue;
-            const blob = await response.blob();
-            const file = new File([blob], "inline-image", { type: blob.type || part.mimeType });
-            await attachRemoteFile(part.cid, file);
-          } catch {
-            /* A failed part never corrupts the remaining draft. */
-          }
-        }
+            }),
+          onMapping: ({ cid, mimeType, bytes }) => {
+            attachmentTasks.push(
+              attachRemoteFile(
+                cid,
+                new File([bytes], "inline-image", { type: mimeType.split(";", 1)[0] }),
+              ),
+            );
+          },
+        });
+        await Promise.all(attachmentTasks);
       }
       if (cancelled) {
         for (const image of hydrated) URL.revokeObjectURL(image.objectUrl);
@@ -5883,14 +5940,24 @@ function Composer({
         if (node) {
           node.src = image.objectUrl;
           node.dataset.mmInlineId = image.id;
+          delete node.dataset.mmSourceCid;
+          node.removeAttribute("aria-busy");
+          node.style.removeProperty("visibility");
         }
       }
+      for (const unresolved of editor.querySelectorAll<HTMLImageElement>(
+        'img[src^="cid:" i],img[data-mm-source-cid]',
+      ))
+        unresolved.remove();
       setInlineImages(hydrated);
       inlineHydratedRef.current = true;
+      if (isDirtyRef.current) autosaveRef.current?.schedule();
     };
-    void hydrate();
+    inlineReadinessRef.current = hydrate();
+    void inlineReadinessRef.current;
     return () => {
       cancelled = true;
+      streamController.abort();
       for (const image of inlineImagesRef.current) URL.revokeObjectURL(image.objectUrl);
     };
     // Intentional mount-only hydration: Composer is keyed by draft identity.
@@ -6768,6 +6835,7 @@ function Composer({
     setSending(true);
     setProgress(0);
     try {
+      await inlineReadinessRef.current;
       const serialized = serializeInlineImages(
         editorRef.current?.innerHTML ?? "",
         inlineImagesRef.current,
@@ -6998,6 +7066,7 @@ function Composer({
     try {
       // Any pending debounced save must NOT race the explicit save.
       autosaveRef.current?.cancel();
+      await inlineReadinessRef.current;
       const serialized = serializeInlineImages(
         editorRef.current?.innerHTML ?? "",
         inlineImagesRef.current,
