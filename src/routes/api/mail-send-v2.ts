@@ -47,11 +47,13 @@ export const Route = createFileRoute("/api/mail-send-v2")({
             body: JSON.stringify(safe),
           });
           const result = await upstream.text();
+          const serverTiming = upstream.headers.get("Server-Timing");
           return new Response(result, {
             status: upstream.status,
             headers: {
               "Content-Type": "application/json",
               "Cache-Control": "private, no-store",
+              ...(serverTiming ? { "Server-Timing": serverTiming } : {}),
             },
           });
         } catch {

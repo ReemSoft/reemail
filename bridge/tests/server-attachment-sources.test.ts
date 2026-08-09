@@ -23,3 +23,15 @@ test("server source transfer failure drops only the transfer connection", () => 
   assert.match(source, /dropAccountConnection\(input\.account, "transfer"\)/);
   assert.doesNotMatch(source, /dropAccountConnection\(input\.account, "interactive"\)/);
 });
+
+test("empty server source list returns before account binding or IMAP work", () => {
+  const source = readFileSync(
+    new URL("../src/server-attachment-sources.ts", import.meta.url),
+    "utf8",
+  );
+  const earlyReturn = source.indexOf("if (input.sources.length === 0) return []");
+  assert.ok(earlyReturn > 0);
+  assert.ok(earlyReturn < source.indexOf("accountBinding(input.account)"));
+  assert.ok(earlyReturn < source.indexOf("getMailboxesCached("));
+  assert.ok(earlyReturn < source.indexOf("withAccountMailbox("));
+});

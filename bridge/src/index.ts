@@ -44,7 +44,8 @@ import {
   getMailboxesCached,
   withAccountMailbox,
 } from "./imap-connection.js";
-import { sendMessage } from "./smtp.js";
+import { sendMessage, sendMessageFast } from "./smtp.js";
+import { postSendFinalizers } from "./post-send-finalizer.js";
 import { mapUploadedAttachments } from "./inline-images.js";
 import {
   DraftSavePayloadSchema,
@@ -83,6 +84,7 @@ app.use(
     },
     methods: ["GET", "POST", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization", "X-Bridge-Key"],
+    exposedHeaders: ["Server-Timing", "X-MailMaestro-Stage-Ms"],
     credentials: false,
   }),
 );
@@ -300,6 +302,7 @@ app.get("/api/metrics/imap-gates", requireKey, (_req, res) => {
     uploads: directUploadGate.stats(),
     downloads: { active: downloadGates.inFlight() },
     staging: stagedAttachmentStats(),
+    sentFinalizers: postSendFinalizers.stats(),
   });
 });
 
@@ -625,6 +628,7 @@ app.post("/api/attachment-upload-ticket", requireKey, (req, res) => {
 });
 
 app.post("/api/direct/attachment-upload", async (req, res) => {
+  const handlerStartedAt = performance.now();
   const release = directUploadGate.tryAcquire();
   if (!release) return res.status(429).json({ ok: false, error: "UPLOAD_BUSY" });
   try {
@@ -646,6 +650,7 @@ app.post("/api/direct/attachment-upload", async (req, res) => {
     if (contentLength && contentLength !== data.size) {
       return res.status(400).json({ ok: false, error: "UPLOAD_SIZE_MISMATCH" });
     }
+    const stageStartedAt = performance.now();
     const staged = await stageAttachmentStream({
       secret: BRIDGE_API_KEY,
       account: ticket.account,
@@ -654,6 +659,18 @@ app.post("/api/direct/attachment-upload", async (req, res) => {
       kind: data.kind,
       declaredSize: data.size,
       stream: req,
+    });
+    const stageMs = performance.now() - stageStartedAt;
+    const totalMs = performance.now() - handlerStartedAt;
+    res.setHeader(
+      "Server-Timing",
+      `stage;dur=${stageMs.toFixed(1)}, total;dur=${totalMs.toFixed(1)}`,
+    );
+    res.setHeader("X-MailMaestro-Stage-Ms", stageMs.toFixed(1));
+    console.info("[bridge] Direct upload complete", {
+      bytes: staged.size,
+      stageMs: Math.round(stageMs),
+      totalMs: Math.round(totalMs),
     });
     return res.json({ ok: true, ...staged });
   } catch (error) {
@@ -666,6 +683,7 @@ app.post("/api/direct/attachment-upload", async (req, res) => {
 });
 
 app.post("/api/send-v2", requireKey, async (req, res) => {
+  const foregroundStartedAt = performance.now();
   let gateKey: string | null = null;
   let gateAcquired = false;
   let stagedAccount: string | null = null;
@@ -680,6 +698,7 @@ app.post("/api/send-v2", requireKey, async (req, res) => {
       ...payload.attachmentHandles,
       ...payload.stagedInlineImages.map(({ handle }) => handle),
     ];
+    const handleResolveStartedAt = performance.now();
     const normal = await Promise.all(
       payload.attachmentHandles.map((handle) =>
         resolveStagedAttachment(BRIDGE_API_KEY, handle, account),
@@ -691,6 +710,8 @@ app.post("/api/send-v2", requireKey, async (req, res) => {
         staged: await resolveStagedAttachment(BRIDGE_API_KEY, item.handle, account),
       })),
     );
+    const handleResolveMs = performance.now() - handleResolveStartedAt;
+    const sourceStageStartedAt = performance.now();
     const sourceAttachments = await stageServerAttachmentSources({
       secret: BRIDGE_API_KEY,
       account: payload.account as MailAccount,
@@ -706,6 +727,7 @@ app.post("/api/send-v2", requireKey, async (req, res) => {
       })),
       maxBytes: SEND_MAX_TOTAL_BYTES,
     });
+    const sourceStageMs = performance.now() - sourceStageStartedAt;
     sourceHandles = sourceAttachments.map(({ staged }) => staged.handle);
     if (normal.some((item) => item.kind !== "attachment")) {
       return res.status(400).json({ ok: false, error: "ATTACHMENT_KIND_MISMATCH" });
@@ -744,7 +766,7 @@ app.post("/api/send-v2", requireKey, async (req, res) => {
         contentType,
       })),
     );
-    const result = await sendMessage(payload.account as MailAccount, payload.password, {
+    const result = await sendMessageFast(payload.account as MailAccount, payload.password, {
       from: {
         name: payload.account.display_name || payload.account.email_address,
         email: payload.account.email_address,
@@ -759,6 +781,17 @@ app.post("/api/send-v2", requireKey, async (req, res) => {
     });
     if (!result.ok) return res.status(500).json(result);
     sendSucceeded = true;
+    const foregroundTotalMs = performance.now() - foregroundStartedAt;
+    res.setHeader(
+      "Server-Timing",
+      [
+        `handleResolve;dur=${handleResolveMs.toFixed(1)}`,
+        `sourceStage;dur=${sourceStageMs.toFixed(1)}`,
+        `mimeSpool;dur=${result.timings.mimeSpoolMs.toFixed(1)}`,
+        `smtp;dur=${result.timings.smtpMs.toFixed(1)}`,
+        `foregroundTotal;dur=${foregroundTotalMs.toFixed(1)}`,
+      ].join(", "),
+    );
     return res.json(result);
   } catch (error) {
     const code =

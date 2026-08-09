@@ -6,6 +6,7 @@ import { describe, it, expect, vi } from "vitest";
 import {
   createDraftSaver,
   createPendingDeleteQueue,
+  deleteDraftAfterSend,
   clearDraftDoc,
   draftKeyV2,
   draftKeyV3,
@@ -18,6 +19,35 @@ import {
   type DraftStorageLike,
   type SaveRemoteResult,
 } from "../mail-draft-lifecycle";
+
+describe("post-send draft deletion", () => {
+  it("does not block completion and reports a deferred failure", async () => {
+    let settle!: (value: boolean) => void;
+    const pending = new Promise<boolean>((resolve) => {
+      settle = resolve;
+    });
+    const onFailure = vi.fn();
+    deleteDraftAfterSend({ deleteRemote: () => pending, onFailure });
+    expect(onFailure).not.toHaveBeenCalled();
+    settle(false);
+    await pending;
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(onFailure).toHaveBeenCalledOnce();
+  });
+
+  it("reports a thrown delete failure exactly once", async () => {
+    const onFailure = vi.fn();
+    deleteDraftAfterSend({
+      deleteRemote: () => {
+        throw new Error("offline");
+      },
+      onFailure,
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(onFailure).toHaveBeenCalledOnce();
+  });
+});
 
 function memStorage(): DraftStorageLike & { store: Map<string, string> } {
   const store = new Map<string, string>();

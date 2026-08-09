@@ -693,6 +693,7 @@ import {
   clearDraftDoc,
   createDraftSaver,
   createPendingDeleteQueue,
+  deleteDraftAfterSend,
   newDraftId,
   type DraftSaver,
   type DraftSaveStatus,
@@ -701,6 +702,7 @@ import {
   type DraftDocV3,
   type PendingDeleteQueue,
 } from "@/lib/mail-draft-lifecycle";
+import { planRemoteDraftSave } from "@/lib/mail-draft-autosave-policy";
 import {
   createAutosaveScheduler,
   attachInputListener,
@@ -5818,7 +5820,7 @@ function Composer({
                 uid: res.uid as number,
                 uidValidity: res.uidValidity as string,
               };
-              if (typeof window !== "undefined") {
+              if (typeof window !== "undefined" && !sendCompletedRef.current) {
                 writeDraftDoc(window.localStorage, accountEmail, {
                   version: 3,
                   draftId,
@@ -5842,6 +5844,11 @@ function Composer({
       onStatus: setSaveStatus,
       onServerRef: (r) => setServerRef(r),
       onCompleted: ({ completedGeneration, status, serverRef, code }) => {
+        const wasAutomatic = automaticSaveGenerationsRef.current.delete(completedGeneration);
+        if (sendCompletedRef.current) return;
+        if (wasAutomatic && status === "saved") {
+          lastSuccessfulAutomaticSaveAtRef.current = Date.now();
+        }
         // Advance the clean marker ONLY when a save actually persisted
         // (remote success, or local-fallback on NETWORK). A hard failure
         // (SESSION_REQUIRED, APPEND_FAILED, etc.) MUST leave the composer
@@ -6277,9 +6284,15 @@ function Composer({
   // helpers expose idempotent .dispose() and are torn down inside useEffect
   // cleanup so no callback runs after unmount.
   const remoteAutosaveTimerRef = useRef<number | null>(null);
+  const sendInProgressRef = useRef(false);
+  const sendCompletedRef = useRef(false);
+  const automaticRemoteSaveInFlightRef = useRef<Promise<void> | null>(null);
+  const lastSuccessfulAutomaticSaveAtRef = useRef<number | null>(null);
+  const automaticSaveGenerationsRef = useRef(new Set<number>());
   const pendingRemoteSaveRef = useRef<{
     snapshot: DraftSnapshot;
     generation: number;
+    hasAttachments: boolean;
   } | null>(null);
   // Latest snapshot fields captured for the scheduler's callback (avoids
   // stale-closure reads without re-instantiating the scheduler each render).
@@ -6312,11 +6325,49 @@ function Composer({
 
   useEffect(() => {
     if (typeof window === "undefined") return;
+    const flushPendingRemoteSave = () => {
+      remoteAutosaveTimerRef.current = null;
+      const pending = pendingRemoteSaveRef.current;
+      if (!pending || sendInProgressRef.current) return;
+      if (pending.hasAttachments && lastSuccessfulAutomaticSaveAtRef.current) {
+        const remaining = Math.max(
+          0,
+          lastSuccessfulAutomaticSaveAtRef.current + 60_000 - Date.now(),
+        );
+        if (remaining > 0) {
+          remoteAutosaveTimerRef.current = window.setTimeout(flushPendingRemoteSave, remaining);
+          return;
+        }
+      }
+      pendingRemoteSaveRef.current = null;
+      automaticSaveGenerationsRef.current.clear();
+      automaticSaveGenerationsRef.current.add(pending.generation);
+      const savePromise = saverRef.current?.requestSave(
+        pending.snapshot,
+        serverRefRef.current,
+        pending.generation,
+      );
+      if (savePromise) {
+        automaticRemoteSaveInFlightRef.current = savePromise;
+        void savePromise.then(
+          () => {
+            if (automaticRemoteSaveInFlightRef.current === savePromise) {
+              automaticRemoteSaveInFlightRef.current = null;
+            }
+          },
+          () => {
+            if (automaticRemoteSaveInFlightRef.current === savePromise) {
+              automaticRemoteSaveInFlightRef.current = null;
+            }
+          },
+        );
+      }
+    };
     const scheduler = createAutosaveScheduler({
       delayMs: 800,
       onFire: () => {
         const s = snapshotInputsRef.current;
-        if (s.sending) return;
+        if (s.sending || sendInProgressRef.current) return;
         if (!inlineHydratedRef.current) return;
         const serialized = serializeInlineImages(
           editorRef.current?.innerHTML ?? "",
@@ -6372,22 +6423,20 @@ function Composer({
         // this exact value (or a newer coalesced one) — a stale response
         // can never mark newer content clean.
         const genAtFire = generationRef.current;
-        pendingRemoteSaveRef.current = { snapshot, generation: genAtFire };
+        const hasAttachments = s.existingKeptLen + s.filesLen + s.inlineLen > 0;
+        pendingRemoteSaveRef.current = { snapshot, generation: genAtFire, hasAttachments };
         if (remoteAutosaveTimerRef.current !== null) {
           window.clearTimeout(remoteAutosaveTimerRef.current);
         }
-        remoteAutosaveTimerRef.current = window.setTimeout(() => {
-          remoteAutosaveTimerRef.current = null;
-          const pending = pendingRemoteSaveRef.current;
-          pendingRemoteSaveRef.current = null;
-          if (pending) {
-            void saverRef.current?.requestSave(
-              pending.snapshot,
-              serverRefRef.current,
-              pending.generation,
-            );
-          }
-        }, 5_000);
+        const plan = planRemoteDraftSave({
+          automatic: true,
+          hasAttachments,
+          sending: sendInProgressRef.current,
+          now: Date.now(),
+          lastSuccessfulAutomaticSaveAt: lastSuccessfulAutomaticSaveAtRef.current,
+        });
+        if (!plan.allowed) return;
+        remoteAutosaveTimerRef.current = window.setTimeout(flushPendingRemoteSave, plan.delayMs);
       },
     });
     autosaveRef.current = scheduler;
@@ -6993,6 +7042,14 @@ function Composer({
   };
 
   async function performSend() {
+    sendInProgressRef.current = true;
+    autosaveRef.current?.cancel();
+    if (remoteAutosaveTimerRef.current !== null) {
+      window.clearTimeout(remoteAutosaveTimerRef.current);
+      remoteAutosaveTimerRef.current = null;
+    }
+    pendingRemoteSaveRef.current = null;
+    let sendAccepted = false;
     setSending(true);
     setProgress(0);
     try {
@@ -7076,17 +7133,18 @@ function Composer({
         ok: false,
         error: `HTTP ${response.status}`,
       }))) as { ok: boolean; error?: string };
-      setProgress(100);
-
       if (!result.ok) {
         toast.error(result.error || tr("فشل إرسال الرسالة"));
         return;
       }
+      sendAccepted = true;
+      sendCompletedRef.current = true;
+      setProgress(100);
       // Clear draft on successful send: local wipe + best-effort server delete,
       // with any failure re-queued so the next composer mount can retry it.
       try {
         clearDraftDoc(window.localStorage, accountEmail);
-        await clearInlineImages(inlineScope).catch(() => undefined);
+        void clearInlineImages(inlineScope).catch(() => undefined);
       } catch {
         /* noop */
       }
@@ -7094,26 +7152,35 @@ function Composer({
       const hadServerCopy = !!refAtSend || saveStatus !== "idle";
       if (hadServerCopy) {
         const token = session.mailSessionToken ?? "";
-        let deleteOk = false;
-        try {
-          const del = await bridgeDeleteDraftFn({
-            data: {
-              mailSessionToken: token,
+        const automaticSaveAtSend = automaticRemoteSaveInFlightRef.current;
+        deleteDraftAfterSend({
+          deleteRemote: async () => {
+            await automaticSaveAtSend?.catch(() => undefined);
+            try {
+              clearDraftDoc(window.localStorage, accountEmail);
+            } catch {
+              /* remote cleanup must still run if local storage is unavailable */
+            }
+            const deleted = await bridgeDeleteDraftFn({
+              data: {
+                mailSessionToken: token,
+                draftId,
+                previousRef: refAtSend ?? undefined,
+              },
+            });
+            return !!deleted?.ok;
+          },
+          onFailure: () => {
+            pendingQueueRef.current?.enqueue(accountEmail, {
               draftId,
-              previousRef: refAtSend ?? undefined,
-            },
-          });
-          deleteOk = !!del?.ok;
-        } catch {
-          deleteOk = false;
-        }
-        if (!deleteOk) {
-          pendingQueueRef.current?.enqueue(accountEmail, {
-            draftId,
-            previousRef: refAtSend,
-          });
-        }
+              previousRef: refAtSend,
+            });
+          },
+        });
       }
+      toast.success(tr("تم إرسال الرسالة"));
+      onClose({ refreshDrafts: false });
+      onSent();
       // Address book: record recipients AFTER a successful SMTP send only.
       // Never let this failure poison the send outcome.
       try {
@@ -7141,14 +7208,13 @@ function Composer({
       } catch {
         /* noop — never fail the send */
       }
-      toast.success(tr("تم إرسال الرسالة"));
-      onClose({ refreshDrafts: false });
-      onSent();
     } catch (err: unknown) {
       toast.error(errorMessage(err, tr("فشل إرسال الرسالة")));
     } finally {
+      sendInProgressRef.current = false;
       setSending(false);
       setProgress(0);
+      if (!sendAccepted && isDirtyRef.current) autosaveRef.current?.schedule();
     }
   }
 

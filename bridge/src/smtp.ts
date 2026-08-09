@@ -1,8 +1,10 @@
 import { createTransport } from "nodemailer";
 import type { ImapFlow, ListResponse } from "imapflow";
 import type { Readable } from "node:stream";
+import { createHash } from "node:crypto";
 import { makeImapClient, listMailboxes } from "./imap.js";
 import { createMimeSpool, withMimeSpoolReadStream, type MimeSpool } from "./mime-spool.js";
+import { postSendFinalizers, type PostSendFinalizerQueue } from "./post-send-finalizer.js";
 import type { MailAccount } from "./types.js";
 
 export interface SendAttachment {
@@ -37,6 +39,11 @@ export interface SendMessageOk {
 export interface SendMessageErr {
   ok: false;
   error: string;
+}
+
+export interface FastSendMessageOk extends SendMessageOk {
+  sentCopyPending: boolean;
+  timings: { mimeSpoolMs: number; smtpMs: number };
 }
 
 const SENT_SEARCH_RETRIES = 3;
@@ -182,6 +189,7 @@ export interface SendMessageDeps {
   createImapSentClient: (account: MailAccount, password: string) => ImapSentClient;
   createMimeSpool?: (payload: SendMessagePayload) => Promise<MimeSpool>;
   sleep?: (ms: number) => Promise<void>;
+  postSendQueue?: Pick<PostSendFinalizerQueue, "enqueue">;
 }
 
 export function smtpRejectUnauthorized(env = process.env): boolean {
@@ -222,6 +230,99 @@ function defaultDeps(): SendMessageDeps {
       };
     },
     sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+  };
+}
+
+export async function sendMessageFast(
+  account: MailAccount,
+  password: string,
+  payload: SendMessagePayload,
+  deps: SendMessageDeps = defaultDeps(),
+): Promise<FastSendMessageOk | SendMessageErr> {
+  const spoolStartedAt = performance.now();
+  let spool: MimeSpool;
+  try {
+    spool = await (deps.createMimeSpool ?? createMimeSpool)(payload);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "failed to build MIME";
+    return { ok: false, error: message };
+  }
+  const mimeSpoolMs = performance.now() - spoolStartedAt;
+
+  const smtpStartedAt = performance.now();
+  let transporter: SmtpTransport | null = null;
+  try {
+    transporter = deps.createTransport(account, password);
+    const envelopeRecipients = [...payload.to, ...(payload.cc || []), ...(payload.bcc || [])].map(
+      (recipient) => recipient.email,
+    );
+    await withMimeSpoolReadStream(spool, (raw) =>
+      transporter.sendMail({
+        raw,
+        envelope: { from: payload.from.email, to: envelopeRecipients },
+      }),
+    );
+  } catch (error) {
+    await spool.cleanup().catch(() => undefined);
+    const message = error instanceof Error ? error.message : "Failed to send message";
+    return { ok: false, error: message };
+  } finally {
+    try {
+      transporter?.close();
+    } catch {
+      /* SMTP acceptance remains authoritative even if local close throws. */
+    }
+  }
+  const smtpMs = performance.now() - smtpStartedAt;
+
+  const queue = deps.postSendQueue ?? postSendFinalizers;
+  const accountKey = createHash("sha256")
+    .update(`${account.imap_host}\0${account.email_address.toLowerCase()}`)
+    .digest("hex");
+  const finalizeSentCopy = async () => {
+    let client: ImapSentClient | null = null;
+    try {
+      client = deps.createImapSentClient(account, password);
+      const sleep = deps.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+      await client.connect();
+      const mailboxes = await client.list();
+      const sentPath = resolveSentPath(mailboxes);
+      if (sentPath) {
+        let found = false;
+        for (let i = 0; i < SENT_SEARCH_RETRIES; i++) {
+          if (await client.searchMessageId(sentPath, spool.messageId)) {
+            found = true;
+            break;
+          }
+          if (i < SENT_SEARCH_RETRIES - 1) await sleep(SENT_SEARCH_INTERVAL_MS);
+        }
+        if (!found) {
+          await withMimeSpoolReadStream(spool, (raw) => client.append(sentPath, raw, ["\\Seen"]));
+        }
+      }
+    } catch {
+      console.error("[bridge] Background Sent-copy failed");
+    } finally {
+      await client?.logout().catch(() => undefined);
+      await spool.cleanup().catch(() => undefined);
+    }
+  };
+  let accepted = false;
+  try {
+    accepted = queue.enqueue(accountKey, finalizeSentCopy);
+  } catch {
+    accepted = false;
+  }
+  if (!accepted) {
+    console.warn("[bridge] Sent finalizer queue saturated; best-effort copy skipped");
+    void spool.cleanup().catch(() => undefined);
+  }
+  return {
+    ok: true,
+    messageId: spool.messageId,
+    sentCopySaved: false,
+    sentCopyPending: accepted,
+    timings: { mimeSpoolMs, smtpMs },
   };
 }
 

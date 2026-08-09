@@ -160,3 +160,32 @@ test("release is idempotent and quota counters never become negative", async () 
   assert.ok(stagedAttachmentStats().stagedBytes >= 0);
   assert.ok(stagedAttachmentStats().stagedFiles >= 0);
 });
+
+test("local staging throughput benchmark streams 1/4/10/25 MiB with bounded chunks", async () => {
+  const chunk = Buffer.alloc(64 * 1024, 0x61);
+  for (const mib of [1, 4, 10, 25]) {
+    const bytes = mib * 1024 * 1024;
+    async function* generated() {
+      let remaining = bytes;
+      while (remaining > 0) {
+        const length = Math.min(remaining, chunk.length);
+        yield length === chunk.length ? chunk : chunk.subarray(0, length);
+        remaining -= length;
+      }
+    }
+    const startedAt = performance.now();
+    const staged = await stageAttachmentStream({
+      secret,
+      account,
+      filename: `benchmark-${mib}.bin`,
+      mimeType: "application/octet-stream",
+      kind: "attachment",
+      declaredSize: bytes,
+      stream: Readable.from(generated()),
+    });
+    const elapsedMs = performance.now() - startedAt;
+    console.log(`[staging-benchmark] mib=${mib} ms=${elapsedMs.toFixed(1)}`);
+    assert.equal(staged.size, bytes);
+    await releaseStagedAttachment(secret, staged.handle, account);
+  }
+});

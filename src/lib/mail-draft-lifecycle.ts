@@ -481,6 +481,27 @@ export interface PendingDeleteQueue {
   flush(accountEmail: string): Promise<{ tried: number; deleted: number; kept: number }>;
 }
 
+export function deleteDraftAfterSend(input: {
+  deleteRemote: () => Promise<boolean>;
+  onFailure: () => void;
+}): void {
+  let failureReported = false;
+  const reportFailure = () => {
+    if (failureReported) return;
+    failureReported = true;
+    try {
+      input.onFailure();
+    } catch {
+      /* cleanup diagnostics must never affect the completed send */
+    }
+  };
+  void Promise.resolve()
+    .then(input.deleteRemote)
+    .then((deleted) => {
+      if (!deleted) reportFailure();
+    }, reportFailure);
+}
+
 function readQueue(storage: DraftStorageLike, accountEmail: string): PendingDeleteEntry[] {
   try {
     const raw = storage.getItem(pendingDeleteKey(accountEmail));

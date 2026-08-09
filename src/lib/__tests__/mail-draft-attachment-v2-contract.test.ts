@@ -9,7 +9,8 @@ describe("draft attachment V2 contract", () => {
     expect(composer).toContain("stagedUploadsRef.current.get(file)");
     expect(composer).toContain('fetch("/api/mail-draft-save-v2"');
     expect(composer).toContain("sourceAttachments");
-    expect(composer).toContain("}, 5_000)");
+    expect(composer).toContain("planRemoteDraftSave({");
+    expect(composer).toContain("hasAttachments");
     const remoteSave = composer.slice(
       composer.indexOf("saveRemote: async"),
       composer.indexOf("onStatus: setSaveStatus"),

@@ -30,6 +30,7 @@ export async function stageServerAttachmentSources(input: {
   sources: ServerAttachmentSource[];
   maxBytes: number;
 }): Promise<Array<{ staged: StagedAttachment; resolved: ResolvedStagedAttachment }>> {
+  if (input.sources.length === 0) return [];
   const account = accountBinding(input.account);
   const output: Array<{ staged: StagedAttachment; resolved: ResolvedStagedAttachment }> = [];
   let currentStaged: StagedAttachment | null = null;

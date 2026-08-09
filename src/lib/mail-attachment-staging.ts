@@ -1,3 +1,5 @@
+import { mailPerf } from "./mail-performance";
+
 export type StagedAttachmentKind = "attachment" | "inline-image";
 
 export interface StagedAttachmentResult {
@@ -18,6 +20,7 @@ export async function uploadAttachmentDirect(
     signal?: AbortSignal;
   },
 ): Promise<StagedAttachmentResult> {
+  const ticketStartedAt = performance.now();
   const ticketResponse = await fetch("/api/mail-attachment-upload-ticket", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -34,10 +37,12 @@ export async function uploadAttachmentDirect(
   if (!ticketResponse.ok || !ticket?.ok) {
     throw new Error(ticket?.error || "UPLOAD_TICKET_FAILED");
   }
+  const ticketMs = performance.now() - ticketStartedAt;
 
   return new Promise<StagedAttachmentResult>((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     const abort = () => xhr.abort();
+    const cleanup = () => options.signal?.removeEventListener("abort", abort);
     options.signal?.addEventListener("abort", abort, { once: true });
     xhr.open("POST", ticket.uploadUrl);
     xhr.setRequestHeader("Authorization", `Bearer ${ticket.ticket}`);
@@ -48,17 +53,42 @@ export async function uploadAttachmentDirect(
       }
     };
     xhr.onload = () => {
-      options.signal?.removeEventListener("abort", abort);
+      cleanup();
       try {
         const result = JSON.parse(xhr.responseText || "{}");
-        if (xhr.status >= 200 && xhr.status < 300 && result.ok) resolve(result);
-        else reject(new Error(result.error || `UPLOAD_HTTP_${xhr.status}`));
+        if (xhr.status >= 200 && xhr.status < 300 && result.ok) {
+          const xhrMs = performance.now() - xhrStartedAt;
+          const bridgeStageHeader = xhr.getResponseHeader("X-MailMaestro-Stage-Ms");
+          const bridgeStageMs = bridgeStageHeader === null ? Number.NaN : Number(bridgeStageHeader);
+          mailPerf("attachment-upload", {
+            ticketMs: Math.round(ticketMs),
+            xhrMs: Math.round(xhrMs),
+            bridgeStageMs: Number.isFinite(bridgeStageMs) ? Math.round(bridgeStageMs) : -1,
+            transportApproxMs: Number.isFinite(bridgeStageMs)
+              ? Math.max(0, Math.round(xhrMs - bridgeStageMs))
+              : -1,
+            bytes: file.size,
+          });
+          resolve(result);
+        } else reject(new Error(result.error || `UPLOAD_HTTP_${xhr.status}`));
       } catch {
         reject(new Error(`UPLOAD_HTTP_${xhr.status}`));
       }
     };
-    xhr.onerror = () => reject(new Error("UPLOAD_NETWORK_ERROR"));
-    xhr.onabort = () => reject(new DOMException("Upload aborted", "AbortError"));
-    xhr.send(file);
+    xhr.onerror = () => {
+      cleanup();
+      reject(new Error("UPLOAD_NETWORK_ERROR"));
+    };
+    xhr.onabort = () => {
+      cleanup();
+      reject(new DOMException("Upload aborted", "AbortError"));
+    };
+    const xhrStartedAt = performance.now();
+    try {
+      xhr.send(file);
+    } catch (error) {
+      cleanup();
+      reject(error);
+    }
   });
 }

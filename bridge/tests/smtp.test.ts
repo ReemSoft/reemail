@@ -57,6 +57,7 @@ test("resolveSentPath returns undefined when no Sent-like folder exists (APPEND 
 // ============================================================================
 import {
   sendMessage,
+  sendMessageFast,
   type SendMessageDeps,
   type SmtpTransport,
   type ImapSentClient,
@@ -366,4 +367,98 @@ test("Sent APPEND immediate rejection closes raw stream and preserves SMTP succe
   assert.equal(rec.appendRaw?.destroyed, true);
   await assert.rejects(access(spoolPath), /ENOENT/);
   await new Promise<void>((resolve) => setImmediate(resolve));
+});
+
+test("sendMessageFast returns after SMTP and finalizes the same spool in background", async () => {
+  const { deps, rec } = mkDeps({
+    mailboxes: [{ path: "Sent" }],
+    searchAttempts: [false, false, false],
+  });
+  const jobs: Array<() => Promise<void>> = [];
+  let spoolPath = "";
+  deps.createMimeSpool = async (payload) => {
+    const spool = await createMimeSpool(payload);
+    spoolPath = spool.path;
+    return spool;
+  };
+  deps.postSendQueue = {
+    enqueue(_key, run) {
+      jobs.push(run);
+      return true;
+    },
+  };
+
+  const result = await sendMessageFast(ACCT, "pw", BASE_PAYLOAD, deps);
+  assert.equal(result.ok, true);
+  assert.equal(rec.imapConnected, 0, "foreground must not start Sent IMAP work");
+  assert.equal(jobs.length, 1);
+  await access(spoolPath);
+
+  await jobs[0]();
+  assert.equal(rec.imapConnected, 1);
+  assert.equal(rec.appendCalls.length, 1);
+  assert.ok(rec.lastRaw && rec.appendCalls[0].raw.equals(rec.lastRaw));
+  await assert.rejects(access(spoolPath), /ENOENT/);
+});
+
+test("sendMessageFast SMTP failure cleans the spool and enqueues no Sent work", async () => {
+  const { deps } = mkDeps({
+    smtpFail: "rejected",
+    mailboxes: [{ path: "Sent" }],
+  });
+  let enqueueCalls = 0;
+  let spoolPath = "";
+  deps.createMimeSpool = async (payload) => {
+    const spool = await createMimeSpool(payload);
+    spoolPath = spool.path;
+    return spool;
+  };
+  deps.postSendQueue = {
+    enqueue() {
+      enqueueCalls++;
+      return true;
+    },
+  };
+  const result = await sendMessageFast(ACCT, "pw", BASE_PAYLOAD, deps);
+  assert.equal(result.ok, false);
+  assert.equal(enqueueCalls, 0);
+  await assert.rejects(access(spoolPath), /ENOENT/);
+});
+
+test("sendMessageFast queue saturation never resends SMTP and cleans the spool", async () => {
+  const { deps, rec } = mkDeps({ mailboxes: [{ path: "Sent" }] });
+  let spoolPath = "";
+  deps.createMimeSpool = async (payload) => {
+    const spool = await createMimeSpool(payload);
+    spoolPath = spool.path;
+    return spool;
+  };
+  deps.postSendQueue = { enqueue: () => false };
+  const result = await sendMessageFast(ACCT, "pw", BASE_PAYLOAD, deps);
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.sentCopyPending, false);
+  assert.equal(rec.sendMailCalls, 1);
+  assert.equal(rec.imapConnected, 0);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  await assert.rejects(access(spoolPath), /ENOENT/);
+});
+
+test("sendMessageFast keeps SMTP acceptance authoritative when transport close throws", async () => {
+  const { deps, rec } = mkDeps({ mailboxes: [{ path: "Sent" }] });
+  const createTransport = deps.createTransport;
+  deps.createTransport = (account, password) => {
+    const transport = createTransport(account, password);
+    return {
+      sendMail: (options) => transport.sendMail(options),
+      close() {
+        transport.close();
+        throw new Error("close failed");
+      },
+    };
+  };
+  deps.postSendQueue = { enqueue: () => false };
+  const result = await sendMessageFast(ACCT, "pw", BASE_PAYLOAD, deps);
+  assert.equal(result.ok, true);
+  assert.equal(rec.sendMailCalls, 1);
 });
