@@ -21,6 +21,7 @@ import { Route as ApiMailSendRouteImport } from './routes/api/mail-send'
 import { Route as ApiMailInlinePartRouteImport } from './routes/api/mail-inline-part'
 import { Route as ApiMailDraftSaveV2RouteImport } from './routes/api/mail-draft-save-v2'
 import { Route as ApiMailAttachmentUploadTicketRouteImport } from './routes/api/mail-attachment-upload-ticket'
+import { Route as ApiMailAttachmentTicketRouteImport } from './routes/api/mail-attachment-ticket'
 import { Route as ApiMailAttachmentRouteImport } from './routes/api/mail-attachment'
 import { Route as AuthenticatedDashboardRouteImport } from './routes/_authenticated/dashboard'
 import { Route as ApiPublicHooksMailSyncTickRouteImport } from './routes/api/public/hooks/mail-sync-tick'
@@ -85,6 +86,11 @@ const ApiMailAttachmentUploadTicketRoute =
     path: '/api/mail-attachment-upload-ticket',
     getParentRoute: () => rootRouteImport,
   } as any)
+const ApiMailAttachmentTicketRoute = ApiMailAttachmentTicketRouteImport.update({
+  id: '/api/mail-attachment-ticket',
+  path: '/api/mail-attachment-ticket',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiMailAttachmentRoute = ApiMailAttachmentRouteImport.update({
   id: '/api/mail-attachment',
   path: '/api/mail-attachment',
@@ -111,6 +117,7 @@ export interface FileRoutesByFullPath {
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/dashboard': typeof AuthenticatedDashboardRoute
   '/api/mail-attachment': typeof ApiMailAttachmentRoute
+  '/api/mail-attachment-ticket': typeof ApiMailAttachmentTicketRoute
   '/api/mail-attachment-upload-ticket': typeof ApiMailAttachmentUploadTicketRoute
   '/api/mail-draft-save-v2': typeof ApiMailDraftSaveV2Route
   '/api/mail-inline-part': typeof ApiMailInlinePartRoute
@@ -127,6 +134,7 @@ export interface FileRoutesByTo {
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/dashboard': typeof AuthenticatedDashboardRoute
   '/api/mail-attachment': typeof ApiMailAttachmentRoute
+  '/api/mail-attachment-ticket': typeof ApiMailAttachmentTicketRoute
   '/api/mail-attachment-upload-ticket': typeof ApiMailAttachmentUploadTicketRoute
   '/api/mail-draft-save-v2': typeof ApiMailDraftSaveV2Route
   '/api/mail-inline-part': typeof ApiMailInlinePartRoute
@@ -145,6 +153,7 @@ export interface FileRoutesById {
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/_authenticated/dashboard': typeof AuthenticatedDashboardRoute
   '/api/mail-attachment': typeof ApiMailAttachmentRoute
+  '/api/mail-attachment-ticket': typeof ApiMailAttachmentTicketRoute
   '/api/mail-attachment-upload-ticket': typeof ApiMailAttachmentUploadTicketRoute
   '/api/mail-draft-save-v2': typeof ApiMailDraftSaveV2Route
   '/api/mail-inline-part': typeof ApiMailInlinePartRoute
@@ -163,6 +172,7 @@ export interface FileRouteTypes {
     | '/sitemap.xml'
     | '/dashboard'
     | '/api/mail-attachment'
+    | '/api/mail-attachment-ticket'
     | '/api/mail-attachment-upload-ticket'
     | '/api/mail-draft-save-v2'
     | '/api/mail-inline-part'
@@ -179,6 +189,7 @@ export interface FileRouteTypes {
     | '/sitemap.xml'
     | '/dashboard'
     | '/api/mail-attachment'
+    | '/api/mail-attachment-ticket'
     | '/api/mail-attachment-upload-ticket'
     | '/api/mail-draft-save-v2'
     | '/api/mail-inline-part'
@@ -196,6 +207,7 @@ export interface FileRouteTypes {
     | '/sitemap.xml'
     | '/_authenticated/dashboard'
     | '/api/mail-attachment'
+    | '/api/mail-attachment-ticket'
     | '/api/mail-attachment-upload-ticket'
     | '/api/mail-draft-save-v2'
     | '/api/mail-inline-part'
@@ -213,6 +225,7 @@ export interface RootRouteChildren {
   MailRoute: typeof MailRoute
   SitemapDotxmlRoute: typeof SitemapDotxmlRoute
   ApiMailAttachmentRoute: typeof ApiMailAttachmentRoute
+  ApiMailAttachmentTicketRoute: typeof ApiMailAttachmentTicketRoute
   ApiMailAttachmentUploadTicketRoute: typeof ApiMailAttachmentUploadTicketRoute
   ApiMailDraftSaveV2Route: typeof ApiMailDraftSaveV2Route
   ApiMailInlinePartRoute: typeof ApiMailInlinePartRoute
@@ -307,6 +320,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiMailAttachmentUploadTicketRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/mail-attachment-ticket': {
+      id: '/api/mail-attachment-ticket'
+      path: '/api/mail-attachment-ticket'
+      fullPath: '/api/mail-attachment-ticket'
+      preLoaderRoute: typeof ApiMailAttachmentTicketRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/mail-attachment': {
       id: '/api/mail-attachment'
       path: '/api/mail-attachment'
@@ -351,6 +371,7 @@ const rootRouteChildren: RootRouteChildren = {
   MailRoute: MailRoute,
   SitemapDotxmlRoute: SitemapDotxmlRoute,
   ApiMailAttachmentRoute: ApiMailAttachmentRoute,
+  ApiMailAttachmentTicketRoute: ApiMailAttachmentTicketRoute,
   ApiMailAttachmentUploadTicketRoute: ApiMailAttachmentUploadTicketRoute,
   ApiMailDraftSaveV2Route: ApiMailDraftSaveV2Route,
   ApiMailInlinePartRoute: ApiMailInlinePartRoute,

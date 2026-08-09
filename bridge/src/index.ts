@@ -13,6 +13,8 @@ import {
 } from "./staged-attachments.js";
 import { TransferConcurrency } from "./transfer-concurrency.js";
 import { stageServerAttachmentSources } from "./server-attachment-sources.js";
+import { pipeline } from "node:stream/promises";
+import { attachmentContentDisposition, sanitizeAttachmentFilename } from "./attachment-transfer.js";
 import { createSendGates } from "./concurrency.js";
 import { createImapGates, loadImapGatesConfigFromEnv, type ImapPriority } from "./imap-gates.js";
 import { createImapGateMiddleware } from "./imap-gate-middleware.js";
@@ -31,9 +33,15 @@ import {
   deleteMessage,
   searchMessages,
   downloadAttachment,
+  resolveFolderPath,
   type InlinePartMetadata,
 } from "./imap.js";
-import { closeAllImapConnections } from "./imap-connection.js";
+import {
+  closeAllImapConnections,
+  dropAccountConnection,
+  getMailboxesCached,
+  withAccountMailbox,
+} from "./imap-connection.js";
 import { sendMessage } from "./smtp.js";
 import { mapUploadedAttachments } from "./inline-images.js";
 import {
@@ -62,7 +70,7 @@ if (!BRIDGE_API_KEY) {
 }
 
 const allowedOrigins = new Set(
-  (process.env.MAIL_APP_ORIGINS || "https://reemsoft-reemail.lovable.app")
+  (process.env.MAIL_APP_ORIGINS || "https://reemail.lovable.app")
     .split(",")
     .map((value) => value.trim())
     .filter(Boolean),
@@ -241,6 +249,20 @@ const DraftV2AttachmentSchema = z.object({
   sourceAttachments: z.array(ServerAttachmentSourceSchema).max(10).default([]),
 });
 
+const DownloadTicketPayloadSchema = MessagePayloadSchema.extend({
+  part: z.string().regex(/^\d+(?:\.\d+)*$/),
+  mode: z.enum(["download", "preview"]),
+  filename: z.string().min(1).max(255),
+  mimeType: z.string().min(1).max(255),
+  size: z
+    .number()
+    .int()
+    .min(0)
+    .max(50 * 1024 * 1024),
+});
+
+const DownloadCapabilityDataSchema = DownloadTicketPayloadSchema;
+
 // --- Middleware ---
 function requireKey(req: express.Request, res: express.Response, next: express.NextFunction) {
   const key = req.headers["x-bridge-key"] || req.headers["authorization"];
@@ -283,6 +305,7 @@ app.get("/api/metrics/imap-gates", requireKey, (_req, res) => {
     ok: true,
     gates: imapGates.stats(),
     uploads: directUploadGate.stats(),
+    downloads: { active: downloadGates.inFlight() },
     staging: stagedAttachmentStats(),
   });
 });
@@ -1039,36 +1062,144 @@ app.post(
 
 // ---- Attachment download (streamed) ----
 const ATTACHMENT_MAX_BYTES = Number(process.env.ATTACHMENT_MAX_BYTES || 50 * 1024 * 1024);
-const INLINE_MIME_ALLOWLIST = new Set<string>([
-  "image/png",
-  "image/jpeg",
-  "image/jpg",
-  "image/gif",
-  "image/webp",
-  "application/pdf",
-]);
-
-function sanitizeFilename(name: string | undefined | null): string {
-  if (!name) return "attachment";
-  // Strip path separators, control chars, CR/LF (header injection).
-  const cleaned = name
-    .replace(/[\r\n]/g, "")
-    .replace(/[/\\]/g, "_")
-    .replace(/[\x00-\x1f\x7f]/g, "")
-    .trim();
-  return cleaned.slice(0, 200) || "attachment";
-}
-
-function contentDispositionHeader(filename: string, mimeType: string): string {
-  const disposition = INLINE_MIME_ALLOWLIST.has(mimeType.toLowerCase()) ? "inline" : "attachment";
-  const asciiSafe = filename.replace(/[^\x20-\x7e]/g, "_").replace(/["\\]/g, "_");
-  // RFC 5987 encoding for the real UTF-8 filename (Arabic names).
-  const encoded = encodeURIComponent(filename);
-  return `${disposition}; filename="${asciiSafe}"; filename*=UTF-8''${encoded}`;
-}
-
 const AttachmentPayloadSchema = MessagePayloadSchema.extend({
   part: z.string().min(1).max(50),
+});
+
+const downloadGates = createSendGates({
+  globalMax: Number(process.env.MAIL_DOWNLOAD_GLOBAL_MAX || 16),
+  perKeyMax: Number(process.env.MAIL_DOWNLOAD_ACCOUNT_MAX || 1),
+});
+
+app.post("/api/attachment-download-ticket", requireKey, (req, res) => {
+  try {
+    const payload = DownloadTicketPayloadSchema.parse(req.body);
+    const expiresAt = Date.now() + 60_000;
+    const ticket = sealTransferTicket(BRIDGE_API_KEY, {
+      purpose: "attachment-download",
+      account: accountBinding(payload.account as MailAccount),
+      exp: expiresAt,
+      data: payload,
+    });
+    const publicBase = (
+      process.env.MAIL_BRIDGE_PUBLIC_URL || `${req.protocol}://${req.get("host")}`
+    ).replace(/\/$/, "");
+    return res.json({
+      ok: true,
+      downloadUrl: `${publicBase}/api/direct/attachment-download?t=${encodeURIComponent(ticket)}`,
+      expiresAt,
+    });
+  } catch {
+    return res.status(400).json({ ok: false, error: "INVALID_PAYLOAD" });
+  }
+});
+
+app.get("/api/direct/attachment-download", async (req, res) => {
+  let gateKey = "";
+  let acquired = false;
+  let capabilityValidated = false;
+  let transferAccount: MailAccount | null = null;
+  try {
+    const ticket = openTransferTicket(BRIDGE_API_KEY, String(req.query.t || ""), {
+      purpose: "attachment-download",
+    });
+    const payload = DownloadCapabilityDataSchema.parse(ticket.data);
+    transferAccount = payload.account as MailAccount;
+    gateKey = ticket.account;
+    if (accountBinding(payload.account as MailAccount) !== gateKey) {
+      return res.status(403).end("Invalid capability");
+    }
+    capabilityValidated = true;
+    if (payload.size > ATTACHMENT_MAX_BYTES) {
+      return res.status(413).end("Attachment too large");
+    }
+    if (!downloadGates.tryAcquire(gateKey)) {
+      return res.status(429).end("Transfer busy");
+    }
+    acquired = true;
+    const mailboxes = await getMailboxesCached(
+      payload.account as MailAccount,
+      payload.password,
+      "transfer",
+    );
+    const folderPath = resolveFolderPath(mailboxes, payload.folder);
+    if (!folderPath) return res.status(404).end("Attachment not found");
+
+    await withAccountMailbox(
+      payload.account as MailAccount,
+      payload.password,
+      folderPath,
+      async (client) => {
+        const download = await client.download(payload.uid.toString(), payload.part, {
+          uid: true,
+          maxBytes: ATTACHMENT_MAX_BYTES,
+        });
+        if (!download?.content) {
+          res.status(404).end("Attachment not found");
+          return;
+        }
+        const meta = download.meta as {
+          contentType?: string;
+          filename?: string;
+          expectedSize?: number;
+        };
+        const expectedSize = Number(meta.expectedSize ?? payload.size);
+        if (Number.isFinite(expectedSize) && expectedSize > ATTACHMENT_MAX_BYTES) {
+          download.content.destroy();
+          dropAccountConnection(payload.account as MailAccount, "transfer");
+          res.status(413).end("Attachment too large");
+          return;
+        }
+        const mimeType = String(meta.contentType || payload.mimeType || "application/octet-stream")
+          .split(";", 1)[0]
+          .trim()
+          .toLowerCase();
+        const filename = sanitizeAttachmentFilename(meta.filename || payload.filename);
+        res.setHeader("Content-Type", mimeType);
+        res.setHeader(
+          "Content-Disposition",
+          attachmentContentDisposition(filename, mimeType, payload.mode),
+        );
+        res.setHeader("X-Content-Type-Options", "nosniff");
+        res.setHeader("Cache-Control", "private, no-store");
+        res.setHeader("Referrer-Policy", "no-referrer");
+        let completed = false;
+        const abort = () => {
+          if (completed || res.writableEnded) return;
+          download.content.destroy();
+          dropAccountConnection(payload.account as MailAccount, "transfer");
+        };
+        res.once("close", abort);
+        try {
+          await pipeline(download.content, res);
+          completed = true;
+        } finally {
+          res.off("close", abort);
+        }
+      },
+      "transfer",
+    );
+  } catch (error) {
+    if (acquired && transferAccount && !res.writableEnded) {
+      dropAccountConnection(transferAccount, "transfer");
+    }
+    if (!res.headersSent) {
+      const code = error instanceof z.ZodError ? 400 : capabilityValidated ? 500 : 401;
+      res
+        .status(code)
+        .end(
+          code === 401
+            ? "Invalid capability"
+            : code === 400
+              ? "Invalid request"
+              : "Transfer failed",
+        );
+    } else if (!res.writableEnded) {
+      res.end();
+    }
+  } finally {
+    if (acquired) downloadGates.release(gateKey);
+  }
 });
 
 app.post("/api/attachment", requireKey, imapGate("interactive"), async (req, res) => {
@@ -1087,9 +1218,9 @@ app.post("/api/attachment", requireKey, imapGate("interactive"), async (req, res
     }
     const { meta, content, cleanup } = result;
     const mimeType = (meta.contentType || "application/octet-stream").toLowerCase();
-    const filename = sanitizeFilename(meta.filename);
+    const filename = sanitizeAttachmentFilename(meta.filename);
     res.setHeader("Content-Type", mimeType);
-    res.setHeader("Content-Disposition", contentDispositionHeader(filename, mimeType));
+    res.setHeader("Content-Disposition", attachmentContentDisposition(filename, mimeType));
     res.setHeader("X-Content-Type-Options", "nosniff");
     res.setHeader("Cache-Control", "private, no-store");
     if (typeof meta.expectedSize === "number" && meta.expectedSize > 0) {

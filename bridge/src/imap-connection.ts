@@ -52,13 +52,13 @@ const entries = new Map<string, Entry>();
 const pending = new Map<string, Promise<Entry>>();
 
 /**
- * Connection lanes. At most TWO connections per active account:
+ * Connection lanes. At most THREE connections per active account:
  *   * interactive — everything the user started (opening a message, flags…)
  *   * background  — sync + body-cache warming
- * Each lane serializes its own commands, but the background lane NEVER
- * enters the interactive chain, so a warm-up can not delay a click.
+ *   * transfer     â€” long attachment streams, isolated from message-open
+ * Each lane serializes its own commands, so a transfer can not delay a click.
  */
-export type ImapLane = "interactive" | "background";
+export type ImapLane = "interactive" | "background" | "transfer";
 
 /** Account identity key. Host + user + lane only — never logged. */
 function keyFor(account: MailAccount, lane: ImapLane = "interactive"): string {
@@ -166,7 +166,7 @@ export async function getMailboxesCached(
 }
 
 export function invalidateMailboxCache(account: MailAccount) {
-  for (const lane of ["interactive", "background"] as ImapLane[]) {
+  for (const lane of ["interactive", "background", "transfer"] as ImapLane[]) {
     const e = entries.get(keyFor(account, lane));
     if (e) e.mailboxes = undefined;
   }
@@ -177,7 +177,7 @@ export function invalidateMailboxCache(account: MailAccount) {
  * errored or was destroyed mid-literal). The next request reconnects cleanly.
  */
 export function dropAccountConnection(account: MailAccount, lane?: ImapLane): void {
-  const lanes: ImapLane[] = lane ? [lane] : ["interactive", "background"];
+  const lanes: ImapLane[] = lane ? [lane] : ["interactive", "background", "transfer"];
   for (const l of lanes) {
     const key = keyFor(account, l);
     const e = entries.get(key);
@@ -271,15 +271,16 @@ export async function closeAllImapConnections(): Promise<void> {
 
 /** Bounded, PII-free stats for /api/health style surfaces. */
 export function imapConnectionStats() {
-  const lanes = { interactive: 0, background: 0 };
+  const lanes = { interactive: 0, background: 0, transfer: 0 };
   for (const k of entries.keys()) {
     if (k.startsWith("background|")) lanes.background++;
+    else if (k.startsWith("transfer|")) lanes.transfer++;
     else lanes.interactive++;
   }
   return {
     openConnections: entries.size,
     lanes,
-    maxConnectionsPerAccount: 2,
+    maxConnectionsPerAccount: 3,
     idleCloseMs: IDLE_CLOSE_MS,
     listCacheMs: LIST_CACHE_MS,
   };

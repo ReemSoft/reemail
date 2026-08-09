@@ -135,27 +135,36 @@ test("connection stats expose bounded config only (no host/account identifiers)"
     "maxConnectionsPerAccount",
     "openConnections",
   ]);
-  assert.deepEqual(Object.keys(s.lanes).sort(), ["background", "interactive"]);
+  assert.deepEqual(Object.keys(s.lanes).sort(), ["background", "interactive", "transfer"]);
 
   assert.equal(typeof s.openConnections, "number");
   assert.ok(s.idleCloseMs > 0);
   assert.ok(s.listCacheMs > 0);
 
   // 2. lane counters are non-negative numbers
-  for (const v of [s.lanes.interactive, s.lanes.background]) {
+  for (const v of [s.lanes.interactive, s.lanes.background, s.lanes.transfer]) {
     assert.equal(typeof v, "number");
     assert.ok(Number.isFinite(v) && v >= 0);
   }
 
   // 3. two connections per account max (interactive + background)
-  assert.equal(s.maxConnectionsPerAccount, 2);
+  assert.equal(s.maxConnectionsPerAccount, 3);
 
   // 4. no PII / identifiers among the VALUES: every leaf value is a number,
   //    so no host, account, company, email or any personal identifier can leak.
-  const leaves = [s.openConnections, s.maxConnectionsPerAccount, s.idleCloseMs, s.listCacheMs,
-    s.lanes.interactive, s.lanes.background];
+  const leaves = [
+    s.openConnections,
+    s.maxConnectionsPerAccount,
+    s.idleCloseMs,
+    s.listCacheMs,
+    s.lanes.interactive,
+    s.lanes.background,
+    s.lanes.transfer,
+  ];
   for (const v of leaves) assert.equal(typeof v, "number");
-  const values = JSON.stringify(s).toLowerCase().replace(/"[a-z]+":/g, "");
+  const values = JSON.stringify(s)
+    .toLowerCase()
+    .replace(/"[a-z]+":/g, "");
   for (const forbidden of ["host", "account", "company", "email", "user", "pass", "@"]) {
     assert.ok(!values.includes(forbidden), `stats must not expose "${forbidden}"`);
   }
@@ -166,4 +175,5 @@ test("connection stats expose bounded config only (no host/account identifiers)"
   assert.equal(after.openConnections, 0);
   assert.equal(after.lanes.interactive, 0);
   assert.equal(after.lanes.background, 0);
+  assert.equal(after.lanes.transfer, 0);
 });

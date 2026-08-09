@@ -8190,13 +8190,7 @@ function AttachmentCard({
   const canPreview = INLINE_PREVIEW_MIME.has((attachment.mimeType || "").toLowerCase());
   const canDownload = !!attachment.part;
 
-  useEffect(() => {
-    return () => {
-      if (previewUrl) URL.revokeObjectURL(previewUrl);
-    };
-  }, [previewUrl]);
-
-  async function fetchBlob(): Promise<Blob | null> {
+  async function requestTransferUrl(mode: "download" | "preview"): Promise<string | null> {
     const session = getMailSession();
     if (!session) {
       toast.error(tr("انتهت الجلسة"));
@@ -8207,7 +8201,7 @@ function AttachmentCard({
       toast.error(tr("لا يمكن تحديد المرفق"));
       return null;
     }
-    const res = await fetch("/api/mail-attachment", {
+    const res = await fetch("/api/mail-attachment-ticket", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -8216,6 +8210,10 @@ function AttachmentCard({
         folder: parsed.folder,
         uid: parsed.uid,
         part: attachment.part,
+        mode,
+        filename: attachment.filename,
+        mimeType: attachment.mimeType || "application/octet-stream",
+        size: attachment.size || 0,
       }),
     });
     if (!res.ok) {
@@ -8223,23 +8221,22 @@ function AttachmentCard({
       toast.error(tr("تعذّر تنزيل المرفق") + (msg ? `: ${msg.slice(0, 100)}` : ""));
       return null;
     }
-    return await res.blob();
+    const result = await res.json().catch(() => null);
+    return typeof result?.downloadUrl === "string" ? result.downloadUrl : null;
   }
 
   async function handleDownload() {
     if (busy || !canDownload) return;
     setBusy("download");
     try {
-      const blob = await fetchBlob();
-      if (!blob) return;
-      const url = URL.createObjectURL(blob);
+      const url = await requestTransferUrl("download");
+      if (!url) return;
       const a = document.createElement("a");
       a.href = url;
-      a.download = attachment.filename || "attachment";
+      a.rel = "noreferrer";
       document.body.appendChild(a);
       a.click();
       a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 1500);
     } finally {
       setBusy(null);
     }
@@ -8249,10 +8246,9 @@ function AttachmentCard({
     if (busy || !canDownload || !canPreview) return;
     setBusy("preview");
     try {
-      const blob = await fetchBlob();
-      if (!blob) return;
-      if (previewUrl) URL.revokeObjectURL(previewUrl);
-      setPreviewUrl(URL.createObjectURL(blob));
+      const url = await requestTransferUrl("preview");
+      if (!url) return;
+      setPreviewUrl(url);
     } finally {
       setBusy(null);
     }
