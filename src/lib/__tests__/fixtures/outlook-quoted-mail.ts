@@ -6,23 +6,23 @@ export const OUTLOOK_QUOTED_MAIL = `
   td { padding: 6px; vertical-align: top; }
   .unsafe { background-image: url(https://tracker.example/pixel); position: fixed; z-index: 9999; }
 </style>
-<div class="MsoNormal">---------- Forwarded message ----------</div>
+<div class="MsoNormal flex fixed hidden grid absolute w-full" id="forwarded-header" title="forwarded-header">---------- Forwarded message ----------</div>
 
-<div class="section" id="greeting">
+<div class="section" id="greeting" title="greeting">
   <p>Dear project team,</p>
 </div>
 
-<table id="summary">
+<table id="summary" title="summary">
   <tbody>
     <tr>
       <td>
-        <div class="section" id="overview">Long project description</div>
+        <div class="section" id="overview" title="overview">Long project description</div>
       </td>
     </tr>
   </tbody>
 </table>
 
-<div class="section" id="information">
+<div class="section" id="information" title="information">
   <p><strong>Project Information</strong></p>
   <table>
     <tr><td>Owner</td><td>MailMaestro</td></tr>
@@ -30,7 +30,7 @@ export const OUTLOOK_QUOTED_MAIL = `
   </table>
 </div>
 
-<div class="section unsafe" id="signature" style="position:fixed;transform:scale(4);color:#334455">
+<div class="section unsafe" id="signature" title="signature" style="position:fixed;transform:scale(4);color:#334455">
   <p>Greetings,<br>Operations Team</p>
   <img src="cid:Company.Logo@Example" width="180" height="48" alt="Company logo">
 </div>

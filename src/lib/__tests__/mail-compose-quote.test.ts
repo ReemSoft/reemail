@@ -4,9 +4,10 @@ import { describe, expect, it } from "vitest";
 import { exportPreparedQuotedDocument, markQuotedCidImagesPending } from "@/lib/mail-compose-quote";
 import { buildForwardQuoteHtml, buildReplyQuoteHtml } from "@/lib/mail-quote";
 import {
-  applyInlineImageToCidNode,
+  applyInlineImageToCidNodes,
   createInlineComposeImage,
   findInlineImageNodeByCid,
+  findInlineImageNodesByCid,
   serializeInlineImages,
 } from "@/lib/mail-compose-inline-images";
 import { readDraftDoc, writeDraftDoc, type DraftStorageLike } from "@/lib/mail-draft-lifecycle";
@@ -22,16 +23,19 @@ describe("quoted email preparation", () => {
     template.innerHTML = html;
 
     expect(html).not.toMatch(/<style|position\s*:\s*fixed|z-index|transform|url\s*\(/i);
-    expect(template.content.querySelector("#greeting")?.getAttribute("style")).toMatch(
+    expect(template.content.querySelector('[title="greeting"]')?.getAttribute("style")).toMatch(
       /margin|padding|color/,
     );
-    expect(template.content.querySelector("#summary tbody tr td")).not.toBeNull();
+    expect(template.content.querySelector('[title="summary"] tbody tr td')).not.toBeNull();
     expect(
       Array.from(
-        template.content.querySelectorAll("#greeting,#summary,#information,#signature"),
-        (node) => node.id,
+        template.content.querySelectorAll(
+          '[title="greeting"],[title="summary"],[title="information"],[title="signature"]',
+        ),
+        (node) => node.getAttribute("title"),
       ),
     ).toEqual(["greeting", "summary", "information", "signature"]);
+    expect(template.content.querySelector("[class],[id]")).toBeNull();
     expect(
       Array.from(template.content.querySelectorAll("table,tbody,tr")).flatMap((node) =>
         Array.from(node.childNodes).filter(
@@ -39,6 +43,59 @@ describe("quoted email preparation", () => {
         ),
       ),
     ).toHaveLength(0);
+  });
+
+  it("strips hostile app-colliding classes and source ids after preserving safe presentation", () => {
+    document.body.innerHTML = `
+      <style>.MsoNormal { color: rgb(12, 34, 56); font-size: 15px; }</style>
+      <a href="#target">jump</a>
+      <div id="target" class="flex fixed hidden grid absolute w-full MsoNormal"
+           style="position:absolute;transform:scale(5)">Text</div>`;
+    const html = exportPreparedQuotedDocument(document);
+    const template = document.createElement("template");
+    template.innerHTML = html;
+    const content = template.content.querySelector("div");
+    expect(content?.textContent).toBe("Text");
+    expect(content?.hasAttribute("class")).toBe(false);
+    expect(content?.hasAttribute("id")).toBe(false);
+    expect(content?.getAttribute("style")).toMatch(/color|font-size/);
+    expect(content?.getAttribute("style")).not.toMatch(/position|transform/);
+    expect(template.content.querySelector("a")?.hasAttribute("href")).toBe(false);
+
+    const initialReply = markQuotedCidImagesPending(
+      buildReplyQuoteHtml(
+        '<div class="flex fixed hidden grid absolute w-full" id="source">Text</div>',
+        meta,
+        "en",
+      ),
+    );
+    const initialTemplate = document.createElement("template");
+    initialTemplate.innerHTML = initialReply;
+    expect(initialTemplate.content.querySelector(".mm_quote")).not.toBeNull();
+    expect(
+      initialTemplate.content.querySelector(
+        "[data-mm-quoted-content] [class],[data-mm-quoted-content] [id]",
+      ),
+    ).toBeNull();
+  });
+
+  it("blocks HTTPS and protocol-relative tracker images before live Composer insertion", () => {
+    const html = markQuotedCidImagesPending(`
+      <table><tr><td>
+        <img src="https://tracker.example/pixel.png" srcset="https://tracker.example/2x.png 2x" width="1" height="1">
+        <img src="//tracker.example/pixel.png" width="2" height="2">
+      </td></tr></table>`);
+    const template = document.createElement("template");
+    template.innerHTML = html;
+    const images = Array.from(template.content.querySelectorAll<HTMLImageElement>("img"));
+    expect(images).toHaveLength(2);
+    for (const image of images) {
+      expect(image.hasAttribute("src")).toBe(false);
+      expect(image.hasAttribute("srcset")).toBe(false);
+      expect(image.dataset.mmRemoteImageBlocked).toBe("1");
+      expect(image.style.visibility).toBe("hidden");
+    }
+    expect(html).not.toMatch(/(?:src|srcset)=["'](?:https?:)?\/\//i);
   });
 
   it("keeps the editor pre-wrap contract isolated from a normal-whitespace quote", () => {
@@ -86,17 +143,83 @@ describe("quoted email preparation", () => {
     try {
       const editor = document.createElement("div");
       editor.innerHTML = markQuotedCidImagesPending(
-        '<table><tbody><tr><td id="cell"><img src="cid:logo@example" width="180"></td></tr></tbody></table>',
+        '<table><tbody><tr><td title="cell"><img src="cid:logo@example" width="180"></td></tr></tbody></table>',
       );
       const image = createInlineComposeImage(
         new File([new Uint8Array([1])], "logo.png", { type: "image/png" }),
       );
-      expect(applyInlineImageToCidNode(editor, "<LOGO@example>", image)).toBe(true);
+      expect(applyInlineImageToCidNodes(editor, "<LOGO@example>", image)).toBe(1);
       const node = editor.querySelector<HTMLImageElement>("img");
       expect(node?.src).toContain("blob:cached-logo");
       expect(node?.style.visibility).toBe("");
       expect(node?.dataset.mmInlineId).toBe(image.id);
-      expect(editor.querySelector("#cell")?.contains(node ?? null)).toBe(true);
+      expect(editor.querySelector('[title="cell"]')?.contains(node ?? null)).toBe(true);
+    } finally {
+      URL.createObjectURL = originalCreate;
+    }
+  });
+
+  it("hydrates every repeated CID occurrence and serializes one attachment identity", () => {
+    const originalCreate = URL.createObjectURL;
+    URL.createObjectURL = () => "blob:repeated-logo";
+    try {
+      const editor = document.createElement("div");
+      editor.innerHTML = markQuotedCidImagesPending(
+        '<img src="cid:logo@example" width="120"><p>text</p><img src="cid:LOGO@example" width="240">',
+      );
+      const image = createInlineComposeImage(
+        new File([new Uint8Array([1, 2])], "logo.png", { type: "image/png" }),
+      );
+      expect(findInlineImageNodesByCid(editor, "<logo@example>")).toHaveLength(2);
+      expect(applyInlineImageToCidNodes(editor, "<logo@example>", image)).toBe(2);
+      const nodes = Array.from(editor.querySelectorAll<HTMLImageElement>("img"));
+      expect(nodes.map((node) => node.dataset.mmInlineId)).toEqual([image.id, image.id]);
+      expect(nodes.map((node) => node.getAttribute("width"))).toEqual(["120", "240"]);
+      expect(editor.children[1]?.textContent).toBe("text");
+
+      const serialized = serializeInlineImages(editor.innerHTML, [image]);
+      expect(serialized.html.match(new RegExp(`cid:${image.cid}`, "g"))).toHaveLength(2);
+      expect(serialized.inlineImages).toHaveLength(1);
+      expect(serialized.inlineImages[0]?.cid).toBe(image.cid);
+    } finally {
+      URL.createObjectURL = originalCreate;
+    }
+  });
+
+  it("handles a mixed repeated small CID, large CID, and blocked remote tracker", () => {
+    const originalCreate = URL.createObjectURL;
+    let sequence = 0;
+    URL.createObjectURL = () => `blob:mixed-${++sequence}`;
+    try {
+      document.body.innerHTML = `
+        <style>.signature { padding: 8px; } table { width: 100%; }</style>
+        <table class="grid"><tr><td>
+          <img src="cid:small@example" width="80">
+          <span>signature</span>
+          <img src="cid:SMALL@example" width="160">
+          <img src="cid:large@example" width="320">
+          <img src="https://tracker.example/pixel.png" width="1" height="1">
+        </td></tr></table>`;
+      const editor = document.createElement("div");
+      editor.innerHTML = exportPreparedQuotedDocument(document);
+      const small = createInlineComposeImage(
+        new File([new Uint8Array(128)], "small.png", { type: "image/png" }),
+      );
+      const large = createInlineComposeImage(
+        new File([new Uint8Array(Math.round(1.8 * 1024 * 1024))], "large.png", {
+          type: "image/png",
+        }),
+      );
+      expect(applyInlineImageToCidNodes(editor, "small@example", small)).toBe(2);
+      expect(applyInlineImageToCidNodes(editor, "large@example", large)).toBe(1);
+      expect(editor.querySelector("[class],[id]")).toBeNull();
+      expect(editor.querySelector<HTMLImageElement>("[data-mm-remote-image-blocked]")?.src).toBe(
+        "",
+      );
+      const serialized = serializeInlineImages(editor.innerHTML, [small, large]);
+      expect(serialized.inlineImages).toHaveLength(2);
+      expect(serialized.html.match(new RegExp(`cid:${small.cid}`, "g"))).toHaveLength(2);
+      expect(serialized.html).toContain(`cid:${large.cid}`);
     } finally {
       URL.createObjectURL = originalCreate;
     }

@@ -776,8 +776,7 @@ import {
   alignInlineImageNode,
   installInlineImageSelectionListener,
   startInlineImageDragSession,
-  findInlineImageNodeByCid,
-  applyInlineImageToCidNode,
+  applyInlineImageToCidNodes,
   type InlineComposeImage,
   type InlineImageAlignment,
   type InlineImageDragSession,
@@ -5873,7 +5872,7 @@ function Composer({
       const attachRemoteFile = async (sourceCid: string, file: File) => {
         if (!validateInlineImageFile(file).ok) return;
         const image = createInlineComposeImage(file);
-        if (!applyInlineImageToCidNode(editor, sourceCid, image)) {
+        if (applyInlineImageToCidNodes(editor, sourceCid, image) === 0) {
           URL.revokeObjectURL(image.objectUrl);
           return;
         }
@@ -5934,16 +5933,7 @@ function Composer({
       }
       // Local rows already have durable cid/src. Rebind those nodes to fresh object URLs.
       for (const image of hydrated) {
-        const node =
-          editor.querySelector<HTMLImageElement>(`img[data-mm-inline-id="${image.id}"]`) ??
-          findInlineImageNodeByCid(editor, image.cid);
-        if (node) {
-          node.src = image.objectUrl;
-          node.dataset.mmInlineId = image.id;
-          delete node.dataset.mmSourceCid;
-          node.removeAttribute("aria-busy");
-          node.style.removeProperty("visibility");
-        }
+        applyInlineImageToCidNodes(editor, image.cid, image);
       }
       for (const unresolved of editor.querySelectorAll<HTMLImageElement>(
         'img[src^="cid:" i],img[data-mm-source-cid]',

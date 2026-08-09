@@ -644,20 +644,41 @@ export function alignInlineImageNode(
   editor.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
+export function findInlineImageNodesByCid(editor: HTMLElement, cid: string): HTMLImageElement[] {
+  const wanted = cid.trim().replace(/^<|>$/g, "").toLowerCase();
+  return Array.from(
+    editor.querySelectorAll<HTMLImageElement>('img[src^="cid:" i],img[data-mm-source-cid]'),
+  ).filter((image) => {
+    const pending = image.dataset.mmSourceCid;
+    const source = pending ?? image.getAttribute("src")?.slice(4) ?? "";
+    return source.trim().replace(/^<|>$/g, "").toLowerCase() === wanted;
+  });
+}
+
 export function findInlineImageNodeByCid(
   editor: HTMLElement,
   cid: string,
 ): HTMLImageElement | null {
-  const wanted = cid.trim().replace(/^<|>$/g, "").toLowerCase();
-  return (
-    Array.from(
-      editor.querySelectorAll<HTMLImageElement>('img[src^="cid:" i],img[data-mm-source-cid]'),
-    ).find((image) => {
-      const pending = image.dataset.mmSourceCid;
-      const source = pending ?? image.getAttribute("src")?.slice(4) ?? "";
-      return source.trim().replace(/^<|>$/g, "").toLowerCase() === wanted;
-    }) ?? null
-  );
+  return findInlineImageNodesByCid(editor, cid)[0] ?? null;
+}
+
+export function applyInlineImageToCidNodes(
+  editor: HTMLElement,
+  sourceCid: string,
+  image: InlineComposeImage,
+): number {
+  const nodes = findInlineImageNodesByCid(editor, sourceCid);
+  for (const node of nodes) {
+    node.src = image.objectUrl;
+    node.dataset.mmInlineId = image.id;
+    delete node.dataset.mmSourceCid;
+    node.removeAttribute("aria-busy");
+    node.style.removeProperty("visibility");
+    node.draggable = false;
+    node.style.maxWidth = "100%";
+    node.style.height = "auto";
+  }
+  return nodes.length;
 }
 
 export function applyInlineImageToCidNode(
@@ -665,17 +686,7 @@ export function applyInlineImageToCidNode(
   sourceCid: string,
   image: InlineComposeImage,
 ): boolean {
-  const node = findInlineImageNodeByCid(editor, sourceCid);
-  if (!node) return false;
-  node.src = image.objectUrl;
-  node.dataset.mmInlineId = image.id;
-  delete node.dataset.mmSourceCid;
-  node.removeAttribute("aria-busy");
-  node.style.removeProperty("visibility");
-  node.draggable = false;
-  node.style.maxWidth = "100%";
-  node.style.height = "auto";
-  return true;
+  return applyInlineImageToCidNodes(editor, sourceCid, image) > 0;
 }
 
 /** Produce recipient-safe HTML and a bounded metadata list. */
@@ -689,6 +700,7 @@ export function serializeInlineImages(
   const root = template.content;
   const byId = new Map(images.map((image) => [image.id, image]));
   const used: InlineComposeImage[] = [];
+  const usedIds = new Set<string>();
   const serializedNodes = new Set<HTMLImageElement>();
   for (const img of root.querySelectorAll<HTMLImageElement>("img[data-mm-inline-id]")) {
     const id = img.dataset.mmInlineId || "";
@@ -711,7 +723,10 @@ export function serializeInlineImages(
     img.removeAttribute("draggable");
     img.style.removeProperty("touch-action");
     if (!options.keepEditorIds) delete img.dataset.mmInlineId;
-    used.push(image);
+    if (!usedIds.has(image.id)) {
+      used.push(image);
+      usedIds.add(image.id);
+    }
     serializedNodes.add(img);
   }
   for (const unsafe of root.querySelectorAll<HTMLImageElement>(

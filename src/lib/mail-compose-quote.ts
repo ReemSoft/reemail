@@ -1,4 +1,5 @@
 const QUOTED_CID_ATTR = "data-mm-source-cid";
+const BLOCKED_REMOTE_IMAGE_ATTR = "data-mm-remote-image-blocked";
 
 const SAFE_STYLE_PROPERTIES = new Set([
   "display",
@@ -112,12 +113,50 @@ function markCidImagesPending(root: ParentNode): void {
   }
 }
 
+function blockRemoteImageSources(root: ParentNode): void {
+  for (const source of root.querySelectorAll<HTMLElement>("source[srcset]")) {
+    source.removeAttribute("srcset");
+  }
+  for (const image of root.querySelectorAll<HTMLImageElement>("img")) {
+    image.removeAttribute("srcset");
+    const src = (image.getAttribute("src") ?? "").trim();
+    if (!/^(?:https?:)?\/\//i.test(src)) continue;
+    image.removeAttribute("src");
+    image.setAttribute(BLOCKED_REMOTE_IMAGE_ATTR, "1");
+    image.style.visibility = "hidden";
+    image.setAttribute("aria-hidden", "true");
+  }
+  for (const element of root.querySelectorAll<HTMLElement>("[background]")) {
+    element.removeAttribute("background");
+  }
+}
+
+function isolateSourceSelectors(root: ParentNode): void {
+  for (const anchor of root.querySelectorAll<HTMLAnchorElement>("a[href]")) {
+    if ((anchor.getAttribute("href") ?? "").trim().startsWith("#")) anchor.removeAttribute("href");
+  }
+  for (const element of root.querySelectorAll<HTMLElement>("[class],[id]")) {
+    element.removeAttribute("class");
+    element.removeAttribute("id");
+  }
+}
+
 /** Prevent native broken-image chrome before asynchronous CID hydration starts. */
 export function markQuotedCidImagesPending(html: string): string {
-  if (typeof document === "undefined") return html.replace(/\ssrc=(['"])cid:([^'"]+)\1/gi, "");
+  if (typeof document === "undefined") {
+    return html.replace(/\ssrc=(['"])((?:cid:|https?:\/\/|\/\/)[^'"]+)\1/gi, "");
+  }
   const template = document.createElement("template");
   template.innerHTML = html;
-  markCidImagesPending(template.content);
+  const quotedContents = Array.from(
+    template.content.querySelectorAll<HTMLElement>("[data-mm-quoted-content]"),
+  );
+  const sourceRoots: ParentNode[] = quotedContents.length ? quotedContents : [template.content];
+  for (const root of sourceRoots) {
+    isolateSourceSelectors(root);
+    blockRemoteImageSources(root);
+    markCidImagesPending(root);
+  }
   return template.innerHTML;
 }
 
@@ -195,7 +234,9 @@ export function exportPreparedQuotedDocument(doc: Document): string {
   }
   for (const unsafe of doc.body.querySelectorAll("style,script,link,object,embed,iframe"))
     unsafe.remove();
+  isolateSourceSelectors(doc.body);
   removeStructuralIndentation(doc.body);
+  blockRemoteImageSources(doc.body);
   markCidImagesPending(doc.body);
   return doc.body.innerHTML.trim();
 }
@@ -247,3 +288,4 @@ export async function prepareQuotedEmailForComposer(hardenedHtml: string): Promi
 }
 
 export const QUOTED_SOURCE_CID_ATTR = QUOTED_CID_ATTR;
+export const QUOTED_BLOCKED_REMOTE_IMAGE_ATTR = BLOCKED_REMOTE_IMAGE_ATTR;
