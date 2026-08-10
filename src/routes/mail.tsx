@@ -4869,12 +4869,15 @@ function MessageRow({
 function MessageAttachmentsSection({ message }: { message: MailMessage }) {
   const items = message.attachments ?? [];
   if (!items.length) return null;
+  const total = items.reduce((s, a) => s + (a.size || 0), 0);
   return (
     <div className="mt-4 flex flex-col gap-1.5">
-      <label className="text-sm font-medium text-foreground">
-        {tr("المرفقات")} ·{" "}
-        <bdi dir="ltr">{formatSize(items.reduce((s, a) => s + (a.size || 0), 0))}</bdi>
-      </label>
+      <div className="inline-flex items-center gap-1.5 text-xs font-normal text-muted-foreground">
+        <Paperclip className="h-3.5 w-3.5" aria-hidden="true" />
+        <span>
+          {trf("المرفقات · {{size}}", { size: formatSize(total) })}
+        </span>
+      </div>
       <div className="flex flex-wrap gap-2">
         {items.map((a) => (
           <AttachmentCard key={a.id} attachment={a} message={message} />
