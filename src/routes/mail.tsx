@@ -725,6 +725,7 @@ import {
   FileSpreadsheet,
   FileCode,
   FileType,
+  History,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -5174,11 +5175,14 @@ function ConversationHistory({
   );
   return (
     <div className="mt-6">
-      <div className="mb-3 flex items-center gap-3">
-        <span className="whitespace-nowrap text-xs font-semibold text-foreground">
-          {trf("الرسائل السابقة ({{count}})", { count: ordered.length })}
-        </span>
-        <span className="h-px flex-1 bg-border" />
+      <div className="mb-3 flex flex-col gap-3">
+        <span className="h-px w-full bg-border" />
+        <div className="flex items-center gap-2 text-foreground">
+          <History className="h-4 w-4 text-primary" />
+          <span className="whitespace-nowrap text-sm font-semibold">
+            {trf("الرسائل السابقة ({{count}})", { count: ordered.length })}
+          </span>
+        </div>
       </div>
       <div className="flex flex-col gap-2">
         {ordered.map((row) => (
@@ -5192,6 +5196,7 @@ function ConversationHistory({
     </div>
   );
 }
+
 
 
 
