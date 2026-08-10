@@ -4875,7 +4875,7 @@ function MessageAttachmentsSection({ message }: { message: MailMessage }) {
         {tr("المرفقات")} ·{" "}
         <bdi dir="ltr">{formatSize(items.reduce((s, a) => s + (a.size || 0), 0))}</bdi>
       </label>
-      <div className="flex flex-wrap gap-2 rounded-lg border border-dashed border-border bg-background/50 p-3">
+      <div className="flex flex-wrap gap-2">
         {items.map((a) => (
           <AttachmentCard key={a.id} attachment={a} message={message} />
         ))}
@@ -4883,6 +4883,7 @@ function MessageAttachmentsSection({ message }: { message: MailMessage }) {
     </div>
   );
 }
+
 
 export type ThreadComposeMode = "reply" | "replyAll" | "forward";
 
@@ -5043,11 +5044,12 @@ function ConversationMessageCard({
       {open && (
         <div className="border-t border-border px-3 pb-3">
           {state === "loading" && (
-            <div className="flex items-center gap-2 py-3 text-xs text-muted-foreground">
+            <div className="flex items-center justify-center gap-2 py-3 text-xs text-muted-foreground">
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
               {tr("جارٍ التحميل…")}
             </div>
           )}
+
           {state === "error" && (
             <div className="py-3 text-xs text-destructive">{tr("تعذّر تحميل الرسالة")}</div>
           )}
