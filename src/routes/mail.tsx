@@ -301,6 +301,7 @@ function ThreadedEmailBody({
   largeCidDispatcherRef,
   afterLatest,
   renderHistory,
+  suppressQuoted,
 }: {
   html: string;
   cidImages: CidImageMapping[];
@@ -315,6 +316,11 @@ function ThreadedEmailBody({
    * fallback so the caller can render it when no real thread rows exist.
    */
   renderHistory?: (quotedFallback: React.ReactNode) => React.ReactNode;
+  /**
+   * True when the real thread rows are rendered as separate cards, so the
+   * inline quoted history must not be duplicated.
+   */
+  suppressQuoted?: boolean;
 }) {
   const { latest, quoted } = useMemo(() => splitQuotedHtml(html), [html]);
   const [expanded, setExpanded] = useState(false);
@@ -337,6 +343,20 @@ function ThreadedEmailBody({
       </div>
     );
 
+  if (suppressQuoted)
+    return (
+      <div className={className}>
+        <EmailBodyFrame
+          html={latest}
+          cidImages={cidImages}
+          messageIdentity={`${messageIdentity}:latest`}
+          onReady={onReady}
+          largeCidDispatcherRef={largeCidDispatcherRef}
+        />
+        {afterLatest}
+      </div>
+    );
+
   return (
     <div className={className}>
       <EmailBodyFrame
@@ -346,6 +366,7 @@ function ThreadedEmailBody({
         onReady={onReady}
         largeCidDispatcherRef={largeCidDispatcherRef}
       />
+
       {afterLatest}
       <div className="mt-3">
 
