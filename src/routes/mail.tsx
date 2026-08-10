@@ -352,15 +352,26 @@ function ThreadedEmailBody({
           <span className="tracking-widest leading-none">•••</span>
           <span>{expanded ? tr("إخفاء الرسائل السابقة") : tr("عرض الرسائل السابقة")}</span>
         </button>
-        {expanded && (
-          <div className="mt-3 rounded-lg border border-border bg-muted/30 ps-3 pe-2 py-2 border-s-2 border-s-primary/40">
-            <EmailBodyFrame
-              html={quoted}
-              cidImages={cidImages}
-              messageIdentity={`${messageIdentity}:quoted`}
-            />
-          </div>
-        )}
+        {expanded &&
+          (renderHistory ? (
+            renderHistory(
+              <div className="mt-3 rounded-lg border border-border bg-muted/30 ps-3 pe-2 py-2 border-s-2 border-s-primary/40">
+                <EmailBodyFrame
+                  html={quoted}
+                  cidImages={cidImages}
+                  messageIdentity={`${messageIdentity}:quoted`}
+                />
+              </div>,
+            )
+          ) : (
+            <div className="mt-3 rounded-lg border border-border bg-muted/30 ps-3 pe-2 py-2 border-s-2 border-s-primary/40">
+              <EmailBodyFrame
+                html={quoted}
+                cidImages={cidImages}
+                messageIdentity={`${messageIdentity}:quoted`}
+              />
+            </div>
+          ))}
       </div>
     </div>
   );
