@@ -49,6 +49,7 @@ export interface SyncMessage {
   modseq: string | null;
   messageId: string | null;
   inReplyTo: string | null;
+  references: string[];
   subject: string;
   from: SyncAddress | null;
   to: SyncAddress[];
@@ -244,12 +245,16 @@ export function normalizeMessage(m: FetchMessageObject): SyncMessage {
   const from = env.from && env.from[0] ? normalizeAddress(env.from[0]) : null;
   const to = (env.to ?? []).map(normalizeAddress).filter((v): v is SyncAddress => v !== null);
   const cc = (env.cc ?? []).map(normalizeAddress).filter((v): v is SyncAddress => v !== null);
+  const references = Buffer.isBuffer(m.headers)
+    ? (m.headers.toString("utf8").match(/<[^<>\r\n]+>/g) ?? []).slice(0, 100)
+    : [];
 
   return {
     uid: m.uid,
     modseq: bigIntToDecimalString(m.modseq),
     messageId: typeof env.messageId === "string" ? env.messageId : null,
     inReplyTo: typeof env.inReplyTo === "string" ? env.inReplyTo : null,
+    references,
     subject: typeof env.subject === "string" ? env.subject : "",
     from,
     to,
@@ -353,7 +358,7 @@ export async function syncInitial(
       envelope: true,
       internalDate: true,
       size: true,
-      bodyStructure: true,
+          bodyStructure: true, headers: ["references"],
     };
     for await (const msg of client.fetch(range, query, { uid: false })) {
       collected.push(normalizeMessage(msg));
@@ -429,7 +434,7 @@ export async function syncIncremental(
       endUid = Math.min(currentMaxUid, params.sinceUid + params.limit);
       const range = `${startUid}:${endUid}`;
       const query = {
-        uid: true, flags: true, envelope: true,
+        uid: true, flags: true, envelope: true, headers: ["references"],
         internalDate: true, size: true, bodyStructure: true,
       };
       for await (const msg of client.fetch(range, query, { uid: true })) {

@@ -106,7 +106,7 @@ export const indexListMessages = createServerFn({ method: "POST" })
     let q = supabaseAdmin
       .from("mail_messages")
       .select(
-        "id, uid, subject, from_addr, to_addrs, cc_addrs, internal_date, seen, flagged, has_attachments, message_id",
+        "id, uid, subject, from_addr, to_addrs, cc_addrs, internal_date, seen, flagged, has_attachments, message_id, in_reply_to, references_ids",
       )
       .eq("account_id", accountId)
       .eq("company_id", companyId)
@@ -145,6 +145,8 @@ export const indexListMessages = createServerFn({ method: "POST" })
         flagged: !!r.flagged,
         has_attachments: !!r.has_attachments,
         message_id: r.message_id,
+        in_reply_to: r.in_reply_to,
+        references_ids: r.references_ids,
       }),
       uidValidity: folderUidValidity,
     }));
