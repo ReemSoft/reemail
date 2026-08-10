@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { createReadStream, createWriteStream } from "node:fs";
-import { chmod, mkdir, readdir, stat, unlink } from "node:fs/promises";
+import { chmod, mkdir, readdir, readFile, stat, unlink } from "node:fs/promises";
 import path from "node:path";
 import type { Readable } from "node:stream";
 import { finished } from "node:stream/promises";
@@ -15,13 +15,56 @@ export const MIME_SPOOL_DIR =
     : "/tmp/mailmaestro-spool");
 export const MIME_SPOOL_MAX_AGE_MS = Number(process.env.MAIL_MIME_SPOOL_MAX_AGE_MS || 60 * 60_000);
 
+/**
+ * Hard ceiling for materialising a spool in memory (IMAP APPEND only).
+ *
+ * Derived from the existing send limit (SEND_MAX_TOTAL_BYTES, default 25 MiB)
+ * plus 60% headroom for base64 + headers. It does NOT change any send limit —
+ * it only bounds the transient Buffer used by the background Sent finalizer.
+ */
+export const SENT_APPEND_MAX_BYTES = Number(
+  process.env.SENT_APPEND_MAX_BYTES ||
+    Math.ceil(Number(process.env.SEND_MAX_TOTAL_BYTES || 25 * 1024 * 1024) * 1.6),
+);
+
+export class MimeSpoolTooLargeError extends Error {
+  readonly code = "SENT_COPY_TOO_LARGE";
+  constructor(
+    readonly size: number,
+    readonly maxBytes: number,
+  ) {
+    super("MIME spool exceeds the in-memory APPEND limit");
+    this.name = "MimeSpoolTooLargeError";
+  }
+}
+
 export interface MimeSpool {
   path: string;
   messageId: string;
   size: number;
   openReadStream: () => Readable;
   cleanup: () => Promise<void>;
+  /** Read the exact same on-disk bytes into a bounded Buffer (IMAP APPEND). */
+  readBuffer?: (maxBytes?: number) => Promise<Buffer>;
 }
+
+/**
+ * ImapFlow 1.5's `append()` contract is `string | Buffer` — passing a Readable
+ * silently breaks (`content.length` / `content.indexOf` are undefined) and
+ * surfaces as IMAP_UNKNOWN. Always append bytes read back from the spool so
+ * every attempt is byte-identical to what SMTP streamed.
+ */
+export async function readMimeSpoolBuffer(
+  spool: MimeSpool,
+  maxBytes: number = SENT_APPEND_MAX_BYTES,
+): Promise<Buffer> {
+  if (spool.readBuffer) return spool.readBuffer(maxBytes);
+  if (spool.size > maxBytes) throw new MimeSpoolTooLargeError(spool.size, maxBytes);
+  const buffer = await readFile(spool.path);
+  if (buffer.byteLength > maxBytes) throw new MimeSpoolTooLargeError(buffer.byteLength, maxBytes);
+  return buffer;
+}
+
 
 export async function withMimeSpoolReadStream<T>(
   spool: MimeSpool,
