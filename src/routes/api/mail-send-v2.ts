@@ -30,6 +30,10 @@ export const Route = createFileRoute("/api/mail-send-v2")({
             cc: Array.isArray(body?.cc) ? body.cc : [],
             bcc: Array.isArray(body?.bcc) ? body.bcc : [],
             subject: typeof body?.subject === "string" ? body.subject : "",
+            inReplyTo: typeof body?.inReplyTo === "string" ? body.inReplyTo : undefined,
+            references: Array.isArray(body?.references)
+              ? body.references.filter((value: unknown) => typeof value === "string").slice(0, 100)
+              : [],
             bodyHtml: typeof body?.bodyHtml === "string" ? body.bodyHtml : undefined,
             bodyText: typeof body?.bodyText === "string" ? body.bodyText : undefined,
             attachmentHandles: Array.isArray(body?.attachmentHandles) ? body.attachmentHandles : [],

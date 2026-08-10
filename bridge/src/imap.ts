@@ -1055,10 +1055,14 @@ export function parsedMailToMessage(parsed: ParsedMail, folder: MailFolder): Mai
   }));
 
   const { mailedBy, signedBy, security } = extractSecurityHeaders(parsed);
+  const inReplyTo = headerValue(parsed, "In-Reply-To").trim() || undefined;
+  const references = headerValue(parsed, "References").match(/<[^<>\r\n]+>/g) ?? [];
 
   return {
     id: "",
     threadId: parsed.messageId || "",
+    inReplyTo,
+    references,
     folder,
     from,
     to,

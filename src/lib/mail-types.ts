@@ -30,6 +30,10 @@ export interface MailAttachment {
 export interface MailMessage {
   id: string;
   threadId: string;
+  /** RFC Message-ID of the direct parent, when this message is a reply. */
+  inReplyTo?: string;
+  /** RFC References chain, oldest to newest. */
+  references?: string[];
   folder: MailFolder;
   from: MailAddress;
   to: MailAddress[];
