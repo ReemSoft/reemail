@@ -6273,7 +6273,7 @@ function Composer({
             }
             return { ok: true };
           }
-          return { ok: false, code: res?.code ?? res?.error };
+          return { ok: false, code: res?.code ?? res?.error ?? (response.ok ? "UNKNOWN" : "NETWORK") };
         } catch {
           return { ok: false, code: "NETWORK" };
         }
