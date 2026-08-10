@@ -1168,6 +1168,9 @@ type ComposeInitial = {
   inlineMessageId?: string;
   /** Hardened source retained briefly for post-paint quote style isolation. */
   quoteSourceHtml?: string;
+  /** RFC threading headers used only for Reply/Reply All, never Forward. */
+  inReplyTo?: string;
+  references?: string[];
 };
 
 function stripHtml(html: string): string {
@@ -1217,6 +1220,10 @@ function buildReply(
     inlineImages: message.inlineImages,
     inlineMessageId: message.id,
     quoteSourceHtml,
+    inReplyTo: message.threadId || undefined,
+    references: Array.from(
+      new Set([...(message.references ?? []), message.threadId].filter(Boolean)),
+    ),
     attachmentSourceRef: attachmentSourceRef ?? undefined,
     existingAttachments:
       normalAttachments.length > 0
@@ -4880,6 +4887,7 @@ function ConversationMessageCard({ row }: { row: ConversationRow }) {
       const base: MailMessage = {
         id: `${row.folder}:${row.uid}`,
         threadId: row.messageId ?? `${row.folder}:${row.uid}`,
+        uidValidity: row.uidValidity,
         folder: row.folder,
         from: row.from,
         to: row.to,
@@ -4939,7 +4947,7 @@ function ConversationMessageCard({ row }: { row: ConversationRow }) {
           {loaded && (
             <MessageBody
               message={loaded}
-              html={sanitizeEmailHtml(loaded.body || loaded.preview || "")}
+              html={splitQuotedHtml(sanitizeEmailHtml(loaded.body || loaded.preview || "")).latest}
               className="mt-2"
               afterLatest={<MessageAttachmentsSection message={loaded} />}
             />
@@ -5010,7 +5018,10 @@ function ConversationHistory({
   return (
     <div className="mt-3 flex flex-col gap-2">
       {rows.map((row) => (
-        <ConversationMessageCard key={`${row.folder}:${row.uid}`} row={row} />
+        <ConversationMessageCard
+          key={`${row.folder}:${row.uid}:${row.uidValidity}`}
+          row={row}
+        />
       ))}
     </div>
   );
@@ -7548,6 +7559,8 @@ function Composer({
           cc: cc.filter((r) => r.valid).map((r) => ({ name: r.name ?? "", email: r.email })),
           bcc: bcc.filter((r) => r.valid).map((r) => ({ name: r.name ?? "", email: r.email })),
           subject,
+          inReplyTo: initial?.inReplyTo,
+          references: initial?.references,
           bodyHtml,
           bodyText,
           ...attachmentTransport,

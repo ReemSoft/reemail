@@ -61,6 +61,8 @@ function composerOptions(
     ...(payload.cc?.length ? { cc: payload.cc.map(address).join(", ") } : {}),
     ...(payload.bcc?.length ? { bcc: payload.bcc.map(address).join(", ") } : {}),
     subject: payload.subject,
+    ...(payload.inReplyTo ? { inReplyTo: payload.inReplyTo } : {}),
+    ...(payload.references?.length ? { references: payload.references } : {}),
     text: payload.bodyText || "",
     html: payload.bodyHtml || "",
     ...(payload.attachments?.length

@@ -27,6 +27,7 @@ const ListSchema = z.object({
 export interface ConversationRow {
   uid: number;
   folder: MailFolder;
+  uidValidity: string;
   subject: string;
   from: MailAddress;
   to: MailAddress[];
@@ -80,6 +81,7 @@ export const listMailConversation = createServerFn({ method: "POST" })
       .map((row) => ({
         uid: Number(row.uid),
         folder: row.canonical as MailFolder,
+        uidValidity: String(row.uidvalidity),
         subject: row.subject ?? "",
         from: coerceAddress(row.from_addr),
         to: coerceAddressList(row.to_addrs),
@@ -89,9 +91,7 @@ export const listMailConversation = createServerFn({ method: "POST" })
         flagged: !!row.flagged,
         hasAttachments: !!row.has_attachments,
         messageId: row.message_id ?? null,
-      }))
-      // Newest first from the RPC; render oldest→newest like a real thread.
-      .reverse();
+      }));
 
     return { ok: true, rows: mapped };
   });

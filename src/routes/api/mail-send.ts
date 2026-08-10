@@ -73,6 +73,10 @@ export const Route = createFileRoute("/api/mail-send")({
           cc: Array.isArray(payload?.cc) ? payload.cc : [],
           bcc: Array.isArray(payload?.bcc) ? payload.bcc : [],
           subject: typeof payload?.subject === "string" ? payload.subject : "",
+          inReplyTo: typeof payload?.inReplyTo === "string" ? payload.inReplyTo : undefined,
+          references: Array.isArray(payload?.references)
+            ? payload.references.filter((value: unknown) => typeof value === "string").slice(0, 100)
+            : [],
           bodyHtml: typeof payload?.bodyHtml === "string" ? payload.bodyHtml : undefined,
           bodyText: typeof payload?.bodyText === "string" ? payload.bodyText : undefined,
           inlineImages: inlineParsed.data,

@@ -30,6 +30,8 @@ export interface SendMessagePayload {
   cc?: { name: string; email: string }[];
   bcc?: { name: string; email: string }[];
   subject: string;
+  inReplyTo?: string;
+  references?: string[];
   bodyHtml?: string;
   bodyText?: string;
   attachments?: SendAttachment[];

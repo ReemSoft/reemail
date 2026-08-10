@@ -408,6 +408,7 @@ export type Database = {
           keywords: string[]
           message_id: string | null
           modseq: number | null
+          references_ids: string[]
           seen: boolean
           size_bytes: number | null
           subject: string | null
@@ -434,6 +435,7 @@ export type Database = {
           keywords?: string[]
           message_id?: string | null
           modseq?: number | null
+          references_ids?: string[]
           seen?: boolean
           size_bytes?: number | null
           subject?: string | null
@@ -460,6 +462,7 @@ export type Database = {
           keywords?: string[]
           message_id?: string | null
           modseq?: number | null
+          references_ids?: string[]
           seen?: boolean
           size_bytes?: number | null
           subject?: string | null
