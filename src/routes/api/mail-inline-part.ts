@@ -51,31 +51,21 @@ export const Route = createFileRoute("/api/mail-inline-part")({
         const auth = await resolveBridgeAuth(payload.mailSessionToken);
         if (!auth.ok) return json({ error: auth.error }, auth.status);
 
-        let upstream: Response;
-        try {
-          upstream = await fetch(`${auth.bridgeUrl}/api/message-inline-part`, {
-            method: "POST",
-            signal: request.signal,
-            headers: {
-              "Content-Type": "application/json",
-              "X-Bridge-Key": auth.bridgeKey,
-            },
-            body: JSON.stringify({
-              account: auth.bridgeAccount,
-              password: payload.password,
-              folder: payload.folder,
-              uid: payload.uid,
-              part: payload.part,
-            }),
-          });
-        } catch (e) {
-          // Client navigated away / image detached → request aborted. Not a server error.
-          if (request.signal.aborted || (e as Error)?.name === "AbortError") {
-            return new Response(null, { status: 499 });
-          }
-          return json({ error: "Inline image unavailable" }, 502);
-        }
-
+        const upstream = await fetch(`${auth.bridgeUrl}/api/message-inline-part`, {
+          method: "POST",
+          signal: request.signal,
+          headers: {
+            "Content-Type": "application/json",
+            "X-Bridge-Key": auth.bridgeKey,
+          },
+          body: JSON.stringify({
+            account: auth.bridgeAccount,
+            password: payload.password,
+            folder: payload.folder,
+            uid: payload.uid,
+            part: payload.part,
+          }),
+        });
         if (!upstream.ok) {
           await upstream.body?.cancel().catch(() => undefined);
           return json({ error: "Inline image unavailable" }, upstream.status);
