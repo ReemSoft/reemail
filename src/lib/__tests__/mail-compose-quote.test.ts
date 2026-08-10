@@ -1,7 +1,12 @@
 // @vitest-environment happy-dom
 import { readFileSync } from "node:fs";
+import DOMPurify from "dompurify";
 import { describe, expect, it } from "vitest";
-import { exportPreparedQuotedDocument, markQuotedCidImagesPending } from "@/lib/mail-compose-quote";
+import {
+  applyQuotedDirectionFallback,
+  exportPreparedQuotedDocument,
+  markQuotedCidImagesPending,
+} from "@/lib/mail-compose-quote";
 import { buildForwardQuoteHtml, buildReplyQuoteHtml } from "@/lib/mail-quote";
 import {
   applyInlineImageToCidNodes,
@@ -12,10 +17,217 @@ import {
 } from "@/lib/mail-compose-inline-images";
 import { readDraftDoc, writeDraftDoc, type DraftStorageLike } from "@/lib/mail-draft-lifecycle";
 import { OUTLOOK_QUOTED_MAIL } from "./fixtures/outlook-quoted-mail";
+import { buildEmailHtmlDocument } from "@/lib/mail-compose-html";
 
 const meta = { from: { name: "Sender", email: "sender@example.com" }, date: "2026-08-01" };
 
 describe("quoted email preparation", () => {
+  it("adds block-level auto direction only where source direction is missing", () => {
+    const root = document.createElement("div");
+    root.innerHTML = `
+      <p>English paragraph</p>
+      <p>فقرة عربية</p>
+      <div dir="ltr">Explicit English</div>
+      <div dir="rtl">عربي صريح</div>
+      <div style="direction:ltr;text-align:right">Styled English</div>
+      <div style="direction:rtl;text-align:left">Styled Arabic</div>`;
+    applyQuotedDirectionFallback(root);
+    const blocks = Array.from(root.children) as HTMLElement[];
+    expect(blocks[0]?.getAttribute("dir")).toBe("auto");
+    expect(blocks[1]?.getAttribute("dir")).toBe("auto");
+    expect(blocks[2]?.getAttribute("dir")).toBe("ltr");
+    expect(blocks[3]?.getAttribute("dir")).toBe("rtl");
+    expect(blocks[4]?.hasAttribute("dir")).toBe(false);
+    expect(blocks[4]?.style.direction).toBe("ltr");
+    expect(blocks[4]?.style.textAlign).toBe("right");
+    expect(blocks[5]?.hasAttribute("dir")).toBe(false);
+    expect(blocks[5]?.style.direction).toBe("rtl");
+    expect(blocks[5]?.style.textAlign).toBe("left");
+  });
+
+  it("inherits explicit ancestor direction and keeps fallback siblings independent", () => {
+    const root = document.createElement("section");
+    root.innerHTML = `
+      <div dir="rtl"><p>English under RTL</p></div>
+      <div style="direction:ltr"><p>مرحبا under LTR</p></div>
+      <div dir="rtl"><div dir="ltr"><p>Nearest LTR wins</p></div></div>
+      <p>Independent fallback</p>`;
+    applyQuotedDirectionFallback(root);
+    const explicitParagraphs = root.querySelectorAll("div p");
+    expect(
+      Array.from(explicitParagraphs).every((paragraph) => !paragraph.hasAttribute("dir")),
+    ).toBe(true);
+    expect(root.querySelector("div[dir='rtl']")?.getAttribute("dir")).toBe("rtl");
+    expect((root.querySelector("div[style]") as HTMLElement | null)?.style.direction).toBe("ltr");
+    expect(root.querySelector("div[dir='ltr']")?.getAttribute("dir")).toBe("ltr");
+    expect(root.querySelector("div[dir='ltr'] p")?.closest("[dir]")?.getAttribute("dir")).toBe(
+      "ltr",
+    );
+    expect(root.querySelector(":scope > p")?.getAttribute("dir")).toBe("auto");
+  });
+
+  it.each(["ltr", "rtl"] as const)(
+    "inherits explicit ancestor CSS direction:%s without adding auto",
+    (direction) => {
+      const root = document.createElement("section");
+      root.innerHTML = `<div style="direction:${direction}"><p>Mixed مرحبا text</p></div>`;
+      applyQuotedDirectionFallback(root);
+      const container = root.querySelector("div") as HTMLElement | null;
+      expect(container?.style.direction).toBe(direction);
+      expect(container?.hasAttribute("dir")).toBe(false);
+      expect(container?.querySelector("p")?.hasAttribute("dir")).toBe(false);
+    },
+  );
+
+  it("does not treat a MailMaestro fallback ancestor as explicit source direction", () => {
+    const root = document.createElement("section");
+    root.innerHTML = "<div><p>English</p><p>فقرة عربية</p></div>";
+    applyQuotedDirectionFallback(root);
+    expect(root.querySelector("div")?.getAttribute("dir")).toBe("auto");
+    expect(
+      Array.from(root.querySelectorAll("p"), (paragraph) => paragraph.getAttribute("dir")),
+    ).toEqual(["auto", "auto"]);
+  });
+
+  it("keeps mixed lists and LTR/RTL tables structurally intact", () => {
+    document.body.innerHTML = `
+      <ul><li>English item</li><li>عنصر عربي</li></ul>
+      <table dir="ltr"><tbody><tr><td>English cell</td></tr></tbody></table>
+      <table dir="rtl"><tbody><tr><td>خلية عربية</td></tr></tbody></table>`;
+    const html = exportPreparedQuotedDocument(document);
+    const template = document.createElement("template");
+    template.innerHTML = html;
+    expect(template.content.querySelectorAll("ul > li")).toHaveLength(2);
+    expect(template.content.querySelectorAll("table > tbody > tr > td")).toHaveLength(2);
+    expect(template.content.querySelectorAll('table[dir="ltr"]')).toHaveLength(1);
+    expect(template.content.querySelectorAll('table[dir="rtl"]')).toHaveLength(1);
+    expect(
+      Array.from(template.content.querySelectorAll("li")).every(
+        (element) => element.getAttribute("dir") === "auto",
+      ),
+    ).toBe(true);
+    expect(
+      Array.from(template.content.querySelectorAll("td")).every(
+        (element) => !element.hasAttribute("dir"),
+      ),
+    ).toBe(true);
+  });
+
+  it("preserves source CSS direction and alignment while adding missing fallback", () => {
+    document.body.innerHTML = `
+      <style>
+        .ltr { direction:ltr; text-align:right; }
+        .rtl { direction:rtl; text-align:left; }
+      </style>
+      <p class="ltr">English</p>
+      <p class="rtl">عربي</p>
+      <p>Automatic</p>`;
+    const html = exportPreparedQuotedDocument(document);
+    const template = document.createElement("template");
+    template.innerHTML = html;
+    const paragraphs = Array.from(template.content.querySelectorAll<HTMLElement>("p"));
+    expect(paragraphs[0]?.style.direction).toBe("ltr");
+    expect(paragraphs[0]?.style.textAlign).toBe("right");
+    expect(paragraphs[0]?.hasAttribute("dir")).toBe(false);
+    expect(paragraphs[1]?.style.direction).toBe("rtl");
+    expect(paragraphs[1]?.style.textAlign).toBe("left");
+    expect(paragraphs[1]?.hasAttribute("dir")).toBe(false);
+    expect(paragraphs[2]?.getAttribute("dir")).toBe("auto");
+    expect(template.content.querySelector("[class],[id]")).toBeNull();
+  });
+
+  it("carries document-level body direction into the prepared fragment", () => {
+    document.body.setAttribute("dir", "rtl");
+    document.body.style.textAlign = "right";
+    document.body.innerHTML = "<p>English text under an explicit RTL body</p>";
+    const html = exportPreparedQuotedDocument(document);
+    const template = document.createElement("template");
+    template.innerHTML = html;
+    const wrapper = template.content.firstElementChild as HTMLElement | null;
+    expect(wrapper?.getAttribute("dir")).toBe("rtl");
+    expect(wrapper?.style.textAlign).toBe("right");
+    expect(wrapper?.querySelector("p")?.hasAttribute("dir")).toBe(false);
+    document.body.removeAttribute("dir");
+    document.body.removeAttribute("style");
+  });
+
+  it("keeps LTR body direction inherited by an Arabic child", () => {
+    document.body.setAttribute("dir", "ltr");
+    document.body.innerHTML = "<p>مرحبا تحت اتجاه صريح</p>";
+    const html = exportPreparedQuotedDocument(document);
+    const template = document.createElement("template");
+    template.innerHTML = html;
+    const wrapper = template.content.firstElementChild as HTMLElement | null;
+    expect(wrapper?.getAttribute("dir")).toBe("ltr");
+    expect(wrapper?.querySelector("p")?.hasAttribute("dir")).toBe(false);
+    document.body.removeAttribute("dir");
+  });
+
+  it("keeps HTML-level direction inherited by descendants", () => {
+    const source = document.implementation.createHTMLDocument("");
+    source.documentElement.setAttribute("dir", "rtl");
+    source.body.innerHTML = "<div><p>English under HTML RTL</p></div>";
+    const html = exportPreparedQuotedDocument(source);
+    const template = document.createElement("template");
+    template.innerHTML = html;
+    const wrapper = template.content.firstElementChild as HTMLElement | null;
+    expect(wrapper?.getAttribute("dir")).toBe("rtl");
+    expect(wrapper?.querySelector("div")?.hasAttribute("dir")).toBe(false);
+    expect(wrapper?.querySelector("p")?.hasAttribute("dir")).toBe(false);
+  });
+
+  it("keeps quote direction in draft storage and outgoing email HTML", () => {
+    const values = new Map<string, string>();
+    const storage: DraftStorageLike = {
+      getItem: (key) => values.get(key) ?? null,
+      setItem: (key, value) => void values.set(key, value),
+      removeItem: (key) => void values.delete(key),
+    };
+    const quoteHtml = buildReplyQuoteHtml("Hello", meta, "ar");
+    expect(
+      writeDraftDoc(storage, "author@example.com", {
+        version: 3,
+        draftId: "direction-draft",
+        snapshot: {
+          to: [],
+          cc: [],
+          bcc: [],
+          subject: "Re: Direction",
+          html: quoteHtml,
+          showCc: false,
+          showBcc: false,
+        },
+        serverRef: null,
+        updatedAt: 1,
+      }),
+    ).toBe(true);
+    const reopened = readDraftDoc(storage, "author@example.com");
+    expect(reopened?.snapshot.html).toContain('data-mm-quoted-content="1" dir="auto"');
+    const sanitized = DOMPurify.sanitize(reopened?.snapshot.html ?? "", {
+      FORBID_TAGS: ["script", "iframe", "object", "embed", "form", "link", "meta", "base", "style"],
+      ALLOW_DATA_ATTR: false,
+    });
+    const outgoing = buildEmailHtmlDocument(sanitized, { dir: "rtl" });
+    expect(outgoing).toContain('dir="auto"');
+    expect(outgoing).toContain("border-inline-start:2px");
+  });
+
+  it("keeps explicit source direction inherited in outgoing HTML", () => {
+    const source = document.implementation.createHTMLDocument("");
+    source.body.setAttribute("dir", "rtl");
+    source.body.innerHTML = "<p>English governed by source RTL</p>";
+    const prepared = exportPreparedQuotedDocument(source);
+    expect(prepared).toContain('<div dir="rtl"><p>English governed by source RTL</p></div>');
+    const editor = document.createElement("div");
+    editor.innerHTML = buildReplyQuoteHtml("placeholder", meta, "en");
+    const quotedContent = editor.querySelector<HTMLElement>("[data-mm-quoted-content]");
+    expect(quotedContent).not.toBeNull();
+    if (quotedContent) quotedContent.innerHTML = prepared;
+    const outgoing = buildEmailHtmlDocument(DOMPurify.sanitize(editor.innerHTML), { dir: "ltr" });
+    expect(outgoing).toContain('dir="rtl"');
+    expect(outgoing).toContain("English governed by source RTL");
+  });
+
   it("inlines safe Outlook presentation, preserves order, and removes structural indentation", () => {
     document.body.innerHTML = OUTLOOK_QUOTED_MAIL;
     const html = exportPreparedQuotedDocument(document);

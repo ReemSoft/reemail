@@ -47,6 +47,34 @@ describe("buildReplyQuoteHtml / buildForwardQuoteHtml", () => {
     expect(out).toContain("Subject:");
     expect(out).toContain("<p>body</p>");
   });
+
+  it.each([
+    ["reply in Arabic UI with English source", buildReplyQuoteHtml, "Hello from London", "ar"],
+    ["reply all in Arabic UI with English source", buildReplyQuoteHtml, "Hello from London", "ar"],
+    ["forward in Arabic UI with English source", buildForwardQuoteHtml, "Hello from London", "ar"],
+    ["reply in English UI with Arabic source", buildReplyQuoteHtml, "مرحبا من الرياض", "en"],
+    ["forward in English UI with Arabic source", buildForwardQuoteHtml, "مرحبا من الرياض", "en"],
+  ])("isolates %s with native automatic direction", (_name, build, body, locale) => {
+    const out = build(body, meta, locale);
+    expect(out).toContain('data-mm-quoted-content="1" dir="auto"');
+    expect(out).toContain("padding-inline-start:12px");
+    expect(out).toContain("border-inline-start:2px");
+    expect(out).toContain("text-align:start");
+  });
+
+  it("isolates mixed-direction attribution and forward values", () => {
+    const mixedMeta = {
+      ...meta,
+      from: { name: "علي Ali", email: "ali@example.com" },
+      to: [{ name: "Sara سارة", email: "sara@example.com" }],
+      subject: "Project مشروع",
+    };
+    const reply = buildReplyQuoteHtml("Hello", mixedMeta, "ar", "كتب:");
+    const forward = buildForwardQuoteHtml("Hello", mixedMeta, "ar");
+    expect(reply).toContain("<bdi>علي Ali &lt;ali@example.com&gt;</bdi>");
+    expect(forward).toContain("<bdi>Project مشروع</bdi>");
+    expect(forward).toContain("<bdi>Sara سارة &lt;sara@example.com&gt;</bdi>");
+  });
 });
 
 describe("splitQuotedHtml", () => {

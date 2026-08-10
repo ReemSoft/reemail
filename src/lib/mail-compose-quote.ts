@@ -75,6 +75,22 @@ const BLOCK_ELEMENTS = new Set([
   "UL",
 ]);
 
+const QUOTED_BIDI_BLOCK_SELECTOR = [
+  "p",
+  "div",
+  "li",
+  "blockquote",
+  "td",
+  "th",
+  "h1",
+  "h2",
+  "h3",
+  "h4",
+  "h5",
+  "h6",
+  "pre",
+].join(",");
+
 function normalizedCid(value: string): string {
   return value.trim().replace(/^<|>$/g, "").toLowerCase();
 }
@@ -209,6 +225,58 @@ function removeStructuralIndentation(root: ParentNode): void {
   for (const text of removable) text.remove();
 }
 
+function hasExplicitSourceDirection(
+  element: HTMLElement,
+  fallbackElements?: ReadonlySet<HTMLElement>,
+): boolean {
+  const dir = element.getAttribute("dir")?.trim().toLowerCase();
+  if ((dir === "ltr" || dir === "rtl" || dir === "auto") && !fallbackElements?.has(element)) {
+    return true;
+  }
+  const direction = element.style.getPropertyValue("direction").trim().toLowerCase();
+  return direction === "ltr" || direction === "rtl";
+}
+
+/** Give unformatted quoted text an isolated native bidi context without overriding source intent. */
+export function applyQuotedDirectionFallback(
+  root: ParentNode,
+  inheritedSourceDirection = false,
+): void {
+  const fallbackElements = new Set<HTMLElement>();
+  for (const element of root.querySelectorAll<HTMLElement>(QUOTED_BIDI_BLOCK_SELECTOR)) {
+    let hasSourceContext = inheritedSourceDirection;
+    let current: HTMLElement | null = element;
+    while (!hasSourceContext && current) {
+      if (hasExplicitSourceDirection(current, fallbackElements)) hasSourceContext = true;
+      if (current === root) break;
+      current = current.parentElement;
+    }
+    if (!hasSourceContext) {
+      element.setAttribute("dir", "auto");
+      fallbackElements.add(element);
+    }
+  }
+}
+
+function wrapDocumentDirection(doc: Document, html: string): string {
+  const body = doc.body;
+  const documentElement = doc.documentElement;
+  const dir = body.getAttribute("dir") ?? documentElement.getAttribute("dir");
+  const direction =
+    body.style.getPropertyValue("direction").trim() ||
+    documentElement.style.getPropertyValue("direction").trim();
+  const textAlign =
+    body.style.getPropertyValue("text-align").trim() ||
+    documentElement.style.getPropertyValue("text-align").trim();
+  if (!dir && !direction && !textAlign) return html;
+  const wrapper = doc.createElement("div");
+  if (dir) wrapper.setAttribute("dir", dir);
+  if (direction && safeStyleValue(direction)) wrapper.style.setProperty("direction", direction);
+  if (textAlign && safeStyleValue(textAlign)) wrapper.style.setProperty("text-align", textAlign);
+  wrapper.innerHTML = html;
+  return wrapper.outerHTML;
+}
+
 /** Export the isolated document after converting only approved CSS into inline declarations. */
 export function exportPreparedQuotedDocument(doc: Document): string {
   const rules: CSSRule[] = [];
@@ -219,7 +287,11 @@ export function exportPreparedQuotedDocument(doc: Document): string {
       // No external stylesheets are permitted, but fail closed if a browser rejects access.
     }
   }
-  for (const element of Array.from(doc.body.querySelectorAll<HTMLElement>("*"))) {
+  for (const element of [
+    doc.documentElement,
+    doc.body,
+    ...Array.from(doc.body.querySelectorAll<HTMLElement>("*")),
+  ]) {
     if (element.tagName === "STYLE") continue;
     const computed = doc.defaultView?.getComputedStyle(element);
     if (!computed) continue;
@@ -236,9 +308,10 @@ export function exportPreparedQuotedDocument(doc: Document): string {
     unsafe.remove();
   isolateSourceSelectors(doc.body);
   removeStructuralIndentation(doc.body);
+  applyQuotedDirectionFallback(doc.body, hasExplicitSourceDirection(doc.documentElement));
   blockRemoteImageSources(doc.body);
   markCidImagesPending(doc.body);
-  return doc.body.innerHTML.trim();
+  return wrapDocumentDirection(doc, doc.body.innerHTML.trim());
 }
 
 const FORMATTER_CSP = [

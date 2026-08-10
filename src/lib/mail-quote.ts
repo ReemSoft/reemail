@@ -88,11 +88,17 @@ function formatDate(date: string, locale: string): string {
   }
 }
 
+function bidiIsolate(text: string): string {
+  return `<bdi>${escapeHtml(text)}</bdi>`;
+}
+
 /** Marker class used by the viewer to detect a quoted history block. */
 export const QUOTE_CLASS = "mm_quote";
 
-const BLOCKQUOTE_STYLE =
-  "margin:0;padding-inline-start:12px;border-inline-start:2px solid #d4d4d8;color:#3f3f46;white-space:normal";
+const BLOCKQUOTE_STYLE = "margin:0;color:#3f3f46;white-space:normal";
+
+const QUOTED_CONTENT_STYLE =
+  "padding-inline-start:12px;border-inline-start:2px solid #d4d4d8;white-space:normal;text-align:start";
 
 export const QUOTED_CONTENT_ATTR = "data-mm-quoted-content";
 
@@ -107,14 +113,14 @@ export function buildReplyQuoteHtml(
   attributionLabel = "wrote:",
 ): string {
   const fragment = toQuotableFragment(body);
-  const attribution = `${escapeHtml(formatDate(meta.date, locale))} — ${escapeHtml(
+  const attribution = `${bidiIsolate(formatDate(meta.date, locale))} — ${bidiIsolate(
     formatAddress(meta.from),
   )} ${escapeHtml(attributionLabel)}`;
   return [
     "<div><br></div><div><br></div>",
     `<div class="${QUOTE_CLASS}">`,
     `<div style="color:#71717a;font-size:12px;margin:0 0 8px">${attribution}</div>`,
-    `<blockquote style="${BLOCKQUOTE_STYLE}"><div ${QUOTED_CONTENT_ATTR}="1" style="white-space:normal">${fragment}</div></blockquote>`,
+    `<blockquote style="${BLOCKQUOTE_STYLE}"><div ${QUOTED_CONTENT_ATTR}="1" dir="auto" style="${QUOTED_CONTENT_STYLE}">${fragment}</div></blockquote>`,
     "</div>",
   ].join("");
 }
@@ -142,19 +148,19 @@ export function buildForwardQuoteHtml(
 ): string {
   const fragment = toQuotableFragment(body);
   const rows: string[] = [
-    `${escapeHtml(labels.from)} ${escapeHtml(formatAddress(meta.from))}`,
-    `${escapeHtml(labels.date)} ${escapeHtml(formatDate(meta.date, locale))}`,
+    `${escapeHtml(labels.from)} ${bidiIsolate(formatAddress(meta.from))}`,
+    `${escapeHtml(labels.date)} ${bidiIsolate(formatDate(meta.date, locale))}`,
   ];
-  if (meta.subject) rows.push(`${escapeHtml(labels.subject)} ${escapeHtml(meta.subject)}`);
+  if (meta.subject) rows.push(`${escapeHtml(labels.subject)} ${bidiIsolate(meta.subject)}`);
   if (meta.to?.length) {
-    rows.push(`${escapeHtml(labels.to)} ${escapeHtml(meta.to.map(formatAddress).join(", "))}`);
+    rows.push(`${escapeHtml(labels.to)} ${bidiIsolate(meta.to.map(formatAddress).join(", "))}`);
   }
   return [
     "<div><br></div><div><br></div>",
     `<div class="${QUOTE_CLASS}">`,
     `<div style="color:#71717a;font-size:12px;margin:0 0 8px">${escapeHtml(labels.header)}</div>`,
     `<div style="color:#3f3f46;font-size:12px;margin:0 0 12px">${rows.join("<br>")}</div>`,
-    `<blockquote style="${BLOCKQUOTE_STYLE}"><div ${QUOTED_CONTENT_ATTR}="1" style="white-space:normal">${fragment}</div></blockquote>`,
+    `<blockquote style="${BLOCKQUOTE_STYLE}"><div ${QUOTED_CONTENT_ATTR}="1" dir="auto" style="${QUOTED_CONTENT_STYLE}">${fragment}</div></blockquote>`,
     "</div>",
   ].join("");
 }
