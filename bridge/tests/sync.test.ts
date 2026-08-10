@@ -343,6 +343,22 @@ test("syncIncremental: bounded window + hasMore correct", async () => {
   assert.equal(r.hasMore, true);
 });
 
+test("syncIncremental requests only References header and never source/body/bodyParts", async () => {
+  const client = makeFakeClient({
+    mailbox: { path: "INBOX", exists: 200, uidValidity: 10n, uidNext: 201 },
+    messages: [11, 12].map((uid) => fakeFetchMessage({ uid })),
+  });
+  const r = await syncIncremental(client, { folderPath: "INBOX", sinceUid: 10, limit: 100 });
+  if (r.resetRequired) throw new Error("unexpected");
+  const q = client.fetchCalls[0].query;
+  assert.equal(q.source, undefined);
+  assert.equal(q.body, undefined);
+  assert.equal(q.bodyParts, undefined);
+  assert.deepEqual(q.headers, ["references"]);
+});
+
+
+
 test("syncIncremental: UID gaps → nextSinceUid is END of window not last returned UID", async () => {
   // Server returned only UIDs 12, 15 within window 11:110 (rest expunged).
   const client = makeFakeClient({
