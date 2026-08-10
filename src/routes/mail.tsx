@@ -5172,9 +5172,7 @@ function ConversationHistory({
     <div className="mt-6">
       <div className="mb-2 flex items-center gap-2 text-[11px] font-medium text-muted-foreground">
         <span className="h-px flex-1 bg-border" />
-        <span>
-          {tr("الرسائل السابقة")} ({ordered.length})
-        </span>
+          {trf("الرسائل السابقة ({{count}})", { count: ordered.length })}
         <span className="h-px flex-1 bg-border" />
       </div>
       <div className="flex flex-col gap-2">
