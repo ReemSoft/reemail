@@ -300,6 +300,7 @@ function ThreadedEmailBody({
   onReady,
   largeCidDispatcherRef,
   afterLatest,
+  renderHistory,
 }: {
   html: string;
   cidImages: CidImageMapping[];
@@ -309,6 +310,11 @@ function ThreadedEmailBody({
   largeCidDispatcherRef?: { current: ((image: LargeCidByteMapping) => void) | null };
   /** Rendered directly under the newest turn (e.g. its own attachments). */
   afterLatest?: React.ReactNode;
+  /**
+   * Replaces the quoted-history block once expanded. Receives the quoted
+   * fallback so the caller can render it when no real thread rows exist.
+   */
+  renderHistory?: (quotedFallback: React.ReactNode) => React.ReactNode;
 }) {
   const { latest, quoted } = useMemo(() => splitQuotedHtml(html), [html]);
   const [expanded, setExpanded] = useState(false);
@@ -352,15 +358,26 @@ function ThreadedEmailBody({
           <span className="tracking-widest leading-none">•••</span>
           <span>{expanded ? tr("إخفاء الرسائل السابقة") : tr("عرض الرسائل السابقة")}</span>
         </button>
-        {expanded && (
-          <div className="mt-3 rounded-lg border border-border bg-muted/30 ps-3 pe-2 py-2 border-s-2 border-s-primary/40">
-            <EmailBodyFrame
-              html={quoted}
-              cidImages={cidImages}
-              messageIdentity={`${messageIdentity}:quoted`}
-            />
-          </div>
-        )}
+        {expanded &&
+          (renderHistory ? (
+            renderHistory(
+              <div className="mt-3 rounded-lg border border-border bg-muted/30 ps-3 pe-2 py-2 border-s-2 border-s-primary/40">
+                <EmailBodyFrame
+                  html={quoted}
+                  cidImages={cidImages}
+                  messageIdentity={`${messageIdentity}:quoted`}
+                />
+              </div>,
+            )
+          ) : (
+            <div className="mt-3 rounded-lg border border-border bg-muted/30 ps-3 pe-2 py-2 border-s-2 border-s-primary/40">
+              <EmailBodyFrame
+                html={quoted}
+                cidImages={cidImages}
+                messageIdentity={`${messageIdentity}:quoted`}
+              />
+            </div>
+          ))}
       </div>
     </div>
   );
@@ -575,12 +592,14 @@ function MessageBody({
   onInlineImages,
   className,
   afterLatest,
+  renderHistory,
 }: {
   message: MailMessage;
   html: string;
   onInlineImages?: (images: NonNullable<MailMessage["inlineImages"]>) => void;
   className?: string;
   afterLatest?: React.ReactNode;
+  renderHistory?: (quotedFallback: React.ReactNode) => React.ReactNode;
 }) {
   const bodyIdentity = `${message.id}|${message.uidValidity ?? ""}`;
   const [readyIdentity, setReadyIdentity] = useState("");
@@ -603,6 +622,7 @@ function MessageBody({
       onReady={() => setReadyIdentity(bodyIdentity)}
       largeCidDispatcherRef={largeCidDispatcherRef}
       afterLatest={afterLatest}
+      renderHistory={renderHistory}
     />
   );
 }
@@ -712,6 +732,10 @@ import {
   bridgeDeleteDraft,
 } from "@/lib/mail-bridge.functions";
 import { openMailMessage, resolveMessageInlineImages } from "@/lib/mail-message-open.functions";
+import {
+  listMailConversation,
+  type ConversationRow,
+} from "@/lib/mail-conversation.functions";
 import {
   readDraftDoc,
   writeDraftDoc,
@@ -4788,6 +4812,211 @@ function MessageRow({
   );
 }
 
+/**
+ * Attachment block bound to ONE message (same visual language as the
+ * composer's attachment area). Reused by the open message and by every
+ * previous message of the conversation, so each turn shows its own files.
+ */
+function MessageAttachmentsSection({ message }: { message: MailMessage }) {
+  const items = message.attachments ?? [];
+  if (!items.length) return null;
+  return (
+    <div className="mt-4 flex flex-col gap-1.5">
+      <label className="text-sm font-medium text-foreground">
+        {tr("المرفقات")} ·{" "}
+        <bdi dir="ltr">{formatSize(items.reduce((s, a) => s + (a.size || 0), 0))}</bdi>
+      </label>
+      <div className="flex flex-wrap gap-2 rounded-lg border border-dashed border-border bg-background/50 p-3">
+        {items.map((a) => (
+          <AttachmentCard key={a.id} attachment={a} message={message} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * One previous message of the thread. Collapsed by default: only the local
+ * index header row is rendered (zero network). The body + attachments are
+ * fetched lazily on click through the SAME cache-first open path.
+ */
+function ConversationMessageCard({ row }: { row: ConversationRow }) {
+  const openPrevious = useMailServerFn(openMailMessage);
+  const [open, setOpen] = useState(false);
+  const [loaded, setLoaded] = useState<MailMessage | null>(null);
+  const [state, setState] = useState<"idle" | "loading" | "error">("idle");
+
+  const shortDate = new Date(row.date).toLocaleString(
+    getCurrentLang() === "ar" ? "ar-SA" : "en-GB",
+    { dateStyle: "medium", timeStyle: "short" },
+  );
+
+  async function toggle() {
+    if (open) {
+      setOpen(false);
+      return;
+    }
+    setOpen(true);
+    if (loaded || state === "loading") return;
+    const session = getMailSession();
+    if (!session?.mailSessionToken) {
+      setState("error");
+      return;
+    }
+    setState("loading");
+    try {
+      const res = await openPrevious({
+        data: {
+          mailSessionToken: session.mailSessionToken,
+          password: session.password,
+          folder: row.folder,
+          uid: row.uid,
+        },
+      });
+      if (!res.ok) {
+        setState("error");
+        return;
+      }
+      const base: MailMessage = {
+        id: `${row.folder}:${row.uid}`,
+        threadId: row.messageId ?? `${row.folder}:${row.uid}`,
+        folder: row.folder,
+        from: row.from,
+        to: row.to,
+        cc: row.cc?.length ? row.cc : undefined,
+        subject: row.subject,
+        preview: "",
+        body: "",
+        date: row.date,
+        read: row.seen,
+        starred: row.flagged,
+        hasAttachments: row.hasAttachments,
+      };
+      setLoaded(
+        res.source === "cache"
+          ? {
+              ...base,
+              body: res.body.bodyHtml,
+              preview: res.body.preview,
+              attachments: res.body.attachments,
+              inlineParts: res.body.inlineParts,
+              inlineImages: res.body.inlineImages,
+              uidValidity: res.body.uidValidity,
+            }
+          : { ...base, ...res.message, id: base.id, folder: row.folder },
+      );
+      setState("idle");
+    } catch {
+      setState("error");
+    }
+  }
+
+  return (
+    <div className="rounded-lg border border-border bg-card/60">
+      <button
+        type="button"
+        onClick={toggle}
+        aria-expanded={open}
+        className="flex w-full items-center gap-2 px-3 py-2 text-start text-xs hover:bg-muted/50 rounded-lg"
+      >
+        <span className="min-w-0 flex-1 truncate font-medium text-foreground">
+          {row.from.name || row.from.email}
+        </span>
+        {row.hasAttachments && <Paperclip className="h-3.5 w-3.5 shrink-0 opacity-60" />}
+        <span className="shrink-0 text-muted-foreground">{shortDate}</span>
+      </button>
+      {open && (
+        <div className="border-t border-border px-3 pb-3">
+          {state === "loading" && (
+            <div className="flex items-center gap-2 py-3 text-xs text-muted-foreground">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              {tr("جارٍ التحميل…")}
+            </div>
+          )}
+          {state === "error" && (
+            <div className="py-3 text-xs text-destructive">{tr("تعذّر تحميل الرسالة")}</div>
+          )}
+          {loaded && (
+            <MessageBody
+              message={loaded}
+              html={sanitizeEmailHtml(loaded.body || loaded.preview || "")}
+              className="mt-2"
+              afterLatest={<MessageAttachmentsSection message={loaded} />}
+            />
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Real thread history: the previous messages of the conversation, each as its
+ * own entity with its own attachments. Mounted only after the user expands the
+ * history, so the open path stays untouched. Falls back to the quoted-HTML
+ * block when the local index has no sibling rows.
+ */
+function ConversationHistory({
+  current,
+  quotedFallback,
+}: {
+  current: MailMessage;
+  quotedFallback: React.ReactNode;
+}) {
+  const listConversation = useMailServerFn(listMailConversation);
+  const [rows, setRows] = useState<ConversationRow[] | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    const session = getMailSession();
+    const parsed = parseMessageId(current.id);
+    if (!session?.mailSessionToken || !parsed) {
+      setFailed(true);
+      return;
+    }
+    setRows(null);
+    setFailed(false);
+    listConversation({
+      data: {
+        mailSessionToken: session.mailSessionToken,
+        folder: parsed.folder,
+        uid: parsed.uid,
+      },
+    })
+      .then((res) => {
+        if (cancelled) return;
+        if (res.ok) setRows(res.rows);
+        else setFailed(true);
+      })
+      .catch(() => {
+        if (!cancelled) setFailed(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [current.id, listConversation]);
+
+  if (failed) return <>{quotedFallback}</>;
+  if (rows === null) {
+    return (
+      <div className="mt-3 flex items-center gap-2 text-xs text-muted-foreground">
+        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+        {tr("جارٍ تحميل الرسائل السابقة…")}
+      </div>
+    );
+  }
+  if (!rows.length) return <>{quotedFallback}</>;
+  return (
+    <div className="mt-3 flex flex-col gap-2">
+      {rows.map((row) => (
+        <ConversationMessageCard key={`${row.folder}:${row.uid}`} row={row} />
+      ))}
+    </div>
+  );
+}
+
+
 function MessageView({
   message,
   loading,
@@ -5173,27 +5402,12 @@ function MessageView({
               html={sanitizeEmailHtml(message.body || message.preview || "")}
               onInlineImages={handleInlineImages}
               className="mt-6"
-              afterLatest={
-                message.attachments && message.attachments.length > 0 ? (
-                  <div className="mt-4 flex flex-col gap-1.5">
-                    <label className="text-sm font-medium text-foreground">
-                      {tr("المرفقات")} ·{" "}
-                      <bdi dir="ltr">
-                        {formatSize(
-                          message.attachments.reduce((s, a) => s + (a.size || 0), 0),
-                        )}
-                      </bdi>
-                    </label>
-                    <div className="flex flex-wrap gap-2 rounded-lg border border-dashed border-border bg-background/50 p-3">
-                      {message.attachments.map((a) => (
-                        <AttachmentCard key={a.id} attachment={a} message={message} />
-                      ))}
-                    </div>
-                  </div>
-                ) : null
-              }
-
+              afterLatest={<MessageAttachmentsSection message={message} />}
+              renderHistory={(quotedFallback) => (
+                <ConversationHistory current={message} quotedFallback={quotedFallback} />
+              )}
             />
+
           )}
 
 
