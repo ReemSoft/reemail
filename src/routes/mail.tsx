@@ -733,6 +733,10 @@ import {
 } from "@/lib/mail-bridge.functions";
 import { openMailMessage, resolveMessageInlineImages } from "@/lib/mail-message-open.functions";
 import {
+  listMailConversation,
+  type ConversationRow,
+} from "@/lib/mail-conversation.functions";
+import {
   readDraftDoc,
   writeDraftDoc,
   updateDraftDocServerRef,
