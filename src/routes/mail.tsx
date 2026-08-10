@@ -5402,27 +5402,12 @@ function MessageView({
               html={sanitizeEmailHtml(message.body || message.preview || "")}
               onInlineImages={handleInlineImages}
               className="mt-6"
-              afterLatest={
-                message.attachments && message.attachments.length > 0 ? (
-                  <div className="mt-4 flex flex-col gap-1.5">
-                    <label className="text-sm font-medium text-foreground">
-                      {tr("المرفقات")} ·{" "}
-                      <bdi dir="ltr">
-                        {formatSize(
-                          message.attachments.reduce((s, a) => s + (a.size || 0), 0),
-                        )}
-                      </bdi>
-                    </label>
-                    <div className="flex flex-wrap gap-2 rounded-lg border border-dashed border-border bg-background/50 p-3">
-                      {message.attachments.map((a) => (
-                        <AttachmentCard key={a.id} attachment={a} message={message} />
-                      ))}
-                    </div>
-                  </div>
-                ) : null
-              }
-
+              afterLatest={<MessageAttachmentsSection message={message} />}
+              renderHistory={(quotedFallback) => (
+                <ConversationHistory current={message} quotedFallback={quotedFallback} />
+              )}
             />
+
           )}
 
 
