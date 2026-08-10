@@ -624,8 +624,11 @@ async function runFastRecoveryScenario(options: {
           return step;
         },
         async append(_folderPath, raw) {
-          const bytes = await readStream(raw);
-          recorder.appends.push({ clientId, raw: bytes });
+          // ImapFlow 1.5 accepts Buffer only — reject any stream.
+          if (!Buffer.isBuffer(raw)) {
+            throw new Error(`IMAP append expects a Buffer, received ${typeof raw}`);
+          }
+          recorder.appends.push({ clientId, raw: Buffer.from(raw) });
           const step = options.appends?.[appendIndex++] ?? true;
           if (step instanceof Error) throw step;
           return step;
