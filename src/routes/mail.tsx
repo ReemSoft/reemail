@@ -5550,18 +5550,21 @@ function MessageView({
           {loading ? (
             <MessageBodySkeleton />
           ) : (
-            <MessageBody
-              message={message}
-              html={sanitizeEmailHtml(message.body || message.preview || "")}
-              onInlineImages={handleInlineImages}
-              className="mt-6"
-              afterLatest={<MessageAttachmentsSection message={message} />}
-              renderHistory={(quotedFallback) => (
-                <ConversationHistory current={message} quotedFallback={quotedFallback} />
+            <>
+              <MessageBody
+                message={message}
+                html={sanitizeEmailHtml(message.body || message.preview || "")}
+                onInlineImages={handleInlineImages}
+                className="mt-6"
+                afterLatest={<MessageAttachmentsSection message={message} />}
+                suppressQuoted={hasThreadRows}
+              />
+              {hasThreadRows && (
+                <ConversationHistory rows={threadRows!} onCompose={onComposeFor} />
               )}
-            />
-
+            </>
           )}
+
 
 
           <div className="mt-6 flex flex-wrap gap-2">
