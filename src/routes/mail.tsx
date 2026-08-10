@@ -1,3 +1,4 @@
+import { cn } from "@/lib/utils";
 import { BrandLogo } from "@/components/brand-logo";
 import { ChevronBackward } from "@/components/ui/directional-icon";
 import { tr, trf, getCurrentLang } from "@/i18n";
