@@ -206,6 +206,8 @@
   "تفاصيل الرسالة": "Message details",
   "تقليل المسافة البادئة": "Decrease indent",
   "تم إرسال الرسالة": "Message sent",
+  "تم إرسال الرسالة، لكن تعذّر حفظ نسخة في مجلد المرسلة.": "Message sent, but a copy could not be saved in Sent.",
+  "تم إرسال الرسالة، لكن تعذّر تحديث مجلد المرسلة.": "Message sent, but the Sent folder could not be refreshed.",
   "تم إزالة رسالة مفقودة من القائمة": "A missing message was removed from the list",
   "تم إلغاء الربط.": "Mailbox unlinked.",
   "تم إنشاء الشركة. سجّل الدخول الآن.": "Company created. Sign in now.",

@@ -763,6 +763,14 @@ import {
 } from "@/lib/mail-pending-overrides";
 
 import { runManualRefresh } from "@/lib/mail-refresh-orchestration";
+import { runMailSync } from "@/lib/mail-sync.functions";
+import {
+  coordinateSentCopyCompletion,
+  createSentSyncCoalescer,
+  runTargetedSentSync,
+  watchSentCopy,
+  type SentCopyState,
+} from "@/lib/mail-sent-copy-coordinator";
 import { createSingleFlight } from "@/lib/single-flight";
 import { reviveAt } from "@/lib/mail-rollback";
 
@@ -1267,11 +1275,20 @@ type SortOption = "date-desc" | "date-asc" | "unread-first" | "starred-first";
 
 type SourceKind = "index" | "bridge" | "mock";
 
+type PostSendInfo = {
+  messageId?: string;
+  sentCopySaved: boolean;
+  sentCopyPending: boolean;
+  sentCopyJobId?: string;
+  sentCopyState?: SentCopyState;
+};
+
 function useMailData(session: MailSession | null) {
   const getCounts = useMailServerFn(bridgeGetFolderCounts);
   const getMessages = useMailServerFn(bridgeGetMessages);
   const listIndex = useMailServerFn(indexListMessages);
   const listIndexCounts = useMailServerFn(indexListFolderCounts);
+  const syncFolder = useMailServerFn(runMailSync);
   const [folder, setFolder] = useState<MailFolder>("inbox");
   const [sort, setSort] = useState<SortOption>("date-desc");
   const [counts, setCounts] = useState<
@@ -1295,6 +1312,8 @@ function useMailData(session: MailSession | null) {
   const [useMock, setUseMock] = useState(false);
   const [source, setSource] = useState<SourceKind>("bridge");
   const [indexCursor, setIndexCursor] = useState<string | null>(null);
+  const currentFolderRef = useRef<MailFolder>(folder);
+  currentFolderRef.current = folder;
   // Per-folder "index ready" flag, used to drive the sync hook.
   const [indexReady, setIndexReady] = useState<Partial<Record<MailFolder, boolean>>>({});
   // Race guard: only accept a load result whose id matches the latest request.
@@ -1839,6 +1858,125 @@ function useMailData(session: MailSession | null) {
     },
   });
 
+  const postSendRuntimeRef = useRef({
+    session,
+    folderPaths,
+    syncFolder,
+    loadCountsFast,
+    loadMessages,
+    currentAccountId,
+  });
+  postSendRuntimeRef.current = {
+    session,
+    folderPaths,
+    syncFolder,
+    loadCountsFast,
+    loadMessages,
+    currentAccountId,
+  };
+  const sentSyncCoalescerRef = useRef<ReturnType<typeof createSentSyncCoalescer> | null>(null);
+  useEffect(() => {
+    const coalescer = createSentSyncCoalescer(
+      async (signal) => {
+        const runtime = postSendRuntimeRef.current;
+        const activeSession = runtime.session;
+        if (!activeSession?.mailSessionToken) return "failed";
+        const scopeAccountId = runtime.currentAccountId;
+        try {
+          const outcome = await runTargetedSentSync({
+            signal,
+            sentPath: runtime.folderPaths.sent,
+            sync: (mode, folderPath) =>
+              runtime.syncFolder({
+                data: {
+                  mailSessionToken: activeSession.mailSessionToken!,
+                  password: activeSession.password,
+                  folderPath,
+                  canonical: "sent",
+                  mode,
+                },
+              }),
+            refreshCounts: async () => {
+              if (postSendRuntimeRef.current.currentAccountId === scopeAccountId) {
+                await postSendRuntimeRef.current.loadCountsFast();
+              }
+            },
+            currentFolder: () => currentFolderRef.current,
+            refreshSentList: async () => {
+              if (postSendRuntimeRef.current.currentAccountId === scopeAccountId) {
+                await postSendRuntimeRef.current.loadMessages();
+              }
+            },
+          });
+          if (outcome === "missing-path" || outcome === "failed") {
+            toast.warning(tr("تم إرسال الرسالة، لكن تعذّر تحديث مجلد المرسلة."));
+          }
+          return outcome;
+        } catch {
+          if (postSendRuntimeRef.current.currentAccountId === scopeAccountId) {
+            toast.warning(tr("تم إرسال الرسالة، لكن تعذّر تحديث مجلد المرسلة."));
+          }
+          return "failed";
+        }
+      },
+      {
+        onPersistentBusy: () => {
+          toast.warning(tr("تم إرسال الرسالة، لكن تعذّر تحديث مجلد المرسلة."));
+        },
+      },
+    );
+    sentSyncCoalescerRef.current = coalescer;
+    return () => {
+      coalescer.dispose();
+      if (sentSyncCoalescerRef.current === coalescer) sentSyncCoalescerRef.current = null;
+    };
+  }, [currentAccountId]);
+
+  const postSendAbortRef = useRef<AbortController | null>(null);
+  useEffect(() => {
+    const controller = new AbortController();
+    postSendAbortRef.current?.abort();
+    postSendAbortRef.current = controller;
+    return () => controller.abort();
+  }, [currentAccountId]);
+
+  const onAfterSend = useCallback((info: PostSendInfo) => {
+    const coalescerAtSend = sentSyncCoalescerRef.current;
+    const requestSentSync = () => coalescerAtSend?.request() ?? Promise.resolve();
+    const jobId = info.sentCopyJobId;
+    const activeSession = postSendRuntimeRef.current.session;
+    const controller = postSendAbortRef.current;
+    void coordinateSentCopyCompletion({
+      state: info.sentCopySaved ? "saved" : info.sentCopyState,
+      pending: info.sentCopyPending,
+      hasJob: Boolean(jobId && activeSession?.mailSessionToken && controller),
+      watch: () =>
+        watchSentCopy({
+          signal: controller!.signal,
+          check: async () => {
+            const response = await fetch("/api/mail-sent-copy-status", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                mailSessionToken: activeSession!.mailSessionToken,
+                jobId,
+              }),
+              signal: controller!.signal,
+            });
+            return (await response.json().catch(() => ({ ok: false }))) as {
+              ok: boolean;
+              state?: SentCopyState;
+              code?: string;
+            };
+          },
+        }),
+      requestSync: requestSentSync,
+      warnCopyFailure: () => {
+        toast.warning(tr("تم إرسال الرسالة، لكن تعذّر حفظ نسخة في مجلد المرسلة."));
+      },
+    });
+  }, []);
+
   return {
     folder,
     setFolder,
@@ -1872,17 +2010,7 @@ function useMailData(session: MailSession | null) {
         loadMessages,
         loadCounts: loadCountsFast,
       }),
-    onAfterSend: async () => {
-      // After a successful send: only refresh the Sent folder itself, and
-      // only if the user is currently viewing it. From any other folder we
-      // just pull counts once (Sent count moves; Inbox does not).
-      if (folder === "sent") {
-        await incrementalNow({ suppressOnSynced: true });
-        await Promise.all([loadMessages(), loadCountsFast()]);
-      } else {
-        await loadCountsFast();
-      }
-    },
+    onAfterSend,
     onDraftCreated: () => {
       bumpCountsGen();
       setCounts((prev) => ({
@@ -5516,7 +5644,7 @@ function Composer({
   session: MailSession;
   initial?: ComposeInitial | null;
   onClose: (options: { refreshDrafts: boolean }) => void;
-  onSent: () => void;
+  onSent: (info: PostSendInfo) => void;
   onDraftCreated: () => void;
 }) {
   // Draft storage keying is owned by mail-draft-lifecycle (v3 + auto-migration).
@@ -7190,7 +7318,15 @@ function Composer({
       const result = (await response.json().catch(() => ({
         ok: false,
         error: `HTTP ${response.status}`,
-      }))) as { ok: boolean; error?: string };
+      }))) as {
+        ok: boolean;
+        error?: string;
+        messageId?: string;
+        sentCopySaved?: boolean;
+        sentCopyPending?: boolean;
+        sentCopyJobId?: string;
+        sentCopyState?: SentCopyState;
+      };
       if (!result.ok) {
         toast.error(result.error || tr("فشل إرسال الرسالة"));
         return;
@@ -7238,7 +7374,13 @@ function Composer({
       }
       toast.success(tr("تم إرسال الرسالة"));
       onClose({ refreshDrafts: false });
-      onSent();
+      onSent({
+        messageId: result.messageId,
+        sentCopySaved: result.sentCopySaved === true,
+        sentCopyPending: result.sentCopyPending === true,
+        sentCopyJobId: result.sentCopyJobId,
+        sentCopyState: result.sentCopyState,
+      });
       // Address book: record recipients AFTER a successful SMTP send only.
       // Never let this failure poison the send outcome.
       try {

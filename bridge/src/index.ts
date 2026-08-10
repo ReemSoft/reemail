@@ -45,7 +45,7 @@ import {
   getMailboxesCached,
   withAccountMailbox,
 } from "./imap-connection.js";
-import { sendMessage, sendMessageFast } from "./smtp.js";
+import { sendMessage, sendMessageFast, sentCopyAccountKey } from "./smtp.js";
 import { postSendFinalizers } from "./post-send-finalizer.js";
 import { mapUploadedAttachments } from "./inline-images.js";
 import {
@@ -113,6 +113,11 @@ const AccountSchema = z.object({
 const AuthPayloadSchema = z.object({
   account: AccountSchema,
   password: z.string().min(1),
+});
+
+const SendStatusPayloadSchema = z.object({
+  account: AccountSchema,
+  jobId: z.string().min(32).max(128),
 });
 
 const FolderSchema = z.enum([
@@ -813,6 +818,21 @@ app.post("/api/send-v2", requireKey, async (req, res) => {
       }).catch(() => undefined);
     }
     if (gateAcquired && gateKey) sendGates.release(gateKey);
+  }
+});
+
+app.post("/api/send-status", requireKey, (req, res) => {
+  try {
+    const payload = SendStatusPayloadSchema.parse(req.body);
+    const status = postSendFinalizers.getStatus(
+      sentCopyAccountKey(payload.account as MailAccount),
+      payload.jobId,
+    );
+    if (!status) return res.status(404).json({ ok: false, error: "STATUS_NOT_FOUND" });
+    return res.json({ ok: true, ...status });
+  } catch (error) {
+    const code = error instanceof z.ZodError ? "INVALID_PAYLOAD" : "STATUS_FAILED";
+    return res.status(400).json({ ok: false, error: code });
   }
 });
 

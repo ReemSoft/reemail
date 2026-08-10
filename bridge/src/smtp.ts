@@ -1,11 +1,17 @@
 import { createTransport } from "nodemailer";
 import type { ImapFlow, ListResponse } from "imapflow";
 import type { Readable } from "node:stream";
-import { createHash } from "node:crypto";
 import { makeImapClient, listMailboxes } from "./imap.js";
 import { createMimeSpool, withMimeSpoolReadStream, type MimeSpool } from "./mime-spool.js";
-import { postSendFinalizers, type PostSendFinalizerQueue } from "./post-send-finalizer.js";
+import {
+  postSendFinalizers,
+  type PostSendFinalizerQueue,
+  type SentCopyEnqueueResult,
+  type SentCopyOutcome,
+  type SentCopyState,
+} from "./post-send-finalizer.js";
 import type { MailAccount } from "./types.js";
+import { accountBinding } from "./transfer-tickets.js";
 
 export interface SendAttachment {
   filename: string;
@@ -43,6 +49,8 @@ export interface SendMessageErr {
 
 export interface FastSendMessageOk extends SendMessageOk {
   sentCopyPending: boolean;
+  sentCopyJobId?: string;
+  sentCopyState: SentCopyState;
   timings: { mimeSpoolMs: number; smtpMs: number };
 }
 
@@ -189,7 +197,11 @@ export interface SendMessageDeps {
   createImapSentClient: (account: MailAccount, password: string) => ImapSentClient;
   createMimeSpool?: (payload: SendMessagePayload) => Promise<MimeSpool>;
   sleep?: (ms: number) => Promise<void>;
-  postSendQueue?: Pick<PostSendFinalizerQueue, "enqueue">;
+  postSendQueue?: Partial<Pick<PostSendFinalizerQueue, "enqueue" | "enqueueTracked">>;
+}
+
+export function sentCopyAccountKey(account: MailAccount): string {
+  return accountBinding(account);
 }
 
 export function smtpRejectUnauthorized(env = process.env): boolean {
@@ -276,43 +288,54 @@ export async function sendMessageFast(
   const smtpMs = performance.now() - smtpStartedAt;
 
   const queue = deps.postSendQueue ?? postSendFinalizers;
-  const accountKey = createHash("sha256")
-    .update(`${account.imap_host}\0${account.email_address.toLowerCase()}`)
-    .digest("hex");
-  const finalizeSentCopy = async () => {
+  const accountKey = sentCopyAccountKey(account);
+  const finalizeSentCopy = async (): Promise<SentCopyOutcome> => {
     let client: ImapSentClient | null = null;
+    let failureCode = "IMAP_CONNECT_FAILED";
     try {
       client = deps.createImapSentClient(account, password);
       const sleep = deps.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
       await client.connect();
+      failureCode = "IMAP_LIST_FAILED";
       const mailboxes = await client.list();
       const sentPath = resolveSentPath(mailboxes);
-      if (sentPath) {
-        let found = false;
-        for (let i = 0; i < SENT_SEARCH_RETRIES; i++) {
-          if (await client.searchMessageId(sentPath, spool.messageId)) {
-            found = true;
-            break;
-          }
-          if (i < SENT_SEARCH_RETRIES - 1) await sleep(SENT_SEARCH_INTERVAL_MS);
+      if (!sentPath) return { state: "failed", code: "SENT_FOLDER_NOT_FOUND" };
+      failureCode = "IMAP_SEARCH_FAILED";
+      for (let i = 0; i < SENT_SEARCH_RETRIES; i++) {
+        if (await client.searchMessageId(sentPath, spool.messageId)) {
+          return { state: "saved", source: "provider" };
         }
-        if (!found) {
-          await withMimeSpoolReadStream(spool, (raw) => client.append(sentPath, raw, ["\\Seen"]));
-        }
+        if (i < SENT_SEARCH_RETRIES - 1) await sleep(SENT_SEARCH_INTERVAL_MS);
       }
+      failureCode = "IMAP_APPEND_FAILED";
+      await withMimeSpoolReadStream(spool, (raw) => client.append(sentPath, raw, ["\\Seen"]));
+      return { state: "saved", source: "append" };
     } catch {
-      console.error("[bridge] Background Sent-copy failed");
+      return { state: "failed", code: failureCode };
     } finally {
       await client?.logout().catch(() => undefined);
       await spool.cleanup().catch(() => undefined);
     }
   };
-  let accepted = false;
+  let queued: SentCopyEnqueueResult | undefined;
   try {
-    accepted = queue.enqueue(accountKey, finalizeSentCopy);
+    if (queue.enqueueTracked) {
+      queued = queue.enqueueTracked(accountKey, finalizeSentCopy);
+    } else if (queue.enqueue) {
+      const accepted = queue.enqueue(accountKey, async () => {
+        await finalizeSentCopy();
+      });
+      queued = {
+        accepted,
+        jobId: "",
+        state: accepted ? "pending" : "rejected",
+        ...(!accepted ? { code: "QUEUE_FULL" } : {}),
+      };
+    }
   } catch {
-    accepted = false;
+    queued = undefined;
   }
+  const accepted = queued?.accepted === true;
   if (!accepted) {
     console.warn("[bridge] Sent finalizer queue saturated; best-effort copy skipped");
     void spool.cleanup().catch(() => undefined);
@@ -322,6 +345,8 @@ export async function sendMessageFast(
     messageId: spool.messageId,
     sentCopySaved: false,
     sentCopyPending: accepted,
+    ...(queued?.jobId ? { sentCopyJobId: queued.jobId } : {}),
+    sentCopyState: queued?.state ?? "rejected",
     timings: { mimeSpoolMs, smtpMs },
   };
 }

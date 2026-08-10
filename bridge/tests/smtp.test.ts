@@ -58,10 +58,12 @@ test("resolveSentPath returns undefined when no Sent-like folder exists (APPEND 
 import {
   sendMessage,
   sendMessageFast,
+  sentCopyAccountKey,
   type SendMessageDeps,
   type SmtpTransport,
   type ImapSentClient,
 } from "../src/smtp.js";
+import { PostSendFinalizerQueue } from "../src/post-send-finalizer.js";
 import type { MailAccount } from "../src/types.js";
 
 const ACCT: MailAccount = {
@@ -462,3 +464,84 @@ test("sendMessageFast keeps SMTP acceptance authoritative when transport close t
   assert.equal(result.ok, true);
   assert.equal(rec.sendMailCalls, 1);
 });
+
+test("sendMessageFast tracked provider auto-save transitions pending to saved", async () => {
+  const { deps, rec } = mkDeps({ mailboxes: [{ path: "Sent" }], searchAttempts: [true] });
+  const queue = new PostSendFinalizerQueue();
+  deps.postSendQueue = queue;
+  const result = await sendMessageFast(ACCT, "pw", BASE_PAYLOAD, deps);
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.sentCopyPending, true);
+  assert.ok(result.sentCopyJobId);
+  await waitForFinalizers(queue);
+  assert.equal(queue.getStatus(sentCopyAccountKey(ACCT), result.sentCopyJobId!)?.state, "saved");
+  assert.equal(
+    queue.getStatus(sentCopyAccountKey(ACCT), result.sentCopyJobId!)?.source,
+    "provider",
+  );
+  assert.equal(rec.sendMailCalls, 1);
+  assert.equal(rec.appendCalls.length, 0);
+});
+
+test("sendMessageFast tracked APPEND fallback transitions pending to saved", async () => {
+  const { deps, rec } = mkDeps({
+    mailboxes: [{ path: "Sent" }],
+    searchAttempts: [false, false, false],
+  });
+  const queue = new PostSendFinalizerQueue();
+  deps.postSendQueue = queue;
+  const result = await sendMessageFast(ACCT, "pw", BASE_PAYLOAD, deps);
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  await waitForFinalizers(queue);
+  const status = queue.getStatus(sentCopyAccountKey(ACCT), result.sentCopyJobId!);
+  assert.equal(status?.state, "saved");
+  assert.equal(status?.source, "append");
+  assert.equal(rec.appendCalls.length, 1);
+  assert.equal(rec.sendMailCalls, 1);
+});
+
+test("sendMessageFast tracked terminal Sent failures never resend SMTP", async () => {
+  for (const options of [
+    {
+      mailboxes: [{ path: "Sent" }],
+      searchAttempts: [false, false, false],
+      appendFail: "quota",
+    },
+    { mailboxes: [{ path: "INBOX" }] },
+  ]) {
+    const { deps, rec } = mkDeps(options);
+    const queue = new PostSendFinalizerQueue();
+    deps.postSendQueue = queue;
+    const result = await sendMessageFast(ACCT, "pw", BASE_PAYLOAD, deps);
+    assert.equal(result.ok, true);
+    if (!result.ok) continue;
+    await waitForFinalizers(queue);
+    assert.equal(queue.getStatus(sentCopyAccountKey(ACCT), result.sentCopyJobId!)?.state, "failed");
+    assert.equal(rec.sendMailCalls, 1);
+  }
+});
+
+test("sendMessageFast exposes tracked rejection without starting IMAP", async () => {
+  const { deps, rec } = mkDeps({ mailboxes: [{ path: "Sent" }] });
+  const queue = new PostSendFinalizerQueue(1, 1, 0);
+  deps.postSendQueue = queue;
+  const result = await sendMessageFast(ACCT, "pw", BASE_PAYLOAD, deps);
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.sentCopyState, "rejected");
+  assert.equal(result.sentCopyPending, false);
+  assert.ok(result.sentCopyJobId);
+  assert.equal(queue.getStatus(sentCopyAccountKey(ACCT), result.sentCopyJobId!)?.state, "rejected");
+  assert.equal(rec.imapConnected, 0);
+  assert.equal(rec.sendMailCalls, 1);
+});
+
+async function waitForFinalizers(queue: PostSendFinalizerQueue): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt++) {
+    if (queue.stats().active === 0 && queue.stats().queued === 0) return;
+    await new Promise<void>((resolve) => setTimeout(resolve, 2));
+  }
+  assert.fail("finalizer did not settle");
+}

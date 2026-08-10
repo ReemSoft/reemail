@@ -16,6 +16,7 @@ import { Route as DemoRouteImport } from './routes/demo'
 import { Route as CompanyRouteImport } from './routes/company'
 import { Route as AuthenticatedRouteRouteImport } from './routes/_authenticated/route'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as ApiMailSentCopyStatusRouteImport } from './routes/api/mail-sent-copy-status'
 import { Route as ApiMailSendV2RouteImport } from './routes/api/mail-send-v2'
 import { Route as ApiMailSendRouteImport } from './routes/api/mail-send'
 import { Route as ApiMailInlinePartRouteImport } from './routes/api/mail-inline-part'
@@ -58,6 +59,11 @@ const AuthenticatedRouteRoute = AuthenticatedRouteRouteImport.update({
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiMailSentCopyStatusRoute = ApiMailSentCopyStatusRouteImport.update({
+  id: '/api/mail-sent-copy-status',
+  path: '/api/mail-sent-copy-status',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiMailSendV2Route = ApiMailSendV2RouteImport.update({
@@ -123,6 +129,7 @@ export interface FileRoutesByFullPath {
   '/api/mail-inline-part': typeof ApiMailInlinePartRoute
   '/api/mail-send': typeof ApiMailSendRoute
   '/api/mail-send-v2': typeof ApiMailSendV2Route
+  '/api/mail-sent-copy-status': typeof ApiMailSentCopyStatusRoute
   '/api/public/hooks/mail-sync-tick': typeof ApiPublicHooksMailSyncTickRoute
 }
 export interface FileRoutesByTo {
@@ -140,6 +147,7 @@ export interface FileRoutesByTo {
   '/api/mail-inline-part': typeof ApiMailInlinePartRoute
   '/api/mail-send': typeof ApiMailSendRoute
   '/api/mail-send-v2': typeof ApiMailSendV2Route
+  '/api/mail-sent-copy-status': typeof ApiMailSentCopyStatusRoute
   '/api/public/hooks/mail-sync-tick': typeof ApiPublicHooksMailSyncTickRoute
 }
 export interface FileRoutesById {
@@ -159,6 +167,7 @@ export interface FileRoutesById {
   '/api/mail-inline-part': typeof ApiMailInlinePartRoute
   '/api/mail-send': typeof ApiMailSendRoute
   '/api/mail-send-v2': typeof ApiMailSendV2Route
+  '/api/mail-sent-copy-status': typeof ApiMailSentCopyStatusRoute
   '/api/public/hooks/mail-sync-tick': typeof ApiPublicHooksMailSyncTickRoute
 }
 export interface FileRouteTypes {
@@ -178,6 +187,7 @@ export interface FileRouteTypes {
     | '/api/mail-inline-part'
     | '/api/mail-send'
     | '/api/mail-send-v2'
+    | '/api/mail-sent-copy-status'
     | '/api/public/hooks/mail-sync-tick'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -195,6 +205,7 @@ export interface FileRouteTypes {
     | '/api/mail-inline-part'
     | '/api/mail-send'
     | '/api/mail-send-v2'
+    | '/api/mail-sent-copy-status'
     | '/api/public/hooks/mail-sync-tick'
   id:
     | '__root__'
@@ -213,6 +224,7 @@ export interface FileRouteTypes {
     | '/api/mail-inline-part'
     | '/api/mail-send'
     | '/api/mail-send-v2'
+    | '/api/mail-sent-copy-status'
     | '/api/public/hooks/mail-sync-tick'
   fileRoutesById: FileRoutesById
 }
@@ -231,6 +243,7 @@ export interface RootRouteChildren {
   ApiMailInlinePartRoute: typeof ApiMailInlinePartRoute
   ApiMailSendRoute: typeof ApiMailSendRoute
   ApiMailSendV2Route: typeof ApiMailSendV2Route
+  ApiMailSentCopyStatusRoute: typeof ApiMailSentCopyStatusRoute
   ApiPublicHooksMailSyncTickRoute: typeof ApiPublicHooksMailSyncTickRoute
 }
 
@@ -283,6 +296,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/mail-sent-copy-status': {
+      id: '/api/mail-sent-copy-status'
+      path: '/api/mail-sent-copy-status'
+      fullPath: '/api/mail-sent-copy-status'
+      preLoaderRoute: typeof ApiMailSentCopyStatusRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/mail-send-v2': {
@@ -377,6 +397,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiMailInlinePartRoute: ApiMailInlinePartRoute,
   ApiMailSendRoute: ApiMailSendRoute,
   ApiMailSendV2Route: ApiMailSendV2Route,
+  ApiMailSentCopyStatusRoute: ApiMailSentCopyStatusRoute,
   ApiPublicHooksMailSyncTickRoute: ApiPublicHooksMailSyncTickRoute,
 }
 export const routeTree = rootRouteImport
