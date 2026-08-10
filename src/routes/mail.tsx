@@ -8563,19 +8563,22 @@ function AttachmentCard({
 
   return (
     <>
-      <div className="group inline-flex items-center gap-2 rounded-lg border border-border bg-card px-2.5 py-1.5 text-xs shadow-soft">
-        <span className={`inline-flex h-6 w-6 items-center justify-center rounded-md ${tint}`}>
-          <FileIcon className="h-3.5 w-3.5" />
+      <div className="group flex items-center gap-3 rounded-lg border border-border/50 bg-card/50 p-2.5 transition-all hover:border-border hover:bg-card hover:shadow-soft">
+        <span className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg ${tint}`}>
+          <FileIcon className="h-5 w-5" />
         </span>
-        <div className="flex flex-col leading-tight">
-          <span className="max-w-[180px] truncate font-medium" title={attachment.filename}>
+        <div className="min-w-0 flex-1">
+          <p
+            className="truncate text-sm font-medium leading-tight"
+            title={attachment.filename}
+          >
             {attachment.filename}
-          </span>
-          <span className="text-[10px] text-muted-foreground">
-            <bdi dir="ltr">{formatSize(attachment.size)}</bdi>
-          </span>
+          </p>
+          <p className="mt-0.5 text-xs text-muted-foreground" dir="ltr">
+            <bdi>{formatSize(attachment.size)}</bdi>
+          </p>
         </div>
-        <div className="flex shrink-0 items-center gap-0.5">
+        <div className="flex shrink-0 items-center gap-0.5 opacity-60 transition-opacity group-hover:opacity-100 sm:gap-1">
           {canPreview && (
             <button
               type="button"
@@ -8583,12 +8586,12 @@ function AttachmentCard({
               disabled={!canDownload || busy !== null}
               title={tr("معاينة")}
               aria-label={tr("معاينة")}
-              className="rounded p-0.5 opacity-60 hover:bg-muted hover:opacity-100 disabled:cursor-not-allowed disabled:opacity-40"
+              className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
             >
               {busy === "preview" ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                <Loader2 className="h-4 w-4 animate-spin" />
               ) : (
-                <Eye className="h-3.5 w-3.5" />
+                <Eye className="h-4 w-4" />
               )}
             </button>
           )}
@@ -8598,16 +8601,17 @@ function AttachmentCard({
             disabled={!canDownload || busy !== null}
             title={canDownload ? tr("تنزيل") : tr("غير متاح")}
             aria-label={tr("تنزيل")}
-            className="rounded p-0.5 opacity-60 hover:bg-muted hover:opacity-100 disabled:cursor-not-allowed disabled:opacity-40"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
           >
             {busy === "download" ? (
-              <CircleArrowDown className="h-3.5 w-3.5 animate-bounce text-primary" />
+              <CircleArrowDown className="h-4 w-4 animate-bounce text-primary" />
             ) : (
-              <Download className="h-3.5 w-3.5" />
+              <Download className="h-4 w-4" />
             )}
           </button>
         </div>
       </div>
+
 
 
       {previewUrl && (
