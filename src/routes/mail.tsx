@@ -299,6 +299,7 @@ function ThreadedEmailBody({
   className,
   onReady,
   largeCidDispatcherRef,
+  afterLatest,
 }: {
   html: string;
   cidImages: CidImageMapping[];
@@ -306,6 +307,8 @@ function ThreadedEmailBody({
   className?: string;
   onReady?: () => void;
   largeCidDispatcherRef?: { current: ((image: LargeCidByteMapping) => void) | null };
+  /** Rendered directly under the newest turn (e.g. its own attachments). */
+  afterLatest?: React.ReactNode;
 }) {
   const { latest, quoted } = useMemo(() => splitQuotedHtml(html), [html]);
   const [expanded, setExpanded] = useState(false);
@@ -316,14 +319,16 @@ function ThreadedEmailBody({
 
   if (!quoted)
     return (
-      <EmailBodyFrame
-        html={html}
-        cidImages={cidImages}
-        messageIdentity={messageIdentity}
-        className={className}
-        onReady={onReady}
-        largeCidDispatcherRef={largeCidDispatcherRef}
-      />
+      <div className={className}>
+        <EmailBodyFrame
+          html={html}
+          cidImages={cidImages}
+          messageIdentity={messageIdentity}
+          onReady={onReady}
+          largeCidDispatcherRef={largeCidDispatcherRef}
+        />
+        {afterLatest}
+      </div>
     );
 
   return (
@@ -335,7 +340,9 @@ function ThreadedEmailBody({
         onReady={onReady}
         largeCidDispatcherRef={largeCidDispatcherRef}
       />
+      {afterLatest}
       <div className="mt-3">
+
         <button
           type="button"
           onClick={() => setExpanded((v) => !v)}
