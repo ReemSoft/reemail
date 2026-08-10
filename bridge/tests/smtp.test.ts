@@ -105,7 +105,7 @@ interface Recorder {
   sleeps: number[];
   lastRaw?: Buffer;
   smtpRaw?: Readable;
-  appendRaw?: Readable;
+  appendRaw?: Buffer;
 }
 
 async function readStream(raw: NodeJS.ReadableStream): Promise<Buffer> {
@@ -165,9 +165,14 @@ function mkDeps(opts: {
       return result;
     },
     async append(folder, raw, flags) {
+      // ImapFlow 1.5 contract: append() accepts `string | Buffer` ONLY.
+      // A Readable here is the production bug this fake must reject.
+      if (!Buffer.isBuffer(raw)) {
+        throw new Error(`IMAP append expects a Buffer, received ${typeof raw}`);
+      }
       rec.appendRaw = raw;
       if (opts.appendRejectBeforeRead) throw new Error(opts.appendRejectBeforeRead);
-      rec.appendCalls.push({ folder, raw: await readStream(raw), flags });
+      rec.appendCalls.push({ folder, raw: Buffer.from(raw), flags });
       if (opts.appendFail) throw new Error(opts.appendFail);
     },
     async logout() {
