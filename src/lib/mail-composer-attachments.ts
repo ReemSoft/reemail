@@ -1,5 +1,6 @@
 import type { MailAttachment, MailFolder, MailMessage } from "@/lib/mail-types";
 import type { DraftAttachmentSourceRef, DraftSourceAttachment } from "@/lib/mail-draft-lifecycle";
+import type { StagedAttachmentResult } from "@/lib/mail-attachment-staging";
 
 export interface AttachmentSourceRef {
   folderPath: string;
@@ -22,6 +23,42 @@ export interface AttachmentTransportPlan {
   sourceAttachments: SourceAttachmentTransport[];
   sourceAttachmentIds: string[];
   unresolvedAttachmentIds: string[];
+}
+
+export function buildStagedAttachmentTransport(input: {
+  plan: AttachmentTransportPlan;
+  normal: readonly StagedAttachmentResult[];
+  inline: readonly StagedAttachmentResult[];
+  inlineMetadata: readonly {
+    uploadFilename: string;
+    cid: string;
+    contentType: string;
+  }[];
+}) {
+  if (input.normal.some((item) => item.kind !== "attachment"))
+    throw new Error("NORMAL_ATTACHMENT_KIND_MISMATCH");
+  if (input.inline.length !== input.inlineMetadata.length)
+    throw new Error("INLINE_ATTACHMENT_METADATA_MISMATCH");
+  const stagedInlineImages = input.inline.map((item, index) => {
+    const metadata = input.inlineMetadata[index];
+    if (item.kind !== "inline-image") throw new Error("INLINE_ATTACHMENT_KIND_MISMATCH");
+    if (item.filename !== metadata.uploadFilename)
+      throw new Error("INLINE_ATTACHMENT_FILENAME_MISMATCH");
+    return {
+      handle: item.handle,
+      uploadFilename: metadata.uploadFilename,
+      cid: metadata.cid,
+      contentType: metadata.contentType,
+    };
+  });
+  return {
+    attachmentHandles: [
+      ...input.plan.attachmentHandles,
+      ...input.normal.map((item) => item.handle),
+    ],
+    stagedInlineImages,
+    sourceAttachments: input.plan.sourceAttachments,
+  };
 }
 
 const MAIL_FOLDERS: ReadonlySet<string> = new Set<MailFolder>([

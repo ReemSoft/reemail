@@ -32,11 +32,19 @@ import {
 } from "@/lib/mail-compose-quote";
 import { splitQuotedHtml } from "@/lib/mail-thread-split";
 import {
+  ATTACHMENT_PREPARATION_MESSAGE_KEY,
+  getOrCreateStagedUpload,
+  getStagedReady,
+  setStagedReady,
   uploadAttachmentDirect,
+  type StagedReadyCache,
   type StagedAttachmentKind,
   type StagedAttachmentResult,
+  type StagedUploadCache,
+  isAttachmentPreparationProtocolError,
 } from "@/lib/mail-attachment-staging";
 import {
+  buildStagedAttachmentTransport,
   buildLocalSourceAttachmentState,
   buildAttachmentTransportPlan,
   deriveAttachmentSourceRef,
@@ -5848,8 +5856,8 @@ function Composer({
   // always reads the latest attachment state without a re-instantiation.
   const filesRef = useRef<File[]>([]);
   const inlineImagesRef = useRef<InlineComposeImage[]>([]);
-  const stagedUploadsRef = useRef<WeakMap<File, Promise<StagedAttachmentResult>>>(new WeakMap());
-  const stagedReadyRef = useRef<WeakMap<File, StagedAttachmentResult>>(new WeakMap());
+  const stagedUploadsRef = useRef<StagedUploadCache>(new WeakMap());
+  const stagedReadyRef = useRef<StagedReadyCache>(new WeakMap());
   const restoredInlineHandlesRef = useRef(
     new Map(
       (restored?.inlineImages ?? [])
@@ -5865,46 +5873,54 @@ function Composer({
 
   const saverRef = useRef<DraftSaver | null>(null);
 
-  function ensureStaged(file: File, kind: StagedAttachmentKind) {
-    const existing = stagedUploadsRef.current.get(file);
-    if (existing) return existing;
-    const restoredHandle =
-      kind === "inline-image" ? restoredInlineHandlesRef.current.get(file.name) : undefined;
-    if (restoredHandle) {
-      const ready = Promise.resolve({
-        handle: restoredHandle,
-        filename: file.name,
-        size: file.size,
-        mimeType: file.type,
+  function ensureStaged(file: File, kind: StagedAttachmentKind, filename = file.name) {
+    return getOrCreateStagedUpload(stagedUploadsRef.current, file, kind, filename, () => {
+      const restoredHandle =
+        kind === "inline-image" ? restoredInlineHandlesRef.current.get(filename) : undefined;
+      if (restoredHandle) {
+        const ready = Promise.resolve({
+          handle: restoredHandle,
+          filename,
+          size: file.size,
+          mimeType: file.type,
+          kind,
+          expiresAt: Number.MAX_SAFE_INTEGER,
+        });
+        ready.then((result) => {
+          const current = stagedUploadsRef.current.get(file)?.get(kind);
+          if (current?.filename === filename)
+            setStagedReady(stagedReadyRef.current, file, kind, result);
+        });
+        return ready;
+      }
+      setUploadState((current) => new Map(current).set(file, { status: "uploading", progress: 0 }));
+      return uploadAttachmentDirect(file, {
+        mailSessionToken: session.mailSessionToken ?? "",
         kind,
-        expiresAt: Number.MAX_SAFE_INTEGER,
-      });
-      stagedUploadsRef.current.set(file, ready);
-      ready.then((result) => stagedReadyRef.current.set(file, result));
-      return ready;
-    }
-    setUploadState((current) => new Map(current).set(file, { status: "uploading", progress: 0 }));
-    const promise = uploadAttachmentDirect(file, {
-      mailSessionToken: session.mailSessionToken ?? "",
-      kind,
-      onProgress: (progressValue) => {
-        setUploadState((current) =>
-          new Map(current).set(file, { status: "uploading", progress: progressValue }),
-        );
-      },
-    })
-      .then((result) => {
-        stagedReadyRef.current.set(file, result);
-        setUploadState((current) => new Map(current).set(file, { status: "ready", progress: 100 }));
-        autosaveRef.current?.schedule();
-        return result;
+        filename,
+        onProgress: (progressValue) => {
+          setUploadState((current) =>
+            new Map(current).set(file, { status: "uploading", progress: progressValue }),
+          );
+        },
       })
-      .catch((error) => {
-        setUploadState((current) => new Map(current).set(file, { status: "failed", progress: 0 }));
-        throw error;
-      });
-    stagedUploadsRef.current.set(file, promise);
-    return promise;
+        .then((result) => {
+          const current = stagedUploadsRef.current.get(file)?.get(kind);
+          if (current?.filename === filename)
+            setStagedReady(stagedReadyRef.current, file, kind, result);
+          setUploadState((current) =>
+            new Map(current).set(file, { status: "ready", progress: 100 }),
+          );
+          autosaveRef.current?.schedule();
+          return result;
+        })
+        .catch((error) => {
+          setUploadState((current) =>
+            new Map(current).set(file, { status: "failed", progress: 0 }),
+          );
+          throw error;
+        });
+    });
   }
 
   if (!saverRef.current) {
@@ -5951,9 +5967,17 @@ function Composer({
             currentFiles.map((file) => ensureStaged(file, "attachment")),
           );
           const stagedInline = await Promise.all(
-            transportImages.map((image) => ensureStaged(image.file, "inline-image")),
+            transportImages.map((image) =>
+              ensureStaged(image.file, "inline-image", image.uploadFilename),
+            ),
           );
           const inlineMetadata = metadataToTransport(transportImages);
+          const attachmentTransport = buildStagedAttachmentTransport({
+            plan: attachmentPlan,
+            normal: stagedFiles,
+            inline: stagedInline,
+            inlineMetadata,
+          });
           const response = await fetch("/api/mail-draft-save-v2", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -5974,15 +5998,7 @@ function Composer({
               bodyHtml: transportHtml,
               bodyText: stripHtml(transportHtml),
               previousRef: previousRef ?? undefined,
-              attachmentHandles: [
-                ...attachmentPlan.attachmentHandles,
-                ...stagedFiles.map((item) => item.handle),
-              ],
-              stagedInlineImages: stagedInline.map((item, index) => ({
-                handle: item.handle,
-                ...inlineMetadata[index],
-              })),
-              sourceAttachments: attachmentPlan.sourceAttachments,
+              ...attachmentTransport,
             }),
           });
           const res = await response.json().catch(() => null);
@@ -6415,7 +6431,7 @@ function Composer({
         : [];
     });
     const added = filesRef.current.flatMap((file) => {
-      const staged = stagedReadyRef.current.get(file);
+      const staged = getStagedReady(stagedReadyRef.current, file, "attachment", file.name);
       return staged
         ? [{ handle: staged.handle, filename: file.name, size: file.size, mimeType: file.type }]
         : [];
@@ -6433,7 +6449,9 @@ function Composer({
         const image = inlineImagesRef.current.find(
           (candidate) => candidate.uploadFilename === metadata.uploadFilename,
         );
-        const staged = image ? stagedReadyRef.current.get(image.file) : undefined;
+        const staged = image
+          ? getStagedReady(stagedReadyRef.current, image.file, "inline-image", image.uploadFilename)
+          : undefined;
         return staged ? { ...metadata, stagedHandle: staged.handle } : metadata;
       }),
     };
@@ -6456,20 +6474,7 @@ function Composer({
   }, [files]);
   useEffect(() => {
     for (const image of inlineImages) {
-      const restoredHandle = restoredInlineHandlesRef.current.get(image.uploadFilename);
-      if (restoredHandle && !stagedUploadsRef.current.has(image.file)) {
-        const ready = Promise.resolve({
-          handle: restoredHandle,
-          filename: image.uploadFilename,
-          size: image.file.size,
-          mimeType: image.file.type,
-          kind: "inline-image" as const,
-          expiresAt: Number.MAX_SAFE_INTEGER,
-        });
-        stagedUploadsRef.current.set(image.file, ready);
-        ready.then((result) => stagedReadyRef.current.set(image.file, result));
-      }
-      void ensureStaged(image.file, "inline-image").catch(() => undefined);
+      void ensureStaged(image.file, "inline-image", image.uploadFilename).catch(() => undefined);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [inlineImages]);
@@ -7285,13 +7290,21 @@ function Composer({
       try {
         stagedNormal = await Promise.all(files.map((file) => ensureStaged(file, "attachment")));
         stagedInline = await Promise.all(
-          transportImages.map((image) => ensureStaged(image.file, "inline-image")),
+          transportImages.map((image) =>
+            ensureStaged(image.file, "inline-image", image.uploadFilename),
+          ),
         );
       } catch {
         toast.error(tr("تعذّر رفع أحد المرفقات"));
         return;
       }
       const inlineMetadata = metadataToTransport(transportImages);
+      const attachmentTransport = buildStagedAttachmentTransport({
+        plan: attachmentPlan,
+        normal: stagedNormal,
+        inline: stagedInline,
+        inlineMetadata,
+      });
       const response = await fetch("/api/mail-send-v2", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -7304,15 +7317,7 @@ function Composer({
           subject,
           bodyHtml,
           bodyText,
-          attachmentHandles: [
-            ...attachmentPlan.attachmentHandles,
-            ...stagedNormal.map((item) => item.handle),
-          ],
-          stagedInlineImages: stagedInline.map((item, index) => ({
-            handle: item.handle,
-            ...inlineMetadata[index],
-          })),
-          sourceAttachments: attachmentPlan.sourceAttachments,
+          ...attachmentTransport,
         }),
       });
       const result = (await response.json().catch(() => ({
@@ -7328,7 +7333,11 @@ function Composer({
         sentCopyState?: SentCopyState;
       };
       if (!result.ok) {
-        toast.error(result.error || tr("فشل إرسال الرسالة"));
+        toast.error(
+          isAttachmentPreparationProtocolError(result.error)
+            ? tr(ATTACHMENT_PREPARATION_MESSAGE_KEY)
+            : result.error || tr("فشل إرسال الرسالة"),
+        );
         return;
       }
       sendAccepted = true;

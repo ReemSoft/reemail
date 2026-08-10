@@ -337,6 +337,7 @@
   "غير متاح": "Not available",
   "فتح البريد": "Open Mail",
   "فشل إرسال الرسالة": "Failed to send message",
+  "تعذّر تجهيز المرفقات للإرسال. أعد المحاولة.": "Attachments could not be prepared for sending. Please try again.",
   "فشل استعادة ${failedIds.length} من ${ids.length} رسالة": "Failed to restore ${failedIds.length} of ${ids.length} messages",
   "فشل استعادة {{failed}} من {{total}} رسالة": "Failed to restore {{failed}} of {{total}} messages",
   "فشل استعادة الرسالة": "Failed to restore message",

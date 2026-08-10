@@ -6,7 +6,7 @@ describe("draft attachment V2 contract", () => {
   const composer = readFileSync(new URL("../../routes/mail.tsx", import.meta.url), "utf8");
 
   it("reuses one staged upload and sends no attachment bytes on autosave", () => {
-    expect(composer).toContain("stagedUploadsRef.current.get(file)");
+    expect(composer).toContain("getOrCreateStagedUpload(stagedUploadsRef.current");
     expect(composer).toContain('fetch("/api/mail-draft-save-v2"');
     expect(composer).toContain("sourceAttachments");
     expect(composer).toContain("planRemoteDraftSave({");

@@ -7,7 +7,8 @@ describe("active attachment V2 contract", () => {
   it("stages selected files before send and sends handle-only JSON", () => {
     expect(composer).toContain('ensureStaged(file, "attachment")');
     expect(composer).toContain('fetch("/api/mail-send-v2"');
-    expect(composer).toContain("...stagedNormal.map((item) => item.handle)");
+    expect(composer).toContain("buildStagedAttachmentTransport({");
+    expect(composer).toContain("...attachmentTransport");
     const sendBody = composer.slice(composer.indexOf("async function performSend"));
     expect(sendBody).not.toContain('xhr.open("POST", "/api/mail-send")');
     expect(sendBody).not.toContain("xhr.send(form)");

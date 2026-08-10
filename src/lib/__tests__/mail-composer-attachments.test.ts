@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildAttachmentTransportPlan,
   buildLocalSourceAttachmentState,
+  buildStagedAttachmentTransport,
   deriveAttachmentSourceRef,
   selectNormalComposerAttachments,
   type AttachmentSourceRef,
@@ -384,8 +385,72 @@ describe("Reply, Reply All, Forward and Composer wiring", () => {
   });
 
   it("combines current source handles with newly uploaded staged handles", () => {
-    expect(route).toContain("...attachmentPlan.attachmentHandles");
-    expect(route).toContain("...stagedNormal.map((item) => item.handle)");
-    expect(route).toContain("...stagedFiles.map((item) => item.handle)");
+    expect(route.match(/buildStagedAttachmentTransport\(\{/g)).toHaveLength(2);
+    expect(route.match(/\.\.\.attachmentTransport/g)).toHaveLength(2);
+  });
+
+  it.each(["Reply", "Reply All", "Forward"])(
+    "%s keeps an existing normal source separate from a hydrated inline CID",
+    () => {
+      const plan = buildAttachmentTransportPlan({
+        attachments: [normal[0]],
+        restoredHandles: new Map(),
+        preservedHandles: new Map(),
+        sourceRef,
+      });
+      const transport = buildStagedAttachmentTransport({
+        plan,
+        normal: [],
+        inline: [
+          {
+            handle: "inline-handle",
+            filename: "mm-inline-cid.png",
+            size: 1,
+            mimeType: "image/png",
+            kind: "inline-image",
+            expiresAt: 1,
+          },
+        ],
+        inlineMetadata: [
+          {
+            uploadFilename: "mm-inline-cid.png",
+            cid: "quoted-cid@example",
+            contentType: "image/png",
+          },
+        ],
+      });
+
+      expect(transport.sourceAttachments).toHaveLength(1);
+      expect(transport.sourceAttachments[0].part).toBe("2");
+      expect(transport.attachmentHandles).toEqual([]);
+      expect(transport.stagedInlineImages).toEqual([
+        {
+          handle: "inline-handle",
+          uploadFilename: "mm-inline-cid.png",
+          cid: "quoted-cid@example",
+          contentType: "image/png",
+        },
+      ]);
+    },
+  );
+
+  it("fails closed before Send V2 when a staged result crosses transport buckets", () => {
+    const plan = buildAttachmentTransportPlan({
+      attachments: [],
+      restoredHandles: new Map(),
+      preservedHandles: new Map(),
+      sourceRef: null,
+    });
+    const wrong = {
+      handle: "wrong",
+      filename: "x.png",
+      size: 1,
+      mimeType: "image/png",
+      kind: "inline-image" as const,
+      expiresAt: 1,
+    };
+    expect(() =>
+      buildStagedAttachmentTransport({ plan, normal: [wrong], inline: [], inlineMetadata: [] }),
+    ).toThrow("NORMAL_ATTACHMENT_KIND_MISMATCH");
   });
 });

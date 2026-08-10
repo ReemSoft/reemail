@@ -46,6 +46,7 @@ import {
   withAccountMailbox,
 } from "./imap-connection.js";
 import { sendMessage, sendMessageFast, sentCopyAccountKey } from "./smtp.js";
+import { classifyAttachmentValidationFailure } from "./attachment-validation.js";
 import { postSendFinalizers } from "./post-send-finalizer.js";
 import { mapUploadedAttachments } from "./inline-images.js";
 import {
@@ -735,15 +736,11 @@ app.post("/api/send-v2", requireKey, async (req, res) => {
     });
     const sourceStageMs = performance.now() - sourceStageStartedAt;
     sourceHandles = sourceAttachments.map(({ staged }) => staged.handle);
-    if (normal.some((item) => item.kind !== "attachment")) {
-      return res.status(400).json({ ok: false, error: "ATTACHMENT_KIND_MISMATCH" });
-    }
-    if (
-      inline.some(
-        ({ item, staged }) =>
-          staged.kind !== "inline-image" || staged.filename !== item.uploadFilename,
-      )
-    ) {
+    const attachmentValidationFailure = classifyAttachmentValidationFailure(normal, inline);
+    if (attachmentValidationFailure) {
+      console.warn("[bridge] send-v2 attachment validation failed", {
+        code: attachmentValidationFailure,
+      });
       return res.status(400).json({ ok: false, error: "ATTACHMENT_KIND_MISMATCH" });
     }
     const all = [...normal, ...inline.map(({ staged }) => staged)];

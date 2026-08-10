@@ -5,10 +5,12 @@ import {
   alignInlineImageNode,
   clampInlineImageWidth,
   createInlineComposeImage,
+  dataUriToFile,
   insertInlineImageNode,
   installInlineImageSelectionListener,
   isInlineImageToolTarget,
   moveInlineImageNode,
+  metadataToTransport,
   removeInlineImageNode,
   resolveInlineImageDropTarget,
   serializeInlineImages,
@@ -230,6 +232,19 @@ describe("composer inline images", () => {
     expect(result.html).not.toContain("data:image");
     expect(result.html).not.toContain("data-mm-inline-id");
     expect(result.inlineImages).toHaveLength(1);
+  });
+
+  it("keeps the hydrated quoted CID staging filename identical to the Send V2 declaration", () => {
+    const file = dataUriToFile("data:image/png;base64,eA==", "inline-image", "image/png");
+    const image = createInlineComposeImage(file);
+    const [transport] = metadataToTransport([image]);
+
+    expect(image.file.name).not.toBe(transport.uploadFilename);
+    // The hotfix passes this logical name to uploadAttachmentDirect, so the
+    // ticketed filename and the Send V2 declaration now share one authority.
+    const stagedFilename = image.uploadFilename;
+    const bridgeRejects = stagedFilename !== transport.uploadFilename;
+    expect(bridgeRejects).toBe(false);
   });
 
   it("enforces resize minimum and editor maximum", () => {
