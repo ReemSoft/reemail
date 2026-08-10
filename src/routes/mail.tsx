@@ -574,11 +574,13 @@ function MessageBody({
   html,
   onInlineImages,
   className,
+  afterLatest,
 }: {
   message: MailMessage;
   html: string;
   onInlineImages?: (images: NonNullable<MailMessage["inlineImages"]>) => void;
   className?: string;
+  afterLatest?: React.ReactNode;
 }) {
   const bodyIdentity = `${message.id}|${message.uidValidity ?? ""}`;
   const [readyIdentity, setReadyIdentity] = useState("");
@@ -600,9 +602,11 @@ function MessageBody({
       className={className}
       onReady={() => setReadyIdentity(bodyIdentity)}
       largeCidDispatcherRef={largeCidDispatcherRef}
+      afterLatest={afterLatest}
     />
   );
 }
+
 
 import {
   Inbox,
