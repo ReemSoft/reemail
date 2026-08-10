@@ -5175,11 +5175,16 @@ function MessageView({
               className="mt-6"
               afterLatest={
                 message.attachments && message.attachments.length > 0 ? (
-                  <div className="@container mt-4">
-                    <p className="mb-2 text-xs font-semibold text-muted-foreground">
-                      {tr("المرفقات")} ({message.attachments.length})
-                    </p>
-                    <div className="grid grid-cols-1 gap-2 @md:grid-cols-2">
+                  <div className="mt-4 flex flex-col gap-1.5">
+                    <label className="text-sm font-medium text-foreground">
+                      {tr("المرفقات")} ·{" "}
+                      <bdi dir="ltr">
+                        {formatSize(
+                          message.attachments.reduce((s, a) => s + (a.size || 0), 0),
+                        )}
+                      </bdi>
+                    </label>
+                    <div className="flex flex-wrap gap-2 rounded-lg border border-dashed border-border bg-background/50 p-3">
                       {message.attachments.map((a) => (
                         <AttachmentCard key={a.id} attachment={a} message={message} />
                       ))}
@@ -5187,6 +5192,7 @@ function MessageView({
                   </div>
                 ) : null
               }
+
             />
           )}
 
