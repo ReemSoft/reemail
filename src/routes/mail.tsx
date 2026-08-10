@@ -5076,24 +5076,27 @@ function ConversationMessageCard({
                 afterLatest={<MessageAttachmentsSection message={loaded} />}
               />
               {onCompose && (
-                <div className="mt-4 flex flex-wrap gap-2 border-t border-border pt-3">
+                <div className="mt-6 grid grid-cols-[repeat(auto-fit,minmax(0,1fr))] gap-2 border-t border-border pt-4">
                   <button
                     onClick={() => onCompose(loaded, "reply")}
-                    className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1.5 text-xs font-medium transition hover:bg-muted active:border-transparent active:bg-primary active:text-primary-foreground focus-visible:border-transparent focus-visible:bg-primary focus-visible:text-primary-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+                    className="inline-flex min-w-0 items-center justify-center gap-1.5 rounded-full border border-border bg-card px-3 py-1.5 text-xs font-medium transition hover:bg-muted active:border-transparent active:bg-primary active:text-primary-foreground focus-visible:border-transparent focus-visible:bg-primary focus-visible:text-primary-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
                   >
-                    <Reply className="h-3.5 w-3.5" /> {tr("رد")}
+                    <Reply className="h-3.5 w-3.5 shrink-0" />
+                    <span className="truncate">{tr("رد")}</span>
                   </button>
                   <button
                     onClick={() => onCompose(loaded, "replyAll")}
-                    className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1.5 text-xs font-medium transition hover:bg-muted active:border-transparent active:bg-primary active:text-primary-foreground focus-visible:border-transparent focus-visible:bg-primary focus-visible:text-primary-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+                    className="inline-flex min-w-0 items-center justify-center gap-1.5 rounded-full border border-border bg-card px-3 py-1.5 text-xs font-medium transition hover:bg-muted active:border-transparent active:bg-primary active:text-primary-foreground focus-visible:border-transparent focus-visible:bg-primary focus-visible:text-primary-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
                   >
-                    <ReplyAll className="h-3.5 w-3.5" /> {tr("رد على الكل")}
+                    <ReplyAll className="h-3.5 w-3.5 shrink-0" />
+                    <span className="truncate">{tr("رد على الكل")}</span>
                   </button>
                   <button
                     onClick={() => onCompose(loaded, "forward")}
-                    className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1.5 text-xs font-medium transition hover:bg-muted active:border-transparent active:bg-primary active:text-primary-foreground focus-visible:border-transparent focus-visible:bg-primary focus-visible:text-primary-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+                    className="inline-flex min-w-0 items-center justify-center gap-1.5 rounded-full border border-border bg-card px-3 py-1.5 text-xs font-medium transition hover:bg-muted active:border-transparent active:bg-primary active:text-primary-foreground focus-visible:border-transparent focus-visible:bg-primary focus-visible:text-primary-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
                   >
-                    <Forward className="h-3.5 w-3.5" /> {tr("إعادة توجيه")}
+                    <Forward className="h-3.5 w-3.5 shrink-0" />
+                    <span className="truncate">{tr("إعادة توجيه")}</span>
                   </button>
                 </div>
               )}
