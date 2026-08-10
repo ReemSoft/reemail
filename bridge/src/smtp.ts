@@ -330,8 +330,13 @@ async function appendSentCopy(
     }
     return { ok: true };
   } catch (error) {
+    if (error instanceof MimeSpoolTooLargeError) {
+      // Sent-copy only: SMTP already succeeded and must never be re-sent.
+      return { ok: false, failure: { code: "SENT_COPY_TOO_LARGE", retryable: false } };
+    }
     return { ok: false, failure: classifyImapFailure(error) };
   }
+
 }
 
 async function closeSentClient(client: ImapSentClient | null): Promise<void> {
