@@ -5096,10 +5096,12 @@ function useConversationRows(messageId: string): ConversationRow[] | null {
       setRows([]);
       return;
     }
+    const token = session.mailSessionToken;
     const run = () => {
       listConversation({
         data: {
-          mailSessionToken: session.mailSessionToken,
+          mailSessionToken: token,
+
           folder: parsed.folder,
           uid: parsed.uid,
         },
