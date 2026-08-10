@@ -5204,7 +5204,7 @@ function ConversationHistory({
           </span>
         </div>
       </div>
-      <div className="flex flex-col gap-2">
+      <div className="flex flex-col gap-4">
         {ordered.map((row) => (
           <ConversationMessageCard
             key={`${row.folder}:${row.uid}:${row.uidValidity}`}
