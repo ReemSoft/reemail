@@ -299,6 +299,7 @@ function ThreadedEmailBody({
   className,
   onReady,
   largeCidDispatcherRef,
+  afterLatest,
 }: {
   html: string;
   cidImages: CidImageMapping[];
@@ -306,6 +307,8 @@ function ThreadedEmailBody({
   className?: string;
   onReady?: () => void;
   largeCidDispatcherRef?: { current: ((image: LargeCidByteMapping) => void) | null };
+  /** Rendered directly under the newest turn (e.g. its own attachments). */
+  afterLatest?: React.ReactNode;
 }) {
   const { latest, quoted } = useMemo(() => splitQuotedHtml(html), [html]);
   const [expanded, setExpanded] = useState(false);
@@ -316,14 +319,16 @@ function ThreadedEmailBody({
 
   if (!quoted)
     return (
-      <EmailBodyFrame
-        html={html}
-        cidImages={cidImages}
-        messageIdentity={messageIdentity}
-        className={className}
-        onReady={onReady}
-        largeCidDispatcherRef={largeCidDispatcherRef}
-      />
+      <div className={className}>
+        <EmailBodyFrame
+          html={html}
+          cidImages={cidImages}
+          messageIdentity={messageIdentity}
+          onReady={onReady}
+          largeCidDispatcherRef={largeCidDispatcherRef}
+        />
+        {afterLatest}
+      </div>
     );
 
   return (
@@ -335,7 +340,9 @@ function ThreadedEmailBody({
         onReady={onReady}
         largeCidDispatcherRef={largeCidDispatcherRef}
       />
+      {afterLatest}
       <div className="mt-3">
+
         <button
           type="button"
           onClick={() => setExpanded((v) => !v)}
@@ -567,11 +574,13 @@ function MessageBody({
   html,
   onInlineImages,
   className,
+  afterLatest,
 }: {
   message: MailMessage;
   html: string;
   onInlineImages?: (images: NonNullable<MailMessage["inlineImages"]>) => void;
   className?: string;
+  afterLatest?: React.ReactNode;
 }) {
   const bodyIdentity = `${message.id}|${message.uidValidity ?? ""}`;
   const [readyIdentity, setReadyIdentity] = useState("");
@@ -593,9 +602,11 @@ function MessageBody({
       className={className}
       onReady={() => setReadyIdentity(bodyIdentity)}
       largeCidDispatcherRef={largeCidDispatcherRef}
+      afterLatest={afterLatest}
     />
   );
 }
+
 
 import {
   Inbox,
@@ -5162,21 +5173,23 @@ function MessageView({
               html={sanitizeEmailHtml(message.body || message.preview || "")}
               onInlineImages={handleInlineImages}
               className="mt-6"
+              afterLatest={
+                message.attachments && message.attachments.length > 0 ? (
+                  <div className="@container mt-4">
+                    <p className="mb-2 text-xs font-semibold text-muted-foreground">
+                      {tr("المرفقات")} ({message.attachments.length})
+                    </p>
+                    <div className="grid grid-cols-1 gap-2 @md:grid-cols-2">
+                      {message.attachments.map((a) => (
+                        <AttachmentCard key={a.id} attachment={a} message={message} />
+                      ))}
+                    </div>
+                  </div>
+                ) : null
+              }
             />
           )}
 
-          {!loading && message.attachments && message.attachments.length > 0 && (
-            <div className="@container mt-6">
-              <p className="mb-2 text-xs font-semibold text-muted-foreground">
-                {tr("المرفقات")} ({message.attachments.length})
-              </p>
-              <div className="grid grid-cols-1 gap-2 @md:grid-cols-2">
-                {message.attachments.map((a) => (
-                  <AttachmentCard key={a.id} attachment={a} message={message} />
-                ))}
-              </div>
-            </div>
-          )}
 
           <div className="mt-6 flex flex-wrap gap-2">
             <button
