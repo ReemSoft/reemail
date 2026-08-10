@@ -36,6 +36,13 @@ import {
   type StagedAttachmentKind,
   type StagedAttachmentResult,
 } from "@/lib/mail-attachment-staging";
+import {
+  buildLocalSourceAttachmentState,
+  buildAttachmentTransportPlan,
+  deriveAttachmentSourceRef,
+  selectNormalComposerAttachments,
+  type AttachmentSourceRef,
+} from "@/lib/mail-composer-attachments";
 
 // Kept as a thin wrapper — the heavy lifting (DOMPurify + CSS url()/@import
 // stripping + anchor hardening) lives in `@/lib/email-viewer-security` and is
@@ -1100,6 +1107,8 @@ type ComposeInitial = {
    */
   editDraftId?: string;
   previousRef?: DraftServerRef;
+  /** Physical source of kept IMAP attachments; never implies Draft replacement. */
+  attachmentSourceRef?: AttachmentSourceRef;
   existingAttachments?: EditDraftSource;
   /** When true, `body` is already sanitized HTML and is loaded verbatim. */
   bodyIsHtml?: boolean;
@@ -1118,7 +1127,14 @@ function stripHtml(html: string): string {
   return tmp.textContent || tmp.innerText || "";
 }
 
-function buildReply(message: MailMessage, myEmail: string, all: boolean): ComposeInitial {
+function buildReply(
+  message: MailMessage,
+  myEmail: string,
+  all: boolean,
+  attachmentSourceRef: AttachmentSourceRef | null,
+): ComposeInitial | null {
+  const normalAttachments = selectNormalComposerAttachments(message);
+  if (normalAttachments.length > 0 && !attachmentSourceRef) return null;
   const subject = message.subject.startsWith("Re:") ? message.subject : `Re: ${message.subject}`;
   const to = message.from.email;
   let cc = "";
@@ -1150,10 +1166,20 @@ function buildReply(message: MailMessage, myEmail: string, all: boolean): Compos
     inlineImages: message.inlineImages,
     inlineMessageId: message.id,
     quoteSourceHtml,
+    attachmentSourceRef: attachmentSourceRef ?? undefined,
+    existingAttachments:
+      normalAttachments.length > 0
+        ? { messageId: message.id, attachments: normalAttachments }
+        : undefined,
   };
 }
 
-function buildForward(message: MailMessage): ComposeInitial {
+function buildForward(
+  message: MailMessage,
+  attachmentSourceRef: AttachmentSourceRef | null,
+): ComposeInitial | null {
+  const normalAttachments = selectNormalComposerAttachments(message);
+  if (normalAttachments.length > 0 && !attachmentSourceRef) return null;
   const subject = message.subject.startsWith("Fwd:") ? message.subject : `Fwd: ${message.subject}`;
   const quoteSourceHtml = sanitizeEmailHtml(message.body || message.preview || "");
   const body = markQuotedCidImagesPending(
@@ -1179,6 +1205,11 @@ function buildForward(message: MailMessage): ComposeInitial {
     inlineImages: message.inlineImages,
     inlineMessageId: message.id,
     quoteSourceHtml,
+    attachmentSourceRef: attachmentSourceRef ?? undefined,
+    existingAttachments:
+      normalAttachments.length > 0
+        ? { messageId: message.id, attachments: normalAttachments }
+        : undefined,
   };
 }
 
@@ -1211,11 +1242,7 @@ function buildEditDraft(message: MailMessage, draftsFolderPath?: string): Compos
         }
       : undefined;
   const rawSubject = message.subject === tr("(بدون موضوع)") ? "" : message.subject;
-  const normalAttachments = (message.attachments ?? []).filter(
-    (attachment) =>
-      attachment.disposition !== "inline" &&
-      !(message.inlineParts ?? []).some((part) => part.part === attachment.part),
-  );
+  const normalAttachments = selectNormalComposerAttachments(message);
   const existingAttachments =
     normalAttachments.length > 0
       ? { messageId: message.id, attachments: normalAttachments }
@@ -1228,6 +1255,7 @@ function buildEditDraft(message: MailMessage, draftsFolderPath?: string): Compos
     bodyIsHtml: true,
     editDraftId,
     previousRef,
+    attachmentSourceRef: normalAttachments.length > 0 ? previousRef : undefined,
     existingAttachments,
     inlineParts: message.inlineParts,
     inlineImages: message.inlineImages,
@@ -4398,13 +4426,43 @@ function MailApp() {
                 setSelectedMessage(null);
                 setReading(false);
               }}
-              onReply={() =>
-                setCompose(buildReply(selectedMessage, session.account.email_address, false))
-              }
-              onReplyAll={() =>
-                setCompose(buildReply(selectedMessage, session.account.email_address, true))
-              }
-              onForward={() => setCompose(buildForward(selectedMessage))}
+              onReply={() => {
+                const next = buildReply(
+                  selectedMessage,
+                  session.account.email_address,
+                  false,
+                  deriveAttachmentSourceRef(selectedMessage, folderPaths),
+                );
+                if (!next) {
+                  toast.error(tr("تعذّر تجهيز مرفقات الرسالة"));
+                  return;
+                }
+                setCompose(next);
+              }}
+              onReplyAll={() => {
+                const next = buildReply(
+                  selectedMessage,
+                  session.account.email_address,
+                  true,
+                  deriveAttachmentSourceRef(selectedMessage, folderPaths),
+                );
+                if (!next) {
+                  toast.error(tr("تعذّر تجهيز مرفقات الرسالة"));
+                  return;
+                }
+                setCompose(next);
+              }}
+              onForward={() => {
+                const next = buildForward(
+                  selectedMessage,
+                  deriveAttachmentSourceRef(selectedMessage, folderPaths),
+                );
+                if (!next) {
+                  toast.error(tr("تعذّر تجهيز مرفقات الرسالة"));
+                  return;
+                }
+                setCompose(next);
+              }}
               onArchive={() => handleMove(selectedMessage.id, "archive")}
               onDelete={() => handleDelete(selectedMessage.id)}
               onSpam={() => handleMove(selectedMessage.id, "spam")}
@@ -5567,17 +5625,18 @@ function Composer({
     return "";
   }, [restored, initial]);
 
-  // M4-C: existing server-side attachments carried over from the loaded
-  // Drafts message. Each entry stays as metadata until first save/send, at
-  // which point we lazily stream its bytes from the bridge (server proxy,
-  // never base64 in JSON) and cache the resulting File.
+  // Existing Draft/Reply/Forward server attachments stay metadata-only in
+  // the browser. Save/send uses a durable staged handle or the IMAP source
+  // identity; attachment bytes remain entirely on the Bridge data plane.
   const restoredStaged = restored?.stagedAttachments ?? [];
+  const restoredSource = restored?.sourceAttachments;
   const restoredHandleByAttachmentIdRef = useRef(
     new Map(restoredStaged.map((item, index) => [`staged:${index}`, item.handle])),
   );
   const [existingKept, setExistingKept] = useState<import("@/lib/mail-types").MailAttachment[]>(
     () => [
       ...(initial?.existingAttachments?.attachments ?? []),
+      ...(restoredSource?.attachments ?? []),
       ...restoredStaged.map((item, index) => ({
         id: `staged:${index}`,
         filename: item.filename,
@@ -5671,7 +5730,9 @@ function Composer({
     ),
   );
   const preservedSourceHandlesRef = useRef<Map<string, string>>(new Map());
-  const sourcePreviousRef = useRef(initial?.previousRef ?? null);
+  const attachmentSourceRef = useRef(
+    initial?.attachmentSourceRef ?? restoredSource?.sourceRef ?? null,
+  );
   const autosaveRef = useRef<ReturnType<typeof createAutosaveScheduler> | null>(null);
 
   const saverRef = useRef<DraftSaver | null>(null);
@@ -5734,36 +5795,36 @@ function Composer({
         );
         const transportHtml = sanitizeComposerHtml(transport.html);
         try {
+          const attachmentPlan = buildAttachmentTransportPlan({
+            attachments: existingKeptRef.current,
+            restoredHandles: restoredHandleByAttachmentIdRef.current,
+            preservedHandles: preservedSourceHandlesRef.current,
+            sourceRef: attachmentSourceRef.current,
+          });
+          if (attachmentPlan.unresolvedAttachmentIds.length > 0) {
+            return { ok: false, code: "SOURCE_ATTACHMENT_UNRESOLVED" };
+          }
+          const keptBytes = existingKeptRef.current.reduce(
+            (sum, attachment) => sum + (attachment.size || 0),
+            0,
+          );
+          const totalAttachmentBytes =
+            keptBytes +
+            currentFiles.reduce((sum, file) => sum + file.size, 0) +
+            transportImages.reduce((sum, image) => sum + image.file.size, 0);
+          if (
+            existingKeptRef.current.length + currentFiles.length + transportImages.length >
+              COMPOSE_MAX_FILES ||
+            totalAttachmentBytes > COMPOSE_MAX_TOTAL_BYTES
+          ) {
+            return { ok: false, code: "ATTACHMENT_LIMIT_EXCEEDED" };
+          }
           const stagedFiles = await Promise.all(
             currentFiles.map((file) => ensureStaged(file, "attachment")),
           );
           const stagedInline = await Promise.all(
             transportImages.map((image) => ensureStaged(image.file, "inline-image")),
           );
-          const restoredHandles = existingKeptRef.current
-            .map((attachment) => restoredHandleByAttachmentIdRef.current.get(attachment.id))
-            .filter((handle): handle is string => Boolean(handle));
-          const sourceRef = sourcePreviousRef.current;
-          const sourceCandidates =
-            preservedSourceHandlesRef.current.size || !sourceRef
-              ? []
-              : existingKeptRef.current
-                  .filter(
-                    (attachment) =>
-                      !restoredHandleByAttachmentIdRef.current.has(attachment.id) &&
-                      Boolean(attachment.part),
-                  )
-                  .map((attachment) => ({
-                    id: attachment.id,
-                    folderPath: sourceRef.folderPath,
-                    uid: sourceRef.uid,
-                    uidValidity: sourceRef.uidValidity,
-                    part: attachment.part!,
-                    filename: attachment.filename,
-                    size: attachment.size,
-                    mimeType: attachment.mimeType || "application/octet-stream",
-                  }));
-          const sourceAttachments = sourceCandidates.map(({ id: _id, ...source }) => source);
           const inlineMetadata = metadataToTransport(transportImages);
           const response = await fetch("/api/mail-draft-save-v2", {
             method: "POST",
@@ -5786,31 +5847,30 @@ function Composer({
               bodyText: stripHtml(transportHtml),
               previousRef: previousRef ?? undefined,
               attachmentHandles: [
-                ...restoredHandles,
-                ...preservedSourceHandlesRef.current.values(),
+                ...attachmentPlan.attachmentHandles,
                 ...stagedFiles.map((item) => item.handle),
               ],
               stagedInlineImages: stagedInline.map((item, index) => ({
                 handle: item.handle,
                 ...inlineMetadata[index],
               })),
-              sourceAttachments,
+              sourceAttachments: attachmentPlan.sourceAttachments,
             }),
           });
           const res = await response.json().catch(() => null);
           if (res?.ok) {
             if (
-              sourceCandidates.length &&
+              attachmentPlan.sourceAttachmentIds.length &&
               (!Array.isArray(res.sourceAttachmentHandles) ||
-                res.sourceAttachmentHandles.length !== sourceCandidates.length)
+                res.sourceAttachmentHandles.length !== attachmentPlan.sourceAttachmentIds.length)
             ) {
               return { ok: false, code: "SOURCE_ATTACHMENT_HANDLE_MISMATCH" };
             }
-            if (sourceCandidates.length) {
-              sourceCandidates.forEach((source, index) => {
+            if (attachmentPlan.sourceAttachmentIds.length) {
+              attachmentPlan.sourceAttachmentIds.forEach((attachmentId, index) => {
                 const handle = res.sourceAttachmentHandles[index];
                 if (typeof handle === "string") {
-                  preservedSourceHandlesRef.current.set(source.id, handle);
+                  preservedSourceHandlesRef.current.set(attachmentId, handle);
                 }
               });
             }
@@ -6235,6 +6295,12 @@ function Composer({
     return {
       ...snapshot,
       stagedAttachments: [...restored, ...preserved, ...added],
+      sourceAttachments: buildLocalSourceAttachmentState({
+        attachments: existingKeptRef.current,
+        restoredHandles: restoredHandleByAttachmentIdRef.current,
+        preservedHandles: preservedSourceHandlesRef.current,
+        sourceRef: attachmentSourceRef.current,
+      }),
       inlineImages: snapshot.inlineImages?.map((metadata) => {
         const image = inlineImagesRef.current.find(
           (candidate) => candidate.uploadFilename === metadata.uploadFilename,
@@ -6653,7 +6719,11 @@ function Composer({
   }
 
   function removeExistingAttachment(id: string) {
-    setExistingKept((prev) => prev.filter((a) => a.id !== id));
+    setExistingKept((prev) => {
+      const next = prev.filter((a) => a.id !== id);
+      existingKeptRef.current = next;
+      return next;
+    });
     restoredHandleByAttachmentIdRef.current.delete(id);
     preservedSourceHandlesRef.current.delete(id);
   }
@@ -7071,6 +7141,17 @@ function Composer({
       const bodyHtml = buildEmailHtmlDocument(fragment, { dir: editorDir });
       const bodyText = htmlToPlainText(fragment);
 
+      const attachmentPlan = buildAttachmentTransportPlan({
+        attachments: existingKeptRef.current,
+        restoredHandles: restoredHandleByAttachmentIdRef.current,
+        preservedHandles: preservedSourceHandlesRef.current,
+        sourceRef: attachmentSourceRef.current,
+      });
+      if (attachmentPlan.unresolvedAttachmentIds.length > 0) {
+        toast.error(tr("تعذّر تجهيز مرفقات الرسالة"));
+        return;
+      }
+
       let stagedNormal: StagedAttachmentResult[];
       let stagedInline: StagedAttachmentResult[];
       try {
@@ -7083,28 +7164,6 @@ function Composer({
         return;
       }
       const inlineMetadata = metadataToTransport(transportImages);
-      const restoredHandles = existingKeptRef.current
-        .map((attachment) => restoredHandleByAttachmentIdRef.current.get(attachment.id))
-        .filter((handle): handle is string => Boolean(handle));
-      const sourceRef = sourcePreviousRef.current;
-      const sourceAttachments =
-        preservedSourceHandlesRef.current.size || !sourceRef
-          ? []
-          : existingKeptRef.current
-              .filter(
-                (attachment) =>
-                  !restoredHandleByAttachmentIdRef.current.has(attachment.id) &&
-                  Boolean(attachment.part),
-              )
-              .map((attachment) => ({
-                folderPath: sourceRef.folderPath,
-                uid: sourceRef.uid,
-                uidValidity: sourceRef.uidValidity,
-                part: attachment.part!,
-                filename: attachment.filename,
-                size: attachment.size,
-                mimeType: attachment.mimeType || "application/octet-stream",
-              }));
       const response = await fetch("/api/mail-send-v2", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -7118,15 +7177,14 @@ function Composer({
           bodyHtml,
           bodyText,
           attachmentHandles: [
-            ...restoredHandles,
-            ...preservedSourceHandlesRef.current.values(),
+            ...attachmentPlan.attachmentHandles,
             ...stagedNormal.map((item) => item.handle),
           ],
           stagedInlineImages: stagedInline.map((item, index) => ({
             handle: item.handle,
             ...inlineMetadata[index],
           })),
-          sourceAttachments,
+          sourceAttachments: attachmentPlan.sourceAttachments,
         }),
       });
       const result = (await response.json().catch(() => ({
@@ -7228,6 +7286,10 @@ function Composer({
       toast.error(trf("عنوان بريد غير صالح: {{email}}", { email: invalid[0].email }));
       return;
     }
+    if (totalCount > COMPOSE_MAX_FILES || totalBytes > COMPOSE_MAX_TOTAL_BYTES) {
+      toast.error(tr("تجاوزت حدود المرفقات المسموحة"));
+      return;
+    }
     if (!subject.trim()) {
       const ok = window.confirm(tr("لا يوجد موضوع. هل ترغب في الإرسال على أي حال؟"));
       if (!ok) return;
@@ -7236,7 +7298,7 @@ function Composer({
     const html = editorRef.current?.innerHTML ?? "";
     const text = stripHtml(html).toLowerCase();
     const mentionsAttach = /(attach|attached|attachment|مرفق|مرفقات|المرفق)/.test(text);
-    if (mentionsAttach && files.length === 0) {
+    if (mentionsAttach && existingKept.length + files.length === 0) {
       const ok = window.confirm(tr("ذكرت مرفقاً لكن لم تُضِف أي ملف. هل تريد الإرسال دون مرفق؟"));
       if (!ok) return;
     }
@@ -7258,7 +7320,7 @@ function Composer({
     el?.addEventListener("keydown", onKey);
     return () => el?.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [to, cc, bcc, subject, files]);
+  }, [to, cc, bcc, subject, files, existingKept, inlineImages, totalCount, totalBytes]);
 
   // Inline mode: composer fills the message-viewer pane on the same
   // light bg-surface used elsewhere, wrapped in an elegant card.
@@ -7290,6 +7352,10 @@ function Composer({
   type SaveNowResult = "saved_server" | "saved_local" | "failed" | "empty";
   async function saveDraftNow(): Promise<SaveNowResult> {
     if (typeof window === "undefined") return "failed";
+    if (totalCount > COMPOSE_MAX_FILES || totalBytes > COMPOSE_MAX_TOTAL_BYTES) {
+      toast.error(tr("تجاوزت حدود المرفقات المسموحة"));
+      return "failed";
+    }
     if (savingNowRef.current) {
       // Double-submit protection: reflect current effective state.
       const st = saverRef.current?.getStatus();

@@ -52,6 +52,24 @@ export interface DraftRecipient {
   valid: boolean;
 }
 
+/** Physical IMAP identity used only to restore unsaved source attachments. */
+export interface DraftAttachmentSourceRef {
+  folderPath: string;
+  uid: number;
+  uidValidity: string;
+}
+
+/** Metadata-only source attachment. Attachment bytes are never persisted. */
+export interface DraftSourceAttachment {
+  id: string;
+  part?: string;
+  filename: string;
+  size: number;
+  mimeType: string;
+  disposition?: string;
+  contentId?: string;
+}
+
 export interface DraftSnapshot {
   to: DraftRecipient[];
   cc: DraftRecipient[];
@@ -74,6 +92,10 @@ export interface DraftSnapshot {
     size: number;
     mimeType: string;
   }>;
+  sourceAttachments?: {
+    sourceRef: DraftAttachmentSourceRef;
+    attachments: DraftSourceAttachment[];
+  };
 }
 
 export interface DraftServerRef {
