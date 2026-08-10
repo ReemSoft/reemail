@@ -5510,7 +5510,7 @@ function MessageView({
                 </button>
                 {detailsOpen && (
                   <div className="mt-2 rounded-lg border border-border bg-muted/40 p-3">
-                    <dl className="grid grid-cols-[max-content_1fr] gap-x-2 gap-y-1.5 text-xs">
+                    <dl className="grid grid-cols-[max-content_1fr] gap-x-2 gap-y-1.5 text-sm">
                       <dt className="text-foreground/70 whitespace-nowrap">{tr("المرسل:")}</dt>
                       <dd className="min-w-0 break-all">
                         {message.from.name ? (
