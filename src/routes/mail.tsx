@@ -301,6 +301,7 @@ function ThreadedEmailBody({
   largeCidDispatcherRef,
   afterLatest,
   renderHistory,
+  suppressQuoted,
 }: {
   html: string;
   cidImages: CidImageMapping[];
@@ -315,6 +316,11 @@ function ThreadedEmailBody({
    * fallback so the caller can render it when no real thread rows exist.
    */
   renderHistory?: (quotedFallback: React.ReactNode) => React.ReactNode;
+  /**
+   * True when the real thread rows are rendered as separate cards, so the
+   * inline quoted history must not be duplicated.
+   */
+  suppressQuoted?: boolean;
 }) {
   const { latest, quoted } = useMemo(() => splitQuotedHtml(html), [html]);
   const [expanded, setExpanded] = useState(false);
@@ -337,6 +343,20 @@ function ThreadedEmailBody({
       </div>
     );
 
+  if (suppressQuoted)
+    return (
+      <div className={className}>
+        <EmailBodyFrame
+          html={latest}
+          cidImages={cidImages}
+          messageIdentity={`${messageIdentity}:latest`}
+          onReady={onReady}
+          largeCidDispatcherRef={largeCidDispatcherRef}
+        />
+        {afterLatest}
+      </div>
+    );
+
   return (
     <div className={className}>
       <EmailBodyFrame
@@ -346,6 +366,7 @@ function ThreadedEmailBody({
         onReady={onReady}
         largeCidDispatcherRef={largeCidDispatcherRef}
       />
+
       {afterLatest}
       <div className="mt-3">
 
@@ -593,6 +614,7 @@ function MessageBody({
   className,
   afterLatest,
   renderHistory,
+  suppressQuoted,
 }: {
   message: MailMessage;
   html: string;
@@ -600,6 +622,7 @@ function MessageBody({
   className?: string;
   afterLatest?: React.ReactNode;
   renderHistory?: (quotedFallback: React.ReactNode) => React.ReactNode;
+  suppressQuoted?: boolean;
 }) {
   const bodyIdentity = `${message.id}|${message.uidValidity ?? ""}`;
   const [readyIdentity, setReadyIdentity] = useState("");
@@ -623,7 +646,9 @@ function MessageBody({
       largeCidDispatcherRef={largeCidDispatcherRef}
       afterLatest={afterLatest}
       renderHistory={renderHistory}
+      suppressQuoted={suppressQuoted}
     />
+
   );
 }
 
@@ -4649,6 +4674,23 @@ function MailApp() {
               onPrint={() => {
                 /* handled inside MessageView */
               }}
+              onComposeFor={(msg, mode) => {
+                const next =
+                  mode === "forward"
+                    ? buildForward(msg, deriveAttachmentSourceRef(msg, folderPaths))
+                    : buildReply(
+                        msg,
+                        session.account.email_address,
+                        mode === "replyAll",
+                        deriveAttachmentSourceRef(msg, folderPaths),
+                      );
+                if (!next) {
+                  toast.error(tr("تعذّر تجهيز مرفقات الرسالة"));
+                  return;
+                }
+                setCompose(next);
+              }}
+
             />
           ) : selectedId && reading ? (
             <LoadingViewer
@@ -4842,12 +4884,54 @@ function MessageAttachmentsSection({ message }: { message: MailMessage }) {
   );
 }
 
+export type ThreadComposeMode = "reply" | "replyAll" | "forward";
+
+/** Compact recipient summary shown on a collapsed / expanded thread card. */
+function ThreadRecipients({ message }: { message: MailMessage }) {
+  const to = message.to.map((t) => t.email).filter(Boolean);
+  const cc = (message.cc ?? []).map((c) => c.email).filter(Boolean);
+  return (
+    <dl className="grid grid-cols-[max-content_1fr] gap-x-2 gap-y-1 text-[11px]">
+      <dt className="whitespace-nowrap text-foreground/60">{tr("المرسل:")}</dt>
+      <dd className="min-w-0 break-all">
+        {message.from.name ? <span className="me-1">{message.from.name}</span> : null}
+        <span dir="ltr" className="text-muted-foreground unicode-bidi-isolate">
+          &lt;{message.from.email || "—"}&gt;
+        </span>
+      </dd>
+      <dt className="whitespace-nowrap text-foreground/60">{tr("المستلم:")}</dt>
+      <dd className="min-w-0 break-all">
+        <span dir="ltr" className="unicode-bidi-isolate">
+          {to.length ? to.join(", ") : "—"}
+        </span>
+      </dd>
+      {cc.length > 0 && (
+        <>
+          <dt className="whitespace-nowrap text-foreground/60">{tr("نسخة:")}</dt>
+          <dd className="min-w-0 break-all">
+            <span dir="ltr" className="unicode-bidi-isolate">
+              {cc.join(", ")}
+            </span>
+          </dd>
+        </>
+      )}
+    </dl>
+  );
+}
+
 /**
- * One previous message of the thread. Collapsed by default: only the local
- * index header row is rendered (zero network). The body + attachments are
- * fetched lazily on click through the SAME cache-first open path.
+ * One previous message of the thread rendered as its own collapsible tab.
+ * Collapsed by default: only the local index header row is rendered (zero
+ * network). The body + attachments are fetched lazily on click through the
+ * SAME cache-first open path, and reply/forward act on THAT message.
  */
-function ConversationMessageCard({ row }: { row: ConversationRow }) {
+function ConversationMessageCard({
+  row,
+  onCompose,
+}: {
+  row: ConversationRow;
+  onCompose?: (message: MailMessage, mode: ThreadComposeMode) => void;
+}) {
   const openPrevious = useMailServerFn(openMailMessage);
   const [open, setOpen] = useState(false);
   const [loaded, setLoaded] = useState<MailMessage | null>(null);
@@ -4857,6 +4941,7 @@ function ConversationMessageCard({ row }: { row: ConversationRow }) {
     getCurrentLang() === "ar" ? "ar-SA" : "en-GB",
     { dateStyle: "medium", timeStyle: "short" },
   );
+  const toPreview = row.to.map((t) => t.email).filter(Boolean).join(", ");
 
   async function toggle() {
     if (open) {
@@ -4920,18 +5005,40 @@ function ConversationMessageCard({ row }: { row: ConversationRow }) {
   }
 
   return (
-    <div className="rounded-lg border border-border bg-card/60">
+    <div
+      className={`overflow-hidden rounded-xl border transition-colors ${
+        open ? "border-border bg-card shadow-sm" : "border-border/70 bg-card/50 hover:bg-muted/40"
+      }`}
+    >
       <button
         type="button"
         onClick={toggle}
         aria-expanded={open}
-        className="flex w-full items-center gap-2 px-3 py-2 text-start text-xs hover:bg-muted/50 rounded-lg"
+        className="flex w-full items-start gap-3 px-3 py-2.5 text-start"
       >
-        <span className="min-w-0 flex-1 truncate font-medium text-foreground">
-          {row.from.name || row.from.email}
+        <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-brand-gradient text-[11px] font-bold text-white">
+          {(row.from.name || row.from.email || "?").charAt(0).toUpperCase()}
         </span>
-        {row.hasAttachments && <Paperclip className="h-3.5 w-3.5 shrink-0 opacity-60" />}
-        <span className="shrink-0 text-muted-foreground">{shortDate}</span>
+        <span className="min-w-0 flex-1">
+          <span className="flex items-center gap-2">
+            <span className="min-w-0 flex-1 truncate text-xs font-semibold text-foreground">
+              {row.from.name || row.from.email}
+            </span>
+            {row.hasAttachments && <Paperclip className="h-3.5 w-3.5 shrink-0 opacity-60" />}
+            <span className="shrink-0 text-[11px] text-muted-foreground">{shortDate}</span>
+            <ChevronDown
+              className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform ${
+                open ? "rotate-180" : ""
+              }`}
+            />
+          </span>
+          <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">
+            <span className="text-foreground/60">{tr("إلى")} </span>
+            <span dir="ltr" className="unicode-bidi-isolate">
+              {toPreview || "—"}
+            </span>
+          </span>
+        </span>
       </button>
       {open && (
         <div className="border-t border-border px-3 pb-3">
@@ -4945,12 +5052,42 @@ function ConversationMessageCard({ row }: { row: ConversationRow }) {
             <div className="py-3 text-xs text-destructive">{tr("تعذّر تحميل الرسالة")}</div>
           )}
           {loaded && (
-            <MessageBody
-              message={loaded}
-              html={splitQuotedHtml(sanitizeEmailHtml(loaded.body || loaded.preview || "")).latest}
-              className="mt-2"
-              afterLatest={<MessageAttachmentsSection message={loaded} />}
-            />
+            <>
+              <div className="mt-3 rounded-lg border border-border bg-muted/30 p-2.5">
+                <ThreadRecipients message={loaded} />
+              </div>
+              <MessageBody
+                message={loaded}
+                html={
+                  splitQuotedHtml(sanitizeEmailHtml(loaded.body || loaded.preview || "")).latest
+                }
+                className="mt-3"
+                suppressQuoted
+                afterLatest={<MessageAttachmentsSection message={loaded} />}
+              />
+              {onCompose && (
+                <div className="mt-4 flex flex-wrap gap-2 border-t border-border pt-3">
+                  <button
+                    onClick={() => onCompose(loaded, "reply")}
+                    className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1.5 text-xs font-medium hover:bg-muted"
+                  >
+                    <Reply className="h-3.5 w-3.5" /> {tr("رد")}
+                  </button>
+                  <button
+                    onClick={() => onCompose(loaded, "replyAll")}
+                    className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1.5 text-xs font-medium hover:bg-muted"
+                  >
+                    <ReplyAll className="h-3.5 w-3.5" /> {tr("رد على الكل")}
+                  </button>
+                  <button
+                    onClick={() => onCompose(loaded, "forward")}
+                    className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1.5 text-xs font-medium hover:bg-muted"
+                  >
+                    <Forward className="h-3.5 w-3.5" /> {tr("إعادة توجيه")}
+                  </button>
+                </div>
+              )}
+            </>
           )}
         </div>
       )}
@@ -4959,73 +5096,95 @@ function ConversationMessageCard({ row }: { row: ConversationRow }) {
 }
 
 /**
- * Real thread history: the previous messages of the conversation, each as its
- * own entity with its own attachments. Mounted only after the user expands the
- * history, so the open path stays untouched. Falls back to the quoted-HTML
- * block when the local index has no sibling rows.
+ * Loads the sibling rows of a conversation from the LOCAL INDEX only.
+ * Deferred to an idle callback after the open path finished, so it never
+ * competes with body rendering. Returns `null` while unknown.
  */
-function ConversationHistory({
-  current,
-  quotedFallback,
-}: {
-  current: MailMessage;
-  quotedFallback: React.ReactNode;
-}) {
+function useConversationRows(messageId: string): ConversationRow[] | null {
   const listConversation = useMailServerFn(listMailConversation);
   const [rows, setRows] = useState<ConversationRow[] | null>(null);
-  const [failed, setFailed] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
+    setRows(null);
     const session = getMailSession();
-    const parsed = parseMessageId(current.id);
+    const parsed = parseMessageId(messageId);
     if (!session?.mailSessionToken || !parsed) {
-      setFailed(true);
+      setRows([]);
       return;
     }
-    setRows(null);
-    setFailed(false);
-    listConversation({
-      data: {
-        mailSessionToken: session.mailSessionToken,
-        folder: parsed.folder,
-        uid: parsed.uid,
-      },
-    })
-      .then((res) => {
-        if (cancelled) return;
-        if (res.ok) setRows(res.rows);
-        else setFailed(true);
+    const token = session.mailSessionToken;
+    const run = () => {
+      listConversation({
+        data: {
+          mailSessionToken: token,
+
+          folder: parsed.folder,
+          uid: parsed.uid,
+        },
       })
-      .catch(() => {
-        if (!cancelled) setFailed(true);
-      });
+        .then((res) => {
+          if (!cancelled) setRows(res.ok ? res.rows : []);
+        })
+        .catch(() => {
+          if (!cancelled) setRows([]);
+        });
+    };
+    const idle = (
+      window as unknown as { requestIdleCallback?: (cb: () => void, o?: object) => number }
+    ).requestIdleCallback;
+    const handle = idle ? idle(run, { timeout: 800 }) : window.setTimeout(run, 120);
     return () => {
       cancelled = true;
+      const cancelIdle = (
+        window as unknown as { cancelIdleCallback?: (h: number) => void }
+      ).cancelIdleCallback;
+      if (idle && cancelIdle) cancelIdle(handle as number);
+      else window.clearTimeout(handle as number);
     };
-  }, [current.id, listConversation]);
+  }, [messageId, listConversation]);
 
-  if (failed) return <>{quotedFallback}</>;
-  if (rows === null) {
-    return (
-      <div className="mt-3 flex items-center gap-2 text-xs text-muted-foreground">
-        <Loader2 className="h-3.5 w-3.5 animate-spin" />
-        {tr("جارٍ تحميل الرسائل السابقة…")}
-      </div>
-    );
-  }
-  if (!rows.length) return <>{quotedFallback}</>;
+  return rows;
+}
+
+/**
+ * Real thread history: the previous messages of the conversation, each as its
+ * own collapsible tab with its own recipients, attachments and actions.
+ * Newest first, directly under the currently open message.
+ */
+function ConversationHistory({
+  rows,
+  onCompose,
+}: {
+  rows: ConversationRow[];
+  onCompose?: (message: MailMessage, mode: ThreadComposeMode) => void;
+}) {
+  const ordered = useMemo(
+    () => [...rows].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()),
+    [rows],
+  );
   return (
-    <div className="mt-3 flex flex-col gap-2">
-      {rows.map((row) => (
-        <ConversationMessageCard
-          key={`${row.folder}:${row.uid}:${row.uidValidity}`}
-          row={row}
-        />
-      ))}
+    <div className="mt-6">
+      <div className="mb-2 flex items-center gap-2 text-[11px] font-medium text-muted-foreground">
+        <span className="h-px flex-1 bg-border" />
+        <span>
+          {tr("الرسائل السابقة")} ({ordered.length})
+        </span>
+        <span className="h-px flex-1 bg-border" />
+      </div>
+      <div className="flex flex-col gap-2">
+        {ordered.map((row) => (
+          <ConversationMessageCard
+            key={`${row.folder}:${row.uid}:${row.uidValidity}`}
+            row={row}
+            onCompose={onCompose}
+          />
+        ))}
+      </div>
     </div>
   );
 }
+
 
 
 function MessageView({
@@ -5043,6 +5202,7 @@ function MessageView({
   onMarkUnread,
   onRestore,
   onPrint,
+  onComposeFor,
 }: {
   message: MailMessage;
   loading: boolean;
@@ -5058,9 +5218,13 @@ function MessageView({
   onMarkUnread: () => void;
   onRestore: () => void;
   onPrint: () => void;
+  onComposeFor?: (message: MailMessage, mode: ThreadComposeMode) => void;
 }) {
   const { dir: uiDir } = useLanguage();
+  const threadRows = useConversationRows(message.id);
+  const hasThreadRows = !!threadRows?.length;
   const [detailsOpen, setDetailsOpen] = useState(false);
+
   const recipientsAll = [
     ...message.to.map((t) => ({ ...t, kind: "to" as const })),
     ...(message.cc || []).map((c) => ({ ...c, kind: "cc" as const })),
@@ -5408,18 +5572,21 @@ function MessageView({
           {loading ? (
             <MessageBodySkeleton />
           ) : (
-            <MessageBody
-              message={message}
-              html={sanitizeEmailHtml(message.body || message.preview || "")}
-              onInlineImages={handleInlineImages}
-              className="mt-6"
-              afterLatest={<MessageAttachmentsSection message={message} />}
-              renderHistory={(quotedFallback) => (
-                <ConversationHistory current={message} quotedFallback={quotedFallback} />
+            <>
+              <MessageBody
+                message={message}
+                html={sanitizeEmailHtml(message.body || message.preview || "")}
+                onInlineImages={handleInlineImages}
+                className="mt-6"
+                afterLatest={<MessageAttachmentsSection message={message} />}
+                suppressQuoted={hasThreadRows}
+              />
+              {hasThreadRows && (
+                <ConversationHistory rows={threadRows!} onCompose={onComposeFor} />
               )}
-            />
-
+            </>
           )}
+
 
 
           <div className="mt-6 flex flex-wrap gap-2">
