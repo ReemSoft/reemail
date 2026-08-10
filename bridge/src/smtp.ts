@@ -4,6 +4,7 @@ import type { Readable } from "node:stream";
 import { makeImapClient, listMailboxes } from "./imap.js";
 import {
   createMimeSpool,
+  MimeSpoolTooLargeError,
   readMimeSpoolBuffer,
   withMimeSpoolReadStream,
   type MimeSpool,

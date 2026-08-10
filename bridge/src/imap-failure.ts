@@ -7,6 +7,7 @@ export type SafeImapFailureCode =
   | "IMAP_QUOTA_EXCEEDED"
   | "IMAP_MAILBOX_UNAVAILABLE"
   | "IMAP_PROTOCOL_ERROR"
+  | "SENT_COPY_TOO_LARGE"
   | "IMAP_UNKNOWN";
 
 export interface ClassifiedImapFailure {
