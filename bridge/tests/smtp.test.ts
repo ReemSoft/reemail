@@ -105,7 +105,7 @@ interface Recorder {
   sleeps: number[];
   lastRaw?: Buffer;
   smtpRaw?: Readable;
-  appendRaw?: Readable;
+  appendRaw?: Buffer;
 }
 
 async function readStream(raw: NodeJS.ReadableStream): Promise<Buffer> {
@@ -165,9 +165,14 @@ function mkDeps(opts: {
       return result;
     },
     async append(folder, raw, flags) {
+      // ImapFlow 1.5 contract: append() accepts `string | Buffer` ONLY.
+      // A Readable here is the production bug this fake must reject.
+      if (!Buffer.isBuffer(raw)) {
+        throw new Error(`IMAP append expects a Buffer, received ${typeof raw}`);
+      }
       rec.appendRaw = raw;
       if (opts.appendRejectBeforeRead) throw new Error(opts.appendRejectBeforeRead);
-      rec.appendCalls.push({ folder, raw: await readStream(raw), flags });
+      rec.appendCalls.push({ folder, raw: Buffer.from(raw), flags });
       if (opts.appendFail) throw new Error(opts.appendFail);
     },
     async logout() {
@@ -366,7 +371,7 @@ test("SMTP immediate rejection closes raw stream before spool cleanup", async ()
   await new Promise<void>((resolve) => setImmediate(resolve));
 });
 
-test("Sent APPEND immediate rejection closes raw stream and preserves SMTP success", async () => {
+test("Sent APPEND immediate rejection keeps SMTP success and cleans the spool", async () => {
   const { deps, rec } = mkDeps({
     mailboxes: [{ path: "Sent" }],
     searchAttempts: [false, false, false],
@@ -382,7 +387,7 @@ test("Sent APPEND immediate rejection closes raw stream and preserves SMTP succe
   assert.equal(result.ok, true);
   if (!result.ok) return;
   assert.equal(result.sentCopySaved, false);
-  assert.equal(rec.appendRaw?.destroyed, true);
+  assert.equal(Buffer.isBuffer(rec.appendRaw), true);
   await assert.rejects(access(spoolPath), /ENOENT/);
   await new Promise<void>((resolve) => setImmediate(resolve));
 });
@@ -619,8 +624,11 @@ async function runFastRecoveryScenario(options: {
           return step;
         },
         async append(_folderPath, raw) {
-          const bytes = await readStream(raw);
-          recorder.appends.push({ clientId, raw: bytes });
+          // ImapFlow 1.5 accepts Buffer only — reject any stream.
+          if (!Buffer.isBuffer(raw)) {
+            throw new Error(`IMAP append expects a Buffer, received ${typeof raw}`);
+          }
+          recorder.appends.push({ clientId, raw: Buffer.from(raw) });
           const step = options.appends?.[appendIndex++] ?? true;
           if (step instanceof Error) throw step;
           return step;
@@ -694,7 +702,12 @@ test("retryable first APPEND miss retries once on the fresh connection", async (
   assert.ok(recorder.appends.every(({ raw }) => raw.equals(recorder.smtpRaw!)));
   assert.ok(recorder.searches.every(({ messageId }) => messageId === result.messageId));
   assert.equal(recorder.cleanups, 1);
-  assert.equal(recorder.spoolOpens, 3, "SMTP plus two APPEND attempts use fresh streams");
+  assert.equal(
+    recorder.spoolOpens,
+    1,
+    "SMTP streams the spool once; each APPEND re-reads the same spool as a Buffer",
+  );
+
 });
 
 test("second APPEND failure performs final verification and never attempts a third APPEND", async () => {
