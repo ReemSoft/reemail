@@ -50,6 +50,22 @@ test("resolveSentPath returns undefined when no Sent-like folder exists (APPEND 
   assert.equal(resolveSentPath(boxes as any), undefined);
 });
 
+test("resolveSentPath skips a \\Noselect Sent candidate for a selectable Sent mailbox", () => {
+  const boxes = [
+    { path: "Sent group", specialUse: "\\Sent", flags: new Set(["\\Noselect"]) },
+    { path: "Sent", flags: new Set<string>() },
+  ];
+  assert.equal(resolveSentPath(boxes as unknown as Parameters<typeof resolveSentPath>[0]), "Sent");
+});
+
+test("resolveSentPath rejects a lone \\Noselect Sent mailbox", () => {
+  const boxes = [{ path: "Sent", specialUse: "\\Sent", flags: new Set(["\\Noselect"]) }];
+  assert.equal(
+    resolveSentPath(boxes as unknown as Parameters<typeof resolveSentPath>[0]),
+    undefined,
+  );
+});
+
 // ============================================================================
 // Full sendMessage regression tests via dependency injection.
 // These tests MUST fail if Search-then-APPEND, duplicate protection, raw-MIME
@@ -545,3 +561,197 @@ async function waitForFinalizers(queue: PostSendFinalizerQueue): Promise<void> {
   }
   assert.fail("finalizer did not settle");
 }
+
+type RecoverySearchStep = boolean | Error;
+type RecoveryAppendStep = true | false | Error;
+
+interface RecoveryRecorder {
+  smtpCalls: number;
+  clientsCreated: number;
+  searches: Array<{ clientId: number; messageId: string }>;
+  appends: Array<{ clientId: number; raw: Buffer }>;
+  cleanups: number;
+  spoolOpens: number;
+  smtpRaw?: Buffer;
+}
+
+function recoveryError(code: string, message = code): Error & { code: string } {
+  return Object.assign(new Error(message), { code });
+}
+
+async function runFastRecoveryScenario(options: {
+  searches?: RecoverySearchStep[];
+  appends?: RecoveryAppendStep[];
+  mailboxes?: Array<{ path: string; specialUse?: string; flags?: Set<string> }>;
+}) {
+  const recorder: RecoveryRecorder = {
+    smtpCalls: 0,
+    clientsCreated: 0,
+    searches: [],
+    appends: [],
+    cleanups: 0,
+    spoolOpens: 0,
+  };
+  let searchIndex = 0;
+  let appendIndex = 0;
+  const queue = new PostSendFinalizerQueue();
+  const deps: SendMessageDeps = {
+    createTransport: () => ({
+      async sendMail({ raw }) {
+        recorder.smtpCalls++;
+        recorder.smtpRaw = await readStream(raw);
+      },
+      close() {},
+    }),
+    createImapSentClient: () => {
+      const clientId = ++recorder.clientsCreated;
+      return {
+        async connect() {},
+        async list() {
+          return (options.mailboxes ?? [{ path: "Sent" }]) as unknown as Awaited<
+            ReturnType<ImapSentClient["list"]>
+          >;
+        },
+        async searchMessageId(_folderPath, messageId) {
+          recorder.searches.push({ clientId, messageId });
+          const step = options.searches?.[searchIndex++] ?? false;
+          if (step instanceof Error) throw step;
+          return step;
+        },
+        async append(_folderPath, raw) {
+          const bytes = await readStream(raw);
+          recorder.appends.push({ clientId, raw: bytes });
+          const step = options.appends?.[appendIndex++] ?? true;
+          if (step instanceof Error) throw step;
+          return step;
+        },
+        async logout() {},
+      };
+    },
+    sleep: async () => undefined,
+    postSendQueue: queue,
+    createMimeSpool: async (payload) => {
+      const spool = await createMimeSpool(payload);
+      return {
+        ...spool,
+        openReadStream: () => {
+          recorder.spoolOpens++;
+          return spool.openReadStream();
+        },
+        cleanup: async () => {
+          recorder.cleanups++;
+          await spool.cleanup();
+        },
+      };
+    },
+  };
+  const result = await sendMessageFast(ACCT, "pw", BASE_PAYLOAD, deps);
+  assert.equal(result.ok, true);
+  if (!result.ok) throw new Error("SMTP unexpectedly failed");
+  await waitForFinalizers(queue);
+  return {
+    result,
+    status: queue.getStatus(sentCopyAccountKey(ACCT), result.sentCopyJobId!),
+    recorder,
+  };
+}
+
+test("Sent finalizer saves after one successful APPEND", async () => {
+  const { status, recorder } = await runFastRecoveryScenario({
+    searches: [false, false, false],
+    appends: [true],
+  });
+  assert.equal(status?.state, "saved");
+  assert.equal(status?.source, "append");
+  assert.equal(recorder.appends.length, 1);
+});
+
+test("ambiguous first APPEND reconnects and finds the same Message-ID without a duplicate", async () => {
+  const { result, status, recorder } = await runFastRecoveryScenario({
+    searches: [false, false, false, true],
+    appends: [recoveryError("ECONNRESET")],
+  });
+  assert.equal(status?.state, "saved");
+  assert.equal(recorder.appends.length, 1);
+  assert.equal(recorder.clientsCreated, 2);
+  assert.equal(recorder.appends[0].clientId, 1);
+  assert.equal(recorder.searches.at(-1)?.clientId, 2);
+  assert.ok(recorder.searches.every(({ messageId }) => messageId === result.messageId));
+});
+
+test("retryable first APPEND miss retries once on the fresh connection", async () => {
+  const { result, status, recorder } = await runFastRecoveryScenario({
+    searches: [false, false, false, false, false, false],
+    appends: [recoveryError("ETIMEDOUT"), true],
+  });
+  assert.equal(status?.state, "saved");
+  assert.equal(recorder.appends.length, 2);
+  assert.deepEqual(
+    recorder.appends.map(({ clientId }) => clientId),
+    [1, 2],
+  );
+  assert.ok(recorder.smtpRaw);
+  assert.ok(recorder.appends.every(({ raw }) => raw.equals(recorder.smtpRaw!)));
+  assert.ok(recorder.searches.every(({ messageId }) => messageId === result.messageId));
+  assert.equal(recorder.cleanups, 1);
+  assert.equal(recorder.spoolOpens, 3, "SMTP plus two APPEND attempts use fresh streams");
+});
+
+test("second APPEND failure performs final verification and never attempts a third APPEND", async () => {
+  const { status, recorder } = await runFastRecoveryScenario({
+    searches: [false, false, false, false, false, false, true],
+    appends: [recoveryError("ECONNRESET"), recoveryError("ETIMEDOUT")],
+  });
+  assert.equal(status?.state, "saved");
+  assert.equal(recorder.appends.length, 2);
+  assert.equal(recorder.clientsCreated, 3);
+});
+
+test("permanent quota failure verifies absence and does not blindly APPEND again", async () => {
+  const { status, recorder } = await runFastRecoveryScenario({
+    searches: [false, false, false, false, false, false],
+    appends: [recoveryError("OVERQUOTA")],
+  });
+  assert.equal(status?.state, "failed");
+  assert.equal(status?.code, "IMAP_QUOTA_EXCEEDED");
+  assert.equal(recorder.appends.length, 1);
+  assert.equal(recorder.clientsCreated, 2);
+});
+
+test("permission-denied APPEND is verified but never blindly retried", async () => {
+  const { status, recorder } = await runFastRecoveryScenario({
+    searches: [false, false, false, false, false, false],
+    appends: [recoveryError("NOPERM")],
+  });
+  assert.equal(status?.state, "failed");
+  assert.equal(status?.code, "IMAP_PERMISSION_DENIED");
+  assert.equal(recorder.appends.length, 1);
+});
+
+test("APPEND false is not treated as saved and follows bounded recovery", async () => {
+  const { status, recorder } = await runFastRecoveryScenario({
+    searches: [false, false, false, false, false, false],
+    appends: [false, true],
+  });
+  assert.equal(status?.state, "saved");
+  assert.equal(recorder.appends.length, 2);
+});
+
+test("initial Message-ID search failure reconnects instead of becoming a normal miss", async () => {
+  const { status, recorder } = await runFastRecoveryScenario({
+    searches: [recoveryError("ECONNRESET"), true],
+  });
+  assert.equal(status?.state, "saved");
+  assert.equal(status?.source, "provider");
+  assert.equal(recorder.clientsCreated, 2);
+  assert.equal(recorder.appends.length, 0);
+});
+
+test("missing selectable Sent path remains a terminal SENT_FOLDER_NOT_FOUND", async () => {
+  const { status, recorder } = await runFastRecoveryScenario({
+    mailboxes: [{ path: "INBOX" }, { path: "Sent", flags: new Set(["\\Noselect"]) }],
+  });
+  assert.equal(status?.state, "failed");
+  assert.equal(status?.code, "SENT_FOLDER_NOT_FOUND");
+  assert.equal(recorder.appends.length, 0);
+});

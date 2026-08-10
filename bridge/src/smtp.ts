@@ -12,6 +12,11 @@ import {
 } from "./post-send-finalizer.js";
 import type { MailAccount } from "./types.js";
 import { accountBinding } from "./transfer-tickets.js";
+import {
+  classifyImapFailure,
+  type ClassifiedImapFailure,
+  type SafeImapFailureCode,
+} from "./imap-failure.js";
 
 export interface SendAttachment {
   filename: string;
@@ -65,8 +70,15 @@ const SENT_SEARCH_INTERVAL_MS = 500;
  * no suitable Sent mailbox is present — never creates one.
  */
 export function resolveSentPath(mailboxes: ListResponse[]): string | undefined {
+  const selectable = (mailbox: ListResponse) => {
+    const flags = (mailbox as unknown as { flags?: Set<string> | string[] }).flags;
+    if (!flags) return true;
+    const normalized = Array.from(flags, (flag) => flag.toLowerCase());
+    return !normalized.includes("\\noselect") && !normalized.includes("\\nonexistent");
+  };
   // 1) SPECIAL-USE \Sent (RFC 6154)
   for (const mb of mailboxes) {
+    if (!selectable(mb)) continue;
     const su = (mb as unknown as { specialUse?: string | string[] }).specialUse;
     if (!su) continue;
     if (Array.isArray(su) ? su.includes("\\Sent") : su === "\\Sent") return mb.path;
@@ -82,7 +94,9 @@ export function resolveSentPath(mailboxes: ListResponse[]): string | undefined {
     "المرسلة",
   ];
   for (const name of known) {
-    const found = mailboxes.find((m) => m.path.toLowerCase() === name.toLowerCase());
+    const found = mailboxes.find(
+      (m) => selectable(m) && m.path.toLowerCase() === name.toLowerCase(),
+    );
     if (found) return found.path;
   }
   return undefined;
@@ -147,20 +161,16 @@ async function messageExistsInFolder(
   folderPath: string,
   messageId: string,
 ): Promise<boolean> {
+  const lock = await client.getMailboxLock(folderPath);
   try {
-    const lock = await client.getMailboxLock(folderPath);
-    try {
-      // Some IMAP servers include the surrounding <> in header searches, some
-      // don't. Try the raw ID first; imapflow will quote appropriately.
-      const uids = (await client.search({ header: { "message-id": messageId } } as never, {
-        uid: true,
-      })) as number[] | false;
-      return Array.isArray(uids) && uids.length > 0;
-    } finally {
-      lock.release();
-    }
-  } catch {
-    return false;
+    // Some IMAP servers include the surrounding <> in header searches, some
+    // don't. Try the raw ID first; imapflow will quote appropriately.
+    const uids = (await client.search({ header: { "message-id": messageId } } as never, {
+      uid: true,
+    })) as number[] | false;
+    return Array.isArray(uids) && uids.length > 0;
+  } finally {
+    lock.release();
   }
 }
 
@@ -191,7 +201,7 @@ export interface ImapSentClient {
   connect(): Promise<void>;
   list(): Promise<ListResponse[]>;
   searchMessageId(folderPath: string, messageId: string): Promise<boolean>;
-  append(folderPath: string, raw: Readable, flags: string[]): Promise<void>;
+  append(folderPath: string, raw: Readable, flags: string[]): Promise<unknown | false>;
   logout(): Promise<void>;
 }
 export interface SendMessageDeps {
@@ -238,13 +248,214 @@ function defaultDeps(): SendMessageDeps {
         searchMessageId: (folderPath, messageId) =>
           messageExistsInFolder(client, folderPath, messageId),
         append: async (folderPath, raw, flags) => {
-          await client.append(folderPath, raw as never, flags);
+          const result = await client.append(folderPath, raw as never, flags);
+          if (result === false) {
+            const error = new Error("IMAP append client is not usable") as Error & { code: string };
+            error.code = "ECONNECTIONCLOSED";
+            throw error;
+          }
+          return result;
         },
         logout: () => client.logout().catch(() => {}) as unknown as Promise<void>,
       };
     },
     sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
   };
+}
+
+type SentSearchResult =
+  | { state: "found" }
+  | { state: "not-found" }
+  | { state: "failed"; failure: ClassifiedImapFailure };
+
+function sentCopyLog(
+  stage:
+    | "SEARCH_FAILED"
+    | "APPEND_RETRYABLE_FAILURE"
+    | "APPEND_PERMANENT_FAILURE"
+    | "RECOVERY_SEARCH_FOUND"
+    | "APPEND_RETRY_SUCCESS"
+    | "FINAL_SENT_COPY_FAILURE",
+  failure: ClassifiedImapFailure,
+  attempt: number,
+  startedAt: number,
+): void {
+  console.warn("[bridge] sent-copy recovery", {
+    stage,
+    code: failure.code,
+    attempt,
+    durationMs: Math.max(0, Math.round(performance.now() - startedAt)),
+    retryable: failure.retryable,
+  });
+}
+
+async function searchSentBounded(
+  client: ImapSentClient,
+  folderPath: string,
+  messageId: string,
+  sleep: (ms: number) => Promise<void>,
+): Promise<SentSearchResult> {
+  for (let attempt = 0; attempt < SENT_SEARCH_RETRIES; attempt++) {
+    try {
+      if (await client.searchMessageId(folderPath, messageId)) return { state: "found" };
+    } catch (error) {
+      return { state: "failed", failure: classifyImapFailure(error) };
+    }
+    if (attempt < SENT_SEARCH_RETRIES - 1) await sleep(SENT_SEARCH_INTERVAL_MS);
+  }
+  return { state: "not-found" };
+}
+
+async function appendSentCopy(
+  client: ImapSentClient,
+  folderPath: string,
+  spool: MimeSpool,
+): Promise<{ ok: true } | { ok: false; failure: ClassifiedImapFailure }> {
+  try {
+    const result = await withMimeSpoolReadStream(spool, (raw) =>
+      client.append(folderPath, raw, ["\\Seen"]),
+    );
+    if (result === false) {
+      return {
+        ok: false,
+        failure: { code: "IMAP_CONNECTION_CLOSED", retryable: true },
+      };
+    }
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, failure: classifyImapFailure(error) };
+  }
+}
+
+async function closeSentClient(client: ImapSentClient | null): Promise<void> {
+  await client?.logout().catch(() => undefined);
+}
+
+async function openSentClient(
+  account: MailAccount,
+  password: string,
+  deps: SendMessageDeps,
+): Promise<
+  | { ok: true; client: ImapSentClient; sentPath: string }
+  | {
+      ok: false;
+      client: ImapSentClient | null;
+      code: SafeImapFailureCode | "SENT_FOLDER_NOT_FOUND";
+    }
+> {
+  let client: ImapSentClient | null = null;
+  try {
+    client = deps.createImapSentClient(account, password);
+    await client.connect();
+    const sentPath = resolveSentPath(await client.list());
+    if (!sentPath) return { ok: false, client, code: "SENT_FOLDER_NOT_FOUND" };
+    return { ok: true, client, sentPath };
+  } catch (error) {
+    return { ok: false, client, code: classifyImapFailure(error).code };
+  }
+}
+
+async function finalizeSentCopySafely(
+  account: MailAccount,
+  password: string,
+  spool: MimeSpool,
+  deps: SendMessageDeps,
+): Promise<SentCopyOutcome> {
+  const sleep = deps.sleep ?? ((ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const startedAt = performance.now();
+  let opened = await openSentClient(account, password, deps);
+  if (opened.ok === false) {
+    await closeSentClient(opened.client);
+    return { state: "failed", code: opened.code };
+  }
+  let { client, sentPath } = opened;
+  let search = await searchSentBounded(client, sentPath, spool.messageId, sleep);
+  if (search.state === "found") {
+    await closeSentClient(client);
+    return { state: "saved", source: "provider" };
+  }
+  if (search.state === "failed") {
+    const initialSearchFailure = search.failure;
+    sentCopyLog("SEARCH_FAILED", initialSearchFailure, 1, startedAt);
+    await closeSentClient(client);
+    opened = await openSentClient(account, password, deps);
+    if (opened.ok === false) {
+      await closeSentClient(opened.client);
+      return { state: "failed", code: opened.code };
+    }
+    ({ client, sentPath } = opened);
+    search = await searchSentBounded(client, sentPath, spool.messageId, sleep);
+    if (search.state === "found") {
+      sentCopyLog("RECOVERY_SEARCH_FOUND", initialSearchFailure, 0, startedAt);
+      await closeSentClient(client);
+      return { state: "saved", source: "provider" };
+    }
+    if (search.state === "failed") {
+      sentCopyLog("FINAL_SENT_COPY_FAILURE", search.failure, 0, startedAt);
+      await closeSentClient(client);
+      return { state: "failed", code: search.failure.code };
+    }
+  }
+
+  const firstAppend = await appendSentCopy(client, sentPath, spool);
+  if (firstAppend.ok === true) {
+    await closeSentClient(client);
+    return { state: "saved", source: "append" };
+  }
+  sentCopyLog(
+    firstAppend.failure.retryable ? "APPEND_RETRYABLE_FAILURE" : "APPEND_PERMANENT_FAILURE",
+    firstAppend.failure,
+    1,
+    startedAt,
+  );
+  await closeSentClient(client);
+
+  opened = await openSentClient(account, password, deps);
+  if (opened.ok === false) {
+    await closeSentClient(opened.client);
+    return { state: "failed", code: opened.code };
+  }
+  ({ client, sentPath } = opened);
+  search = await searchSentBounded(client, sentPath, spool.messageId, sleep);
+  if (search.state === "found") {
+    sentCopyLog("RECOVERY_SEARCH_FOUND", firstAppend.failure, 1, startedAt);
+    await closeSentClient(client);
+    return { state: "saved", source: "append" };
+  }
+  if (search.state === "failed") {
+    sentCopyLog("FINAL_SENT_COPY_FAILURE", search.failure, 1, startedAt);
+    await closeSentClient(client);
+    return { state: "failed", code: search.failure.code };
+  }
+  if (!firstAppend.failure.retryable) {
+    sentCopyLog("FINAL_SENT_COPY_FAILURE", firstAppend.failure, 1, startedAt);
+    await closeSentClient(client);
+    return { state: "failed", code: firstAppend.failure.code };
+  }
+
+  const secondAppend = await appendSentCopy(client, sentPath, spool);
+  if (secondAppend.ok === true) {
+    sentCopyLog("APPEND_RETRY_SUCCESS", firstAppend.failure, 2, startedAt);
+    await closeSentClient(client);
+    return { state: "saved", source: "append" };
+  }
+  await closeSentClient(client);
+
+  opened = await openSentClient(account, password, deps);
+  if (opened.ok === false) {
+    await closeSentClient(opened.client);
+    return { state: "failed", code: opened.code };
+  }
+  ({ client, sentPath } = opened);
+  search = await searchSentBounded(client, sentPath, spool.messageId, sleep);
+  await closeSentClient(client);
+  if (search.state === "found") {
+    sentCopyLog("RECOVERY_SEARCH_FOUND", secondAppend.failure, 2, startedAt);
+    return { state: "saved", source: "append" };
+  }
+  const finalFailure = search.state === "failed" ? search.failure : secondAppend.failure;
+  sentCopyLog("FINAL_SENT_COPY_FAILURE", finalFailure, 2, startedAt);
+  return { state: "failed", code: finalFailure.code };
 }
 
 export async function sendMessageFast(
@@ -292,30 +503,11 @@ export async function sendMessageFast(
   const queue = deps.postSendQueue ?? postSendFinalizers;
   const accountKey = sentCopyAccountKey(account);
   const finalizeSentCopy = async (): Promise<SentCopyOutcome> => {
-    let client: ImapSentClient | null = null;
-    let failureCode = "IMAP_CONNECT_FAILED";
     try {
-      client = deps.createImapSentClient(account, password);
-      const sleep = deps.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
-      await client.connect();
-      failureCode = "IMAP_LIST_FAILED";
-      const mailboxes = await client.list();
-      const sentPath = resolveSentPath(mailboxes);
-      if (!sentPath) return { state: "failed", code: "SENT_FOLDER_NOT_FOUND" };
-      failureCode = "IMAP_SEARCH_FAILED";
-      for (let i = 0; i < SENT_SEARCH_RETRIES; i++) {
-        if (await client.searchMessageId(sentPath, spool.messageId)) {
-          return { state: "saved", source: "provider" };
-        }
-        if (i < SENT_SEARCH_RETRIES - 1) await sleep(SENT_SEARCH_INTERVAL_MS);
-      }
-      failureCode = "IMAP_APPEND_FAILED";
-      await withMimeSpoolReadStream(spool, (raw) => client.append(sentPath, raw, ["\\Seen"]));
-      return { state: "saved", source: "append" };
-    } catch {
-      return { state: "failed", code: failureCode };
+      return await finalizeSentCopySafely(account, password, spool, deps);
+    } catch (error) {
+      return { state: "failed", code: classifyImapFailure(error).code };
     } finally {
-      await client?.logout().catch(() => undefined);
       await spool.cleanup().catch(() => undefined);
     }
   };
