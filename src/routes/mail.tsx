@@ -8578,7 +8578,7 @@ function AttachmentCard({
             <bdi>{formatSize(attachment.size)}</bdi>
           </p>
         </div>
-        <div className="flex shrink-0 items-center gap-0.5 opacity-60 transition-opacity group-hover:opacity-100 sm:gap-1">
+        <div className="flex shrink-0 items-center gap-0.5 opacity-60 transition-opacity sm:opacity-0 sm:group-hover:opacity-100 sm:gap-1">
           {canPreview && (
             <button
               type="button"
