@@ -5490,7 +5490,7 @@ function MessageView({
                   {formatDate(message.date, getCurrentLang())}
                 </span>
               </div>
-              <div className="mt-1 text-xs text-muted-foreground">
+              <div className="mt-1 text-sm text-muted-foreground">
                 <button
                   type="button"
                   onClick={() => setDetailsOpen((v) => !v)}
