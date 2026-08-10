@@ -300,6 +300,7 @@ function ThreadedEmailBody({
   onReady,
   largeCidDispatcherRef,
   afterLatest,
+  renderHistory,
 }: {
   html: string;
   cidImages: CidImageMapping[];
@@ -309,6 +310,11 @@ function ThreadedEmailBody({
   largeCidDispatcherRef?: { current: ((image: LargeCidByteMapping) => void) | null };
   /** Rendered directly under the newest turn (e.g. its own attachments). */
   afterLatest?: React.ReactNode;
+  /**
+   * Replaces the quoted-history block once expanded. Receives the quoted
+   * fallback so the caller can render it when no real thread rows exist.
+   */
+  renderHistory?: (quotedFallback: React.ReactNode) => React.ReactNode;
 }) {
   const { latest, quoted } = useMemo(() => splitQuotedHtml(html), [html]);
   const [expanded, setExpanded] = useState(false);
