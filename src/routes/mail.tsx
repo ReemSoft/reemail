@@ -5456,8 +5456,8 @@ function MessageView({
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
-      <div className="flex-1 overflow-y-auto">
-        <div className="mx-4 w-full max-w-none p-4 sm:mx-6 sm:p-6">
+      <div className="flex-1 min-w-0 overflow-x-hidden overflow-y-auto">
+        <div className="mx-4 p-4 sm:mx-6 sm:p-6">
           <h1 className="break-words text-xl font-bold leading-snug sm:text-2xl">
             {message.subject || tr("(بدون موضوع)")}
           </h1>
@@ -5663,7 +5663,7 @@ function LoadingViewer({ onBack }: { onBack: () => void }) {
         </button>
         <div />
       </div>
-      <div className="mx-4 w-full max-w-none flex-1 p-4 sm:mx-6 sm:p-6">
+      <div className="mx-4 flex-1 p-4 sm:mx-6 sm:p-6">
         <div className="h-7 w-2/3 animate-pulse rounded bg-muted" />
         <div className="mt-5 h-12 w-full animate-pulse rounded bg-muted/70" />
         <MessageBodySkeleton />
