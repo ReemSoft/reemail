@@ -5173,21 +5173,23 @@ function MessageView({
               html={sanitizeEmailHtml(message.body || message.preview || "")}
               onInlineImages={handleInlineImages}
               className="mt-6"
+              afterLatest={
+                message.attachments && message.attachments.length > 0 ? (
+                  <div className="@container mt-4">
+                    <p className="mb-2 text-xs font-semibold text-muted-foreground">
+                      {tr("المرفقات")} ({message.attachments.length})
+                    </p>
+                    <div className="grid grid-cols-1 gap-2 @md:grid-cols-2">
+                      {message.attachments.map((a) => (
+                        <AttachmentCard key={a.id} attachment={a} message={message} />
+                      ))}
+                    </div>
+                  </div>
+                ) : null
+              }
             />
           )}
 
-          {!loading && message.attachments && message.attachments.length > 0 && (
-            <div className="@container mt-6">
-              <p className="mb-2 text-xs font-semibold text-muted-foreground">
-                {tr("المرفقات")} ({message.attachments.length})
-              </p>
-              <div className="grid grid-cols-1 gap-2 @md:grid-cols-2">
-                {message.attachments.map((a) => (
-                  <AttachmentCard key={a.id} attachment={a} message={message} />
-                ))}
-              </div>
-            </div>
-          )}
 
           <div className="mt-6 flex flex-wrap gap-2">
             <button
