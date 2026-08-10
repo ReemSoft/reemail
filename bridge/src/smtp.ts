@@ -2,7 +2,12 @@ import { createTransport } from "nodemailer";
 import type { ImapFlow, ListResponse } from "imapflow";
 import type { Readable } from "node:stream";
 import { makeImapClient, listMailboxes } from "./imap.js";
-import { createMimeSpool, withMimeSpoolReadStream, type MimeSpool } from "./mime-spool.js";
+import {
+  createMimeSpool,
+  readMimeSpoolBuffer,
+  withMimeSpoolReadStream,
+  type MimeSpool,
+} from "./mime-spool.js";
 import {
   postSendFinalizers,
   type PostSendFinalizerQueue,
@@ -201,7 +206,8 @@ export interface ImapSentClient {
   connect(): Promise<void>;
   list(): Promise<ListResponse[]>;
   searchMessageId(folderPath: string, messageId: string): Promise<boolean>;
-  append(folderPath: string, raw: Readable, flags: string[]): Promise<unknown | false>;
+  /** ImapFlow 1.5 accepts `string | Buffer` only — never a Readable. */
+  append(folderPath: string, raw: Buffer, flags: string[]): Promise<unknown | false>;
   logout(): Promise<void>;
 }
 export interface SendMessageDeps {
@@ -248,7 +254,7 @@ function defaultDeps(): SendMessageDeps {
         searchMessageId: (folderPath, messageId) =>
           messageExistsInFolder(client, folderPath, messageId),
         append: async (folderPath, raw, flags) => {
-          const result = await client.append(folderPath, raw as never, flags);
+          const result = await client.append(folderPath, raw, flags);
           if (result === false) {
             const error = new Error("IMAP append client is not usable") as Error & { code: string };
             error.code = "ECONNECTIONCLOSED";
@@ -312,9 +318,10 @@ async function appendSentCopy(
   spool: MimeSpool,
 ): Promise<{ ok: true } | { ok: false; failure: ClassifiedImapFailure }> {
   try {
-    const result = await withMimeSpoolReadStream(spool, (raw) =>
-      client.append(folderPath, raw, ["\\Seen"]),
-    );
+    // Re-read the same spool bytes for every attempt: byte-identical MIME,
+    // no global buffer, no cache. Buffer is required by ImapFlow's contract.
+    const raw = await readMimeSpoolBuffer(spool);
+    const result = await client.append(folderPath, raw, ["\\Seen"]);
     if (result === false) {
       return {
         ok: false,
@@ -604,7 +611,7 @@ export async function sendMessage(
         // No auto-saved copy → APPEND the exact MIME with \Seen.
         if (!sentCopySaved) {
           try {
-            await withMimeSpoolReadStream(spool, (raw) => client.append(sentPath, raw, ["\\Seen"]));
+            await client.append(sentPath, await readMimeSpoolBuffer(spool), ["\\Seen"]);
             sentCopySaved = true;
           } catch (appendErr) {
             const m = appendErr instanceof Error ? appendErr.message : String(appendErr);
