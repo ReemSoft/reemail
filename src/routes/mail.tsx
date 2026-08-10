@@ -5185,6 +5185,7 @@ function MessageView({
   onMarkUnread,
   onRestore,
   onPrint,
+  onComposeFor,
 }: {
   message: MailMessage;
   loading: boolean;
@@ -5200,9 +5201,13 @@ function MessageView({
   onMarkUnread: () => void;
   onRestore: () => void;
   onPrint: () => void;
+  onComposeFor?: (message: MailMessage, mode: ThreadComposeMode) => void;
 }) {
   const { dir: uiDir } = useLanguage();
+  const threadRows = useConversationRows(message.id);
+  const hasThreadRows = !!threadRows?.length;
   const [detailsOpen, setDetailsOpen] = useState(false);
+
   const recipientsAll = [
     ...message.to.map((t) => ({ ...t, kind: "to" as const })),
     ...(message.cc || []).map((c) => ({ ...c, kind: "cc" as const })),
