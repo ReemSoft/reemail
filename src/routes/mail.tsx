@@ -5010,15 +5010,19 @@ function ConversationMessageCard({
 
   return (
     <div
-      className={`overflow-hidden rounded-xl border transition-colors ${
-        open ? "border-border bg-card shadow-sm" : "border-border/70 bg-card/50 hover:bg-muted/40"
+      className={`overflow-hidden rounded-xl border-2 transition-colors ${
+        open
+          ? "border-primary/40 bg-primary/[0.05] shadow-sm"
+          : "border-border bg-card/50 hover:bg-muted/40"
       }`}
     >
       <button
         type="button"
         onClick={toggle}
         aria-expanded={open}
-        className="flex w-full items-start gap-3 px-3 py-2.5 text-start"
+        className={`flex w-full items-start gap-3 px-3 py-2.5 text-start transition-colors ${
+          open ? "bg-primary/[0.03]" : ""
+        }`}
       >
         <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-brand-gradient text-[11px] font-bold text-white">
           {(row.from.name || row.from.email || "?").charAt(0).toUpperCase()}
@@ -5170,9 +5174,10 @@ function ConversationHistory({
   );
   return (
     <div className="mt-6">
-      <div className="mb-2 flex items-center gap-2 text-[11px] font-medium text-muted-foreground">
-        <span className="h-px flex-1 bg-border" />
+      <div className="mb-3 flex items-center gap-3">
+        <span className="whitespace-nowrap text-xs font-semibold text-foreground">
           {trf("الرسائل السابقة ({{count}})", { count: ordered.length })}
+        </span>
         <span className="h-px flex-1 bg-border" />
       </div>
       <div className="flex flex-col gap-2">
