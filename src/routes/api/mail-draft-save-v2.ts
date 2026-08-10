@@ -12,35 +12,49 @@ export const Route = createFileRoute("/api/mail-draft-save-v2")({
           const { resolveBridgeAuth } = await import("@/lib/mail-bridge-auth.server");
           const auth = await resolveBridgeAuth(token);
           if (!auth.ok) return json({ ok: false, error: auth.error }, auth.status);
-          const upstream = await fetch(`${auth.bridgeUrl}/api/draft-save-v2`, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "X-Bridge-Key": auth.bridgeKey,
-            },
-            body: JSON.stringify({
-              account: auth.bridgeAccount,
-              password,
-              draftId: body?.draftId,
-              to: Array.isArray(body?.to) ? body.to : [],
-              cc: Array.isArray(body?.cc) ? body.cc : [],
-              bcc: Array.isArray(body?.bcc) ? body.bcc : [],
-              subject: typeof body?.subject === "string" ? body.subject : "",
-              bodyHtml: typeof body?.bodyHtml === "string" ? body.bodyHtml : undefined,
-              bodyText: typeof body?.bodyText === "string" ? body.bodyText : undefined,
-              previousRef: body?.previousRef,
-              attachmentHandles: Array.isArray(body?.attachmentHandles)
-                ? body.attachmentHandles
-                : [],
-              stagedInlineImages: Array.isArray(body?.stagedInlineImages)
-                ? body.stagedInlineImages
-                : [],
-              sourceAttachments: Array.isArray(body?.sourceAttachments)
-                ? body.sourceAttachments
-                : [],
-            }),
-          });
+          let upstream: Response;
+          try {
+            upstream = await fetch(`${auth.bridgeUrl}/api/draft-save-v2`, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "X-Bridge-Key": auth.bridgeKey,
+              },
+              body: JSON.stringify({
+                account: auth.bridgeAccount,
+                password,
+                draftId: body?.draftId,
+                to: Array.isArray(body?.to) ? body.to : [],
+                cc: Array.isArray(body?.cc) ? body.cc : [],
+                bcc: Array.isArray(body?.bcc) ? body.bcc : [],
+                subject: typeof body?.subject === "string" ? body.subject : "",
+                bodyHtml: typeof body?.bodyHtml === "string" ? body.bodyHtml : undefined,
+                bodyText: typeof body?.bodyText === "string" ? body.bodyText : undefined,
+                previousRef: body?.previousRef,
+                attachmentHandles: Array.isArray(body?.attachmentHandles)
+                  ? body.attachmentHandles
+                  : [],
+                stagedInlineImages: Array.isArray(body?.stagedInlineImages)
+                  ? body.stagedInlineImages
+                  : [],
+                sourceAttachments: Array.isArray(body?.sourceAttachments)
+                  ? body.sourceAttachments
+                  : [],
+              }),
+            });
+          } catch {
+            // Transport failure to the bridge — surface as a soft NETWORK
+            // failure so the composer keeps the local draft instead of
+            // bubbling a 5xx (blank-screen error boundary).
+            return json({ ok: false, error: "NETWORK", code: "NETWORK" }, 200);
+          }
           const result = await upstream.text();
+          const isJson = (upstream.headers.get("content-type") ?? "").includes("application/json");
+          if (!isJson || upstream.status >= 500) {
+            // Gateway/HTML errors (502/503/504 from the reverse proxy) are
+            // transport-class, not protocol-class.
+            return json({ ok: false, error: "NETWORK", code: "NETWORK" }, 200);
+          }
           return new Response(result, {
             status: upstream.status,
             headers: {
@@ -48,6 +62,7 @@ export const Route = createFileRoute("/api/mail-draft-save-v2")({
               "Cache-Control": "private, no-store",
             },
           });
+
         } catch {
           return json({ ok: false, error: "INVALID_PAYLOAD" }, 400);
         }
