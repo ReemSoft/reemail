@@ -5028,26 +5028,26 @@ function ConversationMessageCard({
         <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-brand-gradient text-[11px] font-bold text-white">
           {(row.from.name || row.from.email || "?").charAt(0).toUpperCase()}
         </span>
-          <span className="min-w-0 flex-1">
-            <span className="flex items-center gap-2">
-              <span className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground">
-                {row.from.name || row.from.email}
-              </span>
-              {row.hasAttachments && <Paperclip className="h-3.5 w-3.5 shrink-0 opacity-60" />}
-              <span className="shrink-0 text-xs text-muted-foreground">{shortDate}</span>
-              <ChevronDown
-                className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform ${
-                  open ? "rotate-180" : ""
-                }`}
-              />
+        <span className="min-w-0 flex-1">
+          <span className="flex items-center gap-2">
+            <span className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground">
+              {row.from.name || row.from.email}
             </span>
-            <span className="mt-0.5 block truncate text-xs text-muted-foreground">
-              <span className="text-foreground/60">{tr("إلى")} </span>
-              <span dir="ltr" className="unicode-bidi-isolate">
-                {toPreview || "—"}
-              </span>
+            {row.hasAttachments && <Paperclip className="h-3.5 w-3.5 shrink-0 opacity-60" />}
+            <span className="shrink-0 text-xs text-muted-foreground">{shortDate}</span>
+            <ChevronDown
+              className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform ${
+                open ? "rotate-180" : ""
+              }`}
+            />
+          </span>
+          <span className="mt-0.5 block truncate text-xs text-muted-foreground">
+            <span className="text-foreground/60">{tr("إلى")} </span>
+            <span dir="ltr" className="unicode-bidi-isolate">
+              {toPreview || "—"}
             </span>
           </span>
+        </span>
       </button>
       {open && (
         <div className="border-t border-border px-3 pb-3">
