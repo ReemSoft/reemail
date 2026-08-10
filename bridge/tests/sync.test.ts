@@ -272,7 +272,7 @@ test("syncInitial: empty mailbox returns no messages, releases lock", async () =
   assert.equal(client.lock.released, true);
 });
 
-test("syncInitial: does not request source/headers/bodyParts", async () => {
+test("syncInitial requests only References header and never source/body/bodyParts", async () => {
   const client = makeFakeClient({
     mailbox: { path: "INBOX", exists: 5, uidValidity: 10n, uidNext: 6 },
     messages: [1, 2, 3, 4, 5].map((uid) => fakeFetchMessage({ uid })),
@@ -281,8 +281,10 @@ test("syncInitial: does not request source/headers/bodyParts", async () => {
   assert.equal(client.fetchCalls.length, 1);
   const q = client.fetchCalls[0].query;
   assert.equal(q.source, undefined);
-  assert.equal(q.headers, undefined);
+  assert.equal(q.body, undefined);
   assert.equal(q.bodyParts, undefined);
+  // The ONLY extra header allowed in the sync path (RFC threading).
+  assert.deepEqual(q.headers, ["references"]);
 });
 
 test("syncInitial: mailbox > limit uses last-N sequence range only", async () => {
@@ -340,6 +342,22 @@ test("syncIncremental: bounded window + hasMore correct", async () => {
   assert.equal(r.nextSinceUid, 110);
   assert.equal(r.hasMore, true);
 });
+
+test("syncIncremental requests only References header and never source/body/bodyParts", async () => {
+  const client = makeFakeClient({
+    mailbox: { path: "INBOX", exists: 200, uidValidity: 10n, uidNext: 201 },
+    messages: [11, 12].map((uid) => fakeFetchMessage({ uid })),
+  });
+  const r = await syncIncremental(client, { folderPath: "INBOX", sinceUid: 10, limit: 100 });
+  if (r.resetRequired) throw new Error("unexpected");
+  const q = client.fetchCalls[0].query;
+  assert.equal(q.source, undefined);
+  assert.equal(q.body, undefined);
+  assert.equal(q.bodyParts, undefined);
+  assert.deepEqual(q.headers, ["references"]);
+});
+
+
 
 test("syncIncremental: UID gaps → nextSinceUid is END of window not last returned UID", async () => {
   // Server returned only UIDs 12, 15 within window 11:110 (rest expunged).
