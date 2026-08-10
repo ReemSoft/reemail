@@ -371,7 +371,7 @@ test("SMTP immediate rejection closes raw stream before spool cleanup", async ()
   await new Promise<void>((resolve) => setImmediate(resolve));
 });
 
-test("Sent APPEND immediate rejection closes raw stream and preserves SMTP success", async () => {
+test("Sent APPEND immediate rejection keeps SMTP success and cleans the spool", async () => {
   const { deps, rec } = mkDeps({
     mailboxes: [{ path: "Sent" }],
     searchAttempts: [false, false, false],
@@ -387,7 +387,7 @@ test("Sent APPEND immediate rejection closes raw stream and preserves SMTP succe
   assert.equal(result.ok, true);
   if (!result.ok) return;
   assert.equal(result.sentCopySaved, false);
-  assert.equal(rec.appendRaw?.destroyed, true);
+  assert.equal(Buffer.isBuffer(rec.appendRaw), true);
   await assert.rejects(access(spoolPath), /ENOENT/);
   await new Promise<void>((resolve) => setImmediate(resolve));
 });
