@@ -5595,19 +5595,19 @@ function MessageView({
           <div className="mt-6 flex flex-wrap gap-2">
             <button
               onClick={onReply}
-              className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-4 py-2 text-sm font-medium hover:bg-muted"
+              className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-4 py-2 text-sm font-medium transition hover:bg-muted active:border-transparent active:bg-primary active:text-primary-foreground focus-visible:border-transparent focus-visible:bg-primary focus-visible:text-primary-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
             >
               <Reply className="h-4 w-4" /> {tr("رد")}
             </button>
             <button
               onClick={onReplyAll}
-              className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-4 py-2 text-sm font-medium hover:bg-muted"
+              className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-4 py-2 text-sm font-medium transition hover:bg-muted active:border-transparent active:bg-primary active:text-primary-foreground focus-visible:border-transparent focus-visible:bg-primary focus-visible:text-primary-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
             >
               <ReplyAll className="h-4 w-4" /> {tr("رد على الكل")}
             </button>
             <button
               onClick={onForward}
-              className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-4 py-2 text-sm font-medium hover:bg-muted"
+              className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-4 py-2 text-sm font-medium transition hover:bg-muted active:border-transparent active:bg-primary active:text-primary-foreground focus-visible:border-transparent focus-visible:bg-primary focus-visible:text-primary-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
             >
               <Forward className="h-4 w-4" /> {tr("إعادة توجيه")}
             </button>
