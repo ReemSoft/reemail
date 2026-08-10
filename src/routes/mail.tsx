@@ -614,6 +614,7 @@ function MessageBody({
   className,
   afterLatest,
   renderHistory,
+  suppressQuoted,
 }: {
   message: MailMessage;
   html: string;
@@ -621,6 +622,7 @@ function MessageBody({
   className?: string;
   afterLatest?: React.ReactNode;
   renderHistory?: (quotedFallback: React.ReactNode) => React.ReactNode;
+  suppressQuoted?: boolean;
 }) {
   const bodyIdentity = `${message.id}|${message.uidValidity ?? ""}`;
   const [readyIdentity, setReadyIdentity] = useState("");
@@ -644,7 +646,9 @@ function MessageBody({
       largeCidDispatcherRef={largeCidDispatcherRef}
       afterLatest={afterLatest}
       renderHistory={renderHistory}
+      suppressQuoted={suppressQuoted}
     />
+
   );
 }
 
