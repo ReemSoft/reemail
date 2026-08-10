@@ -702,7 +702,12 @@ test("retryable first APPEND miss retries once on the fresh connection", async (
   assert.ok(recorder.appends.every(({ raw }) => raw.equals(recorder.smtpRaw!)));
   assert.ok(recorder.searches.every(({ messageId }) => messageId === result.messageId));
   assert.equal(recorder.cleanups, 1);
-  assert.equal(recorder.spoolOpens, 3, "SMTP plus two APPEND attempts use fresh streams");
+  assert.equal(
+    recorder.spoolOpens,
+    1,
+    "SMTP streams the spool once; each APPEND re-reads the same spool as a Buffer",
+  );
+
 });
 
 test("second APPEND failure performs final verification and never attempts a third APPEND", async () => {
