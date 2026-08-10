@@ -725,6 +725,7 @@ import {
   FileSpreadsheet,
   FileCode,
   FileType,
+  History,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -4807,7 +4808,7 @@ function MessageRow({
           >
             {message.from.name || message.from.email}
           </span>
-          <span className="shrink-0 text-[11px] text-muted-foreground">
+          <span className="shrink-0 text-xs text-muted-foreground">
             {formatDate(message.date, getCurrentLang())}
           </span>
         </div>
@@ -5029,18 +5030,18 @@ function ConversationMessageCard({
         </span>
         <span className="min-w-0 flex-1">
           <span className="flex items-center gap-2">
-            <span className="min-w-0 flex-1 truncate text-xs font-semibold text-foreground">
+            <span className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground">
               {row.from.name || row.from.email}
             </span>
             {row.hasAttachments && <Paperclip className="h-3.5 w-3.5 shrink-0 opacity-60" />}
-            <span className="shrink-0 text-[11px] text-muted-foreground">{shortDate}</span>
+            <span className="shrink-0 text-xs text-muted-foreground">{shortDate}</span>
             <ChevronDown
               className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform ${
                 open ? "rotate-180" : ""
               }`}
             />
           </span>
-          <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">
+          <span className="mt-0.5 block truncate text-xs text-muted-foreground">
             <span className="text-foreground/60">{tr("إلى")} </span>
             <span dir="ltr" className="unicode-bidi-isolate">
               {toPreview || "—"}
@@ -5174,11 +5175,14 @@ function ConversationHistory({
   );
   return (
     <div className="mt-6">
-      <div className="mb-3 flex items-center gap-3">
-        <span className="whitespace-nowrap text-xs font-semibold text-foreground">
-          {trf("الرسائل السابقة ({{count}})", { count: ordered.length })}
-        </span>
-        <span className="h-px flex-1 bg-border" />
+      <div className="mb-3 flex flex-col gap-3">
+        <span className="h-px w-full bg-border" />
+        <div className="flex items-center gap-2 text-foreground">
+          <History className="h-4 w-4 text-primary" />
+          <span className="whitespace-nowrap text-sm font-semibold">
+            {trf("الرسائل السابقة ({{count}})", { count: ordered.length })}
+          </span>
+        </div>
       </div>
       <div className="flex flex-col gap-2">
         {ordered.map((row) => (
@@ -5192,6 +5196,7 @@ function ConversationHistory({
     </div>
   );
 }
+
 
 
 
@@ -5479,13 +5484,13 @@ function MessageView({
                   )}
                 </div>
                 <span
-                  className="shrink-0 whitespace-nowrap text-xs text-muted-foreground"
+                  className="shrink-0 whitespace-nowrap text-sm text-muted-foreground"
                   title={new Date(message.date).toLocaleString(getCurrentLang())}
                 >
                   {formatDate(message.date, getCurrentLang())}
                 </span>
               </div>
-              <div className="mt-1 text-xs text-muted-foreground">
+              <div className="mt-1 text-sm text-muted-foreground">
                 <button
                   type="button"
                   onClick={() => setDetailsOpen((v) => !v)}
@@ -5505,7 +5510,7 @@ function MessageView({
                 </button>
                 {detailsOpen && (
                   <div className="mt-2 rounded-lg border border-border bg-muted/40 p-3">
-                    <dl className="grid grid-cols-[max-content_1fr] gap-x-2 gap-y-1.5 text-xs">
+                    <dl className="grid grid-cols-[max-content_1fr] gap-x-2 gap-y-1.5 text-sm">
                       <dt className="text-foreground/70 whitespace-nowrap">{tr("المرسل:")}</dt>
                       <dd className="min-w-0 break-all">
                         {message.from.name ? (
