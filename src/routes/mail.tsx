@@ -4842,7 +4842,9 @@ function MessageAttachmentsSection({ message }: { message: MailMessage }) {
  */
 function ConversationMessageCard({ row }: { row: ConversationRow }) {
   const openPrevious = useMailServerFn(openMailMessage);
-  const [open, setOpen] = useState(false);
+  // Expanded by default: the user already asked to see the previous messages,
+  // so each turn shows its body + its own attachments without a second click.
+  const [open, setOpen] = useState(true);
   const [loaded, setLoaded] = useState<MailMessage | null>(null);
   const [state, setState] = useState<"idle" | "loading" | "error">("idle");
 
@@ -4851,74 +4853,79 @@ function ConversationMessageCard({ row }: { row: ConversationRow }) {
     { dateStyle: "medium", timeStyle: "short" },
   );
 
-  async function toggle() {
-    if (open) {
-      setOpen(false);
-      return;
-    }
-    setOpen(true);
-    if (loaded || state === "loading") return;
+  // Cache-first body load, once, only while the card is open.
+  useEffect(() => {
+    if (!open || loaded || state !== "idle") return;
+    let cancelled = false;
     const session = getMailSession();
     if (!session?.mailSessionToken) {
       setState("error");
       return;
     }
     setState("loading");
-    try {
-      const res = await openPrevious({
-        data: {
-          mailSessionToken: session.mailSessionToken,
-          password: session.password,
-          folder: row.folder,
-          uid: row.uid,
-        },
-      });
-      if (!res.ok) {
-        setState("error");
-        return;
-      }
-      const base: MailMessage = {
-        id: `${row.folder}:${row.uid}`,
-        threadId: row.messageId ?? `${row.folder}:${row.uid}`,
+    openPrevious({
+      data: {
+        mailSessionToken: session.mailSessionToken,
+        password: session.password,
         folder: row.folder,
-        from: row.from,
-        to: row.to,
-        cc: row.cc?.length ? row.cc : undefined,
-        subject: row.subject,
-        preview: "",
-        body: "",
-        date: row.date,
-        read: row.seen,
-        starred: row.flagged,
-        hasAttachments: row.hasAttachments,
-      };
-      setLoaded(
-        res.source === "cache"
-          ? {
-              ...base,
-              body: res.body.bodyHtml,
-              preview: res.body.preview,
-              attachments: res.body.attachments,
-              inlineParts: res.body.inlineParts,
-              inlineImages: res.body.inlineImages,
-              uidValidity: res.body.uidValidity,
-            }
-          : { ...base, ...res.message, id: base.id, folder: row.folder },
-      );
-      setState("idle");
-    } catch {
-      setState("error");
-    }
-  }
+        uid: row.uid,
+      },
+    })
+      .then((res) => {
+        if (cancelled) return;
+        if (!res.ok) {
+          setState("error");
+          return;
+        }
+        const base: MailMessage = {
+          id: `${row.folder}:${row.uid}`,
+          threadId: row.messageId ?? `${row.folder}:${row.uid}`,
+          folder: row.folder,
+          from: row.from,
+          to: row.to,
+          cc: row.cc?.length ? row.cc : undefined,
+          subject: row.subject,
+          preview: "",
+          body: "",
+          date: row.date,
+          read: row.seen,
+          starred: row.flagged,
+          hasAttachments: row.hasAttachments,
+        };
+        setLoaded(
+          res.source === "cache"
+            ? {
+                ...base,
+                body: res.body.bodyHtml,
+                preview: res.body.preview,
+                attachments: res.body.attachments,
+                inlineParts: res.body.inlineParts,
+                inlineImages: res.body.inlineImages,
+                uidValidity: res.body.uidValidity,
+              }
+            : { ...base, ...res.message, id: base.id, folder: row.folder },
+        );
+        setState("idle");
+      })
+      .catch(() => {
+        if (!cancelled) setState("error");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, loaded, state, openPrevious, row]);
 
   return (
     <div className="rounded-lg border border-border bg-card/60">
       <button
         type="button"
-        onClick={toggle}
+        onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
         className="flex w-full items-center gap-2 px-3 py-2 text-start text-xs hover:bg-muted/50 rounded-lg"
       >
+        <ChevronDown
+          className={`h-3.5 w-3.5 shrink-0 opacity-60 transition-transform ${open ? "" : "-rotate-90"}`}
+        />
         <span className="min-w-0 flex-1 truncate font-medium text-foreground">
           {row.from.name || row.from.email}
         </span>
