@@ -4926,6 +4926,39 @@ function ThreadRecipients({ message }: { message: MailMessage }) {
 }
 
 /**
+ * Shared reply / reply-all / forward buttons used both inside thread cards
+ * and below the currently opened message. Keeps the exact same style, size
+ * and focus behaviour everywhere.
+ */
+function MessageReplyButtons({
+  onReply,
+  onReplyAll,
+  onForward,
+  className,
+}: {
+  onReply: () => void;
+  onReplyAll: () => void;
+  onForward: () => void;
+  className?: string;
+}) {
+  const btn =
+    "inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1.5 text-xs font-medium transition hover:bg-muted active:border-transparent active:bg-primary active:text-primary-foreground focus-visible:border-transparent focus-visible:bg-primary focus-visible:text-primary-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30";
+  return (
+    <div className={cn("flex flex-wrap gap-2", className)}>
+      <button type="button" onClick={onReply} className={btn}>
+        <Reply className="h-3.5 w-3.5" /> {tr("رد")}
+      </button>
+      <button type="button" onClick={onReplyAll} className={btn}>
+        <ReplyAll className="h-3.5 w-3.5" /> {tr("رد على الكل")}
+      </button>
+      <button type="button" onClick={onForward} className={btn}>
+        <Forward className="h-3.5 w-3.5" /> {tr("إعادة توجيه")}
+      </button>
+    </div>
+  );
+}
+
+/**
  * One previous message of the thread rendered as its own collapsible tab.
  * Collapsed by default: only the local index header row is rendered (zero
  * network). The body + attachments are fetched lazily on click through the
