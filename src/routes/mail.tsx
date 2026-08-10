@@ -4674,6 +4674,23 @@ function MailApp() {
               onPrint={() => {
                 /* handled inside MessageView */
               }}
+              onComposeFor={(msg, mode) => {
+                const next =
+                  mode === "forward"
+                    ? buildForward(msg, deriveAttachmentSourceRef(msg, folderPaths))
+                    : buildReply(
+                        msg,
+                        session.account.email_address,
+                        mode === "replyAll",
+                        deriveAttachmentSourceRef(msg, folderPaths),
+                      );
+                if (!next) {
+                  toast.error(tr("تعذّر تجهيز مرفقات الرسالة"));
+                  return;
+                }
+                setCompose(next);
+              }}
+
             />
           ) : selectedId && reading ? (
             <LoadingViewer
