@@ -5074,19 +5074,19 @@ function ConversationMessageCard({
                 <div className="mt-4 flex flex-wrap gap-2 border-t border-border pt-3">
                   <button
                     onClick={() => onCompose(loaded, "reply")}
-                    className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1.5 text-xs font-medium hover:bg-muted"
+                    className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1.5 text-xs font-medium transition hover:bg-muted active:border-transparent active:bg-primary active:text-primary-foreground focus-visible:border-transparent focus-visible:bg-primary focus-visible:text-primary-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
                   >
                     <Reply className="h-3.5 w-3.5" /> {tr("رد")}
                   </button>
                   <button
                     onClick={() => onCompose(loaded, "replyAll")}
-                    className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1.5 text-xs font-medium hover:bg-muted"
+                    className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1.5 text-xs font-medium transition hover:bg-muted active:border-transparent active:bg-primary active:text-primary-foreground focus-visible:border-transparent focus-visible:bg-primary focus-visible:text-primary-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
                   >
                     <ReplyAll className="h-3.5 w-3.5" /> {tr("رد على الكل")}
                   </button>
                   <button
                     onClick={() => onCompose(loaded, "forward")}
-                    className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1.5 text-xs font-medium hover:bg-muted"
+                    className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1.5 text-xs font-medium transition hover:bg-muted active:border-transparent active:bg-primary active:text-primary-foreground focus-visible:border-transparent focus-visible:bg-primary focus-visible:text-primary-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
                   >
                     <Forward className="h-3.5 w-3.5" /> {tr("إعادة توجيه")}
                   </button>
@@ -5172,9 +5172,7 @@ function ConversationHistory({
     <div className="mt-6">
       <div className="mb-2 flex items-center gap-2 text-[11px] font-medium text-muted-foreground">
         <span className="h-px flex-1 bg-border" />
-        <span>
-          {tr("الرسائل السابقة")} ({ordered.length})
-        </span>
+          {trf("الرسائل السابقة ({{count}})", { count: ordered.length })}
         <span className="h-px flex-1 bg-border" />
       </div>
       <div className="flex flex-col gap-2">
@@ -5597,19 +5595,19 @@ function MessageView({
           <div className="mt-6 flex flex-wrap gap-2">
             <button
               onClick={onReply}
-              className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-4 py-2 text-sm font-medium hover:bg-muted"
+              className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-4 py-2 text-sm font-medium transition hover:bg-muted active:border-transparent active:bg-primary active:text-primary-foreground focus-visible:border-transparent focus-visible:bg-primary focus-visible:text-primary-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
             >
               <Reply className="h-4 w-4" /> {tr("رد")}
             </button>
             <button
               onClick={onReplyAll}
-              className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-4 py-2 text-sm font-medium hover:bg-muted"
+              className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-4 py-2 text-sm font-medium transition hover:bg-muted active:border-transparent active:bg-primary active:text-primary-foreground focus-visible:border-transparent focus-visible:bg-primary focus-visible:text-primary-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
             >
               <ReplyAll className="h-4 w-4" /> {tr("رد على الكل")}
             </button>
             <button
               onClick={onForward}
-              className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-4 py-2 text-sm font-medium hover:bg-muted"
+              className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-4 py-2 text-sm font-medium transition hover:bg-muted active:border-transparent active:bg-primary active:text-primary-foreground focus-visible:border-transparent focus-visible:bg-primary focus-visible:text-primary-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
             >
               <Forward className="h-4 w-4" /> {tr("إعادة توجيه")}
             </button>
