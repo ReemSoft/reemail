@@ -19,7 +19,7 @@ export interface SyncMessagePayload {
   modseq: string | null;
   messageId: string | null;
   inReplyTo: string | null;
-  references: string[];
+  references?: string[];
   subject: string;
   from: SyncAddress | null;
   to: SyncAddress[];
@@ -105,7 +105,7 @@ export function mapSyncMessageToRow(
     modseq: m.modseq == null ? null : Number(m.modseq),
     message_id: m.messageId,
     in_reply_to: m.inReplyTo,
-    references_ids: m.references,
+    references_ids: m.references ?? [],
     subject: m.subject && m.subject.length ? m.subject : null,
     from_addr: m.from,
     to_addrs: m.to,
