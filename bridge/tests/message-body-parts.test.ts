@@ -124,6 +124,30 @@ test("inline image parts remain discoverable with their cid + part number", () =
   assert.equal(logo!.size, 12_000);
 });
 
+test("BODYSTRUCTURE attachment filenames are normalized without changing valid Arabic", () => {
+  const validArabic = "\u062a\u0642\u0631\u064a\u0631.pdf";
+  const mojibake = Buffer.from(validArabic, "utf8").toString("latin1");
+  const parts = collectAttachmentParts({
+    type: "multipart/mixed",
+    childNodes: [
+      {
+        type: "application/pdf",
+        part: "1",
+        disposition: "attachment",
+        dispositionParameters: { filename: mojibake },
+      },
+      {
+        type: "application/pdf",
+        part: "2",
+        disposition: "attachment",
+        dispositionParameters: { filename: validArabic },
+      },
+    ],
+  });
+  assert.equal(parts[0]?.filename, validArabic);
+  assert.equal(parts[1]?.filename, validArabic);
+});
+
 test("connection stats expose bounded config only (no host/account identifiers)", async () => {
   const s = imapConnectionStats();
 

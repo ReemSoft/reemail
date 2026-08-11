@@ -34,6 +34,30 @@ test("maps only matching uploads to CID inline attachments", async () => {
   assert.equal(mapped[1].contentDisposition, "inline");
 });
 
+test("normalizes outgoing metadata after inline identity matching without touching bytes", async () => {
+  const original = "\u062a\u0642\u0631\u064a\u0631.pdf";
+  const mojibake = Buffer.from(original, "utf8").toString("latin1");
+  let prefixReads = 0;
+  const mapped = await mapUploadedAttachments(
+    [
+      { originalname: mojibake, path: "/tmp/report-bytes", mimetype: "application/pdf", size: 4 },
+      { originalname: filename, path: "/tmp/image-bytes", mimetype: "image/png", size: 20 },
+    ],
+    [{ uploadFilename: filename, cid, contentType: "image/png" }],
+    async (path) => {
+      prefixReads += 1;
+      assert.equal(path, "/tmp/image-bytes");
+      return Buffer.from("89504e470d0a1a0a", "hex");
+    },
+  );
+  assert.equal(mapped[0]?.filename, original);
+  assert.equal(mapped[0]?.path, "/tmp/report-bytes");
+  assert.equal(mapped[1]?.filename, filename);
+  assert.equal(mapped[1]?.path, "/tmp/image-bytes");
+  assert.equal(mapped[1]?.cid, cid);
+  assert.equal(prefixReads, 1);
+});
+
 test("rejects unsupported MIME, malformed CID, mismatches and duplicate metadata", async () => {
   const file = [
     { originalname: filename, path: "/tmp/image", mimetype: "image/svg+xml", size: 20 },

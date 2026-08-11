@@ -2,6 +2,7 @@ import { ImapFlow, type ListResponse, type SearchObject } from "imapflow";
 import { simpleParser, type AddressObject, type ParsedMail } from "mailparser";
 import type { Readable } from "node:stream";
 import type { MailAccount, MailFolder, FolderCount, MailMessage, MailAttachment } from "./types.js";
+import { normalizeAttachmentFilename } from "./attachment-filename.js";
 import {
   getMailboxesCached,
   withAccountMailbox,
@@ -918,10 +919,12 @@ export async function downloadAttachment(
     dl.content.once("error", () => {
       cleanup().catch(() => {});
     });
+    const rawFilename = (dl.meta as any)?.filename;
     return {
       meta: {
         contentType: (dl.meta as any)?.contentType,
-        filename: (dl.meta as any)?.filename,
+        filename:
+          typeof rawFilename === "string" ? normalizeAttachmentFilename(rawFilename) : undefined,
         disposition: (dl.meta as any)?.disposition,
         expectedSize: (dl.meta as any)?.expectedSize,
       },
@@ -1014,7 +1017,7 @@ export function collectAttachmentParts(
       acc.push({
         id: structure.part,
         part: structure.part,
-        filename: filename || `attachment_${acc.length + 1}`,
+        filename: filename ? normalizeAttachmentFilename(filename) : `attachment_${acc.length + 1}`,
         size: typeof structure.size === "number" ? structure.size : 0,
         mimeType: mime || "application/octet-stream",
         disposition: disp,
@@ -1049,7 +1052,7 @@ export function parsedMailToMessage(parsed: ParsedMail, folder: MailFolder): Mai
   const hasAttachments = parsed.attachments && parsed.attachments.length > 0;
   const attachments = (parsed.attachments || []).map((a, i) => ({
     id: a.checksum || `att_${i}`,
-    filename: a.filename || `attachment_${i}`,
+    filename: a.filename ? normalizeAttachmentFilename(a.filename) : `attachment_${i}`,
     size: a.size,
     mimeType: a.contentType,
   }));

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { open } from "node:fs/promises";
 import type { SendAttachment } from "./smtp.js";
+import { normalizeAttachmentFilename } from "./attachment-filename.js";
 
 export const INLINE_IMAGE_MIME_TYPES = [
   "image/png",
@@ -77,7 +78,11 @@ export async function mapUploadedAttachments(
     files.map(async (file): Promise<SendAttachment> => {
       const inline = byName.get(file.originalname);
       if (!inline)
-        return { filename: file.originalname, path: file.path, contentType: file.mimetype };
+        return {
+          filename: normalizeAttachmentFilename(file.originalname),
+          path: file.path,
+          contentType: file.mimetype,
+        };
       if (
         file.size > INLINE_IMAGE_MAX_BYTES ||
         file.mimetype !== inline.contentType ||
@@ -87,7 +92,7 @@ export async function mapUploadedAttachments(
         throw new Error("INVALID_INLINE_IMAGE");
       matched.add(file.originalname);
       return {
-        filename: file.originalname,
+        filename: normalizeAttachmentFilename(file.originalname),
         path: file.path,
         contentType: file.mimetype,
         cid: inline.cid,
