@@ -21,6 +21,7 @@ function message(uid: number, date = uid): MailMessage {
 }
 
 const routeSource = readFileSync(new URL("../../routes/mail.tsx", import.meta.url), "utf8");
+const indexSource = readFileSync(new URL("../mail-index.functions.ts", import.meta.url), "utf8");
 const bridgeSource = readFileSync(new URL("../../../bridge/src/imap.ts", import.meta.url), "utf8");
 const bridgeIndexSource = readFileSync(
   new URL("../../../bridge/src/index.ts", import.meta.url),
@@ -30,6 +31,25 @@ const serverFunctionSource = readFileSync(
   new URL("../mail-bridge.functions.ts", import.meta.url),
   "utf8",
 );
+
+function canTriggerEndReached(input: {
+  loadedScope: string | null;
+  currentScope: string;
+  loading: boolean;
+  loadingMore: boolean;
+  hasMore: boolean;
+  query?: string;
+  deepSearch?: boolean;
+}): boolean {
+  return (
+    input.loadedScope === input.currentScope &&
+    !input.loading &&
+    input.hasMore &&
+    !input.loadingMore &&
+    !input.query?.trim() &&
+    !input.deepSearch
+  );
+}
 
 describe("sender-folder Local Index to IMAP handoff", () => {
   it("keeps all 135 indexed rows reachable as 50 + 50 + 35 without dedupe loss", () => {
@@ -96,8 +116,8 @@ describe("sender-history orchestration safety", () => {
     expect(routeSource).toContain("setSenderHistoryLoadingScope(scopeKey)");
     expect(routeSource).toContain("current === scopeKey ? null : current");
     expect(routeSource).toContain("senderHistoryLoadingScope === senderScopeKey");
-    expect(routeSource).toContain("if (!historicalScope) setLoadingMore(true)");
-    expect(routeSource).toContain("if (!historicalScope) setLoadingMore(false)");
+    expect(routeSource).toContain("if (!historicalScope) setLoadingMoreScope(requestScope)");
+    expect(routeSource).toContain("current === requestScope ? null : current");
   });
 
   it("preserves the cursor and retryability after a failed historical page", () => {
@@ -145,5 +165,88 @@ describe("sender-history orchestration safety", () => {
     expect(serverFunctionSource).toContain('"/api/sender-messages"');
     expect(serverFunctionSource).toContain("resolveBridgeAuth(mailSessionToken)");
     expect(bridgeSource.match(/export async function getSenderMessagesPage\(/g)).toHaveLength(1);
+  });
+});
+
+describe("current-scope load-more permission", () => {
+  const ready = {
+    loadedScope: "account-b|inbox|",
+    currentScope: "account-b|inbox|",
+    loading: false,
+    loadingMore: false,
+    hasMore: true,
+  };
+
+  it("keeps a short initial Local Index list exhausted without loadMore", () => {
+    expect(indexSource).toContain("const hasMore = rows.length > limit");
+    expect(canTriggerEndReached({ ...ready, hasMore: false })).toBe(false);
+  });
+
+  it("blocks endReached while the primary list is loading", () => {
+    expect(canTriggerEndReached({ ...ready, loading: true })).toBe(false);
+  });
+
+  it("blocks endReached until the current scope has completed its primary load", () => {
+    expect(canTriggerEndReached({ ...ready, loadedScope: null })).toBe(false);
+  });
+
+  it("does not inherit account A pagination permission after switching to account B", () => {
+    expect(canTriggerEndReached({ ...ready, loadedScope: "account-a|inbox|", hasMore: true })).toBe(
+      false,
+    );
+    expect(
+      canTriggerEndReached({
+        ...ready,
+        loadedScope: "account-b|inbox|",
+        currentScope: "account-a|inbox|",
+        hasMore: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("does not inherit folder pagination permission after a folder switch", () => {
+    expect(canTriggerEndReached({ ...ready, loadedScope: "account-b|sent|", hasMore: true })).toBe(
+      false,
+    );
+  });
+
+  it("does not inherit Inbox pagination permission in a sender-folder scope", () => {
+    expect(
+      canTriggerEndReached({
+        ...ready,
+        currentScope: "account-b|inbox|sender@example.com",
+        hasMore: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("preserves valid same-scope normal Inbox pagination", () => {
+    expect(canTriggerEndReached(ready)).toBe(true);
+    expect(routeSource).toContain("canonical: folder");
+    expect(routeSource).toContain("const offset = messages.length");
+  });
+
+  it("prevents duplicate current-scope pagination", () => {
+    expect(canTriggerEndReached({ ...ready, loadingMore: true })).toBe(false);
+  });
+
+  it("wires the same complete guard into Virtuoso and preserves sender-history spinner", () => {
+    const endReached = routeSource.slice(
+      routeSource.indexOf("endReached={() =>"),
+      routeSource.indexOf("itemContent=", routeSource.indexOf("endReached={() =>")),
+    );
+    expect(endReached).toContain("listPaginationReady");
+    expect(endReached).toContain("!loading");
+    expect(endReached).toContain("hasMore");
+    expect(endReached).toContain("!loadingMore");
+    expect(routeSource).toContain("senderHistoryLoadingScope === senderScopeKey");
+  });
+
+  it("guards stale loadMore results from merging or changing hasMore", () => {
+    expect(routeSource).toContain("const isCurrentPagination = () =>");
+    expect(
+      routeSource.match(/if \(!isCurrentPagination\(\)\) return;/g)?.length,
+    ).toBeGreaterThanOrEqual(3);
+    expect(routeSource).toContain("loadedListScopeRef.current !== requestScope");
   });
 });

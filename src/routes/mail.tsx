@@ -1389,6 +1389,10 @@ function useMailData(session: MailSession | null) {
   // list shows only messages from this address; `folder` stays "inbox" so
   // every existing mutation/sync path keeps working unchanged.
   const [senderView, setSenderView] = useState<string | null>(null);
+  const listScopeKey = `${session?.account.id ?? ""}|${folder}|${senderView?.trim().toLowerCase() ?? ""}`;
+  const listScopeKeyRef = useRef(listScopeKey);
+  listScopeKeyRef.current = listScopeKey;
+  const loadedListScopeRef = useRef<string | null>(null);
   // Scope all server-search progress to this account + normalized sender.
   const senderScopeKey =
     session && senderView ? `${session.account.id}|${senderView.trim().toLowerCase()}` : null;
@@ -1466,7 +1470,8 @@ function useMailData(session: MailSession | null) {
   const [folderPaths, setFolderPaths] = useState<Partial<Record<MailFolder, string>>>({});
   const [messages, setMessages] = useState<MailMessage[]>([]);
   const [loading, setLoading] = useState(false);
-  const [loadingMore, setLoadingMore] = useState(false);
+  const [loadingMoreScope, setLoadingMoreScope] = useState<string | null>(null);
+  const loadingMore = loadingMoreScope === listScopeKey;
   const [senderHistoryLoadingScope, setSenderHistoryLoadingScope] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(false);
   const [bridgeError, setBridgeError] = useState<string | null>(null);
@@ -1798,7 +1803,7 @@ function useMailData(session: MailSession | null) {
   );
 
   const loadFromBridge = useCallback(
-    async (reqId: number) => {
+    async (reqId: number, requestScope: string) => {
       if (!session) return;
       const bridgeStartedAt = Date.now();
       try {
@@ -1812,7 +1817,7 @@ function useMailData(session: MailSession | null) {
             sort,
           },
         });
-        if (loadReqIdRef.current !== reqId) return;
+        if (loadReqIdRef.current !== reqId || listScopeKeyRef.current !== requestScope) return;
         if (!result.ok) throw new Error(result.error);
         // BLOCKER_3: reconcile BEFORE applying overlay so the raw list
         // drives presence checks.
@@ -1827,6 +1832,7 @@ function useMailData(session: MailSession | null) {
           );
         }
 
+        loadedListScopeRef.current = requestScope;
         setMessages(applyPending(result.messages));
         setHasMore(result.messages.length >= PAGE);
         setBridgeError(null);
@@ -1834,7 +1840,7 @@ function useMailData(session: MailSession | null) {
         setSource("bridge");
         setIndexCursor(null);
       } catch (err: unknown) {
-        if (loadReqIdRef.current !== reqId) return;
+        if (loadReqIdRef.current !== reqId || listScopeKeyRef.current !== requestScope) return;
         setBridgeError(errorMessage(err, tr("تعذّر الاتصال بخادم البريد")));
         setHasMore(false);
         setUseMock(false);
@@ -1846,7 +1852,10 @@ function useMailData(session: MailSession | null) {
 
   const loadMessages = useCallback(async () => {
     if (!session) return;
+    const requestScope = listScopeKey;
     const reqId = ++loadReqIdRef.current;
+    const isCurrentRequest = () =>
+      loadReqIdRef.current === reqId && listScopeKeyRef.current === requestScope;
     // Timestamp captured BEFORE the request is issued. After the load
     // succeeds we drop every "confirmed" hide whose confirmedAt <= this
     // value: any mutation that confirmed before this load started is
@@ -1864,8 +1873,9 @@ function useMailData(session: MailSession | null) {
               limit: PAGE,
             },
           });
-          if (loadReqIdRef.current !== reqId) return;
+          if (!isCurrentRequest()) return;
           if (res.ok) {
+            loadedListScopeRef.current = requestScope;
             setMessages(applyPending(res.messages));
             // Local Index can hold only a synced Inbox slice. Keep historical
             // pagination available, but do no Bridge work until explicit
@@ -1890,7 +1900,7 @@ function useMailData(session: MailSession | null) {
           setSenderCursor(null);
           return;
         } catch {
-          if (loadReqIdRef.current !== reqId) return;
+          if (!isCurrentRequest()) return;
           setMessages([]);
           setHasMore(false);
           setSenderCursor(null);
@@ -1906,8 +1916,9 @@ function useMailData(session: MailSession | null) {
               limit: PAGE,
             },
           });
-          if (loadReqIdRef.current !== reqId) return;
+          if (!isCurrentRequest()) return;
           if (res.ok && res.indexed) {
+            loadedListScopeRef.current = requestScope;
             reconcilePendingMovesForRead(res.messages, folder, startedAt);
             const promoteKind = originKindForRestore(folder);
             if (promoteKind) {
@@ -1937,12 +1948,12 @@ function useMailData(session: MailSession | null) {
           setIndexReady((prev) => (prev[folder] === false ? prev : { ...prev, [folder]: false }));
         }
       }
-      await loadFromBridge(reqId);
-      if (loadReqIdRef.current === reqId) {
+      await loadFromBridge(reqId, requestScope);
+      if (isCurrentRequest()) {
         gcHiddenBefore(pendingHiddenRef.current, startedAt);
       }
     } finally {
-      if (loadReqIdRef.current === reqId) setLoading(false);
+      if (isCurrentRequest()) setLoading(false);
     }
   }, [
     session,
@@ -1954,22 +1965,33 @@ function useMailData(session: MailSession | null) {
     applyPending,
     senderView,
     listSender,
+    listScopeKey,
   ]);
 
   const loadMore = useCallback(async () => {
+    const requestScope = listScopeKey;
+    const requestGeneration = loadReqIdRef.current;
+    const isCurrentPagination = () =>
+      loadReqIdRef.current === requestGeneration && listScopeKeyRef.current === requestScope;
     const historicalScope =
       session && senderView && !senderCursor
         ? `${session.account.id}|${senderView.trim().toLowerCase()}`
         : null;
-    if (!session || loading || !hasMore || (!historicalScope && loadingMore)) return;
-    if (!historicalScope) setLoadingMore(true);
+    if (
+      !session ||
+      loadedListScopeRef.current !== requestScope ||
+      loading ||
+      !hasMore ||
+      (!historicalScope && loadingMore)
+    )
+      return;
+    if (!historicalScope) setLoadingMoreScope(requestScope);
     try {
       if (senderView) {
         if (!senderCursor) {
           // Index exhausted: one bounded sender-only page, only after the user
           // explicitly requests more. This never runs when the folder opens.
           const scopeKey = historicalScope!;
-          const requestGeneration = loadReqIdRef.current;
           let history = senderHistoryRef.current;
           if (!history || history.scopeKey !== scopeKey) {
             history = { scopeKey, cursor: null, exhausted: false };
@@ -2026,6 +2048,7 @@ function useMailData(session: MailSession | null) {
             cursor: senderCursor,
           },
         });
+        if (!isCurrentPagination()) return;
         if (res.ok) {
           const patched = applyPending(res.messages);
           setMessages((prev) => {
@@ -2051,6 +2074,7 @@ function useMailData(session: MailSession | null) {
             cursor: indexCursor,
           },
         });
+        if (!isCurrentPagination()) return;
         if (res.ok && res.indexed) {
           const patched = applyPending(res.messages);
           setMessages((prev) => {
@@ -2079,6 +2103,7 @@ function useMailData(session: MailSession | null) {
           sort,
         },
       });
+      if (!isCurrentPagination()) return;
       if (!result.ok) throw new Error(result.error);
       const patched = applyPending(result.messages);
       setMessages((prev) => {
@@ -2089,9 +2114,11 @@ function useMailData(session: MailSession | null) {
       });
       setHasMore(result.messages.length >= PAGE);
     } catch {
-      setHasMore(false);
+      if (isCurrentPagination()) setHasMore(false);
     } finally {
-      if (!historicalScope) setLoadingMore(false);
+      if (!historicalScope) {
+        setLoadingMoreScope((current) => (current === requestScope ? null : current));
+      }
     }
   }, [
     session,
@@ -2111,6 +2138,7 @@ function useMailData(session: MailSession | null) {
     listSender,
     getSenderHistoryPage,
     applyPending,
+    listScopeKey,
   ]);
 
   // Counts on mount: Local-Index first (one Supabase SELECT, ~ms) instead of
@@ -2308,6 +2336,7 @@ function useMailData(session: MailSession | null) {
     setMessages,
     loading,
     loadingMore: loadingMore || senderHistoryLoadingScope === senderScopeKey,
+    listPaginationReady: loadedListScopeRef.current === listScopeKey,
     hasMore,
     loadMore,
     bridgeError,
@@ -2488,6 +2517,7 @@ function MailApp() {
     setMessages,
     loading,
     loadingMore,
+    listPaginationReady,
     hasMore,
     loadMore,
     bridgeError,
@@ -4869,7 +4899,15 @@ function MailApp() {
                 increaseViewportBy={{ top: 400, bottom: 800 }}
                 computeItemKey={(_, m) => m.id}
                 endReached={() => {
-                  if (!query.trim() && !inDeepSearch) void loadMore();
+                  if (
+                    listPaginationReady &&
+                    !loading &&
+                    hasMore &&
+                    !loadingMore &&
+                    !query.trim() &&
+                    !inDeepSearch
+                  )
+                    void loadMore();
                 }}
                 itemContent={(_, m) => (
                   <MessageRow
