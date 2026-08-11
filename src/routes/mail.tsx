@@ -5048,7 +5048,30 @@ function MessageRow({
               {l}
             </span>
           ))}
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onSenderFolder(e);
+            }}
+            className="ms-auto rounded p-0.5 text-muted-foreground opacity-70 transition hover:bg-muted hover:text-foreground hover:opacity-100"
+            title={
+              senderFolderColorKey
+                ? tr("إدارة المجلد الخاص بهذا المرسل")
+                : tr("إنشاء مجلد خاص لهذا المرسل")
+            }
+          >
+            {senderFolderColorKey ? (
+              <FolderIcon
+                className="h-3.5 w-3.5"
+                style={{ color: senderFolderColor(senderFolderColorKey).hex }}
+              />
+            ) : (
+              <FolderPlus className="h-3.5 w-3.5" />
+            )}
+          </button>
         </div>
+
       </div>
     </div>
   );
