@@ -1773,6 +1773,40 @@ function useMailData(session: MailSession | null) {
     const startedAt = Date.now();
     setLoading(true);
     try {
+      // Sender Folder view — single indexed read over the Inbox index rows.
+      if (senderView) {
+        try {
+          const res = await listSender({
+            data: {
+              mailSessionToken: session.mailSessionToken!,
+              email: senderView,
+              limit: PAGE,
+            },
+          });
+          if (loadReqIdRef.current !== reqId) return;
+          if (res.ok) {
+            setMessages(applyPending(res.messages));
+            setHasMore(res.hasMore);
+            setSenderCursor(res.nextCursor);
+            setIndexCursor(null);
+            setSource("index");
+            setUseMock(false);
+            setBridgeError(null);
+            gcHiddenBefore(pendingHiddenRef.current, startedAt);
+            return;
+          }
+          setMessages([]);
+          setHasMore(false);
+          setSenderCursor(null);
+          return;
+        } catch {
+          if (loadReqIdRef.current !== reqId) return;
+          setMessages([]);
+          setHasMore(false);
+          setSenderCursor(null);
+          return;
+        }
+      }
       if (canUseIndex(folder, sort)) {
         try {
           const res = await listIndex({
