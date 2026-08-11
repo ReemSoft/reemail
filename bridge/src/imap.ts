@@ -1043,16 +1043,15 @@ export function collectAttachmentParts(
   const filename =
     structure.dispositionParameters?.filename || structure.parameters?.name || undefined;
   const disp = structure.disposition ? String(structure.disposition).toLowerCase() : undefined;
+  const isAttachmentBranch =
+    disp === "attachment" ||
+    (disp === "inline" && !!filename) ||
+    // Fallback: a named branch without an explicit disposition is an
+    // attached entity, not an ordinary structural multipart container.
+    (!disp && !!filename);
 
   if (!isMultipart && structure.part) {
-    const isAttachment =
-      disp === "attachment" ||
-      (disp === "inline" && !!filename) ||
-      // Fallback: leaf part with a filename but no explicit disposition
-      // (common for .zip / application/octet-stream from some clients).
-      (!disp && !!filename);
-
-    if (isAttachment) {
+    if (isAttachmentBranch) {
       acc.push({
         id: structure.part,
         part: structure.part,
@@ -1064,6 +1063,15 @@ export function collectAttachmentParts(
       });
     }
   }
+
+  // An encapsulated message is a separate physical MIME message. Its node can
+  // be one outer attachment (for example original.eml), but its descendants
+  // belong to that attached message. Likewise, an attachment-like multipart
+  // is one attached entity whose children must not donate files to the outer
+  // message. Multipart containers are not exposed because their part number
+  // is not a proven standalone attachment download representation.
+  if (mime === "message/rfc822" || isAttachmentBranch) return acc;
+
   if (Array.isArray(structure.childNodes)) {
     for (const c of structure.childNodes) collectAttachmentParts(c, acc);
   } else if (structure.childNodes) {
