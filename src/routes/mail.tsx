@@ -1962,6 +1962,9 @@ function useMailData(session: MailSession | null) {
     source,
     indexCursor,
     canUseIndex,
+    senderView,
+    senderCursor,
+    listSender,
   ]);
 
   // Counts on mount: Local-Index first (one Supabase SELECT, ~ms) instead of
