@@ -1382,6 +1382,54 @@ function useMailData(session: MailSession | null) {
   // every existing mutation/sync path keeps working unchanged.
   const [senderView, setSenderView] = useState<string | null>(null);
   const [senderCursor, setSenderCursor] = useState<string | null>(null);
+  // Folder definitions: one tiny SELECT per session, never polled.
+  const [senderFolders, setSenderFolders] = useState<SenderFolder[]>([]);
+  const loadSenderFoldersFn = useMailServerFn(listSenderFolders);
+  const saveSenderFolderFn = useMailServerFn(saveSenderFolder);
+  const deleteSenderFolderFn = useMailServerFn(deleteSenderFolder);
+  const mailToken = session?.mailSessionToken ?? null;
+  useEffect(() => {
+    if (!mailToken) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await loadSenderFoldersFn({ data: { mailSessionToken: mailToken } });
+        if (!cancelled && res.ok) setSenderFolders(res.folders);
+      } catch {
+        /* non-fatal: sender folders are an additive convenience */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [mailToken, loadSenderFoldersFn]);
+
+  const upsertSenderFolder = useCallback(
+    async (draft: { email: string; name: string; color: string }) => {
+      if (!mailToken) return false;
+      const res = await saveSenderFolderFn({ data: { mailSessionToken: mailToken, ...draft } });
+      if (!res.ok) return false;
+      const saved = res.folders[0]!;
+      setSenderFolders((prev) => {
+        const rest = prev.filter((f) => f.email !== saved.email);
+        return [...rest, saved];
+      });
+      return true;
+    },
+    [mailToken, saveSenderFolderFn],
+  );
+
+  const removeSenderFolder = useCallback(
+    async (email: string) => {
+      if (!mailToken) return false;
+      const res = await deleteSenderFolderFn({ data: { mailSessionToken: mailToken, email } });
+      if (!res.ok) return false;
+      setSenderFolders((prev) => prev.filter((f) => f.email !== email));
+      setSenderView((cur) => (cur === email ? null : cur));
+      return true;
+    },
+    [mailToken, deleteSenderFolderFn],
+  );
   const [sort, setSort] = useState<SortOption>("date-desc");
   const [counts, setCounts] = useState<
     Record<MailFolder, { total: number; unread: number; supported: boolean }>
