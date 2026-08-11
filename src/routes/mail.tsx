@@ -1854,12 +1854,50 @@ function useMailData(session: MailSession | null) {
     } finally {
       if (loadReqIdRef.current === reqId) setLoading(false);
     }
-  }, [session, folder, sort, canUseIndex, listIndex, loadFromBridge, applyPending]);
+  }, [
+    session,
+    folder,
+    sort,
+    canUseIndex,
+    listIndex,
+    loadFromBridge,
+    applyPending,
+    senderView,
+    listSender,
+  ]);
 
   const loadMore = useCallback(async () => {
     if (!session || loadingMore || loading || !hasMore) return;
     setLoadingMore(true);
     try {
+      if (senderView) {
+        if (!senderCursor) {
+          setHasMore(false);
+          return;
+        }
+        const res = await listSender({
+          data: {
+            mailSessionToken: session.mailSessionToken!,
+            email: senderView,
+            limit: PAGE,
+            cursor: senderCursor,
+          },
+        });
+        if (res.ok) {
+          const patched = applyPending(res.messages);
+          setMessages((prev) => {
+            const seen = new Set(prev.map((m) => m.id));
+            const merged = [...prev];
+            for (const m of patched) if (!seen.has(m.id)) merged.push(m);
+            return merged;
+          });
+          setHasMore(res.hasMore);
+          setSenderCursor(res.nextCursor);
+          return;
+        }
+        setHasMore(false);
+        return;
+      }
       if (source === "index" && indexCursor && canUseIndex(folder, sort)) {
         const res = await listIndex({
           data: {
