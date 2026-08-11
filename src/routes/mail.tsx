@@ -809,6 +809,15 @@ import { mailPerf } from "@/lib/mail-performance";
 import { deleteSavedDraft, shouldShowDeleteDraft } from "@/lib/mail-composer-delete-draft";
 import { tombstoneGhostMessage } from "@/lib/mail-ghost-cleanup.functions";
 import { indexListMessages } from "@/lib/mail-index.functions";
+import {
+  listSenderFolders,
+  listSenderMessages,
+  saveSenderFolder,
+  deleteSenderFolder,
+  type SenderFolder,
+} from "@/lib/mail-sender-folders.functions";
+import { SenderFolderDialog } from "@/components/sender-folder-dialog";
+import { senderFolderColor } from "@/lib/mail-sender-folder-colors";
 import { indexListFolderCounts } from "@/lib/mail-index-counts.functions";
 import { indexUpdateFlag } from "@/lib/mail-flags.functions";
 import { indexMoveMessage } from "@/lib/mail-move.functions";
