@@ -1382,6 +1382,7 @@ function useMailData(session: MailSession | null) {
   // Senders whose one-time Bridge sweep already ran in this session.
   const senderDeepRef = useRef<Set<string>>(new Set());
 
+
   const [folder, setFolder] = useState<MailFolder>("inbox");
   // Sender Folders — virtual filter view over the Inbox index. When set, the
   // list shows only messages from this address; `folder` stays "inbox" so
