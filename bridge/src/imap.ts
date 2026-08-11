@@ -34,6 +34,14 @@ const INLINE_IMAGE_TOTAL_BYTES = envInt("INLINE_IMAGE_TOTAL_BYTES", 1024 * 1024)
 const INLINE_IMAGE_MAX_COUNT = envInt("INLINE_IMAGE_MAX_COUNT", 20);
 const INLINE_IMAGE_STREAM_MAX_BYTES = 5 * 1024 * 1024;
 export const MESSAGE_BODY_MAX_BYTES = 5 * 1024 * 1024;
+const MESSAGE_ENTIRE_BODY_HARD_MAX_BYTES = 25 * 1024 * 1024;
+export const MESSAGE_ENTIRE_BODY_MAX_BYTES = Math.max(
+  MESSAGE_BODY_MAX_BYTES,
+  Math.min(
+    envInt("MESSAGE_ENTIRE_BODY_MAX_BYTES", 16 * 1024 * 1024),
+    MESSAGE_ENTIRE_BODY_HARD_MAX_BYTES,
+  ),
+);
 const INLINE_IMAGE_SAFE_MIME = /^image\/(?:png|jpe?g|gif|webp)$/i;
 
 /**
@@ -58,6 +66,15 @@ export function isDownloadedBodyTruncated(input: {
     return provenCompleteBytes > loadedBytes;
   }
   return loadedBytes >= maxBytes;
+}
+
+export class MessageBodyTooLargeError extends Error {
+  readonly code = "MESSAGE_BODY_TOO_LARGE";
+
+  constructor() {
+    super("MESSAGE_BODY_TOO_LARGE");
+    this.name = "MessageBodyTooLargeError";
+  }
 }
 
 const WELL_KNOWN_FOLDERS: Record<MailFolder, string[]> = {
@@ -847,6 +864,102 @@ export async function getMessageBody(
   if (TIMING_ENABLED)
     console.log(`[imap-timing] lane=${lane} message-open ${Date.now() - tOpen}ms`);
   return result;
+}
+
+export interface EntireMessageBody {
+  body: string;
+  bodyTruncated: false;
+  inlineParts: NonNullable<MailMessage["inlineParts"]>;
+  uidValidity: string;
+}
+
+/**
+ * Explicit, user-triggered large-body read. This deliberately re-downloads
+ * the selected MIME part from byte zero: appending to the initial decoded
+ * prefix would be unsafe across transfer-encoding and charset boundaries.
+ */
+export async function downloadEntireBodyInMailbox(
+  client: ImapFlow,
+  account: MailAccount,
+  uid: number,
+  folder: MailFolder,
+): Promise<EntireMessageBody | null> {
+  const msg = await client.fetchOne(
+    uid.toString(),
+    { uid: true, bodyStructure: true },
+    { uid: true },
+  );
+  if (!msg) return null;
+
+  const mailbox = (client as unknown as { mailbox?: { uidValidity?: unknown } }).mailbox;
+  const uidValidity = mailbox?.uidValidity == null ? "" : String(mailbox.uidValidity);
+  const pick = pickTextPart(msg.bodyStructure);
+  if (!pick) return { body: "", bodyTruncated: false, inlineParts: [], uidValidity };
+
+  const got = await downloadPartBuffer(client, uid, pick.part, MESSAGE_ENTIRE_BODY_MAX_BYTES, () =>
+    dropAccountConnection(account, "interactive"),
+  );
+  if (!got) return null;
+  if (
+    isDownloadedBodyTruncated({
+      loadedBytes: got.buf.length,
+      maxBytes: MESSAGE_ENTIRE_BODY_MAX_BYTES,
+    })
+  ) {
+    throw new MessageBodyTooLargeError();
+  }
+
+  const charset =
+    pick.charset ||
+    /charset="?([\w-]+)"?/i.exec(String(got.meta?.contentType || ""))?.[1] ||
+    (got.meta as { charset?: string })?.charset;
+  const text = decodeText(got.buf, charset);
+  let html = text;
+  if (pick.type !== "text/html") {
+    const mini = await simpleParser(
+      `Content-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n${text}`,
+    );
+    html = mini.textAsHtml || mini.text || "";
+  }
+
+  const structural = collectAttachmentParts(msg.bodyStructure);
+  const referencedCids = new Set<string>();
+  for (const match of html.matchAll(/cid:([^"'\s>)\\]+)/gi)) {
+    referencedCids.add(match[1].replace(/^<|>$/g, "").toLowerCase());
+  }
+  const candidates: NonNullable<MailMessage["inlineParts"]> = [];
+  for (const cid of referencedCids) {
+    const partInfo = structural.find(
+      (part) => (part.contentId || "").replace(/^<|>$/g, "").toLowerCase() === cid,
+    );
+    if (!partInfo?.part) continue;
+    candidates.push({
+      cid,
+      part: partInfo.part,
+      mimeType: partInfo.mimeType || "application/octet-stream",
+      size: partInfo.size || 0,
+    });
+  }
+  candidates.sort((a, b) => (a.size || 0) - (b.size || 0));
+
+  return {
+    body: html,
+    bodyTruncated: false,
+    inlineParts: selectInlineMetadataCandidates(candidates, folder),
+    uidValidity,
+  };
+}
+
+export async function getEntireMessageBody(
+  account: MailAccount,
+  password: string,
+  folder: MailFolder,
+  uid: number,
+  mailboxHint?: TrustedMailboxHint,
+): Promise<EntireMessageBody | null> {
+  return withMessageMailbox(account, password, folder, "interactive", mailboxHint, (client) =>
+    downloadEntireBodyInMailbox(client, account, uid, folder),
+  );
 }
 
 export type InlinePartMetadata = NonNullable<MailMessage["inlineParts"]>[number];

@@ -1,5 +1,9 @@
 {
   "هذه الرسالة كبيرة جدًا. يتم عرض جزء فقط من محتواها.": "This message is very large. Only part of its content is being displayed.",
+  "عرض الرسالة كاملة": "View entire message",
+  "جاري تحميل الرسالة كاملة…": "Loading entire message…",
+  "تعذر تحميل الرسالة كاملة. حاول مرة أخرى.": "Could not load the entire message. Try again.",
+  "هذه الرسالة كبيرة جدًا لعرضها كاملة بأمان.": "This message is too large to display entirely here.",
   "${selection.size} محددة": "${selection.size} selected",
   "(بدون موضوع)": "(No subject)",
   "(مرسل غير معروف)": "(Unknown sender)",

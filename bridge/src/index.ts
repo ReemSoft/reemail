@@ -28,6 +28,8 @@ import {
   getFolderCounts,
   getMessages,
   getMessageBody,
+  getEntireMessageBody,
+  MessageBodyTooLargeError,
   getInlineImagesBatch,
   getLargeInlinePart,
   markRead,
@@ -364,6 +366,15 @@ const OpenMessagePayloadSchema = MessagePayloadSchema.extend({
   expectedUidValidity: z.string().max(64).optional(),
 });
 
+const EntireMessagePayloadSchema = MessagePayloadSchema.extend({
+  mailboxPathHint: z.string().max(500).optional(),
+  expectedUidValidity: z
+    .string()
+    .regex(/^[1-9]\d*$/)
+    .max(64)
+    .optional(),
+}).strict();
+
 /**
  * Lane-aware gate: a background body-warm request must never consume an
  * interactive permit (and must never queue ahead of a user click).
@@ -397,6 +408,35 @@ app.post("/api/message", requireKey, messageGate, async (req, res) => {
   } catch (err: any) {
     console.error("[bridge] /api/message error:", err);
     return res.status(500).json({ ok: false, error: err?.message || "Failed to fetch message" });
+  }
+});
+
+app.post("/api/message-entire", requireKey, imapGate("interactive"), async (req, res) => {
+  try {
+    const payload = EntireMessagePayloadSchema.parse(req.body);
+    const body = await getEntireMessageBody(
+      payload.account as MailAccount,
+      payload.password,
+      payload.folder,
+      payload.uid,
+      payload.mailboxPathHint && payload.expectedUidValidity
+        ? {
+            path: payload.mailboxPathHint,
+            expectedUidValidity: payload.expectedUidValidity,
+          }
+        : undefined,
+    );
+    if (!body) return res.status(404).json({ ok: false, error: "Message not found" });
+    return res.json({ ok: true, ...body });
+  } catch (err: unknown) {
+    if (err instanceof z.ZodError) {
+      return res.status(400).json({ ok: false, error: "INVALID_PAYLOAD" });
+    }
+    if (err instanceof MessageBodyTooLargeError) {
+      return res.status(413).json({ ok: false, error: err.code });
+    }
+    console.error("[bridge] /api/message-entire error:", err);
+    return res.status(500).json({ ok: false, error: "Failed to fetch entire message" });
   }
 });
 

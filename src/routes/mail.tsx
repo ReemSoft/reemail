@@ -52,6 +52,7 @@ import {
   selectNormalComposerAttachments,
   type AttachmentSourceRef,
 } from "@/lib/mail-composer-attachments";
+import { runEntireMessageSingleFlight, samePhysicalMessage } from "@/lib/mail-entire-message";
 
 // Kept as a thin wrapper — the heavy lifting (DOMPurify + CSS url()/@import
 // stripping + anchor hardening) lives in `@/lib/email-viewer-security` and is
@@ -611,6 +612,7 @@ function MessageBody({
   message,
   html,
   onInlineImages,
+  onEntireBody,
   className,
   afterLatest,
   renderHistory,
@@ -619,6 +621,7 @@ function MessageBody({
   message: MailMessage;
   html: string;
   onInlineImages?: (images: NonNullable<MailMessage["inlineImages"]>) => void;
+  onEntireBody?: (message: MailMessage) => void;
   className?: string;
   afterLatest?: React.ReactNode;
   renderHistory?: (quotedFallback: React.ReactNode) => React.ReactNode;
@@ -643,15 +646,7 @@ function MessageBody({
   return (
     <>
       {message.bodyTruncated && (
-        <div
-          role="status"
-          className={cn(
-            className,
-            "mb-3 rounded-md border border-amber-300/70 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-700/70 dark:bg-amber-950/40 dark:text-amber-200",
-          )}
-        >
-          {tr("هذه الرسالة كبيرة جدًا. يتم عرض جزء فقط من محتواها.")}
-        </div>
+        <TruncatedBodyWarning message={message} className={className} onLoaded={onEntireBody} />
       )}
       <ThreadedEmailBody
         html={sanitizedHtml}
@@ -665,6 +660,102 @@ function MessageBody({
         suppressQuoted={suppressQuoted}
       />
     </>
+  );
+}
+
+function TruncatedBodyWarning({
+  message,
+  className,
+  onLoaded,
+}: {
+  message: MailMessage;
+  className?: string;
+  onLoaded?: (message: MailMessage) => void;
+}) {
+  const openEntire = useMailServerFn(openEntireMailMessage);
+  const [loading, setLoading] = useState(false);
+  const identity = `${message.id}|${message.uidValidity ?? ""}`;
+  const activeIdentityRef = useRef(identity);
+  const mountedRef = useRef(true);
+  activeIdentityRef.current = identity;
+  useEffect(
+    () => () => {
+      mountedRef.current = false;
+    },
+    [],
+  );
+
+  async function loadEntire() {
+    if (loading) return;
+    const parsed = parseMessageId(message.id);
+    const session = getMailSession();
+    if (!parsed || !session?.mailSessionToken || !message.uidValidity) {
+      toast.error(tr("تعذر تحميل الرسالة كاملة. حاول مرة أخرى."));
+      return;
+    }
+    const requestIdentity = identity;
+    const companyId = session.company?.id ?? session.account.company_id;
+    const key = `${companyId}|${session.account.id}|${parsed.folder}|${parsed.uid}|${message.uidValidity}`;
+    setLoading(true);
+    try {
+      const result = await runEntireMessageSingleFlight(key, () =>
+        openEntire({
+          data: {
+            mailSessionToken: session.mailSessionToken!,
+            password: session.password,
+            folder: parsed.folder,
+            uid: parsed.uid,
+            uidValidity: message.uidValidity!,
+          },
+        }),
+      );
+      if (!mountedRef.current || activeIdentityRef.current !== requestIdentity) return;
+      if (!result.ok) {
+        toast.error(
+          tr(
+            result.code === "MESSAGE_BODY_TOO_LARGE"
+              ? "هذه الرسالة كبيرة جدًا لعرضها كاملة بأمان."
+              : "تعذر تحميل الرسالة كاملة. حاول مرة أخرى.",
+          ),
+        );
+        return;
+      }
+      onLoaded?.({
+        ...message,
+        body: result.body,
+        bodyTruncated: undefined,
+        inlineParts: result.inlineParts,
+        inlineImages: [],
+        uidValidity: result.uidValidity,
+      });
+    } catch {
+      if (mountedRef.current && activeIdentityRef.current === requestIdentity) {
+        toast.error(tr("تعذر تحميل الرسالة كاملة. حاول مرة أخرى."));
+      }
+    } finally {
+      if (mountedRef.current && activeIdentityRef.current === requestIdentity) setLoading(false);
+    }
+  }
+
+  return (
+    <div
+      role="status"
+      className={cn(
+        className,
+        "mb-3 rounded-md border border-amber-300/70 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-700/70 dark:bg-amber-950/40 dark:text-amber-200",
+      )}
+    >
+      <div>{tr("هذه الرسالة كبيرة جدًا. يتم عرض جزء فقط من محتواها.")}</div>
+      <button
+        type="button"
+        disabled={loading}
+        onClick={loadEntire}
+        className="mt-1.5 inline-flex items-center gap-1.5 rounded-md border border-amber-400/70 bg-background/70 px-2 py-1 font-medium hover:bg-background disabled:cursor-wait disabled:opacity-70"
+      >
+        {loading && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+        {tr(loading ? "جاري تحميل الرسالة كاملة…" : "عرض الرسالة كاملة")}
+      </button>
+    </div>
   );
 }
 
@@ -776,7 +867,11 @@ import {
   type SenderMessagesCursor,
   bridgeDeleteDraft,
 } from "@/lib/mail-bridge.functions";
-import { openMailMessage, resolveMessageInlineImages } from "@/lib/mail-message-open.functions";
+import {
+  openEntireMailMessage,
+  openMailMessage,
+  resolveMessageInlineImages,
+} from "@/lib/mail-message-open.functions";
 import { listMailConversation, type ConversationRow } from "@/lib/mail-conversation.functions";
 import {
   readDraftDoc,
@@ -3613,6 +3708,10 @@ function MailApp() {
     [],
   );
 
+  const handleEntireBodyLoaded = useCallback((next: MailMessage) => {
+    setSelectedMessage((current) => (samePhysicalMessage(current, next) ? next : current));
+  }, []);
+
   async function toggleRead(e: React.MouseEvent, id: string) {
     e.stopPropagation();
     const parsed = parseMessageId(id);
@@ -5055,6 +5154,7 @@ function MailApp() {
               message={selectedMessage}
               loading={reading}
               onInlineImages={handleInlineImagesResolved}
+              onEntireBody={handleEntireBodyLoaded}
               onOpenHistorical={openHistoricalMessage}
               myEmail={session.account.email_address}
               onBack={() => {
@@ -5596,6 +5696,9 @@ function ConversationMessageCard({
               <MessageBody
                 message={loaded}
                 html={loaded.body || loaded.preview || ""}
+                onEntireBody={(next) =>
+                  setLoaded((current) => (samePhysicalMessage(current, next) ? next : current))
+                }
                 className="mt-3"
                 suppressQuoted
                 afterLatest={<MessageAttachmentsSection message={loaded} />}
@@ -5714,6 +5817,7 @@ function MessageView({
   message,
   loading,
   onInlineImages,
+  onEntireBody,
   onOpenHistorical,
   myEmail,
   onBack,
@@ -5731,6 +5835,7 @@ function MessageView({
   message: MailMessage;
   loading: boolean;
   onInlineImages: (messageId: string, images: NonNullable<MailMessage["inlineImages"]>) => void;
+  onEntireBody: (message: MailMessage) => void;
   onOpenHistorical: (row: ConversationRow) => HistoricalOpenAttempt;
   myEmail: string;
   onBack: () => void;
@@ -6102,6 +6207,7 @@ function MessageView({
                 message={message}
                 html={message.body || message.preview || ""}
                 onInlineImages={handleInlineImages}
+                onEntireBody={onEntireBody}
                 className="mt-6"
                 afterLatest={
                   <>

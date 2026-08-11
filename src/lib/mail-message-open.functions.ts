@@ -210,6 +210,108 @@ export const openMailMessage = createServerFn({ method: "POST" })
     return { ok: true, source: "imap", message: msg, body: null };
   });
 
+const EntireMessageSchema = z.object({
+  mailSessionToken: z.string().min(20).max(4096),
+  password: z.string().min(1).max(1024),
+  folder: FolderSchema,
+  uid: z.number().int().positive(),
+  uidValidity: z
+    .string()
+    .regex(/^[1-9]\d*$/)
+    .max(64),
+});
+
+export type OpenEntireMessageResult =
+  | {
+      ok: true;
+      body: string;
+      bodyTruncated: false;
+      inlineParts: NonNullable<MailMessage["inlineParts"]>;
+      uidValidity: string;
+    }
+  | {
+      ok: false;
+      code: "MESSAGE_BODY_TOO_LARGE" | "NOT_FOUND" | "STALE_MESSAGE" | "UNAVAILABLE";
+      error: string;
+    };
+
+/** User-triggered only. Bypasses the persistent body cache in both directions. */
+export const openEntireMailMessage = createServerFn({ method: "POST" })
+  .inputValidator((value: z.input<typeof EntireMessageSchema>) => EntireMessageSchema.parse(value))
+  .handler(async ({ data }): Promise<OpenEntireMessageResult> => {
+    const { verifyBridgeAuthClaims, resolveBridgeAuthForVerifiedClaims } =
+      await import("@/lib/mail-bridge-auth.server");
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { bridgeCallResolved } = await import("@/lib/mail-bridge-call.server");
+
+    const claims = await verifyBridgeAuthClaims(data.mailSessionToken);
+    if (!("sub" in claims)) {
+      return { ok: false, code: "UNAVAILABLE", error: claims.error };
+    }
+
+    const authPromise = resolveBridgeAuthForVerifiedClaims(claims);
+    const hintPromise =
+      data.folder === "starred" || data.folder === "all"
+        ? Promise.resolve(null)
+        : supabaseAdmin
+            .from("mail_folders")
+            .select("path, uidvalidity")
+            .eq("company_id", claims.cid)
+            .eq("account_id", claims.sub)
+            .eq("canonical", data.folder)
+            .limit(1)
+            .maybeSingle();
+    const [auth, hintResult] = await Promise.all([authPromise, hintPromise]);
+    if (!auth.ok) return { ok: false, code: "UNAVAILABLE", error: auth.error };
+
+    const hintRow = hintResult?.data as { path: string | null; uidvalidity: number | null } | null;
+    const mailboxHint =
+      hintRow?.path?.trim() &&
+      hintRow.uidvalidity != null &&
+      /^[1-9]\d*$/.test(String(hintRow.uidvalidity))
+        ? { path: hintRow.path, expectedUidValidity: String(hintRow.uidvalidity) }
+        : undefined;
+
+    const response = await bridgeCallResolved(
+      auth,
+      "/api/message-entire",
+      {
+        folder: data.folder,
+        uid: data.uid,
+        ...(mailboxHint
+          ? {
+              mailboxPathHint: mailboxHint.path,
+              expectedUidValidity: mailboxHint.expectedUidValidity,
+            }
+          : {}),
+      },
+      data.password,
+    );
+    if (!response.ok) {
+      return {
+        ok: false,
+        code:
+          response.error === "MESSAGE_BODY_TOO_LARGE" ? "MESSAGE_BODY_TOO_LARGE" : "UNAVAILABLE",
+        error: response.error,
+      };
+    }
+
+    const uidValidity = String(response.json.uidValidity ?? "");
+    if (uidValidity !== data.uidValidity) {
+      return { ok: false, code: "STALE_MESSAGE", error: "Message identity changed" };
+    }
+    if (typeof response.json.body !== "string") {
+      return { ok: false, code: "NOT_FOUND", error: "Message not found" };
+    }
+    return {
+      ok: true,
+      body: response.json.body,
+      bodyTruncated: false,
+      inlineParts: Array.isArray(response.json.inlineParts) ? response.json.inlineParts : [],
+      uidValidity,
+    };
+  });
+
 const InlinePartSchema = z.object({
   cid: z.string().min(1).max(998),
   part: z.string().regex(/^\d+(?:\.\d+)*$/),
