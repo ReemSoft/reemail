@@ -2375,6 +2375,11 @@ function MailApp() {
   const {
     folder,
     setFolder,
+    senderView,
+    setSenderView,
+    senderFolders,
+    upsertSenderFolder,
+    removeSenderFolder,
     folderPaths,
     sort,
 
