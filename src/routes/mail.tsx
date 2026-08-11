@@ -4769,7 +4769,10 @@ function MailApp() {
                       if (widePrefetch)
                         void prefetchMessage(m.id, "adjacent", false, "interactive");
                     }}
+                    senderFolderColorKey={senderFolderMap.get(m.from.email.toLowerCase())?.color}
+                    onSenderFolder={() => openSenderFolderDialog(m)}
                   />
+
                 )}
                 components={{
                   Footer: () =>
