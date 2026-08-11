@@ -727,6 +727,8 @@ import {
   FileCode,
   FileType,
   History,
+  Folder as FolderIcon,
+  FolderPlus,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -809,6 +811,15 @@ import { mailPerf } from "@/lib/mail-performance";
 import { deleteSavedDraft, shouldShowDeleteDraft } from "@/lib/mail-composer-delete-draft";
 import { tombstoneGhostMessage } from "@/lib/mail-ghost-cleanup.functions";
 import { indexListMessages } from "@/lib/mail-index.functions";
+import {
+  listSenderFolders,
+  listSenderMessages,
+  saveSenderFolder,
+  deleteSenderFolder,
+  type SenderFolder,
+} from "@/lib/mail-sender-folders.functions";
+import { SenderFolderDialog } from "@/components/sender-folder-dialog";
+import { senderFolderColor } from "@/lib/mail-sender-folder-colors";
 import { indexListFolderCounts } from "@/lib/mail-index-counts.functions";
 import { indexUpdateFlag } from "@/lib/mail-flags.functions";
 import { indexMoveMessage } from "@/lib/mail-move.functions";
@@ -1366,7 +1377,61 @@ function useMailData(session: MailSession | null) {
   const listIndex = useMailServerFn(indexListMessages);
   const listIndexCounts = useMailServerFn(indexListFolderCounts);
   const syncFolder = useMailServerFn(runMailSync);
+  const listSender = useMailServerFn(listSenderMessages);
   const [folder, setFolder] = useState<MailFolder>("inbox");
+  // Sender Folders — virtual filter view over the Inbox index. When set, the
+  // list shows only messages from this address; `folder` stays "inbox" so
+  // every existing mutation/sync path keeps working unchanged.
+  const [senderView, setSenderView] = useState<string | null>(null);
+  const [senderCursor, setSenderCursor] = useState<string | null>(null);
+  // Folder definitions: one tiny SELECT per session, never polled.
+  const [senderFolders, setSenderFolders] = useState<SenderFolder[]>([]);
+  const loadSenderFoldersFn = useMailServerFn(listSenderFolders);
+  const saveSenderFolderFn = useMailServerFn(saveSenderFolder);
+  const deleteSenderFolderFn = useMailServerFn(deleteSenderFolder);
+  const mailToken = session?.mailSessionToken ?? null;
+  useEffect(() => {
+    if (!mailToken) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await loadSenderFoldersFn({ data: { mailSessionToken: mailToken } });
+        if (!cancelled && res.ok) setSenderFolders(res.folders);
+      } catch {
+        /* non-fatal: sender folders are an additive convenience */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [mailToken, loadSenderFoldersFn]);
+
+  const upsertSenderFolder = useCallback(
+    async (draft: { email: string; name: string; color: string }) => {
+      if (!mailToken) return false;
+      const res = await saveSenderFolderFn({ data: { mailSessionToken: mailToken, ...draft } });
+      if (!res.ok) return false;
+      const saved = res.folders[0]!;
+      setSenderFolders((prev) => {
+        const rest = prev.filter((f) => f.email !== saved.email);
+        return [...rest, saved];
+      });
+      return true;
+    },
+    [mailToken, saveSenderFolderFn],
+  );
+
+  const removeSenderFolder = useCallback(
+    async (email: string) => {
+      if (!mailToken) return false;
+      const res = await deleteSenderFolderFn({ data: { mailSessionToken: mailToken, email } });
+      if (!res.ok) return false;
+      setSenderFolders((prev) => prev.filter((f) => f.email !== email));
+      setSenderView((cur) => (cur === email ? null : cur));
+      return true;
+    },
+    [mailToken, deleteSenderFolderFn],
+  );
   const [sort, setSort] = useState<SortOption>("date-desc");
   const [counts, setCounts] = useState<
     Record<MailFolder, { total: number; unread: number; supported: boolean }>
@@ -1758,6 +1823,40 @@ function useMailData(session: MailSession | null) {
     const startedAt = Date.now();
     setLoading(true);
     try {
+      // Sender Folder view — single indexed read over the Inbox index rows.
+      if (senderView) {
+        try {
+          const res = await listSender({
+            data: {
+              mailSessionToken: session.mailSessionToken!,
+              email: senderView,
+              limit: PAGE,
+            },
+          });
+          if (loadReqIdRef.current !== reqId) return;
+          if (res.ok) {
+            setMessages(applyPending(res.messages));
+            setHasMore(res.hasMore);
+            setSenderCursor(res.nextCursor);
+            setIndexCursor(null);
+            setSource("index");
+            setUseMock(false);
+            setBridgeError(null);
+            gcHiddenBefore(pendingHiddenRef.current, startedAt);
+            return;
+          }
+          setMessages([]);
+          setHasMore(false);
+          setSenderCursor(null);
+          return;
+        } catch {
+          if (loadReqIdRef.current !== reqId) return;
+          setMessages([]);
+          setHasMore(false);
+          setSenderCursor(null);
+          return;
+        }
+      }
       if (canUseIndex(folder, sort)) {
         try {
           const res = await listIndex({
@@ -1805,12 +1904,50 @@ function useMailData(session: MailSession | null) {
     } finally {
       if (loadReqIdRef.current === reqId) setLoading(false);
     }
-  }, [session, folder, sort, canUseIndex, listIndex, loadFromBridge, applyPending]);
+  }, [
+    session,
+    folder,
+    sort,
+    canUseIndex,
+    listIndex,
+    loadFromBridge,
+    applyPending,
+    senderView,
+    listSender,
+  ]);
 
   const loadMore = useCallback(async () => {
     if (!session || loadingMore || loading || !hasMore) return;
     setLoadingMore(true);
     try {
+      if (senderView) {
+        if (!senderCursor) {
+          setHasMore(false);
+          return;
+        }
+        const res = await listSender({
+          data: {
+            mailSessionToken: session.mailSessionToken!,
+            email: senderView,
+            limit: PAGE,
+            cursor: senderCursor,
+          },
+        });
+        if (res.ok) {
+          const patched = applyPending(res.messages);
+          setMessages((prev) => {
+            const seen = new Set(prev.map((m) => m.id));
+            const merged = [...prev];
+            for (const m of patched) if (!seen.has(m.id)) merged.push(m);
+            return merged;
+          });
+          setHasMore(res.hasMore);
+          setSenderCursor(res.nextCursor);
+          return;
+        }
+        setHasMore(false);
+        return;
+      }
       if (source === "index" && indexCursor && canUseIndex(folder, sort)) {
         const res = await listIndex({
           data: {
@@ -1875,6 +2012,9 @@ function useMailData(session: MailSession | null) {
     source,
     indexCursor,
     canUseIndex,
+    senderView,
+    senderCursor,
+    listSender,
   ]);
 
   // Counts on mount: Local-Index first (one Supabase SELECT, ~ms) instead of
@@ -2057,6 +2197,11 @@ function useMailData(session: MailSession | null) {
   return {
     folder,
     setFolder,
+    senderView,
+    setSenderView,
+    senderFolders,
+    upsertSenderFolder,
+    removeSenderFolder,
     folderPaths,
 
     sort,
@@ -2232,6 +2377,11 @@ function MailApp() {
   const {
     folder,
     setFolder,
+    senderView,
+    setSenderView,
+    senderFolders,
+    upsertSenderFolder,
+    removeSenderFolder,
     folderPaths,
     sort,
 
@@ -2270,6 +2420,33 @@ function MailApp() {
     archiveUidValidityRef,
     bumpCountsGen,
   } = useMailData(session || null);
+
+  // Sender Folders — O(1) lookup for the per-row folder icon.
+  const senderFolderMap = useMemo(
+    () => new Map(senderFolders.map((f) => [f.email.toLowerCase(), f])),
+    [senderFolders],
+  );
+  const [senderDialog, setSenderDialog] = useState<{
+    email: string;
+    name: string;
+    color: string;
+    existing: boolean;
+  } | null>(null);
+  const [senderDialogBusy, setSenderDialogBusy] = useState(false);
+  const openSenderFolderDialog = useCallback(
+    (m: MailMessage) => {
+      const email = (m.from.email || "").toLowerCase();
+      if (!email) return;
+      const found = senderFolderMap.get(email);
+      setSenderDialog({
+        email,
+        name: found?.name ?? (m.from.name || email),
+        color: found?.color ?? "blue",
+        existing: !!found,
+      });
+    },
+    [senderFolderMap],
+  );
 
   // BLOCKER_6 — account identity for origin-tracker calls in this scope.
   const currentAccountId = session?.account.id ?? null;
@@ -4275,7 +4452,7 @@ function MailApp() {
               .filter((f) => counts[f]?.supported !== false)
               .map((f) => {
                 const meta = FOLDER_META[f];
-                const active = f === folder;
+                const active = f === folder && !senderView;
                 const Icon = meta.icon;
                 const { total } = counts[f] || { total: 0 };
                 return (
@@ -4283,6 +4460,7 @@ function MailApp() {
                     key={f}
                     onClick={async () => {
                       if (!(await guardComposerNav())) return;
+                      setSenderView(null);
                       setFolder(f);
                       setSelectedId(null);
                       setSelectedMessage(null);
@@ -4308,7 +4486,42 @@ function MailApp() {
                   </button>
                 );
               })}
+
+            {senderFolders.length > 0 && (
+              <div className="mt-3 border-t border-border pt-3">
+                <p className="px-4 pb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  {tr("المجلدات الخاصة")}
+                </p>
+                {senderFolders.map((sf) => {
+                  const c = senderFolderColor(sf.color);
+                  const active = senderView === sf.email;
+                  return (
+                    <button
+                      key={sf.id}
+                      onClick={async () => {
+                        if (!(await guardComposerNav())) return;
+                        setFolder("inbox");
+                        setSenderView(sf.email);
+                        setSelectedId(null);
+                        setSelectedMessage(null);
+                        setSidebarOpen(false);
+                      }}
+                      title={sf.email}
+                      className={`mb-0.5 flex w-full items-center gap-3 rounded-e-full rounded-s-md px-4 py-2.5 text-sm transition ${
+                        active
+                          ? "bg-sidebar-hover font-semibold text-foreground"
+                          : "text-sidebar-foreground hover:bg-sidebar-hover/60"
+                      }`}
+                    >
+                      <FolderIcon className="h-4 w-4 shrink-0" style={{ color: c.hex }} />
+                      <span className="flex-1 truncate text-start">{sf.name}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </nav>
+
 
           {/* Mobile + tablet footer: language + sign out live here instead of the top bar */}
           <div className="mt-auto border-t border-border p-3 lg:hidden">
@@ -4583,7 +4796,10 @@ function MailApp() {
                       if (widePrefetch)
                         void prefetchMessage(m.id, "adjacent", false, "interactive");
                     }}
+                    senderFolderColorKey={senderFolderMap.get(m.from.email.toLowerCase())?.color}
+                    onSenderFolder={() => openSenderFolderDialog(m)}
                   />
+
                 )}
                 components={{
                   Footer: () =>
@@ -4708,7 +4924,44 @@ function MailApp() {
           )}
         </div>
       </div>
+
+      {senderDialog && (
+        <SenderFolderDialog
+          open
+          onOpenChange={(o) => {
+            if (!o) setSenderDialog(null);
+          }}
+          email={senderDialog.email}
+          initialName={senderDialog.name}
+          initialColor={senderDialog.color}
+          existing={senderDialog.existing}
+          busy={senderDialogBusy}
+          onSave={async (draft) => {
+            setSenderDialogBusy(true);
+            const ok = await upsertSenderFolder(draft);
+            setSenderDialogBusy(false);
+            if (ok) {
+              setSenderDialog(null);
+              toast.success(tr("تم حفظ المجلد"));
+            } else {
+              toast.error(tr("تعذر حفظ المجلد"));
+            }
+          }}
+          onDelete={async () => {
+            setSenderDialogBusy(true);
+            const ok = await removeSenderFolder(senderDialog.email);
+            setSenderDialogBusy(false);
+            if (ok) {
+              setSenderDialog(null);
+              toast.success(tr("تم حذف المجلد"));
+            } else {
+              toast.error(tr("تعذر حذف المجلد"));
+            }
+          }}
+        />
+      )}
     </div>
+
   );
 }
 
@@ -4725,6 +4978,8 @@ function MessageRow({
   onPrefetch,
   onCancelPrefetch,
   onImmediatePrefetch,
+  senderFolderColorKey,
+  onSenderFolder,
 }: {
   message: MailMessage;
   active: boolean;
@@ -4738,6 +4993,9 @@ function MessageRow({
   onPrefetch: () => void;
   onCancelPrefetch: () => void;
   onImmediatePrefetch: () => void;
+  /** Color key when this sender already has a folder, else undefined. */
+  senderFolderColorKey?: string;
+  onSenderFolder: (e: React.MouseEvent) => void;
 }) {
   return (
     <div
@@ -4857,7 +5115,30 @@ function MessageRow({
               {l}
             </span>
           ))}
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onSenderFolder(e);
+            }}
+            className="ms-auto rounded p-0.5 text-muted-foreground opacity-70 transition hover:bg-muted hover:text-foreground hover:opacity-100"
+            title={
+              senderFolderColorKey
+                ? tr("إدارة المجلد الخاص بهذا المرسل")
+                : tr("إنشاء مجلد خاص لهذا المرسل")
+            }
+          >
+            {senderFolderColorKey ? (
+              <FolderIcon
+                className="h-3.5 w-3.5"
+                style={{ color: senderFolderColor(senderFolderColorKey).hex }}
+              />
+            ) : (
+              <FolderPlus className="h-3.5 w-3.5" />
+            )}
+          </button>
         </div>
+
       </div>
     </div>
   );
@@ -8763,6 +9044,8 @@ function Composer({
           </div>
         </div>
       )}
+
+
 
       <AlertDialog
         open={!!closePrompt}

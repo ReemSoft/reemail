@@ -488,6 +488,54 @@ export type Database = {
           },
         ]
       }
+      mail_sender_folders: {
+        Row: {
+          account_id: string
+          color: string
+          company_id: string
+          created_at: string
+          display_name: string | null
+          id: string
+          sender_email: string
+          updated_at: string
+        }
+        Insert: {
+          account_id: string
+          color?: string
+          company_id: string
+          created_at?: string
+          display_name?: string | null
+          id?: string
+          sender_email: string
+          updated_at?: string
+        }
+        Update: {
+          account_id?: string
+          color?: string
+          company_id?: string
+          created_at?: string
+          display_name?: string | null
+          id?: string
+          sender_email?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "mail_sender_folders_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "mail_accounts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "mail_sender_folders_company_id_fkey"
+            columns: ["company_id"]
+            isOneToOne: false
+            referencedRelation: "companies"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       mail_sync_dedupe: {
         Row: {
           account_id: string
@@ -897,6 +945,32 @@ export type Database = {
           oldest_queued_seconds: number
           queued: number
           running: number
+        }[]
+      }
+      list_mail_sender_messages: {
+        Args: {
+          _account_id: string
+          _company_id: string
+          _cursor_date?: string
+          _cursor_id?: string
+          _folder_id: string
+          _limit?: number
+          _sender: string
+        }
+        Returns: {
+          cc_addrs: Json
+          flagged: boolean
+          from_addr: Json
+          has_attachments: boolean
+          id: string
+          in_reply_to: string
+          internal_date: string
+          message_id: string
+          references_ids: string[]
+          seen: boolean
+          subject: string
+          to_addrs: Json
+          uid: number
         }[]
       }
       record_mail_contact_suggestions: {
