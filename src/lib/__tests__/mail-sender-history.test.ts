@@ -92,6 +92,14 @@ describe("sender-history orchestration safety", () => {
     expect(routeSource).toContain("session.account.id");
   });
 
+  it("scopes historical loading so stale sender/account work cannot block the active view", () => {
+    expect(routeSource).toContain("setSenderHistoryLoadingScope(scopeKey)");
+    expect(routeSource).toContain("current === scopeKey ? null : current");
+    expect(routeSource).toContain("senderHistoryLoadingScope === senderScopeKey");
+    expect(routeSource).toContain("if (!historicalScope) setLoadingMore(true)");
+    expect(routeSource).toContain("if (!historicalScope) setLoadingMore(false)");
+  });
+
   it("preserves the cursor and retryability after a failed historical page", () => {
     const historicalBlock = routeSource.slice(
       routeSource.indexOf("const flightKey ="),
@@ -120,6 +128,14 @@ describe("sender-history orchestration safety", () => {
     expect(senderOperation).toContain("envelope: true");
     expect(senderOperation).toContain("bodyStructure: true");
     expect(senderOperation).not.toMatch(/bodyParts|source: true|download\(/);
+  });
+
+  it("uses bounded PARTIAL results with a bounded session-local fallback cache", () => {
+    expect(bridgeSource).toContain("returnOptions: [{ partial: `-1:-${candidateLimit}` }]");
+    expect(bridgeSource).toContain("const candidateLimit = boundedLimit + 1");
+    expect(bridgeSource).toContain("SENDER_HISTORY_CACHE_MAX_ENTRIES = 32");
+    expect(bridgeSource).toContain("SENDER_HISTORY_CACHE_MAX_UIDS = 100_000");
+    expect(bridgeSource).toContain("SENDER_HISTORY_CACHE_TTL_MS = 2 * 60_000");
   });
 
   it("uses one protected, lower-priority dedicated endpoint", () => {

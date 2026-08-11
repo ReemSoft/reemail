@@ -1,23 +1,59 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ImapFlow } from "imapflow";
-import { getSenderMessagesPageInMailbox, type SenderMessagesCursor } from "../src/imap.js";
+import {
+  getSenderMessagesPageInMailbox,
+  resetSenderHistoryUidCacheForTests,
+  senderHistoryUidCacheStats,
+  supportsSenderHistoryPartialSearch,
+  type SenderMessagesCursor,
+} from "../src/imap.js";
 
 type MockRecord = { uid: number; from: string; date?: Date };
 
-function mockClient(records: MockRecord[], uidValidity = "77") {
-  const calls = { searches: 0, fetches: 0, criteria: [] as unknown[], fetched: [] as number[][] };
+function mockClient(records: MockRecord[], uidValidity = "77", partial = false) {
+  const calls = {
+    searches: 0,
+    fetches: 0,
+    criteria: [] as unknown[],
+    searchOptions: [] as unknown[],
+    fetched: [] as number[][],
+  };
   const client = {
     mailbox: { uidValidity },
     options: { auth: { user: "owner@example.com" } },
-    async search(criteria: { from?: string; uid?: string }) {
+    capabilities: new Map(
+      partial
+        ? [
+            ["ESEARCH", true],
+            ["PARTIAL", true],
+          ]
+        : [],
+    ),
+    enabled: new Set<string>(),
+    async search(
+      criteria: { from?: string; uid?: string },
+      options?: { returnOptions?: Array<{ partial: string }> },
+    ) {
       calls.searches += 1;
       calls.criteria.push(criteria);
+      calls.searchOptions.push(options);
       const target = criteria.from?.toLowerCase() ?? "";
       const upper = criteria.uid ? Number(criteria.uid.split(":")[1]) : Number.MAX_SAFE_INTEGER;
-      return records
+      const matching = records
         .filter((record) => record.uid <= upper && record.from.toLowerCase().includes(target))
-        .map((record) => record.uid);
+        .map((record) => record.uid)
+        .sort((a, b) => a - b);
+      const partialRange = options?.returnOptions?.[0]?.partial;
+      if (!partialRange) return matching;
+      const count = Number(partialRange.split(":")[1]?.replace("-", ""));
+      const selected = matching.slice(-count);
+      return {
+        partial: {
+          range: partialRange,
+          messages: selected.join(","),
+        },
+      };
     },
     async *fetch(uids: number[]) {
       calls.fetches += 1;
@@ -42,8 +78,10 @@ function mockClient(records: MockRecord[], uidValidity = "77") {
   return { client: client as unknown as ImapFlow, calls };
 }
 
-test("pages all 437 sender matches without a 200-result cap", async () => {
-  const records = Array.from({ length: 437 }, (_, index) => ({
+test.beforeEach(() => resetSenderHistoryUidCacheForTests());
+
+test("fallback pages more than 500 matches with one SEARCH and bounded FETCH calls", async () => {
+  const records = Array.from({ length: 537 }, (_, index) => ({
     uid: index + 1,
     from: "sender@example.com",
   }));
@@ -53,20 +91,117 @@ test("pages all 437 sender matches without a 200-result cap", async () => {
   let hasMore = true;
 
   while (hasMore) {
-    const page = await getSenderMessagesPageInMailbox(client, "SENDER@example.com", 50, cursor);
+    const page = await getSenderMessagesPageInMailbox(
+      client,
+      "SENDER@example.com",
+      50,
+      cursor,
+      "mailbox-a",
+    );
     seen.push(...page.messages.map((message) => Number(message.id.split(":")[1])));
     cursor = page.nextCursor ?? undefined;
     hasMore = page.hasMore;
   }
 
-  assert.equal(seen.length, 437);
+  assert.equal(seen.length, 537);
   assert.deepEqual(
     seen,
-    Array.from({ length: 437 }, (_, index) => 437 - index),
+    Array.from({ length: 537 }, (_, index) => 537 - index),
   );
-  assert.equal(calls.searches, 9);
-  assert.equal(calls.fetches, 9);
+  assert.equal(calls.searches, 1);
+  assert.equal(calls.fetches, 11);
   assert.ok(calls.fetched.every((uids) => uids.length <= 50));
+});
+
+test("PARTIAL pages more than 500 matches without returning the full UID set", async () => {
+  const records = Array.from({ length: 537 }, (_, index) => ({
+    uid: index + 1,
+    from: "sender@example.com",
+  }));
+  const { client, calls } = mockClient(records, "77", true);
+  let cursor: SenderMessagesCursor | undefined;
+  const seen: number[] = [];
+  let hasMore = true;
+
+  while (hasMore) {
+    const page = await getSenderMessagesPageInMailbox(client, "sender@example.com", 50, cursor);
+    seen.push(...page.messages.map((message) => Number(message.id.split(":")[1])));
+    cursor = page.nextCursor ?? undefined;
+    hasMore = page.hasMore;
+  }
+
+  assert.equal(seen.length, 537);
+  assert.deepEqual(
+    seen,
+    Array.from({ length: 537 }, (_, index) => 537 - index),
+  );
+  assert.equal(calls.searches, 11);
+  assert.equal(calls.fetches, 11);
+  assert.ok(
+    calls.searchOptions.every((options) => JSON.stringify(options).includes('"partial":"-1:-51"')),
+  );
+  assert.ok(calls.fetched.every((uids) => uids.length <= 50));
+});
+
+test("requires both PARTIAL and ESEARCH capabilities", () => {
+  const { client } = mockClient([]);
+  client.capabilities.set("ESEARCH", true);
+  assert.equal(supportsSenderHistoryPartialSearch(client), false);
+  client.capabilities.set("PARTIAL", false);
+  assert.equal(supportsSenderHistoryPartialSearch(client), false);
+  client.capabilities.set("PARTIAL", true);
+  assert.equal(supportsSenderHistoryPartialSearch(client), true);
+});
+
+test("fallback cache stays globally bounded", async () => {
+  for (let index = 0; index < 40; index += 1) {
+    const { client } = mockClient(
+      Array.from({ length: 3_000 }, (_, uid) => ({
+        uid: uid + 1,
+        from: "sender@example.com",
+      })),
+      String(index + 1),
+    );
+    await getSenderMessagesPageInMailbox(
+      client,
+      "sender@example.com",
+      1,
+      undefined,
+      `mailbox-${index}`,
+    );
+  }
+  const stats = senderHistoryUidCacheStats();
+  assert.ok(stats.entries <= stats.maxEntries);
+  assert.ok(stats.cachedUids <= stats.maxCachedUids);
+});
+
+test("a fallback cache filled mid-history still serves a complete fresh first page", async () => {
+  const records = Array.from({ length: 120 }, (_, index) => ({
+    uid: index + 1,
+    from: "sender@example.com",
+  }));
+  const { client, calls } = mockClient(records);
+  const scope = "mailbox-a";
+
+  const older = await getSenderMessagesPageInMailbox(
+    client,
+    "sender@example.com",
+    10,
+    { beforeUid: 61, uidValidity: "77" },
+    scope,
+  );
+  const fresh = await getSenderMessagesPageInMailbox(
+    client,
+    "sender@example.com",
+    10,
+    undefined,
+    scope,
+  );
+
+  assert.equal(calls.searches, 1);
+  assert.deepEqual(calls.criteria[0], { from: "sender@example.com" });
+  assert.equal(older.messages[0]?.id, "inbox:60");
+  assert.equal(fresh.messages[0]?.id, "inbox:120");
 });
 
 test("uses From-only SEARCH and exact-filters substring matches", async () => {

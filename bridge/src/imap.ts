@@ -1538,11 +1538,139 @@ export interface SenderMessagesPage {
   cursorReset: boolean;
 }
 
+const SENDER_HISTORY_CACHE_TTL_MS = 2 * 60_000;
+const SENDER_HISTORY_CACHE_MAX_ENTRIES = 32;
+const SENDER_HISTORY_CACHE_MAX_UIDS = 100_000;
+
+interface SenderHistoryUidCacheEntry {
+  expiresAt: number;
+  uids: number[];
+}
+
+const senderHistoryUidCache = new Map<string, SenderHistoryUidCacheEntry>();
+let senderHistoryCachedUidCount = 0;
+
+function deleteSenderHistoryCacheEntry(key: string): void {
+  const entry = senderHistoryUidCache.get(key);
+  if (!entry) return;
+  senderHistoryCachedUidCount -= entry.uids.length;
+  senderHistoryUidCache.delete(key);
+}
+
+function pruneSenderHistoryUidCache(now: number): void {
+  for (const [key, entry] of senderHistoryUidCache) {
+    if (entry.expiresAt <= now) deleteSenderHistoryCacheEntry(key);
+  }
+}
+
+function readSenderHistoryUidCache(key: string, now: number): number[] | null {
+  pruneSenderHistoryUidCache(now);
+  const entry = senderHistoryUidCache.get(key);
+  if (!entry) return null;
+  senderHistoryUidCache.delete(key);
+  senderHistoryUidCache.set(key, entry);
+  return entry.uids;
+}
+
+function writeSenderHistoryUidCache(key: string, uids: number[], now: number): void {
+  pruneSenderHistoryUidCache(now);
+  deleteSenderHistoryCacheEntry(key);
+  if (uids.length > SENDER_HISTORY_CACHE_MAX_UIDS) return;
+  while (
+    senderHistoryUidCache.size >= SENDER_HISTORY_CACHE_MAX_ENTRIES ||
+    senderHistoryCachedUidCount + uids.length > SENDER_HISTORY_CACHE_MAX_UIDS
+  ) {
+    const oldestKey = senderHistoryUidCache.keys().next().value as string | undefined;
+    if (!oldestKey) break;
+    deleteSenderHistoryCacheEntry(oldestKey);
+  }
+  senderHistoryUidCache.set(key, {
+    expiresAt: now + SENDER_HISTORY_CACHE_TTL_MS,
+    uids,
+  });
+  senderHistoryCachedUidCount += uids.length;
+}
+
+export function resetSenderHistoryUidCacheForTests(): void {
+  senderHistoryUidCache.clear();
+  senderHistoryCachedUidCount = 0;
+}
+
+export function senderHistoryUidCacheStats(): {
+  entries: number;
+  cachedUids: number;
+  maxEntries: number;
+  maxCachedUids: number;
+  ttlMs: number;
+} {
+  return {
+    entries: senderHistoryUidCache.size,
+    cachedUids: senderHistoryCachedUidCount,
+    maxEntries: SENDER_HISTORY_CACHE_MAX_ENTRIES,
+    maxCachedUids: SENDER_HISTORY_CACHE_MAX_UIDS,
+    ttlMs: SENDER_HISTORY_CACHE_TTL_MS,
+  };
+}
+
+function hasImapCapability(client: ImapFlow, capability: string): boolean {
+  const wanted = capability.toUpperCase();
+  for (const [key, enabled] of client.capabilities) {
+    if (key.toUpperCase() === wanted) return enabled !== false;
+  }
+  return false;
+}
+
+export function supportsSenderHistoryPartialSearch(client: ImapFlow): boolean {
+  const rev2Active =
+    client.enabled.has("IMAP4REV2") ||
+    (hasImapCapability(client, "IMAP4REV2") && !hasImapCapability(client, "IMAP4REV1"));
+  return (
+    hasImapCapability(client, "PARTIAL") && (hasImapCapability(client, "ESEARCH") || rev2Active)
+  );
+}
+
+function parseBoundedUidSet(value: unknown, maxItems: number): number[] {
+  if (typeof value !== "string" || !value.trim()) return [];
+  const result = new Set<number>();
+  const add = (uid: number): boolean => {
+    if (!Number.isSafeInteger(uid) || uid <= 0 || uid > 0xffffffff) return false;
+    result.add(uid);
+    return result.size < maxItems;
+  };
+  for (const rawPart of value.split(",")) {
+    const part = rawPart.trim();
+    if (/^\d+$/.test(part)) {
+      if (!add(Number(part))) break;
+      continue;
+    }
+    const match = /^(\d+):(\d+)$/.exec(part);
+    if (!match) continue;
+    const start = Number(match[1]);
+    const end = Number(match[2]);
+    if (![start, end].every((uid) => Number.isSafeInteger(uid) && uid > 0)) continue;
+    const step = start <= end ? 1 : -1;
+    for (let uid = start; ; uid += step) {
+      if (!add(uid) || uid === end) break;
+    }
+    if (result.size >= maxItems) break;
+  }
+  return [...result];
+}
+
+function normalizeSenderHistoryUids(rawUids: readonly number[], beforeUid?: number): number[] {
+  return [...new Set(rawUids)]
+    .filter(
+      (uid) => Number.isInteger(uid) && uid > 0 && (beforeUid === undefined || uid < beforeUid),
+    )
+    .sort((a, b) => b - a);
+}
+
 export async function getSenderMessagesPageInMailbox(
   client: ImapFlow,
   sender: string,
   limit: number,
   cursor?: SenderMessagesCursor,
+  cacheScope?: string,
 ): Promise<SenderMessagesPage> {
   const normalizedSender = sender.trim().toLowerCase();
   const boundedLimit = Math.min(Math.max(Math.floor(limit), 1), 50);
@@ -1562,12 +1690,40 @@ export async function getSenderMessagesPageInMailbox(
     from: normalizedSender,
     ...(beforeUid !== undefined ? { uid: `1:${beforeUid - 1}` } : {}),
   } as unknown as SearchObject;
-  const rawUids = ((await client.search(criteria, { uid: true })) as number[]) || [];
-  const orderedUids = [...new Set(rawUids)]
-    .filter(
-      (uid) => Number.isInteger(uid) && uid > 0 && (beforeUid === undefined || uid < beforeUid),
-    )
-    .sort((a, b) => b - a);
+  const candidateLimit = boundedLimit + 1;
+  let orderedUids: number[];
+  if (supportsSenderHistoryPartialSearch(client)) {
+    const result = await client.search(criteria, {
+      uid: true,
+      returnOptions: [{ partial: `-1:-${candidateLimit}` }],
+    });
+    if (!result || Array.isArray(result) || !("partial" in result)) {
+      throw new Error("Sender history PARTIAL search failed");
+    }
+    orderedUids = normalizeSenderHistoryUids(
+      parseBoundedUidSet(result.partial?.messages, candidateLimit),
+      beforeUid,
+    );
+  } else {
+    const cacheKey = cacheScope ? `${cacheScope}|${uidValidity}|${normalizedSender}` : null;
+    const now = Date.now();
+    const cachedUids = cacheKey ? readSenderHistoryUidCache(cacheKey, now) : null;
+    if (cachedUids) {
+      orderedUids = normalizeSenderHistoryUids(cachedUids, beforeUid);
+    } else {
+      // A cache fill is always mailbox-complete for this sender. Otherwise a
+      // mid-pagination fill could later serve an initial page with newer UIDs
+      // missing from the cached set.
+      const result = await client.search(
+        cacheKey ? ({ from: normalizedSender } as unknown as SearchObject) : criteria,
+        { uid: true },
+      );
+      if (!result || !Array.isArray(result)) throw new Error("Sender history search failed");
+      const searchedUids = normalizeSenderHistoryUids(result);
+      if (cacheKey) writeSenderHistoryUidCache(cacheKey, searchedUids, now);
+      orderedUids = normalizeSenderHistoryUids(searchedUids, beforeUid);
+    }
+  }
   const pageUids = orderedUids.slice(0, boundedLimit);
   if (pageUids.length === 0) {
     return { messages: [], nextCursor: null, hasMore: false, cursorReset };
@@ -1607,11 +1763,12 @@ export async function getSenderMessagesPage(
   limit: number,
   cursor?: SenderMessagesCursor,
 ): Promise<SenderMessagesPage> {
+  const cacheScope = `${account.imap_host.trim().toLowerCase()}:${account.imap_port}|${account.email_address.trim().toLowerCase()}`;
   return withAccountMailbox(
     account,
     password,
     "INBOX",
-    (client) => getSenderMessagesPageInMailbox(client, sender, limit, cursor),
+    (client) => getSenderMessagesPageInMailbox(client, sender, limit, cursor, cacheScope),
     "background",
   );
 }

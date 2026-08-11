@@ -1467,6 +1467,7 @@ function useMailData(session: MailSession | null) {
   const [messages, setMessages] = useState<MailMessage[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [senderHistoryLoadingScope, setSenderHistoryLoadingScope] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(false);
   const [bridgeError, setBridgeError] = useState<string | null>(null);
   const [useMock, setUseMock] = useState(false);
@@ -1956,14 +1957,18 @@ function useMailData(session: MailSession | null) {
   ]);
 
   const loadMore = useCallback(async () => {
-    if (!session || loadingMore || loading || !hasMore) return;
-    setLoadingMore(true);
+    const historicalScope =
+      session && senderView && !senderCursor
+        ? `${session.account.id}|${senderView.trim().toLowerCase()}`
+        : null;
+    if (!session || loading || !hasMore || (!historicalScope && loadingMore)) return;
+    if (!historicalScope) setLoadingMore(true);
     try {
       if (senderView) {
         if (!senderCursor) {
           // Index exhausted: one bounded sender-only page, only after the user
           // explicitly requests more. This never runs when the folder opens.
-          const scopeKey = `${session.account.id}|${senderView.trim().toLowerCase()}`;
+          const scopeKey = historicalScope!;
           const requestGeneration = loadReqIdRef.current;
           let history = senderHistoryRef.current;
           if (!history || history.scopeKey !== scopeKey) {
@@ -1977,6 +1982,7 @@ function useMailData(session: MailSession | null) {
           const flightKey = `${scopeKey}|${history.cursor?.uidValidity ?? "start"}|${history.cursor?.beforeUid ?? "start"}`;
           if (senderHistoryFlightRef.current === flightKey) return;
           senderHistoryFlightRef.current = flightKey;
+          setSenderHistoryLoadingScope(scopeKey);
           try {
             const deep = await getSenderHistoryPage({
               data: {
@@ -2008,6 +2014,7 @@ function useMailData(session: MailSession | null) {
             if (senderHistoryFlightRef.current === flightKey) {
               senderHistoryFlightRef.current = null;
             }
+            setSenderHistoryLoadingScope((current) => (current === scopeKey ? null : current));
           }
           return;
         }
@@ -2084,7 +2091,7 @@ function useMailData(session: MailSession | null) {
     } catch {
       setHasMore(false);
     } finally {
-      setLoadingMore(false);
+      if (!historicalScope) setLoadingMore(false);
     }
   }, [
     session,
@@ -2300,7 +2307,7 @@ function useMailData(session: MailSession | null) {
     messages,
     setMessages,
     loading,
-    loadingMore,
+    loadingMore: loadingMore || senderHistoryLoadingScope === senderScopeKey,
     hasMore,
     loadMore,
     bridgeError,
