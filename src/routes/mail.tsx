@@ -1378,11 +1378,26 @@ function useMailData(session: MailSession | null) {
   const listIndexCounts = useMailServerFn(indexListFolderCounts);
   const syncFolder = useMailServerFn(runMailSync);
   const listSender = useMailServerFn(listSenderMessages);
+  const searchSender = useMailServerFn(bridgeSearch);
+  // Senders whose one-time Bridge sweep already ran in this session.
+  const senderDeepRef = useRef<Set<string>>(new Set());
+
+
   const [folder, setFolder] = useState<MailFolder>("inbox");
   // Sender Folders — virtual filter view over the Inbox index. When set, the
   // list shows only messages from this address; `folder` stays "inbox" so
   // every existing mutation/sync path keeps working unchanged.
   const [senderView, setSenderView] = useState<string | null>(null);
+  // Leaving a sender folder resets its one-time sweep flag, so reopening it
+  // later can sweep again — still only when the user scrolls to the bottom.
+  useEffect(() => {
+    if (!senderView) return;
+    const current = senderView;
+    return () => {
+      senderDeepRef.current.delete(current);
+    };
+  }, [senderView]);
+
   const [senderCursor, setSenderCursor] = useState<string | null>(null);
   // Folder definitions: one tiny SELECT per session, never polled.
   const [senderFolders, setSenderFolders] = useState<SenderFolder[]>([]);
@@ -1848,8 +1863,13 @@ function useMailData(session: MailSession | null) {
           if (loadReqIdRef.current !== reqId) return;
           if (res.ok) {
             setMessages(applyPending(res.messages));
-            setHasMore(res.hasMore);
+            // Local index holds only the synced slice of the Inbox. When it
+            // runs out we still allow one on-demand Bridge sweep (IMAP SEARCH
+            // FROM) at the very bottom of the list, so the folder can show the
+            // sender's older mail too. Zero extra cost until the user asks.
+            setHasMore(res.hasMore || !senderDeepRef.current.has(senderView));
             setSenderCursor(res.nextCursor);
+
             setIndexCursor(null);
             setSource("index");
             setUseMock(false);
@@ -1934,6 +1954,43 @@ function useMailData(session: MailSession | null) {
     try {
       if (senderView) {
         if (!senderCursor) {
+          // Index exhausted → one-time Bridge sweep for this sender, and only
+          // because the user scrolled to the very end. Never runs on open.
+          if (senderDeepRef.current.has(senderView)) {
+            setHasMore(false);
+            return;
+          }
+          senderDeepRef.current.add(senderView);
+          try {
+            const deep = await searchSender({
+              data: {
+                mailSessionToken: session.mailSessionToken!,
+                password: session.password,
+
+                folder: "inbox",
+                query: senderView,
+                includeBody: false,
+                limit: 200,
+              },
+            });
+            if (deep.ok) {
+              const target = senderView.toLowerCase();
+              const extra = applyPending(
+                deep.messages.filter((m) => (m.from?.email || "").toLowerCase() === target),
+              );
+              setMessages((prev) => {
+                const seen = new Set(prev.map((m) => m.id));
+                const merged = [...prev];
+                for (const m of extra) if (!seen.has(m.id)) merged.push(m);
+                merged.sort(
+                  (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime(),
+                );
+                return merged;
+              });
+            }
+          } catch {
+            /* keep the indexed slice on failure */
+          }
           setHasMore(false);
           return;
         }
@@ -1953,13 +2010,14 @@ function useMailData(session: MailSession | null) {
             for (const m of patched) if (!seen.has(m.id)) merged.push(m);
             return merged;
           });
-          setHasMore(res.hasMore);
+          setHasMore(res.hasMore || !senderDeepRef.current.has(senderView));
           setSenderCursor(res.nextCursor);
           return;
         }
         setHasMore(false);
         return;
       }
+
       if (source === "index" && indexCursor && canUseIndex(folder, sort)) {
         const res = await listIndex({
           data: {
@@ -2027,6 +2085,9 @@ function useMailData(session: MailSession | null) {
     senderView,
     senderCursor,
     listSender,
+    searchSender,
+    applyPending,
+
   ]);
 
   // Counts on mount: Local-Index first (one Supabase SELECT, ~ms) instead of
