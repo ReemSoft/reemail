@@ -1366,7 +1366,13 @@ function useMailData(session: MailSession | null) {
   const listIndex = useMailServerFn(indexListMessages);
   const listIndexCounts = useMailServerFn(indexListFolderCounts);
   const syncFolder = useMailServerFn(runMailSync);
+  const listSender = useMailServerFn(listSenderMessages);
   const [folder, setFolder] = useState<MailFolder>("inbox");
+  // Sender Folders — virtual filter view over the Inbox index. When set, the
+  // list shows only messages from this address; `folder` stays "inbox" so
+  // every existing mutation/sync path keeps working unchanged.
+  const [senderView, setSenderView] = useState<string | null>(null);
+  const [senderCursor, setSenderCursor] = useState<string | null>(null);
   const [sort, setSort] = useState<SortOption>("date-desc");
   const [counts, setCounts] = useState<
     Record<MailFolder, { total: number; unread: number; supported: boolean }>
