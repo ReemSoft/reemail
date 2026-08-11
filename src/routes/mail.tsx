@@ -1374,6 +1374,17 @@ type PostSendInfo = {
   sentCopyState?: SentCopyState;
 };
 
+// eslint-disable-next-line react-refresh/only-export-components -- executable regression contract
+export function isMailListLoadingMore(
+  normalLoadingMore: boolean,
+  senderScopeKey: string | null,
+  senderHistoryLoadingScope: string | null,
+): boolean {
+  return (
+    normalLoadingMore || (senderScopeKey !== null && senderHistoryLoadingScope === senderScopeKey)
+  );
+}
+
 function useMailData(session: MailSession | null) {
   const getCounts = useMailServerFn(bridgeGetFolderCounts);
   const getMessages = useMailServerFn(bridgeGetMessages);
@@ -2335,7 +2346,7 @@ function useMailData(session: MailSession | null) {
     messages,
     setMessages,
     loading,
-    loadingMore: loadingMore || senderHistoryLoadingScope === senderScopeKey,
+    loadingMore: isMailListLoadingMore(loadingMore, senderScopeKey, senderHistoryLoadingScope),
     listPaginationReady: loadedListScopeRef.current === listScopeKey,
     hasMore,
     loadMore,

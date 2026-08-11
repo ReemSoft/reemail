@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { MailMessage } from "@/lib/mail-types";
 import { mergeSenderMessagePages } from "@/lib/mail-sender-folders.functions";
+import { isMailListLoadingMore } from "@/routes/mail";
 
 function message(uid: number, date = uid): MailMessage {
   return {
@@ -248,5 +249,34 @@ describe("current-scope load-more permission", () => {
       routeSource.match(/if \(!isCurrentPagination\(\)\) return;/g)?.length,
     ).toBeGreaterThanOrEqual(3);
     expect(routeSource).toContain("loadedListScopeRef.current !== requestScope");
+  });
+});
+
+describe("mail-list loading-more presentation", () => {
+  it("is false for an idle normal Inbox with null sender scopes", () => {
+    expect(isMailListLoadingMore(false, null, null)).toBe(false);
+  });
+
+  it("is false for an idle normal Sent folder with null sender scopes", () => {
+    expect(isMailListLoadingMore(false, null, null)).toBe(false);
+  });
+
+  it("is true for actual normal-folder pagination", () => {
+    expect(isMailListLoadingMore(true, null, null)).toBe(true);
+  });
+
+  it("is true for the active sender historical scope", () => {
+    const scope = "account|sender@example.com";
+    expect(isMailListLoadingMore(false, scope, scope)).toBe(true);
+  });
+
+  it("is false for an idle sender folder", () => {
+    expect(isMailListLoadingMore(false, "account|sender@example.com", null)).toBe(false);
+  });
+
+  it("is false for stale sender history from another scope", () => {
+    expect(
+      isMailListLoadingMore(false, "account|senderB@example.com", "account|senderA@example.com"),
+    ).toBe(false);
   });
 });
