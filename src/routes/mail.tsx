@@ -1954,6 +1954,8 @@ function useMailData(session: MailSession | null) {
             const deep = await searchSender({
               data: {
                 mailSessionToken: session.mailSessionToken!,
+                password: session.password,
+
                 folder: "inbox",
                 query: senderView,
                 includeBody: false,
