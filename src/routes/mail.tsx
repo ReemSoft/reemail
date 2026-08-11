@@ -9008,6 +9008,43 @@ function Composer({
         </div>
       )}
 
+      {senderDialog && (
+        <SenderFolderDialog
+          open
+          onOpenChange={(o) => {
+            if (!o) setSenderDialog(null);
+          }}
+          email={senderDialog.email}
+          initialName={senderDialog.name}
+          initialColor={senderDialog.color}
+          existing={senderDialog.existing}
+          busy={senderDialogBusy}
+          onSave={async (draft) => {
+            setSenderDialogBusy(true);
+            const ok = await upsertSenderFolder(draft);
+            setSenderDialogBusy(false);
+            if (ok) {
+              setSenderDialog(null);
+              toast.success(tr("تم حفظ المجلد"));
+            } else {
+              toast.error(tr("تعذر حفظ المجلد"));
+            }
+          }}
+          onDelete={async () => {
+            setSenderDialogBusy(true);
+            const ok = await removeSenderFolder(senderDialog.email);
+            setSenderDialogBusy(false);
+            if (ok) {
+              setSenderDialog(null);
+              toast.success(tr("تم حذف المجلد"));
+            } else {
+              toast.error(tr("تعذر حذف المجلد"));
+            }
+          }}
+        />
+      )}
+
+
       <AlertDialog
         open={!!closePrompt}
         onOpenChange={(o) => {
