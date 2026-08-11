@@ -1713,16 +1713,28 @@ function useMailData(session: MailSession | null) {
             if (countsMutationGen.current !== gen) return;
             if (authoritative.ok) {
               const draftsCount = authoritative.counts.find((c) => c.folder === "drafts");
-              if (draftsCount) {
-                setCounts((prev) => ({
-                  ...prev,
-                  drafts: {
-                    total: draftsCount.total,
-                    unread: draftsCount.unread,
-                    supported: draftsCount.supported !== false,
-                  },
-                }));
-                if (draftsCount.path) {
+              const starredCount = authoritative.counts.find((c) => c.folder === "starred");
+              if (draftsCount || starredCount) {
+                setCounts((prev) => {
+                  const next = { ...prev };
+                  if (draftsCount) {
+                    next.drafts = {
+                      total: draftsCount.total,
+                      unread: draftsCount.unread,
+                      supported: draftsCount.supported !== false,
+                    };
+                  }
+                  if (starredCount) {
+                    const current = prev.starred ?? { total: 0, unread: 0, supported: true };
+                    next.starred = {
+                      total: isStarCountHot() ? current.total : starredCount.total,
+                      unread: starredCount.unread,
+                      supported: starredCount.supported !== false,
+                    };
+                  }
+                  return next;
+                });
+                if (draftsCount?.path) {
                   setFolderPaths((prev) =>
                     prev.drafts === draftsCount.path ? prev : { ...prev, drafts: draftsCount.path },
                   );
