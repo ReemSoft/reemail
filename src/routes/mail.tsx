@@ -1378,6 +1378,10 @@ function useMailData(session: MailSession | null) {
   const listIndexCounts = useMailServerFn(indexListFolderCounts);
   const syncFolder = useMailServerFn(runMailSync);
   const listSender = useMailServerFn(listSenderMessages);
+  const searchSender = useMailServerFn(bridgeSearch);
+  // Senders whose one-time Bridge sweep already ran in this session.
+  const senderDeepRef = useRef<Set<string>>(new Set());
+
   const [folder, setFolder] = useState<MailFolder>("inbox");
   // Sender Folders — virtual filter view over the Inbox index. When set, the
   // list shows only messages from this address; `folder` stays "inbox" so
