@@ -75,12 +75,23 @@ export interface CachedBody {
   byteSize: number;
 }
 
+export interface MailboxHint {
+  folderId: string;
+  path: string;
+  expectedUidValidity: string;
+}
+
 export type CacheLookup =
   | { hit: true; body: CachedBody }
   | {
       hit: false;
       reason: "no-folder" | "no-row" | "uidvalidity" | "orphan" | "oversize" | "no-headers";
     };
+
+export interface CacheLookupContext {
+  lookup: CacheLookup;
+  mailboxHint?: MailboxHint;
+}
 
 export interface CacheKey {
   companyId: string;
@@ -174,14 +185,14 @@ function normalizeCachedInlineMetadata(
  * A different UIDVALIDITY makes the stored body unusable, by construction:
  * it is part of the unique key AND re-checked here.
  */
-export async function lookupCachedBody(
+export async function lookupCachedBodyWithMailboxHint(
   supabase: SupabaseClient,
   key: CacheKey,
-): Promise<CacheLookup> {
+): Promise<CacheLookupContext> {
   const [folderRes, rowRes] = await Promise.all([
     supabase
       .from("mail_folders")
-      .select("id, uidvalidity")
+      .select("id, uidvalidity, path")
       .eq("company_id", key.companyId)
       .eq("account_id", key.accountId)
       .eq("canonical", key.canonical)
@@ -202,7 +213,11 @@ export async function lookupCachedBody(
       .maybeSingle(),
   ]);
 
-  const folder = folderRes.data as { id: string; uidvalidity: number | null } | null;
+  const folder = folderRes.data as {
+    id: string;
+    uidvalidity: number | null;
+    path: string | null;
+  } | null;
   const row = rowRes.data as {
     uid_validity: number;
     body_html: string | null;
@@ -216,17 +231,36 @@ export async function lookupCachedBody(
     oversize: boolean;
   } | null;
 
-  if (!folder || folder.uidvalidity == null) return { hit: false, reason: "no-folder" };
-  if (!row) return { hit: false, reason: "no-row" };
-  if (Number(row.uid_validity) !== Number(folder.uidvalidity)) {
-    return { hit: false, reason: "uidvalidity" };
+  const mailboxHint =
+    folder?.id &&
+    folder.uidvalidity != null &&
+    Number(folder.uidvalidity) > 0 &&
+    typeof folder.path === "string" &&
+    folder.path.trim()
+      ? {
+          folderId: folder.id,
+          path: folder.path,
+          expectedUidValidity: String(folder.uidvalidity),
+        }
+      : undefined;
+
+  if (!folder || folder.uidvalidity == null) {
+    return { lookup: { hit: false, reason: "no-folder" } };
   }
-  if (row.oversize || (!row.body_html && !row.body_text)) return { hit: false, reason: "oversize" };
+  if (!row) return { lookup: { hit: false, reason: "no-row" }, mailboxHint };
+  if (Number(row.uid_validity) !== Number(folder.uidvalidity)) {
+    return { lookup: { hit: false, reason: "uidvalidity" }, mailboxHint };
+  }
+  if (row.oversize || (!row.body_html && !row.body_text)) {
+    return { lookup: { hit: false, reason: "oversize" }, mailboxHint };
+  }
   // Rows cached before provenance headers were persisted lack `headers_meta`.
   // Treat them as a miss exactly once: the live fetch re-stores a complete
   // row, so the mailed-by / signed-by / security lines come back for good
   // without invalidating the whole cache.
-  if (row.headers_meta == null) return { hit: false, reason: "no-headers" };
+  if (row.headers_meta == null) {
+    return { lookup: { hit: false, reason: "no-headers" }, mailboxHint };
+  }
 
   const live = await supabase
     .from("mail_messages")
@@ -239,7 +273,7 @@ export async function lookupCachedBody(
     .is("deleted_at", null)
     .limit(1)
     .maybeSingle();
-  if (!live.data) return { hit: false, reason: "orphan" };
+  if (!live.data) return { lookup: { hit: false, reason: "orphan" }, mailboxHint };
 
   const bodyHtml = row.body_html ?? row.body_text ?? "";
   const normalizedInlineMetadata = normalizeCachedInlineMetadata(
@@ -249,20 +283,30 @@ export async function lookupCachedBody(
   );
 
   return {
-    hit: true,
-    body: {
-      bodyHtml,
-      preview: row.preview ?? "",
-      inlineParts: normalizedInlineMetadata.inlineParts,
-      inlineImages: Array.isArray(row.inline_images)
-        ? (row.inline_images as CachedBody["inlineImages"])
-        : [],
-      attachments: normalizedInlineMetadata.attachments,
-      headersMeta: sanitizeHeadersMeta(row.headers_meta),
-      uidValidity: String(row.uid_validity),
-      byteSize: row.byte_size,
+    lookup: {
+      hit: true,
+      body: {
+        bodyHtml,
+        preview: row.preview ?? "",
+        inlineParts: normalizedInlineMetadata.inlineParts,
+        inlineImages: Array.isArray(row.inline_images)
+          ? (row.inline_images as CachedBody["inlineImages"])
+          : [],
+        attachments: normalizedInlineMetadata.attachments,
+        headersMeta: sanitizeHeadersMeta(row.headers_meta),
+        uidValidity: String(row.uid_validity),
+        byteSize: row.byte_size,
+      },
     },
+    mailboxHint,
   };
+}
+
+export async function lookupCachedBody(
+  supabase: SupabaseClient,
+  key: CacheKey,
+): Promise<CacheLookup> {
+  return (await lookupCachedBodyWithMailboxHint(supabase, key)).lookup;
 }
 
 /** Non-blocking LRU touch. Never awaited on the response path. */

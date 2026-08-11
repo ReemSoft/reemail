@@ -360,6 +360,8 @@ app.post("/api/messages", requireKey, imapGate("interactive"), async (req, res) 
 
 const OpenMessagePayloadSchema = MessagePayloadSchema.extend({
   lane: z.enum(["interactive", "background"]).optional().default("interactive"),
+  mailboxPathHint: z.string().max(500).optional(),
+  expectedUidValidity: z.string().max(64).optional(),
 });
 
 /**
@@ -381,6 +383,12 @@ app.post("/api/message", requireKey, messageGate, async (req, res) => {
       payload.folder,
       payload.uid,
       payload.lane,
+      payload.mailboxPathHint && payload.expectedUidValidity
+        ? {
+            path: payload.mailboxPathHint,
+            expectedUidValidity: payload.expectedUidValidity,
+          }
+        : undefined,
     );
     if (!message) {
       return res.status(404).json({ ok: false, error: "Message not found" });

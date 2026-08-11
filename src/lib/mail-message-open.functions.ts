@@ -60,36 +60,52 @@ export const openMailMessage = createServerFn({ method: "POST" })
   .inputValidator((v: z.input<typeof OpenSchema>) => OpenSchema.parse(v))
   .handler(async ({ data }): Promise<OpenMessageResult> => {
     const t0 = Date.now();
-    const { resolveBridgeAuth } = await import("@/lib/mail-bridge-auth.server");
+    const { verifyBridgeAuthClaims, resolveBridgeAuthForVerifiedClaims } =
+      await import("@/lib/mail-bridge-auth.server");
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
     const cache = await import("@/lib/mail-body-cache.server");
     const { bridgeCallResolved } = await import("@/lib/mail-bridge-call.server");
 
-    const auth = await resolveBridgeAuth(data.mailSessionToken);
-    if (!auth.ok) {
+    const claims = await verifyBridgeAuthClaims(data.mailSessionToken);
+    if (!("sub" in claims)) {
       return {
         ok: false,
         code: classifyBridgeMessageFailure({
-          status: auth.status,
-          unavailable: auth.code === "BRIDGE_NOT_CONFIGURED",
+          status: claims.status,
+          unavailable: claims.code === "BRIDGE_NOT_CONFIGURED",
         }),
-        error: auth.error,
+        error: claims.error,
         message: null,
         body: null,
-        status: auth.status,
+        status: claims.status,
       };
     }
 
     const key = {
-      companyId: auth.companyId,
-      accountId: auth.accountId,
+      companyId: claims.cid,
+      accountId: claims.sub,
       canonical: data.folder,
       uid: data.uid,
     };
 
+    // Config resolution and cache lookup are independent once the verified
+    // token supplied authoritative tenant/account identity. Start both now;
+    // a complete cache hit never waits for account/config database work.
+    const authPromise = resolveBridgeAuthForVerifiedClaims(claims).catch(() => ({
+      ok: false as const,
+      status: 500,
+      error: "تعذر تحميل الإعدادات.",
+      code: "CONFIG_LOAD_FAILED",
+    }));
+    let mailboxHint: { path: string; expectedUidValidity: string } | undefined;
+
     if (data.allowCache && cache.isCacheableFolder(data.folder)) {
       const tRead = Date.now();
-      const found = await cache.lookupCachedBody(supabaseAdmin, key).catch(() => null);
+      const context = await cache
+        .lookupCachedBodyWithMailboxHint(supabaseAdmin, key)
+        .catch(() => null);
+      const found = context?.lookup ?? null;
+      mailboxHint = context?.mailboxHint;
       console.log(`[message-open] cache-read ${Date.now() - tRead}ms`);
       if (found?.hit) {
         cache.touchCachedBody(supabaseAdmin, key);
@@ -115,11 +131,36 @@ export const openMailMessage = createServerFn({ method: "POST" })
       console.log(`[body-cache] miss reason=${found?.hit === false ? found.reason : "error"}`);
     }
 
+    const auth = await authPromise;
+    if (!auth.ok) {
+      return {
+        ok: false,
+        code: classifyBridgeMessageFailure({
+          status: auth.status,
+          unavailable: auth.code === "BRIDGE_NOT_CONFIGURED",
+        }),
+        error: auth.error,
+        message: null,
+        body: null,
+        status: auth.status,
+      };
+    }
+
     const tImap = Date.now();
     const r = await bridgeCallResolved(
       auth,
       "/api/message",
-      { folder: data.folder, uid: data.uid, lane: data.lane },
+      {
+        folder: data.folder,
+        uid: data.uid,
+        lane: data.lane,
+        ...(mailboxHint && data.folder !== "starred" && data.folder !== "all"
+          ? {
+              mailboxPathHint: mailboxHint.path,
+              expectedUidValidity: mailboxHint.expectedUidValidity,
+            }
+          : {}),
+      },
       data.password,
     );
     console.log(`[message-open] imap-fetch ${Date.now() - tImap}ms`);

@@ -539,6 +539,83 @@ export function planInlineImagesForOpen(
     : { deferred: [], toDownload: candidates };
 }
 
+export interface TrustedMailboxHint {
+  path: string;
+  expectedUidValidity: string;
+}
+
+interface MessageMailboxDeps {
+  getMailboxes: typeof getMailboxesCached;
+  withMailbox: typeof withAccountMailbox;
+}
+
+const messageMailboxDeps: MessageMailboxDeps = {
+  getMailboxes: getMailboxesCached,
+  withMailbox: withAccountMailbox,
+};
+
+class MailboxHintUidValidityMismatch extends Error {}
+
+function validTrustedMailboxHint(
+  value: TrustedMailboxHint | undefined,
+): value is TrustedMailboxHint {
+  return Boolean(
+    value &&
+    value.path.trim() &&
+    value.path.length <= 500 &&
+    /^[1-9]\d*$/.test(value.expectedUidValidity),
+  );
+}
+
+/**
+ * Select a server-proven physical path without LIST, then verify UIDVALIDITY
+ * from the selected mailbox before any FETCH. Invalid/stale hints fall back to
+ * the unchanged LIST + canonical resolver path. Errors after the operation
+ * starts are never retried, avoiding duplicate FETCH/body downloads.
+ */
+export async function withMessageMailbox<T>(
+  account: MailAccount,
+  password: string,
+  folder: MailFolder,
+  lane: ImapLane,
+  hint: TrustedMailboxHint | undefined,
+  operation: (client: ImapFlow) => Promise<T>,
+  deps: MessageMailboxDeps = messageMailboxDeps,
+): Promise<T | null> {
+  if (validTrustedMailboxHint(hint)) {
+    let operationStarted = false;
+    try {
+      return await deps.withMailbox(
+        account,
+        password,
+        hint.path,
+        async (client) => {
+          const selected = (client as unknown as { mailbox?: { uidValidity?: unknown } }).mailbox;
+          const actualUidValidity =
+            selected?.uidValidity == null ? "" : String(selected.uidValidity);
+          if (actualUidValidity !== hint.expectedUidValidity) {
+            throw new MailboxHintUidValidityMismatch();
+          }
+          operationStarted = true;
+          return operation(client);
+        },
+        lane,
+      );
+    } catch (error) {
+      if (operationStarted || !(error instanceof MailboxHintUidValidityMismatch)) {
+        // A path/SELECT failure occurs before our callback and is safe to
+        // resolve normally. Once the callback starts, do not duplicate I/O.
+        if (operationStarted) throw error;
+      }
+    }
+  }
+
+  const mailboxes = await deps.getMailboxes(account, password, lane);
+  const path = resolveFolderPath(mailboxes, folder);
+  if (!path) return null;
+  return deps.withMailbox(account, password, path, operation, lane);
+}
+
 /**
  * Opens a single message for display.
  *
@@ -561,16 +638,15 @@ export async function getMessageBody(
   folder: MailFolder,
   uid: number,
   lane: ImapLane = "interactive",
+  mailboxHint?: TrustedMailboxHint,
 ): Promise<MailMessage | null> {
-  const mailboxes = await getMailboxesCached(account, password, lane);
-  const path = resolveFolderPath(mailboxes, folder);
-  if (!path) return null;
-
   const tOpen = Date.now();
-  const result = await withAccountMailbox(
+  const result = await withMessageMailbox(
     account,
     password,
-    path,
+    folder,
+    lane,
+    mailboxHint,
     async (client) => {
       const tFetch = Date.now();
       const msg = await client.fetchOne(
@@ -733,7 +809,6 @@ export async function getMessageBody(
 
       return parsed;
     },
-    lane,
   );
 
   if (TIMING_ENABLED)

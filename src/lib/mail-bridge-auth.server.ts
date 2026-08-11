@@ -18,6 +18,7 @@ import {
   type ResolvedMailConfig,
 } from "@/lib/mail-config.server";
 import { supabaseAdmin } from "@/integrations/supabase/client.server";
+import type { MailSessionClaims } from "@/lib/mail-token.server";
 
 export interface BridgeAuthOk {
   ok: true;
@@ -44,12 +45,15 @@ export interface BridgeAuthErr {
   code: string;
 }
 
-export async function resolveBridgeAuth(
+export type VerifiedBridgeClaims = Pick<MailSessionClaims, "sub" | "cid">;
+
+/** Verify the Mail Session JWT without starting account/config database work. */
+export async function verifyBridgeAuthClaims(
   mailSessionToken: string,
-): Promise<BridgeAuthOk | BridgeAuthErr> {
-  let claims;
+): Promise<VerifiedBridgeClaims | BridgeAuthErr> {
   try {
-    claims = await verifyMailSessionToken(mailSessionToken);
+    const claims = await verifyMailSessionToken(mailSessionToken);
+    return { sub: claims.sub, cid: claims.cid };
   } catch {
     return {
       ok: false,
@@ -58,6 +62,16 @@ export async function resolveBridgeAuth(
       code: "INVALID_TOKEN",
     };
   }
+}
+
+function isBridgeAuthError(value: VerifiedBridgeClaims | BridgeAuthErr): value is BridgeAuthErr {
+  return "ok" in value && value.ok === false;
+}
+
+/** Resolve server-owned account/config after the JWT claims were verified once. */
+export async function resolveBridgeAuthForVerifiedClaims(
+  claims: VerifiedBridgeClaims,
+): Promise<BridgeAuthOk | BridgeAuthErr> {
   const accountId = claims.sub;
   const companyId = claims.cid;
 
@@ -104,4 +118,12 @@ export async function resolveBridgeAuth(
     bridgeUrl: bridgeUrl.replace(/\/$/, ""),
     bridgeKey,
   };
+}
+
+export async function resolveBridgeAuth(
+  mailSessionToken: string,
+): Promise<BridgeAuthOk | BridgeAuthErr> {
+  const claims = await verifyBridgeAuthClaims(mailSessionToken);
+  if (isBridgeAuthError(claims)) return claims;
+  return resolveBridgeAuthForVerifiedClaims(claims);
 }

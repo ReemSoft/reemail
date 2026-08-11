@@ -9,6 +9,7 @@
 import { describe, it, expect, vi } from "vitest";
 import {
   lookupCachedBody,
+  lookupCachedBodyWithMailboxHint,
   storeCachedBody,
   isCacheableFolder,
   byteLength,
@@ -53,6 +54,34 @@ const CACHED = {
 };
 
 describe("lookupCachedBody", () => {
+  it("reuses the folder query as a bounded server-only mailbox hint", async () => {
+    const db = fakeSupabase({
+      mail_folders: { id: "f1", uidvalidity: 100, path: "[Gmail]/Sent Mail" },
+      mail_message_body_cache: null,
+    });
+
+    const result = await lookupCachedBodyWithMailboxHint(db, { ...KEY, canonical: "sent" });
+
+    expect(result.lookup).toEqual({ hit: false, reason: "no-row" });
+    expect(result.mailboxHint).toEqual({
+      folderId: "f1",
+      path: "[Gmail]/Sent Mail",
+      expectedUidValidity: "100",
+    });
+  });
+
+  it("fails closed without a valid physical path and UIDVALIDITY", async () => {
+    const db = fakeSupabase({
+      mail_folders: { id: "f1", uidvalidity: 100, path: "" },
+      mail_message_body_cache: null,
+    });
+
+    const result = await lookupCachedBodyWithMailboxHint(db, KEY);
+
+    expect(result.lookup).toEqual({ hit: false, reason: "no-row" });
+    expect(result.mailboxHint).toBeUndefined();
+  });
+
   it("hits when uidvalidity matches and the index row is alive", async () => {
     const db = fakeSupabase({
       mail_folders: { id: "f1", uidvalidity: 100 },
