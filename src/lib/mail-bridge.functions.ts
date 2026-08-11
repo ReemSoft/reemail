@@ -70,6 +70,33 @@ const SearchPayloadSchema = AuthSchema.extend({
   limit: z.number().int().positive().max(500).optional(),
 });
 
+const SenderMessagesPayloadSchema = AuthSchema.extend({
+  sender: z.string().trim().toLowerCase().email().max(320),
+  limit: z.number().int().positive().max(50).optional().default(50),
+  cursor: z
+    .object({
+      beforeUid: z.number().int().positive(),
+      uidValidity: z.string().min(1).max(64),
+    })
+    .strict()
+    .optional(),
+}).strict();
+
+export interface SenderMessagesCursor {
+  beforeUid: number;
+  uidValidity: string;
+}
+
+export type SenderMessagesPageResult =
+  | {
+      ok: true;
+      messages: MailMessage[];
+      nextCursor: SenderMessagesCursor | null;
+      hasMore: boolean;
+      cursorReset: boolean;
+    }
+  | { ok: false; error: string };
+
 async function bridgeCall(
   mailSessionToken: string,
   path: string,
@@ -283,6 +310,27 @@ export const bridgeSearch = createServerFn({ method: "POST" })
     );
     if (!r.ok) return { ok: false as const, error: r.error, messages: [] as MailMessage[] };
     return { ok: true as const, messages: (r.json.messages ?? []) as MailMessage[] };
+  });
+
+export const bridgeGetSenderMessagesPage = createServerFn({ method: "POST" })
+  .inputValidator((v: z.input<typeof SenderMessagesPayloadSchema>) =>
+    SenderMessagesPayloadSchema.parse(v),
+  )
+  .handler(async ({ data }): Promise<SenderMessagesPageResult> => {
+    const r = await bridgeCall(
+      data.mailSessionToken,
+      "/api/sender-messages",
+      { sender: data.sender, limit: data.limit, cursor: data.cursor },
+      data.password,
+    );
+    if (!r.ok) return { ok: false, error: "Sender history request failed" };
+    return {
+      ok: true,
+      messages: (r.json.messages ?? []) as MailMessage[],
+      nextCursor: (r.json.nextCursor as SenderMessagesCursor | null) ?? null,
+      hasMore: !!r.json.hasMore,
+      cursorReset: !!r.json.cursorReset,
+    };
   });
 
 export const bridgeSend = createServerFn({ method: "POST" })

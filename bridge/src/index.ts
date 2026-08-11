@@ -35,6 +35,7 @@ import {
   moveMessage,
   deleteMessage,
   searchMessages,
+  getSenderMessagesPage,
   downloadAttachment,
   resolveFolderPath,
   type InlinePartMetadata,
@@ -531,6 +532,18 @@ const SearchPayloadSchema = FolderPayloadSchema.extend({
   limit: z.number().int().positive().max(200).optional().default(100),
 });
 
+const SenderMessagesPayloadSchema = AuthPayloadSchema.extend({
+  sender: z.string().trim().toLowerCase().email().max(320),
+  limit: z.number().int().positive().max(50).optional().default(50),
+  cursor: z
+    .object({
+      beforeUid: z.number().int().positive(),
+      uidValidity: z.string().min(1).max(64),
+    })
+    .strict()
+    .optional(),
+}).strict();
+
 app.post("/api/search", requireKey, imapGate("interactive"), async (req, res) => {
   try {
     const payload = SearchPayloadSchema.parse(req.body);
@@ -545,6 +558,28 @@ app.post("/api/search", requireKey, imapGate("interactive"), async (req, res) =>
   } catch (err: any) {
     console.error("[bridge] /api/search error:", err);
     return res.status(500).json({ ok: false, error: err?.message || "Failed to search" });
+  }
+});
+
+app.post("/api/sender-messages", requireKey, imapGate("background"), async (req, res) => {
+  try {
+    const payload = SenderMessagesPayloadSchema.parse(req.body);
+    const page = await getSenderMessagesPage(
+      payload.account as MailAccount,
+      payload.password,
+      payload.sender,
+      payload.limit,
+      payload.cursor
+        ? {
+            beforeUid: payload.cursor.beforeUid!,
+            uidValidity: payload.cursor.uidValidity!,
+          }
+        : undefined,
+    );
+    return res.json({ ok: true, ...page });
+  } catch {
+    console.error("[bridge] /api/sender-messages failed");
+    return res.status(500).json({ ok: false, error: "Sender history request failed" });
   }
 });
 

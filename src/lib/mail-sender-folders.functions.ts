@@ -21,6 +21,23 @@ export interface SenderFolder {
   color: string;
 }
 
+/** Merge Local Index and IMAP pages by their physical `folder:uid` identity. */
+export function mergeSenderMessagePages(
+  current: readonly MailMessage[],
+  incoming: readonly MailMessage[],
+): MailMessage[] {
+  const seen = new Set(current.map((message) => message.id));
+  const merged = [...current];
+  for (const message of incoming) {
+    if (!seen.has(message.id)) {
+      seen.add(message.id);
+      merged.push(message);
+    }
+  }
+  merged.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  return merged;
+}
+
 const TokenSchema = z.string().min(20).max(4096);
 const EmailSchema = z.string().trim().toLowerCase().min(3).max(320);
 

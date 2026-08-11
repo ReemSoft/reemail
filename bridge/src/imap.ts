@@ -1519,3 +1519,99 @@ export async function searchMessages(
     await client.logout().catch(() => {});
   }
 }
+
+// ---------------------------------------------------------------------------
+// Sender-folder historical pagination. This deliberately stays separate from
+// generic search: it advances through the server UID search space and fetches
+// metadata for one bounded page, never bodies or message sources.
+// ---------------------------------------------------------------------------
+
+export interface SenderMessagesCursor {
+  beforeUid: number;
+  uidValidity: string;
+}
+
+export interface SenderMessagesPage {
+  messages: MailMessage[];
+  nextCursor: SenderMessagesCursor | null;
+  hasMore: boolean;
+  cursorReset: boolean;
+}
+
+export async function getSenderMessagesPageInMailbox(
+  client: ImapFlow,
+  sender: string,
+  limit: number,
+  cursor?: SenderMessagesCursor,
+): Promise<SenderMessagesPage> {
+  const normalizedSender = sender.trim().toLowerCase();
+  const boundedLimit = Math.min(Math.max(Math.floor(limit), 1), 50);
+  const mailbox = client.mailbox;
+  const uidValidity = mailbox ? String(mailbox.uidValidity) : "";
+  if (!uidValidity) throw new Error("Inbox UIDVALIDITY unavailable");
+
+  // UID cursors are invalid after UIDVALIDITY changes. Restart safely; the UI
+  // deduplicates any overlap with messages that are already rendered.
+  const cursorReset = !!cursor && cursor.uidValidity !== uidValidity;
+  const beforeUid = cursorReset ? undefined : cursor?.beforeUid;
+  if (beforeUid !== undefined && beforeUid <= 1) {
+    return { messages: [], nextCursor: null, hasMore: false, cursorReset };
+  }
+
+  const criteria = {
+    from: normalizedSender,
+    ...(beforeUid !== undefined ? { uid: `1:${beforeUid - 1}` } : {}),
+  } as unknown as SearchObject;
+  const rawUids = ((await client.search(criteria, { uid: true })) as number[]) || [];
+  const orderedUids = [...new Set(rawUids)]
+    .filter(
+      (uid) => Number.isInteger(uid) && uid > 0 && (beforeUid === undefined || uid < beforeUid),
+    )
+    .sort((a, b) => b - a);
+  const pageUids = orderedUids.slice(0, boundedLimit);
+  if (pageUids.length === 0) {
+    return { messages: [], nextCursor: null, hasMore: false, cursorReset };
+  }
+
+  const byUid = new Map<number, MailMessage>();
+  for await (const msg of client.fetch(
+    pageUids,
+    {
+      uid: true,
+      envelope: true,
+      internalDate: true,
+      flags: true,
+      bodyStructure: true,
+    },
+    { uid: true },
+  )) {
+    const parsed = await messageFromFetch(msg, "inbox", client);
+    if ((parsed.from?.email || "").trim().toLowerCase() === normalizedSender) {
+      byUid.set(Number(msg.uid), parsed);
+    }
+  }
+
+  const messages = pageUids.flatMap((uid) => {
+    const message = byUid.get(uid);
+    return message ? [message] : [];
+  });
+  const hasMore = orderedUids.length > pageUids.length;
+  const nextCursor = hasMore ? { beforeUid: pageUids[pageUids.length - 1]!, uidValidity } : null;
+  return { messages, nextCursor, hasMore, cursorReset };
+}
+
+export async function getSenderMessagesPage(
+  account: MailAccount,
+  password: string,
+  sender: string,
+  limit: number,
+  cursor?: SenderMessagesCursor,
+): Promise<SenderMessagesPage> {
+  return withAccountMailbox(
+    account,
+    password,
+    "INBOX",
+    (client) => getSenderMessagesPageInMailbox(client, sender, limit, cursor),
+    "background",
+  );
+}

@@ -758,6 +758,8 @@ import {
   bridgeMove,
   bridgeDelete,
   bridgeSearch,
+  bridgeGetSenderMessagesPage,
+  type SenderMessagesCursor,
   bridgeDeleteDraft,
 } from "@/lib/mail-bridge.functions";
 import { openMailMessage, resolveMessageInlineImages } from "@/lib/mail-message-open.functions";
@@ -814,6 +816,7 @@ import { indexListMessages } from "@/lib/mail-index.functions";
 import {
   listSenderFolders,
   listSenderMessages,
+  mergeSenderMessagePages,
   saveSenderFolder,
   deleteSenderFolder,
   type SenderFolder,
@@ -1378,9 +1381,7 @@ function useMailData(session: MailSession | null) {
   const listIndexCounts = useMailServerFn(indexListFolderCounts);
   const syncFolder = useMailServerFn(runMailSync);
   const listSender = useMailServerFn(listSenderMessages);
-  const searchSender = useMailServerFn(bridgeSearch);
-  // Senders whose one-time Bridge sweep already ran in this session.
-  const senderDeepRef = useRef<Set<string>>(new Set());
+  const getSenderHistoryPage = useMailServerFn(bridgeGetSenderMessagesPage);
 
 
   const [folder, setFolder] = useState<MailFolder>("inbox");
@@ -1388,15 +1389,17 @@ function useMailData(session: MailSession | null) {
   // list shows only messages from this address; `folder` stays "inbox" so
   // every existing mutation/sync path keeps working unchanged.
   const [senderView, setSenderView] = useState<string | null>(null);
-  // Leaving a sender folder resets its one-time sweep flag, so reopening it
-  // later can sweep again — still only when the user scrolls to the bottom.
-  useEffect(() => {
-    if (!senderView) return;
-    const current = senderView;
-    return () => {
-      senderDeepRef.current.delete(current);
-    };
-  }, [senderView]);
+  // Scope all server-search progress to this account + normalized sender.
+  const senderScopeKey =
+    session && senderView ? `${session.account.id}|${senderView.trim().toLowerCase()}` : null;
+  const senderScopeKeyRef = useRef<string | null>(senderScopeKey);
+  senderScopeKeyRef.current = senderScopeKey;
+  const senderHistoryRef = useRef<{
+    scopeKey: string;
+    cursor: SenderMessagesCursor | null;
+    exhausted: boolean;
+  } | null>(null);
+  const senderHistoryFlightRef = useRef<string | null>(null);
 
   const [senderCursor, setSenderCursor] = useState<string | null>(null);
   // Folder definitions: one tiny SELECT per session, never polled.
@@ -1863,12 +1866,16 @@ function useMailData(session: MailSession | null) {
           if (loadReqIdRef.current !== reqId) return;
           if (res.ok) {
             setMessages(applyPending(res.messages));
-            // Local index holds only the synced slice of the Inbox. When it
-            // runs out we still allow one on-demand Bridge sweep (IMAP SEARCH
-            // FROM) at the very bottom of the list, so the folder can show the
-            // sender's older mail too. Zero extra cost until the user asks.
-            setHasMore(res.hasMore || !senderDeepRef.current.has(senderView));
+            // Local Index can hold only a synced Inbox slice. Keep historical
+            // pagination available, but do no Bridge work until explicit
+            // loadMore after the Local Index cursor is exhausted.
+            setHasMore(true);
             setSenderCursor(res.nextCursor);
+            senderHistoryRef.current = {
+              scopeKey: `${session.account.id}|${senderView.trim().toLowerCase()}`,
+              cursor: null,
+              exhausted: false,
+            };
 
             setIndexCursor(null);
             setSource("index");
@@ -1954,44 +1961,54 @@ function useMailData(session: MailSession | null) {
     try {
       if (senderView) {
         if (!senderCursor) {
-          // Index exhausted → one-time Bridge sweep for this sender, and only
-          // because the user scrolled to the very end. Never runs on open.
-          if (senderDeepRef.current.has(senderView)) {
+          // Index exhausted: one bounded sender-only page, only after the user
+          // explicitly requests more. This never runs when the folder opens.
+          const scopeKey = `${session.account.id}|${senderView.trim().toLowerCase()}`;
+          const requestGeneration = loadReqIdRef.current;
+          let history = senderHistoryRef.current;
+          if (!history || history.scopeKey !== scopeKey) {
+            history = { scopeKey, cursor: null, exhausted: false };
+            senderHistoryRef.current = history;
+          }
+          if (history.exhausted) {
             setHasMore(false);
             return;
           }
-          senderDeepRef.current.add(senderView);
+          const flightKey = `${scopeKey}|${history.cursor?.uidValidity ?? "start"}|${history.cursor?.beforeUid ?? "start"}`;
+          if (senderHistoryFlightRef.current === flightKey) return;
+          senderHistoryFlightRef.current = flightKey;
           try {
-            const deep = await searchSender({
+            const deep = await getSenderHistoryPage({
               data: {
                 mailSessionToken: session.mailSessionToken!,
                 password: session.password,
-
-                folder: "inbox",
-                query: senderView,
-                includeBody: false,
-                limit: 200,
+                sender: senderView,
+                limit: PAGE,
+                cursor: history.cursor ?? undefined,
               },
             });
-            if (deep.ok) {
-              const target = senderView.toLowerCase();
-              const extra = applyPending(
-                deep.messages.filter((m) => (m.from?.email || "").toLowerCase() === target),
-              );
-              setMessages((prev) => {
-                const seen = new Set(prev.map((m) => m.id));
-                const merged = [...prev];
-                for (const m of extra) if (!seen.has(m.id)) merged.push(m);
-                merged.sort(
-                  (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime(),
-                );
-                return merged;
-              });
-            }
+            if (
+              !deep.ok ||
+              loadReqIdRef.current !== requestGeneration ||
+              senderScopeKeyRef.current !== scopeKey
+            )
+              return;
+            const extra = applyPending(deep.messages);
+            setMessages((prev) => mergeSenderMessagePages(prev, extra));
+            history.cursor = deep.nextCursor;
+            history.exhausted = !deep.hasMore;
+            setHasMore(deep.hasMore);
           } catch {
-            /* keep the indexed slice on failure */
+            if (
+              loadReqIdRef.current === requestGeneration &&
+              senderScopeKeyRef.current === scopeKey
+            )
+              setHasMore(true);
+          } finally {
+            if (senderHistoryFlightRef.current === flightKey) {
+              senderHistoryFlightRef.current = null;
+            }
           }
-          setHasMore(false);
           return;
         }
         const res = await listSender({
@@ -2010,7 +2027,7 @@ function useMailData(session: MailSession | null) {
             for (const m of patched) if (!seen.has(m.id)) merged.push(m);
             return merged;
           });
-          setHasMore(res.hasMore || !senderDeepRef.current.has(senderView));
+          setHasMore(true);
           setSenderCursor(res.nextCursor);
           return;
         }
@@ -2085,9 +2102,8 @@ function useMailData(session: MailSession | null) {
     senderView,
     senderCursor,
     listSender,
-    searchSender,
+    getSenderHistoryPage,
     applyPending,
-
   ]);
 
   // Counts on mount: Local-Index first (one Supabase SELECT, ~ms) instead of
