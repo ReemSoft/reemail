@@ -198,7 +198,6 @@
   "تعذّر تحميل مرفق من المسودة الأصلية": "Failed to load an attachment from the original draft",
   "تعذّر تنزيل المرفق": "Could not download the attachment",
   "جاري تحميل نص الرسالة": "Loading message body",
-
   "تعذّر تنزيل المرفق${msg ?": "Failed to download attachment${msg ?",
   "تعذّر حذف المسودة. احتفظنا بنسختك؛ حاول مرة أخرى.": "Could not delete the draft. Your copy was kept; please try again.",
   "تعذّر حفظ المسودّة": "Failed to save draft",
@@ -260,7 +259,6 @@
   "جاري تحميل المزيد…": "Loading more…",
   "جارٍ التحميل…": "Loading…",
   "جارٍ الحفظ…": "Saving…",
-
   "جارٍ حذف المسودة": "Deleting draft",
   "جاهز لتقديم بريد إلكتروني احترافي لعملائك؟": "Ready to deliver professional email to your clients?",
   "جرّب تفعيل «تضمين نص الرسالة» من خيارات البحث": "Try enabling \"Include content\" in search options",
@@ -467,5 +465,21 @@
   "لديك رسالة غير محفوظة. يمكنك حفظها كمسودّة، أو حذفها، أو البقاء هنا.": "You have an unsaved message. You can save it as a draft, discard it, or stay here.",
   "البقاء هنا": "Stay here",
   "مشفّر": "Encrypted",
-  "غير مشفّر": "Not encrypted"
+  "غير مشفّر": "Not encrypted",
+  "المجلدات الخاصة": "Sender folders",
+  "إنشاء مجلد خاص": "Create sender folder",
+  "تعديل المجلد الخاص": "Edit sender folder",
+  "مجلد فلترة يعرض رسائل هذا المرسل فقط، بدون أي تغيير على صندوق الوارد.": "A filter folder that shows only this sender's messages, without changing your inbox.",
+  "بريد المرسل": "Sender email",
+  "اسم المجلد": "Folder name",
+  "لون المجلد": "Folder color",
+  "حذف المجلد": "Delete folder",
+  "حفظ التعديلات": "Save changes",
+  "إنشاء مجلد": "Create folder",
+  "تم حفظ المجلد": "Folder saved",
+  "تعذر حفظ المجلد": "Couldn't save the folder",
+  "تم حذف المجلد": "Folder deleted",
+  "تعذر حذف المجلد": "Couldn't delete the folder",
+  "إدارة المجلد الخاص بهذا المرسل": "Manage this sender's folder",
+  "إنشاء مجلد خاص لهذا المرسل": "Create a folder for this sender"
 }
