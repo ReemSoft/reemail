@@ -4423,7 +4423,7 @@ function MailApp() {
               .filter((f) => counts[f]?.supported !== false)
               .map((f) => {
                 const meta = FOLDER_META[f];
-                const active = f === folder;
+                const active = f === folder && !senderView;
                 const Icon = meta.icon;
                 const { total } = counts[f] || { total: 0 };
                 return (
@@ -4431,6 +4431,7 @@ function MailApp() {
                     key={f}
                     onClick={async () => {
                       if (!(await guardComposerNav())) return;
+                      setSenderView(null);
                       setFolder(f);
                       setSelectedId(null);
                       setSelectedMessage(null);
@@ -4456,7 +4457,42 @@ function MailApp() {
                   </button>
                 );
               })}
+
+            {senderFolders.length > 0 && (
+              <div className="mt-3 border-t border-border pt-3">
+                <p className="px-4 pb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  {tr("المجلدات الخاصة")}
+                </p>
+                {senderFolders.map((sf) => {
+                  const c = senderFolderColor(sf.color);
+                  const active = senderView === sf.email;
+                  return (
+                    <button
+                      key={sf.id}
+                      onClick={async () => {
+                        if (!(await guardComposerNav())) return;
+                        setFolder("inbox");
+                        setSenderView(sf.email);
+                        setSelectedId(null);
+                        setSelectedMessage(null);
+                        setSidebarOpen(false);
+                      }}
+                      title={sf.email}
+                      className={`mb-0.5 flex w-full items-center gap-3 rounded-e-full rounded-s-md px-4 py-2.5 text-sm transition ${
+                        active
+                          ? "bg-sidebar-hover font-semibold text-foreground"
+                          : "text-sidebar-foreground hover:bg-sidebar-hover/60"
+                      }`}
+                    >
+                      <FolderIcon className="h-4 w-4 shrink-0" style={{ color: c.hex }} />
+                      <span className="flex-1 truncate text-start">{sf.name}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </nav>
+
 
           {/* Mobile + tablet footer: language + sign out live here instead of the top bar */}
           <div className="mt-auto border-t border-border p-3 lg:hidden">
