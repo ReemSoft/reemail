@@ -2195,6 +2195,11 @@ function useMailData(session: MailSession | null) {
   return {
     folder,
     setFolder,
+    senderView,
+    setSenderView,
+    senderFolders,
+    upsertSenderFolder,
+    removeSenderFolder,
     folderPaths,
 
     sort,
