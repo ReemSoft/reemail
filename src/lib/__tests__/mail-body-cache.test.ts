@@ -390,6 +390,48 @@ describe("storeCachedBody", () => {
     expect(row["byte_size"]).toBe(byteLength(big));
   });
 
+  it("forces a truncated body into the existing oversize marker even above the cache budget", async () => {
+    const spy = { upserts: [] as unknown[] };
+    const db = fakeSupabase({}, spy);
+    const partial = "x".repeat(200);
+    const out = await storeCachedBody(
+      db,
+      {
+        ...KEY,
+        uidValidity: "100",
+        bodyHtml: partial,
+        bodyTruncated: true,
+        preview: "x",
+        inlineParts: [],
+        attachments: [],
+      },
+      {
+        maxBytes: 1_000,
+        maxAgeDays: 14,
+        maxRowsPerAccount: 100,
+        warmBatch: 5,
+        warmWindow: 100,
+        inlineMaxBytes: 1536 * 1024,
+      },
+    );
+    expect(out).toBe("oversize");
+    const row = spy.upserts[0] as Record<string, unknown>;
+    expect(row["cache_version"]).toBe(3);
+    expect(row["oversize"]).toBe(true);
+    expect(row["body_html"]).toBeNull();
+    expect(row["byte_size"]).toBe(byteLength(partial));
+
+    const lookup = await lookupCachedBody(
+      fakeSupabase({
+        mail_folders: { id: "f1", uidvalidity: 100 },
+        mail_message_body_cache: row,
+        mail_messages: { id: "m1" },
+      }),
+      KEY,
+    );
+    expect(lookup).toEqual({ hit: false, reason: "oversize" });
+  });
+
   it("persists embedded inline images with the body", async () => {
     const spy = { upserts: [] as unknown[] };
     const db = fakeSupabase({}, spy);

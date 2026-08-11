@@ -18,9 +18,7 @@ const currentView = source.slice(
 
 describe("MAILMAESTRO message render CPU", () => {
   it("sanitizes once per physical message identity and body", () => {
-    expect(messageBody).toContain(
-      "const sanitizedHtml = useMemo(() => {",
-    );
+    expect(messageBody).toContain("const sanitizedHtml = useMemo(() => {");
     expect(messageBody).toContain("void bodyIdentity");
     expect(messageBody).toContain("html={sanitizedHtml}");
     expect(messageBody.match(/sanitizeEmailHtml\(/g)).toHaveLength(1);
@@ -49,5 +47,20 @@ describe("MAILMAESTRO message render CPU", () => {
     expect(currentView).toContain("<MessageBody");
     expect(currentView).toContain('html={message.body || message.preview || ""}');
     expect(historicalCard).toContain("<MessageBody");
+  });
+
+  it("shows one localized truncation warning through the shared body renderer", () => {
+    expect(messageBody).toContain("message.bodyTruncated &&");
+    expect(messageBody).toContain('tr("هذه الرسالة كبيرة جدًا. يتم عرض جزء فقط من محتواها.")');
+    expect(messageBody.match(/bodyTruncated &&/g)).toHaveLength(1);
+    expect(currentView).toContain("<MessageBody");
+    expect(historicalCard).toContain("<MessageBody");
+  });
+
+  it("keeps warning state outside the body and sanitizer dependencies", () => {
+    expect(messageBody).toContain("[bodyIdentity, html]");
+    expect(messageBody).not.toContain("[bodyIdentity, html, message.bodyTruncated]");
+    expect(messageBody).toContain("html={sanitizedHtml}");
+    expect(messageBody).not.toContain("html={`${");
   });
 });

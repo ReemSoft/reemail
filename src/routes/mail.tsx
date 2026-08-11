@@ -370,7 +370,6 @@ function ThreadedEmailBody({
 
       {afterLatest}
       <div className="mt-3">
-
         <button
           type="button"
           onClick={() => setExpanded((v) => !v)}
@@ -642,21 +641,32 @@ function MessageBody({
     dispatchLargeCid,
   );
   return (
-    <ThreadedEmailBody
-      html={sanitizedHtml}
-      cidImages={cidImages}
-      messageIdentity={bodyIdentity}
-      className={className}
-      onReady={() => setReadyIdentity(bodyIdentity)}
-      largeCidDispatcherRef={largeCidDispatcherRef}
-      afterLatest={afterLatest}
-      renderHistory={renderHistory}
-      suppressQuoted={suppressQuoted}
-    />
-
+    <>
+      {message.bodyTruncated && (
+        <div
+          role="status"
+          className={cn(
+            className,
+            "mb-3 rounded-md border border-amber-300/70 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-700/70 dark:bg-amber-950/40 dark:text-amber-200",
+          )}
+        >
+          {tr("هذه الرسالة كبيرة جدًا. يتم عرض جزء فقط من محتواها.")}
+        </div>
+      )}
+      <ThreadedEmailBody
+        html={sanitizedHtml}
+        cidImages={cidImages}
+        messageIdentity={bodyIdentity}
+        className={message.bodyTruncated ? undefined : className}
+        onReady={() => setReadyIdentity(bodyIdentity)}
+        largeCidDispatcherRef={largeCidDispatcherRef}
+        afterLatest={afterLatest}
+        renderHistory={renderHistory}
+        suppressQuoted={suppressQuoted}
+      />
+    </>
   );
 }
-
 
 import {
   Inbox,
@@ -767,10 +777,7 @@ import {
   bridgeDeleteDraft,
 } from "@/lib/mail-bridge.functions";
 import { openMailMessage, resolveMessageInlineImages } from "@/lib/mail-message-open.functions";
-import {
-  listMailConversation,
-  type ConversationRow,
-} from "@/lib/mail-conversation.functions";
+import { listMailConversation, type ConversationRow } from "@/lib/mail-conversation.functions";
 import {
   readDraftDoc,
   writeDraftDoc,
@@ -1397,7 +1404,6 @@ function useMailData(session: MailSession | null) {
   const syncFolder = useMailServerFn(runMailSync);
   const listSender = useMailServerFn(listSenderMessages);
   const getSenderHistoryPage = useMailServerFn(bridgeGetSenderMessagesPage);
-
 
   const [folder, setFolder] = useState<MailFolder>("inbox");
   // Sender Folders — virtual filter view over the Inbox index. When set, the
@@ -4725,7 +4731,6 @@ function MailApp() {
             )}
           </nav>
 
-
           {/* Mobile + tablet footer: language + sign out live here instead of the top bar */}
           <div className="mt-auto border-t border-border p-3 lg:hidden">
             <div className="flex items-center justify-between gap-2">
@@ -5010,7 +5015,6 @@ function MailApp() {
                     senderFolderColorKey={senderFolderMap.get(m.from.email.toLowerCase())?.color}
                     onSenderFolder={() => openSenderFolderDialog(m)}
                   />
-
                 )}
                 components={{
                   Footer: () =>
@@ -5120,7 +5124,6 @@ function MailApp() {
                 }
                 setCompose(next);
               }}
-
             />
           ) : selectedId && reading ? (
             <LoadingViewer
@@ -5173,7 +5176,6 @@ function MailApp() {
         />
       )}
     </div>
-
   );
 }
 
@@ -5350,7 +5352,6 @@ function MessageRow({
             )}
           </button>
         </div>
-
       </div>
     </div>
   );
@@ -5369,9 +5370,7 @@ function MessageAttachmentsSection({ message }: { message: MailMessage }) {
     <div className="mt-4 flex flex-col gap-1.5">
       <div className="inline-flex items-center gap-1.5 text-xs font-normal text-muted-foreground">
         <Paperclip className="h-3.5 w-3.5" aria-hidden="true" />
-        <span>
-          {trf("المرفقات · {{size}}", { size: formatSize(total) })}
-        </span>
+        <span>{trf("المرفقات · {{size}}", { size: formatSize(total) })}</span>
       </div>
       <div className="flex flex-wrap gap-2">
         {items.map((a) => (
@@ -5381,7 +5380,6 @@ function MessageAttachmentsSection({ message }: { message: MailMessage }) {
     </div>
   );
 }
-
 
 export type ThreadComposeMode = "reply" | "replyAll" | "forward";
 
@@ -5499,7 +5497,10 @@ function ConversationMessageCard({
     getCurrentLang() === "ar" ? "ar-SA" : "en-GB",
     { dateStyle: "medium", timeStyle: "short" },
   );
-  const toPreview = row.to.map((t) => t.email).filter(Boolean).join(", ");
+  const toPreview = row.to
+    .map((t) => t.email)
+    .filter(Boolean)
+    .join(", ");
 
   async function toggle() {
     if (open) {
@@ -5540,9 +5541,7 @@ function ConversationMessageCard({
   return (
     <div
       className={`overflow-hidden rounded-xl border-2 transition-colors ${
-        open
-          ? "border-primary/40 bg-card shadow-sm"
-          : "border-border bg-card/50 hover:bg-muted/40"
+        open ? "border-primary/40 bg-card shadow-sm" : "border-border bg-card/50 hover:bg-muted/40"
       }`}
     >
       <button
@@ -5658,9 +5657,8 @@ function useConversationRows(messageId: string): ConversationRow[] | null {
     const handle = idle ? idle(run, { timeout: 800 }) : window.setTimeout(run, 120);
     return () => {
       cancelled = true;
-      const cancelIdle = (
-        window as unknown as { cancelIdleCallback?: (h: number) => void }
-      ).cancelIdleCallback;
+      const cancelIdle = (window as unknown as { cancelIdleCallback?: (h: number) => void })
+        .cancelIdleCallback;
       if (idle && cancelIdle) cancelIdle(handle as number);
       else window.clearTimeout(handle as number);
     };
@@ -5711,9 +5709,6 @@ function ConversationHistory({
     </div>
   );
 }
-
-
-
 
 function MessageView({
   message,
@@ -6130,7 +6125,6 @@ function MessageView({
               )}
             </>
           )}
-
         </div>
       </div>
     </>
@@ -6973,7 +6967,10 @@ function Composer({
             }
             return { ok: true };
           }
-          return { ok: false, code: res?.code ?? res?.error ?? (response.ok ? "UNKNOWN" : "NETWORK") };
+          return {
+            ok: false,
+            code: res?.code ?? res?.error ?? (response.ok ? "UNKNOWN" : "NETWORK"),
+          };
         } catch {
           return { ok: false, code: "NETWORK" };
         }
@@ -9265,8 +9262,6 @@ function Composer({
         </div>
       )}
 
-
-
       <AlertDialog
         open={!!closePrompt}
         onOpenChange={(o) => {
@@ -9523,7 +9518,6 @@ function AttachmentCard({
           </button>
         </div>
       </div>
-
 
       {previewUrl && (
         <div

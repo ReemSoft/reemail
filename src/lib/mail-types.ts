@@ -41,6 +41,8 @@ export interface MailMessage {
   subject: string;
   preview: string;
   body: string; // HTML or plain
+  /** True when only the bounded initial portion of the selected body was returned. */
+  bodyTruncated?: boolean;
   date: string; // ISO
   read: boolean;
   starred: boolean;

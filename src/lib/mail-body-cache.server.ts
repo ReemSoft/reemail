@@ -327,6 +327,7 @@ export function touchCachedBody(supabase: SupabaseClient, key: CacheKey): void {
 export interface StoreInput extends CacheKey {
   uidValidity: string | number;
   bodyHtml: string;
+  bodyTruncated?: boolean;
   preview: string;
   inlineParts: NonNullable<MailMessage["inlineParts"]>;
   inlineImages?: NonNullable<MailMessage["inlineImages"]>;
@@ -349,7 +350,7 @@ export async function storeCachedBody(
   if (!Number.isFinite(uidValidity) || uidValidity <= 0) return "skipped";
 
   const byteSize = byteLength(input.bodyHtml);
-  const oversize = byteSize > limits.maxBytes;
+  const oversize = input.bodyTruncated === true || byteSize > limits.maxBytes;
   const now = new Date().toISOString();
 
   // Embedded inline images are persisted with the body so a cache hit paints

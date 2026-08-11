@@ -33,7 +33,32 @@ const INLINE_IMAGE_MAX_BYTES = envInt("INLINE_IMAGE_MAX_BYTES", 256 * 1024);
 const INLINE_IMAGE_TOTAL_BYTES = envInt("INLINE_IMAGE_TOTAL_BYTES", 1024 * 1024);
 const INLINE_IMAGE_MAX_COUNT = envInt("INLINE_IMAGE_MAX_COUNT", 20);
 const INLINE_IMAGE_STREAM_MAX_BYTES = 5 * 1024 * 1024;
+export const MESSAGE_BODY_MAX_BYTES = 5 * 1024 * 1024;
 const INLINE_IMAGE_SAFE_MIME = /^image\/(?:png|jpe?g|gif|webp)$/i;
+
+/**
+ * Classifies the fully-consumed output of an ImapFlow-limited body stream.
+ *
+ * ImapFlow 1.5.0's download `expectedSize` is the RFC822 message size and a
+ * BODYSTRUCTURE part size describes encoded source octets. Neither proves the
+ * size of the decoded/charset-converted stream, so callers must only provide
+ * `provenCompleteBytes` when an independently reliable output size exists.
+ */
+export function isDownloadedBodyTruncated(input: {
+  loadedBytes: number;
+  maxBytes: number;
+  provenCompleteBytes?: number;
+}): boolean {
+  const { loadedBytes, maxBytes, provenCompleteBytes } = input;
+  if (
+    Number.isSafeInteger(provenCompleteBytes) &&
+    provenCompleteBytes != null &&
+    provenCompleteBytes >= 0
+  ) {
+    return provenCompleteBytes > loadedBytes;
+  }
+  return loadedBytes >= maxBytes;
+}
 
 const WELL_KNOWN_FOLDERS: Record<MailFolder, string[]> = {
   inbox: ["INBOX"],
@@ -687,11 +712,19 @@ export async function getMessageBody(
       let html = "";
       if (pick) {
         const tBody = Date.now();
-        const got = await downloadPartBuffer(client, uid, pick.part, 5 * 1024 * 1024, () =>
+        const got = await downloadPartBuffer(client, uid, pick.part, MESSAGE_BODY_MAX_BYTES, () =>
           dropAccountConnection(account, lane),
         );
         if (got) {
           bodyBytes = got.buf.length;
+          if (
+            isDownloadedBodyTruncated({
+              loadedBytes: bodyBytes,
+              maxBytes: MESSAGE_BODY_MAX_BYTES,
+            })
+          ) {
+            parsed.bodyTruncated = true;
+          }
           const charset =
             pick.charset ||
             /charset="?([\w-]+)"?/i.exec(String(got.meta?.contentType || ""))?.[1] ||
