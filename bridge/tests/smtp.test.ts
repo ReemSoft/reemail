@@ -3,10 +3,62 @@
 // well-known Sent-folder fallback list.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { access } from "node:fs/promises";
+import { access, stat } from "node:fs/promises";
 import type { Readable } from "node:stream";
 import { createMimeSpool } from "../src/mime-spool.js";
 import { resolveSentPath } from "../src/smtp.js";
+
+type InspectFile = (path: string) => Promise<unknown>;
+
+async function waitUntilMissing(
+  path: string,
+  timeoutMs = 750,
+  pollIntervalMs = 10,
+  inspectFile: InspectFile = stat,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  // Let the already-started unlink acquire the file first. On Windows an
+  // immediate fs.access can briefly contend with unlink and report EPERM.
+  await new Promise<void>((resolve) => setTimeout(resolve, pollIntervalMs));
+  while (true) {
+    try {
+      await inspectFile(path);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+      throw error;
+    }
+    if (Date.now() >= deadline) {
+      assert.fail(`MIME spool still exists after ${timeoutMs}ms: ${path}`);
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, pollIntervalMs));
+  }
+}
+
+test("waitUntilMissing accepts delayed cleanup but rejects a cleanup leak", async () => {
+  let delayedChecks = 0;
+  await waitUntilMissing("delayed-spool", 50, 1, async () => {
+    delayedChecks++;
+    if (delayedChecks >= 3) {
+      throw Object.assign(new Error("missing"), { code: "ENOENT" });
+    }
+  });
+  assert.equal(delayedChecks, 3);
+
+  await assert.rejects(
+    waitUntilMissing("never-cleaned-spool", 20, 2, async () => undefined),
+    /MIME spool still exists after 20ms/,
+  );
+});
+
+test("waitUntilMissing rethrows unexpected filesystem errors", async () => {
+  const denied = Object.assign(new Error("denied"), { code: "EACCES" });
+  await assert.rejects(
+    waitUntilMissing("unreadable-spool", 20, 2, async () => {
+      throw denied;
+    }),
+    (error) => error === denied,
+  );
+});
 
 // The imapflow ListResponse we care about is loosely shaped: { path,
 // specialUse? }. Cast through unknown so we don't have to import the full
@@ -463,8 +515,7 @@ test("sendMessageFast queue saturation never resends SMTP and cleans the spool",
   assert.equal(result.sentCopyPending, false);
   assert.equal(rec.sendMailCalls, 1);
   assert.equal(rec.imapConnected, 0);
-  await new Promise<void>((resolve) => setImmediate(resolve));
-  await assert.rejects(access(spoolPath), /ENOENT/);
+  await waitUntilMissing(spoolPath);
 });
 
 test("sendMessageFast keeps SMTP acceptance authoritative when transport close throws", async () => {
@@ -707,7 +758,6 @@ test("retryable first APPEND miss retries once on the fresh connection", async (
     1,
     "SMTP streams the spool once; each APPEND re-reads the same spool as a Buffer",
   );
-
 });
 
 test("second APPEND failure performs final verification and never attempts a third APPEND", async () => {
