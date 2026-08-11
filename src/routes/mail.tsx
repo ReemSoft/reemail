@@ -2421,6 +2421,33 @@ function MailApp() {
     bumpCountsGen,
   } = useMailData(session || null);
 
+  // Sender Folders — O(1) lookup for the per-row folder icon.
+  const senderFolderMap = useMemo(
+    () => new Map(senderFolders.map((f) => [f.email.toLowerCase(), f])),
+    [senderFolders],
+  );
+  const [senderDialog, setSenderDialog] = useState<{
+    email: string;
+    name: string;
+    color: string;
+    existing: boolean;
+  } | null>(null);
+  const [senderDialogBusy, setSenderDialogBusy] = useState(false);
+  const openSenderFolderDialog = useCallback(
+    (m: MailMessage) => {
+      const email = (m.from.email || "").toLowerCase();
+      if (!email) return;
+      const found = senderFolderMap.get(email);
+      setSenderDialog({
+        email,
+        name: found?.name ?? (m.from.name || email),
+        color: found?.color ?? "blue",
+        existing: !!found,
+      });
+    },
+    [senderFolderMap],
+  );
+
   // BLOCKER_6 — account identity for origin-tracker calls in this scope.
   const currentAccountId = session?.account.id ?? null;
 
