@@ -1388,6 +1388,16 @@ function useMailData(session: MailSession | null) {
   // list shows only messages from this address; `folder` stays "inbox" so
   // every existing mutation/sync path keeps working unchanged.
   const [senderView, setSenderView] = useState<string | null>(null);
+  // Leaving a sender folder resets its one-time sweep flag, so reopening it
+  // later can sweep again — still only when the user scrolls to the bottom.
+  useEffect(() => {
+    if (!senderView) return;
+    const current = senderView;
+    return () => {
+      senderDeepRef.current.delete(current);
+    };
+  }, [senderView]);
+
   const [senderCursor, setSenderCursor] = useState<string | null>(null);
   // Folder definitions: one tiny SELECT per session, never polled.
   const [senderFolders, setSenderFolders] = useState<SenderFolder[]>([]);
