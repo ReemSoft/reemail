@@ -1943,6 +1943,41 @@ function useMailData(session: MailSession | null) {
     try {
       if (senderView) {
         if (!senderCursor) {
+          // Index exhausted → one-time Bridge sweep for this sender, and only
+          // because the user scrolled to the very end. Never runs on open.
+          if (senderDeepRef.current.has(senderView)) {
+            setHasMore(false);
+            return;
+          }
+          senderDeepRef.current.add(senderView);
+          try {
+            const deep = await searchSender({
+              data: {
+                mailSessionToken: session.mailSessionToken!,
+                folder: "inbox",
+                query: senderView,
+                includeBody: false,
+                limit: 200,
+              },
+            });
+            if (deep.ok) {
+              const target = senderView.toLowerCase();
+              const extra = applyPending(
+                deep.messages.filter((m) => (m.from?.email || "").toLowerCase() === target),
+              );
+              setMessages((prev) => {
+                const seen = new Set(prev.map((m) => m.id));
+                const merged = [...prev];
+                for (const m of extra) if (!seen.has(m.id)) merged.push(m);
+                merged.sort(
+                  (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime(),
+                );
+                return merged;
+              });
+            }
+          } catch {
+            /* keep the indexed slice on failure */
+          }
           setHasMore(false);
           return;
         }
@@ -1962,13 +1997,14 @@ function useMailData(session: MailSession | null) {
             for (const m of patched) if (!seen.has(m.id)) merged.push(m);
             return merged;
           });
-          setHasMore(res.hasMore);
+          setHasMore(res.hasMore || !senderDeepRef.current.has(senderView));
           setSenderCursor(res.nextCursor);
           return;
         }
         setHasMore(false);
         return;
       }
+
       if (source === "index" && indexCursor && canUseIndex(folder, sort)) {
         const res = await listIndex({
           data: {
