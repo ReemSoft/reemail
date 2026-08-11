@@ -17,7 +17,7 @@ import type { MailAttachment, MailMessage } from "@/lib/mail-types";
 import { INLINE_CID_MAX_COUNT, partitionInlineCidParts } from "@/lib/mail-inline-cid-policy";
 
 /** Bump when the HTML/body pipeline changes: invalidates every stored body. */
-export const BODY_CACHE_VERSION = 2;
+export const BODY_CACHE_VERSION = 3;
 
 /** Folders whose bodies are never cached (drafts mutate in place). */
 const NON_CACHEABLE = new Set(["drafts"]);
