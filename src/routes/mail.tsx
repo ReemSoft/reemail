@@ -2767,6 +2767,7 @@ function MailApp() {
 
   type ClientMessageSource = "memory" | "server-cache" | "imap" | "error";
   type ClientMessageResult = { message: MailMessage | null; source: ClientMessageSource };
+  type MessageOpenContext = { kind: "current-list" } | { kind: "historical"; base: MailMessage };
   type MessageCacheFacade = {
     get: (id: string) => MailMessage | undefined;
     set: (id: string, message: MailMessage) => void;
@@ -2818,6 +2819,7 @@ function MailApp() {
       id: string,
       lane: "interactive" | "background" = "interactive",
       signal?: AbortSignal,
+      context: MessageOpenContext = { kind: "current-list" },
     ): Promise<ClientMessageResult> => {
       if (!session) return Promise.resolve({ message: null, source: "error" });
       // Batch A / Fix #2: check the pending-move overlay BEFORE reading
@@ -2829,22 +2831,34 @@ function MailApp() {
       if (accountId && isMessageSuppressed(pendingMovesRef.current, accountId, id)) {
         return Promise.resolve({ message: null, source: "error" });
       }
-      const cached = messageCache.current.get(id);
+      const scope = {
+        companyId: session.company?.id ?? session.account.company_id,
+        accountId: session.account.id,
+      };
+      const suppliedBase = context.kind === "historical" ? context.base : null;
+      const cached = suppliedBase
+        ? (messageMemoryRef.current?.get(scope, suppliedBase) ?? undefined)
+        : messageCache.current.get(id);
       if (cached) return Promise.resolve({ message: cached, source: "memory" });
       const parsed = parseMessageId(id);
       if (!parsed) return Promise.resolve({ message: null, source: "error" });
       // Envelope row from the list: a cache HIT only ships the body, so the
       // headers/flags are merged from the row the user clicked. Without a
       // base row we force a full live fetch (allowCache: false).
-      const base = messagesRef.current.find((m) => m.id === id) ?? null;
+      const suppliedIdentity = suppliedBase ? parseMessageId(suppliedBase.id) : null;
+      if (
+        suppliedBase &&
+        (!suppliedIdentity ||
+          suppliedIdentity.folder !== parsed.folder ||
+          suppliedIdentity.uid !== parsed.uid)
+      ) {
+        return Promise.resolve({ message: null, source: "error" });
+      }
+      const base = suppliedBase ?? messagesRef.current.find((m) => m.id === id) ?? null;
       const uidValidity = validUidValidity(base?.uidValidity);
       if (lane === "background" && !uidValidity) {
         return Promise.resolve({ message: null, source: "error" });
       }
-      const scope = {
-        companyId: session.company?.id ?? session.account.company_id,
-        accountId: session.account.id,
-      };
       const requestKey = `${scope.companyId}|${scope.accountId}|${parsed.folder}|${parsed.uid}|${uidValidity ?? "interactive"}`;
       const existing = inflight.current.get(requestKey);
       if (existing) {
@@ -2890,6 +2904,18 @@ function MailApp() {
             mailPerf("stale-response-dropped", { phase: "scope" });
             return { message: null, source: "error" } as ClientMessageResult;
           }
+          if (context.kind === "historical") {
+            const returnedUidValidity = validUidValidity(
+              result.ok && result.source === "cache"
+                ? result.body.uidValidity
+                : result.ok && result.source === "imap"
+                  ? result.message?.uidValidity
+                  : null,
+            );
+            if (!uidValidity || returnedUidValidity !== uidValidity) {
+              return { message: null, source: "error" } as ClientMessageResult;
+            }
+          }
           const merged: MailMessage | null =
             result.ok && result.source === "cache" && base
               ? {
@@ -2906,7 +2932,15 @@ function MailApp() {
                   uidValidity: base.uidValidity ?? result.body.uidValidity,
                 }
               : result.ok && result.source === "imap"
-                ? result.message
+                ? context.kind === "historical" && result.message
+                  ? {
+                      ...base,
+                      ...result.message,
+                      id: base!.id,
+                      folder: base!.folder,
+                      uidValidity: result.message.uidValidity ?? base!.uidValidity,
+                    }
+                  : result.message
                 : null;
           if (merged) {
             // Batch A / Fix #2: re-check the overlay AFTER the fetch. The
@@ -2929,7 +2963,7 @@ function MailApp() {
           // index. NOT_FOUND may be transient while a folder sync is racing.
           // Cleanup is allowed only after an explicit interactive open.
           if (!result.ok && result.code === "NOT_FOUND") {
-            if (lane === "background") {
+            if (lane === "background" || context.kind === "historical") {
               return { message: null, source: "error" } as ClientMessageResult;
             }
 
@@ -2963,6 +2997,34 @@ function MailApp() {
       return p;
     },
     [session, openMsg, applyPendingOne, currentAccountId, cleanupGhost],
+  );
+
+  const openHistoricalMessage = useCallback(
+    (row: ConversationRow): HistoricalOpenAttempt => {
+      if (!session) return { kind: "error" };
+      const base = conversationRowBase(row);
+      if (!validUidValidity(base.uidValidity)) return { kind: "error" };
+      if (
+        currentAccountId &&
+        isMessageSuppressed(pendingMovesRef.current, currentAccountId, base.id)
+      ) {
+        return { kind: "error" };
+      }
+      const scope = {
+        companyId: session.company?.id ?? session.account.company_id,
+        accountId: session.account.id,
+      };
+      const cached = messageMemoryRef.current?.get(scope, base) ?? null;
+      if (cached) return { kind: "memory", message: cached };
+      return {
+        kind: "pending",
+        promise: fetchMessage(base.id, "interactive", undefined, {
+          kind: "historical",
+          base,
+        }).then((result) => result.message),
+      };
+    },
+    [currentAccountId, fetchMessage, pendingMovesRef, session],
   );
 
   const prefetchQueueRef = useRef<AdaptivePrefetchQueue<ClientMessageResult> | null>(null);
@@ -4985,6 +5047,7 @@ function MailApp() {
               message={selectedMessage}
               loading={reading}
               onInlineImages={handleInlineImagesResolved}
+              onOpenHistorical={openHistoricalMessage}
               myEmail={session.account.email_address}
               onBack={() => {
                 navigationGenerationRef.current?.invalidate();
@@ -5390,14 +5453,40 @@ function MessageReplyButtons({
  * network). The body + attachments are fetched lazily on click through the
  * SAME cache-first open path, and reply/forward act on THAT message.
  */
+type HistoricalOpenAttempt =
+  | { kind: "memory"; message: MailMessage }
+  | { kind: "pending"; promise: Promise<MailMessage | null> }
+  | { kind: "error" };
+
+function conversationRowBase(row: ConversationRow): MailMessage {
+  const id = `${row.folder}:${row.uid}`;
+  return {
+    id,
+    threadId: row.messageId ?? id,
+    uidValidity: row.uidValidity,
+    folder: row.folder,
+    from: row.from,
+    to: row.to,
+    cc: row.cc?.length ? row.cc : undefined,
+    subject: row.subject,
+    preview: "",
+    body: "",
+    date: row.date,
+    read: row.seen,
+    starred: row.flagged,
+    hasAttachments: row.hasAttachments,
+  };
+}
+
 function ConversationMessageCard({
   row,
   onCompose,
+  onOpenHistorical,
 }: {
   row: ConversationRow;
   onCompose?: (message: MailMessage, mode: ThreadComposeMode) => void;
+  onOpenHistorical: (row: ConversationRow) => HistoricalOpenAttempt;
 }) {
-  const openPrevious = useMailServerFn(openMailMessage);
   const [open, setOpen] = useState(false);
   const [loaded, setLoaded] = useState<MailMessage | null>(null);
   const [state, setState] = useState<"idle" | "loading" | "error">("idle");
@@ -5420,49 +5509,24 @@ function ConversationMessageCard({
       setState("error");
       return;
     }
+    const attempt = onOpenHistorical(row);
+    if (attempt.kind === "memory") {
+      setLoaded(attempt.message);
+      setState("idle");
+      return;
+    }
+    if (attempt.kind === "error") {
+      setState("error");
+      return;
+    }
     setState("loading");
     try {
-      const res = await openPrevious({
-        data: {
-          mailSessionToken: session.mailSessionToken,
-          password: session.password,
-          folder: row.folder,
-          uid: row.uid,
-        },
-      });
-      if (!res.ok) {
+      const message = await attempt.promise;
+      if (!message) {
         setState("error");
         return;
       }
-      const base: MailMessage = {
-        id: `${row.folder}:${row.uid}`,
-        threadId: row.messageId ?? `${row.folder}:${row.uid}`,
-        uidValidity: row.uidValidity,
-        folder: row.folder,
-        from: row.from,
-        to: row.to,
-        cc: row.cc?.length ? row.cc : undefined,
-        subject: row.subject,
-        preview: "",
-        body: "",
-        date: row.date,
-        read: row.seen,
-        starred: row.flagged,
-        hasAttachments: row.hasAttachments,
-      };
-      setLoaded(
-        res.source === "cache"
-          ? {
-              ...base,
-              body: res.body.bodyHtml,
-              preview: res.body.preview,
-              attachments: res.body.attachments,
-              inlineParts: res.body.inlineParts,
-              inlineImages: res.body.inlineImages,
-              uidValidity: res.body.uidValidity,
-            }
-          : { ...base, ...res.message, id: base.id, folder: row.folder },
-      );
+      setLoaded(message);
       setState("idle");
     } catch {
       setState("error");
@@ -5611,9 +5675,11 @@ function useConversationRows(messageId: string): ConversationRow[] | null {
 function ConversationHistory({
   rows,
   onCompose,
+  onOpenHistorical,
 }: {
   rows: ConversationRow[];
   onCompose?: (message: MailMessage, mode: ThreadComposeMode) => void;
+  onOpenHistorical: (row: ConversationRow) => HistoricalOpenAttempt;
 }) {
   const ordered = useMemo(
     () => [...rows].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()),
@@ -5636,6 +5702,7 @@ function ConversationHistory({
             key={`${row.folder}:${row.uid}:${row.uidValidity}`}
             row={row}
             onCompose={onCompose}
+            onOpenHistorical={onOpenHistorical}
           />
         ))}
       </div>
@@ -5650,6 +5717,7 @@ function MessageView({
   message,
   loading,
   onInlineImages,
+  onOpenHistorical,
   myEmail,
   onBack,
   onReply,
@@ -5666,6 +5734,7 @@ function MessageView({
   message: MailMessage;
   loading: boolean;
   onInlineImages: (messageId: string, images: NonNullable<MailMessage["inlineImages"]>) => void;
+  onOpenHistorical: (row: ConversationRow) => HistoricalOpenAttempt;
   myEmail: string;
   onBack: () => void;
   onReply: () => void;
@@ -6051,7 +6120,11 @@ function MessageView({
                 suppressQuoted={hasThreadRows}
               />
               {hasThreadRows && (
-                <ConversationHistory rows={threadRows!} onCompose={onComposeFor} />
+                <ConversationHistory
+                  rows={threadRows!}
+                  onCompose={onComposeFor}
+                  onOpenHistorical={onOpenHistorical}
+                />
               )}
             </>
           )}
