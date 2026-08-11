@@ -1,4 +1,9 @@
-import { ImapFlow, type ListResponse, type SearchObject } from "imapflow";
+import {
+  ImapFlow,
+  type ListResponse,
+  type MessageStructureObject,
+  type SearchObject,
+} from "imapflow";
 import { simpleParser, type AddressObject, type ParsedMail } from "mailparser";
 import type { Readable } from "node:stream";
 import type { MailAccount, MailFolder, FolderCount, MailMessage, MailAttachment } from "./types.js";
@@ -337,40 +342,74 @@ export interface TextPartPick {
   charset?: string;
 }
 
-function structureLeaves(structure: any, acc: any[] = []): any[] {
-  if (!structure) return acc;
-  const mime = String(structure.type || "").toLowerCase();
-  if (!mime.startsWith("multipart/")) acc.push(structure);
-  const kids = Array.isArray(structure.childNodes)
-    ? structure.childNodes
-    : structure.childNodes
-      ? [structure.childNodes]
-      : [];
-  for (const c of kids) structureLeaves(c, acc);
-  return acc;
+function isAttachmentLike(node: MessageStructureObject): boolean {
+  const disposition = node.disposition?.toLowerCase();
+  const filename =
+    node.dispositionParameters?.filename || node.parameters?.filename || node.parameters?.name;
+  return disposition === "attachment" || Boolean(filename);
+}
+
+function contentId(value: string | undefined): string | undefined {
+  const normalized = value?.trim().replace(/^<|>$/g, "").toLowerCase();
+  return normalized || undefined;
+}
+
+function textPartPick(node: MessageStructureObject): TextPartPick | null {
+  const type = node.type.toLowerCase();
+  if ((type !== "text/html" && type !== "text/plain") || isAttachmentLike(node)) {
+    return null;
+  }
+  return {
+    part: node.part || "1",
+    type,
+    charset: node.parameters?.charset,
+  };
+}
+
+/** Resolves one display representation without crossing MIME branch boundaries. */
+function resolveTextPart(node: MessageStructureObject): TextPartPick | null {
+  const type = node.type.toLowerCase();
+
+  // An attached multipart is one attachment branch, and an encapsulated
+  // message is a separate message. Neither may donate a body to its parent.
+  if (isAttachmentLike(node) || type === "message/rfc822") return null;
+  if (!type.startsWith("multipart/")) return textPartPick(node);
+
+  const children = node.childNodes || [];
+  if (type === "multipart/alternative") {
+    let plain: TextPartPick | null = null;
+    for (const child of children) {
+      const pick = resolveTextPart(child);
+      if (pick?.type === "text/html") return pick;
+      if (!plain && pick?.type === "text/plain") plain = pick;
+    }
+    return plain;
+  }
+
+  if (type === "multipart/related") {
+    const start = contentId(node.parameters?.start);
+    if (start) {
+      const root = children.find((child) => contentId(child.id) === start);
+      if (root) return resolveTextPart(root);
+    }
+  }
+
+  // multipart/mixed and related-without-a-resolvable-start use MIME order:
+  // the first child branch that yields a body is the root representation.
+  for (const child of children) {
+    const pick = resolveTextPart(child);
+    if (pick) return pick;
+  }
+  return null;
 }
 
 /**
- * Chooses the displayable body part from BODYSTRUCTURE: text/html first,
- * text/plain otherwise. Attachment-ish leaves (explicit attachment
- * disposition or a filename) are never treated as the body.
+ * Chooses the displayable body part from the already-fetched BODYSTRUCTURE.
+ * Selection follows MIME container semantics and never crosses an attached
+ * branch or an encapsulated message/rfc822 boundary.
  */
-export function pickTextPart(structure: any): TextPartPick | null {
-  const leaves = structureLeaves(structure);
-  const isBody = (n: any) => {
-    const disp = n.disposition ? String(n.disposition).toLowerCase() : undefined;
-    const filename = n.dispositionParameters?.filename || n.parameters?.name;
-    return disp !== "attachment" && !filename;
-  };
-  const byType = (t: string) =>
-    leaves.find((n) => String(n.type || "").toLowerCase() === t && isBody(n));
-  const pick = byType("text/html") || byType("text/plain");
-  if (!pick) return null;
-  return {
-    part: pick.part || "1",
-    type: String(pick.type || "text/plain").toLowerCase(),
-    charset: pick.parameters?.charset,
-  };
+export function pickTextPart(structure: MessageStructureObject | undefined): TextPartPick | null {
+  return structure ? resolveTextPart(structure) : null;
 }
 
 function decodeText(buf: Buffer, charset?: string): string {

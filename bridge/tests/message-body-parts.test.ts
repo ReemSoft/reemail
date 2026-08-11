@@ -61,10 +61,32 @@ test("single-part text message resolves to part 1", () => {
   assert.equal(pick!.charset, "utf-8");
 });
 
+test("single-part html message resolves to its exact part", () => {
+  const pick = pickTextPart({ type: "text/html", part: "4.2", parameters: { charset: "utf-8" } });
+  assert.deepEqual(pick, { part: "4.2", type: "text/html", charset: "utf-8" });
+});
+
 test("multipart/alternative prefers text/html over text/plain", () => {
   const pick = pickTextPart(alternative);
   assert.equal(pick!.part, "2");
   assert.equal(pick!.type, "text/html");
+});
+
+test("multipart/alternative falls back to plain when html is attachment-like", () => {
+  const pick = pickTextPart({
+    type: "multipart/alternative",
+    childNodes: [
+      { type: "text/plain", part: "1", parameters: { charset: "utf-8" } },
+      {
+        type: "text/html",
+        part: "2",
+        disposition: "attachment",
+        dispositionParameters: { filename: "page.html" },
+      },
+    ],
+  });
+  assert.equal(pick?.part, "1");
+  assert.equal(pick?.type, "text/plain");
 });
 
 test("text/plain charset is carried through when html is absent", () => {
@@ -82,6 +104,120 @@ test("an attachment is never selected as the body part", () => {
   assert.equal(pick!.part, "2");
 });
 
+test("multipart/mixed selects the first body-yielding child branch", () => {
+  const pick = pickTextPart({
+    type: "multipart/mixed",
+    childNodes: [
+      {
+        type: "multipart/alternative",
+        childNodes: [
+          { type: "text/plain", part: "1.1" },
+          { type: "text/html", part: "1.2" },
+        ],
+      },
+      { type: "text/html", part: "2" },
+    ],
+  });
+  assert.equal(pick?.part, "1.2");
+});
+
+test("multipart/related selects its root html and never an inline image", () => {
+  const pick = pickTextPart(relatedWithInlineImage);
+  assert.equal(pick?.part, "1");
+  assert.equal(pick?.type, "text/html");
+});
+
+test("multipart/related honors a resolvable start content-id", () => {
+  const pick = pickTextPart({
+    type: "multipart/related",
+    parameters: { start: "<root@mm>" },
+    childNodes: [
+      { type: "text/plain", part: "1", id: "other@mm" },
+      { type: "text/html", part: "2", id: "<ROOT@MM>" },
+      { type: "image/png", part: "3", id: "image@mm" },
+    ],
+  });
+  assert.equal(pick?.part, "2");
+});
+
+test("multipart/related falls back to its first appropriate child when start is absent", () => {
+  const pick = pickTextPart({
+    type: "multipart/related",
+    childNodes: [
+      { type: "image/png", part: "1", id: "image@mm" },
+      { type: "text/plain", part: "2" },
+      { type: "text/html", part: "3" },
+    ],
+  });
+  assert.equal(pick?.part, "2");
+});
+
+test("nested mixed -> alternative -> related resolves the representation tree", () => {
+  const pick = pickTextPart({
+    type: "multipart/mixed",
+    childNodes: [
+      {
+        type: "multipart/alternative",
+        childNodes: [
+          { type: "text/plain", part: "1.1" },
+          {
+            type: "multipart/related",
+            childNodes: [
+              { type: "text/html", part: "1.2.1", parameters: { charset: "windows-1256" } },
+              { type: "image/jpeg", part: "1.2.2", id: "photo@mm" },
+            ],
+          },
+        ],
+      },
+      { type: "application/pdf", part: "2", disposition: "attachment" },
+    ],
+  });
+  assert.deepEqual(pick, { part: "1.2.1", type: "text/html", charset: "windows-1256" });
+});
+
+test("outer plain body wins over html inside an attached message/rfc822", () => {
+  const pick = pickTextPart({
+    type: "multipart/mixed",
+    childNodes: [
+      { type: "text/plain", part: "1" },
+      {
+        type: "message/rfc822",
+        part: "2",
+        disposition: "attachment",
+        childNodes: [{ type: "text/html", part: "2" }],
+      },
+    ],
+  });
+  assert.equal(pick?.part, "1");
+  assert.equal(pick?.type, "text/plain");
+});
+
+test("outer html body is retained when an attached message also has html", () => {
+  const pick = pickTextPart({
+    type: "multipart/mixed",
+    childNodes: [
+      { type: "text/html", part: "1" },
+      {
+        type: "message/rfc822",
+        part: "2",
+        childNodes: [{ type: "text/html", part: "2" }],
+      },
+    ],
+  });
+  assert.equal(pick?.part, "1");
+});
+
+test("message/rfc822 alone never exposes its nested message body", () => {
+  assert.equal(
+    pickTextPart({
+      type: "message/rfc822",
+      part: "1",
+      childNodes: [{ type: "text/html", part: "1" }],
+    }),
+    null,
+  );
+});
+
 test("a text/plain part with a filename is treated as an attachment, not the body", () => {
   const pick = pickTextPart({
     type: "multipart/mixed",
@@ -96,6 +232,46 @@ test("a text/plain part with a filename is treated as an attachment, not the bod
     ],
   });
   assert.equal(pick!.part, "1");
+});
+
+test("a text/html disposition attachment is excluded from body selection", () => {
+  assert.equal(
+    pickTextPart({
+      type: "text/html",
+      part: "1",
+      disposition: "attachment",
+    }),
+    null,
+  );
+});
+
+test("a multipart attachment branch cannot donate nested text", () => {
+  const pick = pickTextPart({
+    type: "multipart/mixed",
+    childNodes: [
+      {
+        type: "multipart/alternative",
+        disposition: "attachment",
+        dispositionParameters: { filename: "saved-message.mime" },
+        childNodes: [{ type: "text/html", part: "1.1" }],
+      },
+      { type: "text/plain", part: "2" },
+    ],
+  });
+  assert.equal(pick?.part, "2");
+});
+
+test("related image-only parts never become a body", () => {
+  assert.equal(
+    pickTextPart({
+      type: "multipart/related",
+      childNodes: [
+        { type: "image/png", part: "1", id: "one@mm" },
+        { type: "image/jpeg", part: "2", id: "two@mm" },
+      ],
+    }),
+    null,
+  );
 });
 
 test("returns null when the structure carries no displayable text part", () => {
