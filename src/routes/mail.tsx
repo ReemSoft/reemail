@@ -4911,6 +4911,8 @@ function MessageRow({
   onPrefetch,
   onCancelPrefetch,
   onImmediatePrefetch,
+  senderFolderColorKey,
+  onSenderFolder,
 }: {
   message: MailMessage;
   active: boolean;
@@ -4924,6 +4926,9 @@ function MessageRow({
   onPrefetch: () => void;
   onCancelPrefetch: () => void;
   onImmediatePrefetch: () => void;
+  /** Color key when this sender already has a folder, else undefined. */
+  senderFolderColorKey?: string;
+  onSenderFolder: (e: React.MouseEvent) => void;
 }) {
   return (
     <div
