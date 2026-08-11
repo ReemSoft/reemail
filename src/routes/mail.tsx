@@ -626,6 +626,10 @@ function MessageBody({
   suppressQuoted?: boolean;
 }) {
   const bodyIdentity = `${message.id}|${message.uidValidity ?? ""}`;
+  const sanitizedHtml = useMemo(() => {
+    void bodyIdentity;
+    return sanitizeEmailHtml(html);
+  }, [bodyIdentity, html]);
   const [readyIdentity, setReadyIdentity] = useState("");
   const largeCidDispatcherRef = useRef<((image: LargeCidByteMapping) => void) | null>(null);
   const dispatchLargeCid = useCallback((image: LargeCidByteMapping) => {
@@ -639,7 +643,7 @@ function MessageBody({
   );
   return (
     <ThreadedEmailBody
-      html={html}
+      html={sanitizedHtml}
       cidImages={cidImages}
       messageIdentity={bodyIdentity}
       className={className}
@@ -5592,9 +5596,7 @@ function ConversationMessageCard({
               </div>
               <MessageBody
                 message={loaded}
-                html={
-                  splitQuotedHtml(sanitizeEmailHtml(loaded.body || loaded.preview || "")).latest
-                }
+                html={loaded.body || loaded.preview || ""}
                 className="mt-3"
                 suppressQuoted
                 afterLatest={<MessageAttachmentsSection message={loaded} />}
@@ -6103,7 +6105,7 @@ function MessageView({
             <>
               <MessageBody
                 message={message}
-                html={sanitizeEmailHtml(message.body || message.preview || "")}
+                html={message.body || message.preview || ""}
                 onInlineImages={handleInlineImages}
                 className="mt-6"
                 afterLatest={

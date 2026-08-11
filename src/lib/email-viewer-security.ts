@@ -16,7 +16,7 @@
  * exact parent origin plus a per-render channelId.
  */
 
-import DOMPurify from "dompurify";
+import DOMPurify, { type Config } from "dompurify";
 
 // ---- CSS hardening ---------------------------------------------------------
 
@@ -50,7 +50,7 @@ function sanitizeCssText(css: string): string {
 export function sanitizeAndHardenEmailHtml(html: string): string {
   if (!html) return "";
 
-  const clean = DOMPurify.sanitize(html, {
+  const config: Config = {
     FORBID_TAGS: ["script", "iframe", "object", "embed", "form", "link", "meta", "base"],
     FORBID_ATTR: ["srcdoc", "formaction"],
     ALLOW_DATA_ATTR: false,
@@ -58,18 +58,10 @@ export function sanitizeAndHardenEmailHtml(html: string): string {
     // in real-world newsletters survive sanitization (DOMPurify otherwise
     // drops <style> at the document root).
     FORCE_BODY: true,
-  });
+  };
 
-  // Parse in a detached document so we don't touch the app DOM.
-  const doc =
-    typeof DOMParser !== "undefined"
-      ? new DOMParser().parseFromString(
-          `<!doctype html><html><head></head><body>${clean}</body></html>`,
-          "text/html",
-        )
-      : null;
-
-  if (!doc || !doc.body) {
+  if (typeof document === "undefined") {
+    const clean = DOMPurify.sanitize(html, config);
     // Fall back to regex-only if DOMParser isn't around (SSR).
     return clean
       .replace(/<style([^>]*)>([\s\S]*?)<\/style>/gi, (_m, attrs, body) => {
@@ -79,19 +71,26 @@ export function sanitizeAndHardenEmailHtml(html: string): string {
       .replace(/\sstyle='([^']*)'/gi, (_m, css) => ` style='${sanitizeCssText(css)}'`);
   }
 
+  // DOMPurify has already parsed and sanitized the input. Harden that detached
+  // body directly instead of serializing it and parsing the same HTML again.
+  const body = DOMPurify.sanitize(html, {
+    ...config,
+    RETURN_DOM: true,
+  }) as unknown as HTMLBodyElement;
+
   // Harden every <style> block.
-  doc.querySelectorAll("style").forEach((el) => {
+  body.querySelectorAll("style").forEach((el) => {
     el.textContent = sanitizeCssText(el.textContent || "");
   });
 
   // Harden every inline style="…" attribute.
-  doc.querySelectorAll<HTMLElement>("[style]").forEach((el) => {
+  body.querySelectorAll<HTMLElement>("[style]").forEach((el) => {
     const raw = el.getAttribute("style") || "";
     el.setAttribute("style", sanitizeCssText(raw));
   });
 
   // Harden anchors: only allow http(s), mailto, tel; force safe target/rel.
-  doc.querySelectorAll("a").forEach((el) => {
+  body.querySelectorAll("a").forEach((el) => {
     const href = (el.getAttribute("href") || "").trim();
     const scheme = href.toLowerCase().split(":")[0];
     const safe =
@@ -106,7 +105,7 @@ export function sanitizeAndHardenEmailHtml(html: string): string {
     el.setAttribute("rel", "noopener noreferrer nofollow");
   });
 
-  return doc.body.innerHTML;
+  return body.innerHTML;
 }
 
 // ---- srcDoc / CSP ---------------------------------------------------------
