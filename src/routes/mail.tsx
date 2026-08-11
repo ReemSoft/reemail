@@ -727,6 +727,8 @@ import {
   FileCode,
   FileType,
   History,
+  Folder as FolderIcon,
+  FolderPlus,
 } from "lucide-react";
 import {
   DropdownMenu,
