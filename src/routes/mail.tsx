@@ -1848,8 +1848,13 @@ function useMailData(session: MailSession | null) {
           if (loadReqIdRef.current !== reqId) return;
           if (res.ok) {
             setMessages(applyPending(res.messages));
-            setHasMore(res.hasMore);
+            // Local index holds only the synced slice of the Inbox. When it
+            // runs out we still allow one on-demand Bridge sweep (IMAP SEARCH
+            // FROM) at the very bottom of the list, so the folder can show the
+            // sender's older mail too. Zero extra cost until the user asks.
+            setHasMore(res.hasMore || !senderDeepRef.current.has(senderView));
             setSenderCursor(res.nextCursor);
+
             setIndexCursor(null);
             setSource("index");
             setUseMock(false);
