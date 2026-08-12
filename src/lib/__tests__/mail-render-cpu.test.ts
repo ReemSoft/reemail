@@ -36,8 +36,10 @@ describe("MAILMAESTRO message render CPU", () => {
     expect(messageBody).toContain("[bodyIdentity, html]");
   });
 
-  it("historical rendering delegates one quoted split to ThreadedEmailBody", () => {
-    expect(historicalCard).toContain('html={loaded.body || loaded.preview || ""}');
+  it("historical rendering trims once before delegating to ThreadedEmailBody", () => {
+    expect(historicalCard).toContain("const historicalBody = useMemo(");
+    expect(historicalCard).toContain("trimHistoricalQuotedContent(");
+    expect(historicalCard).toContain("html={historicalBody}");
     expect(historicalCard).not.toContain("splitQuotedHtml(");
     expect(historicalCard).not.toContain("sanitizeEmailHtml(");
     expect(messageBody).toContain("<ThreadedEmailBody");

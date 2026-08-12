@@ -36,7 +36,7 @@ import {
   markQuotedCidImagesPending,
   prepareQuotedEmailForComposer,
 } from "@/lib/mail-compose-quote";
-import { splitQuotedHtml } from "@/lib/mail-thread-split";
+import { splitQuotedHtml, trimHistoricalQuotedContent } from "@/lib/mail-thread-split";
 import {
   ATTACHMENT_PREPARATION_MESSAGE_KEY,
   getOrCreateStagedUpload,
@@ -5572,6 +5572,10 @@ function ConversationMessageCard({
   const [open, setOpen] = useState(false);
   const [loaded, setLoaded] = useState<MailMessage | null>(null);
   const [state, setState] = useState<"idle" | "loading" | "error">("idle");
+  const historicalBody = useMemo(
+    () => trimHistoricalQuotedContent(loaded?.body || loaded?.preview || ""),
+    [loaded?.body, loaded?.preview],
+  );
 
   const shortDate = new Date(row.date).toLocaleString(
     getCurrentLang() === "ar" ? "ar-SA" : "en-GB",
@@ -5675,7 +5679,7 @@ function ConversationMessageCard({
               </div>
               <MessageBody
                 message={loaded}
-                html={loaded.body || loaded.preview || ""}
+                html={historicalBody}
                 onEntireBody={(next) =>
                   setLoaded((current) => (samePhysicalMessage(current, next) ? next : current))
                 }
