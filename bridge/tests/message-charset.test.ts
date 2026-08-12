@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createRequire } from "node:module";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { decodeDownloadedText } from "../src/imap.js";
@@ -11,6 +12,9 @@ const WINDOWS_1256_ARABIC = Buffer.from(
 );
 const ISO_8859_6_ARABIC = Buffer.from("e5d1cdc8c720c8e3e520e1ea204d61696c204d61657374726f", "hex");
 const WINDOWS_1252_TEXT = Buffer.from("9348656c6c6f942080", "hex");
+const ARABIC_SHORT = "مرحبا بكم في";
+const WINDOWS_1256_ARABIC_SHORT = Buffer.from("e3d1cdc8c720c8dfe320dded", "hex");
+const ISO_8859_6_ARABIC_SHORT = Buffer.from("e5d1cdc8c720c8e3e520e1ea", "hex");
 
 test("ImapFlow-converted UTF-8 wins over the legacy BODYSTRUCTURE charset", () => {
   assert.equal(decodeDownloadedText(UTF8_ARABIC, "windows-1256", { charset: "utf-8" }), ARABIC);
@@ -27,6 +31,14 @@ test("BODYSTRUCTURE-only known legacy charsets decode exact fixed byte vectors",
   assert.equal(decodeDownloadedText(WINDOWS_1256_ARABIC, "windows-1256", undefined), ARABIC);
   assert.equal(decodeDownloadedText(ISO_8859_6_ARABIC, "iso-8859-6", undefined), ARABIC);
   assert.equal(decodeDownloadedText(WINDOWS_1252_TEXT, "windows-1252", undefined), "“Hello” €");
+  assert.equal(
+    decodeDownloadedText(WINDOWS_1256_ARABIC_SHORT, "windows-1256", undefined),
+    ARABIC_SHORT,
+  );
+  assert.equal(
+    decodeDownloadedText(ISO_8859_6_ARABIC_SHORT, "iso-8859-6", undefined),
+    ARABIC_SHORT,
+  );
 });
 
 test("UTF-8, mixed text, ASCII, case, and whitespace stay exact", () => {
@@ -94,4 +106,20 @@ test("charset correction changes no request, cache, MIME, attachment, or CID sur
   assert.doesNotMatch(helper, /fetchOne|downloadPartBuffer|client\.download|withMessageMailbox/);
   assert.doesNotMatch(helper, /BODY_CACHE_VERSION|collectAttachmentParts|selectInline/);
   assert.equal(helper.match(/decodeText\(/g)?.length, 1);
+});
+
+test("legacy decoding is runtime-independent and iconv-lite is an exact direct dependency", () => {
+  const source = readFileSync(new URL("../src/imap.ts", import.meta.url), "utf8");
+  const packageJson = JSON.parse(
+    readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+  ) as { dependencies?: Record<string, string> };
+  const require = createRequire(import.meta.url);
+  const installed = require("iconv-lite/package.json") as { version: string };
+  assert.equal(packageJson.dependencies?.["iconv-lite"], "0.7.3");
+  assert.equal(installed.version, "0.7.3");
+  assert.match(source, /import iconv from "iconv-lite"/);
+  assert.doesNotMatch(source, /(?:imapflow|mailparser)\/node_modules\/iconv-lite/);
+  assert.match(source, /iconv\.encodingExists\(cs\)/);
+  assert.match(source, /iconv\.decode\(buf, cs\)/);
+  assert.equal(decodeDownloadedText(WINDOWS_1252_TEXT, "windows-1252", undefined), "“Hello” €");
 });

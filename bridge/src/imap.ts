@@ -5,6 +5,7 @@ import {
   type SearchObject,
 } from "imapflow";
 import { simpleParser, type AddressObject, type ParsedMail } from "mailparser";
+import iconv from "iconv-lite";
 import type { Readable } from "node:stream";
 import type { MailAccount, MailFolder, FolderCount, MailMessage, MailAttachment } from "./types.js";
 import { normalizeAttachmentFilename } from "./attachment-filename.js";
@@ -456,11 +457,9 @@ export function pickTextPart(structure: MessageStructureObject | undefined): Tex
 
 function decodeText(buf: Buffer, charset?: string): string {
   const cs = (charset || "utf-8").toLowerCase().trim();
-  try {
-    return new TextDecoder(cs as any).decode(buf);
-  } catch {
-    return buf.toString("utf8");
-  }
+  if (cs === "utf-8" || cs === "utf8") return new TextDecoder("utf-8").decode(buf);
+  if (iconv.encodingExists(cs)) return iconv.decode(buf, cs);
+  return new TextDecoder("utf-8").decode(buf);
 }
 
 export function decodeDownloadedText(
