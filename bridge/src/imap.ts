@@ -1323,6 +1323,7 @@ export function parsedMailToMessage(parsed: ParsedMail, folder: MailFolder): Mai
   const from = parsed.from ? addressFromAddressObject(parsed.from) : { name: "", email: "" };
   const to = parsed.to ? addressesFromAddressObject(parsed.to) : [];
   const cc = parsed.cc ? addressesFromAddressObject(parsed.cc) : [];
+  const replyTo = parsed.replyTo ? addressesFromAddressObject(parsed.replyTo) : [];
 
   const body = parsed.html || parsed.textAsHtml || parsed.text || "";
   const preview = makePreview(parsed.text || parsed.subject || "");
@@ -1343,6 +1344,7 @@ export function parsedMailToMessage(parsed: ParsedMail, folder: MailFolder): Mai
     threadId: parsed.messageId || "",
     inReplyTo,
     references,
+    replyTo: replyTo.length ? replyTo : undefined,
     folder,
     from,
     to,

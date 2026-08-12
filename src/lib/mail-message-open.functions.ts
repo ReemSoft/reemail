@@ -41,6 +41,7 @@ export interface CachedBodyPayload {
   mailedBy?: string;
   signedBy?: string;
   security?: string;
+  replyTo?: MailMessage["replyTo"];
   uidValidity: string;
 }
 
@@ -124,6 +125,7 @@ export const openMailMessage = createServerFn({ method: "POST" })
             mailedBy: found.body.headersMeta?.mailedBy,
             signedBy: found.body.headersMeta?.signedBy,
             security: found.body.headersMeta?.security,
+            replyTo: found.body.headersMeta?.replyTo,
             uidValidity: found.body.uidValidity,
           },
         };
@@ -201,6 +203,7 @@ export const openMailMessage = createServerFn({ method: "POST" })
             mailedBy: msg.mailedBy,
             signedBy: msg.signedBy,
             security: msg.security,
+            replyTo: msg.replyTo,
           },
         })
         .catch(() => undefined);
@@ -484,6 +487,7 @@ export const warmMessageBodies = createServerFn({ method: "POST" })
           mailedBy: msg.mailedBy,
           signedBy: msg.signedBy,
           security: msg.security,
+          replyTo: msg.replyTo,
         },
       });
       if (outcome === "stored") warmed++;

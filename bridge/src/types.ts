@@ -33,6 +33,8 @@ export interface MailMessage {
   inReplyTo?: string;
   /** RFC References chain, oldest to newest. */
   references?: string[];
+  /** RFC Reply-To addresses parsed from the already-fetched message headers. */
+  replyTo?: MailAddress[];
   folder: MailFolder;
   from: MailAddress;
   to: MailAddress[];

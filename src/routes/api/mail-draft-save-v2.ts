@@ -28,6 +28,8 @@ export const Route = createFileRoute("/api/mail-draft-save-v2")({
                 cc: Array.isArray(body?.cc) ? body.cc : [],
                 bcc: Array.isArray(body?.bcc) ? body.bcc : [],
                 subject: typeof body?.subject === "string" ? body.subject : "",
+                inReplyTo: typeof body?.inReplyTo === "string" ? body.inReplyTo : undefined,
+                references: Array.isArray(body?.references) ? body.references : [],
                 bodyHtml: typeof body?.bodyHtml === "string" ? body.bodyHtml : undefined,
                 bodyText: typeof body?.bodyText === "string" ? body.bodyText : undefined,
                 previousRef: body?.previousRef,
@@ -62,7 +64,6 @@ export const Route = createFileRoute("/api/mail-draft-save-v2")({
               "Cache-Control": "private, no-store",
             },
           });
-
         } catch {
           return json({ ok: false, error: "INVALID_PAYLOAD" }, 400);
         }

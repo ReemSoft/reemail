@@ -78,6 +78,8 @@ export interface DraftSnapshot {
   html: string;
   showCc: boolean;
   showBcc: boolean;
+  inReplyTo?: string;
+  references?: string[];
   inlineImages?: Array<{
     id: string;
     cid: string;

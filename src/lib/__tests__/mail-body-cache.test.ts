@@ -93,6 +93,29 @@ describe("lookupCachedBody", () => {
     if (res.hit) expect(res.body.bodyHtml).toBe("<p>hello</p>");
   });
 
+  it("returns cached Reply-To metadata without a Bridge or IMAP fallback", async () => {
+    const db = fakeSupabase({
+      mail_folders: { id: "f1", uidvalidity: 100 },
+      mail_message_body_cache: {
+        ...CACHED,
+        headers_meta: {
+          replyTo: [
+            { name: "الدعم", email: "support@example.com" },
+            { name: "Injected\r\nBcc: bad", email: "bad\r\n@example.com" },
+          ],
+        },
+      },
+      mail_messages: { id: "m1" },
+    });
+    const res = await lookupCachedBody(db, KEY);
+    expect(res.hit).toBe(true);
+    if (res.hit) {
+      expect(res.body.headersMeta?.replyTo).toEqual([
+        { name: "الدعم", email: "support@example.com" },
+      ]);
+    }
+  });
+
   it("misses when the folder UIDVALIDITY changed", async () => {
     const db = fakeSupabase({
       mail_folders: { id: "f1", uidvalidity: 101 },
@@ -358,6 +381,27 @@ describe("storeCachedBody", () => {
     expect(row["cache_version"]).toBe(BODY_CACHE_VERSION);
     expect(row["body_html"]).toBe("<p>x</p>");
     expect(row["oversize"]).toBe(false);
+  });
+
+  it("stores Reply-To inside the existing bounded headers JSON", async () => {
+    const spy = { upserts: [] as unknown[] };
+    const db = fakeSupabase({}, spy);
+    await storeCachedBody(db, {
+      ...KEY,
+      uidValidity: "100",
+      bodyHtml: "<p>x</p>",
+      preview: "x",
+      inlineParts: [],
+      attachments: [],
+      headersMeta: { replyTo: [{ name: "Support", email: "support@example.com" }] },
+    });
+    const row = spy.upserts[0] as Record<string, unknown>;
+    expect(row["headers_meta"]).toEqual({
+      mailedBy: undefined,
+      signedBy: undefined,
+      security: undefined,
+      replyTo: [{ name: "Support", email: "support@example.com" }],
+    });
   });
 
   it("records an oversized body with NO content instead of truncating it", async () => {

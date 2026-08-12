@@ -28,6 +28,11 @@ import {
 
 import { buildReplyQuoteHtml, buildForwardQuoteHtml } from "@/lib/mail-quote";
 import {
+  buildReplyRecipients,
+  buildThreadingHeaders,
+  formatComposeAddress,
+} from "@/lib/mail-reply-metadata";
+import {
   markQuotedCidImagesPending,
   prepareQuotedEmailForComposer,
 } from "@/lib/mail-compose-quote";
@@ -1338,17 +1343,10 @@ function buildReply(
   const normalAttachments = selectNormalComposerAttachments(message);
   if (normalAttachments.length > 0 && !attachmentSourceRef) return null;
   const subject = message.subject.startsWith("Re:") ? message.subject : `Re: ${message.subject}`;
-  const to = message.from.email;
-  let cc = "";
-  if (all) {
-    const others = [
-      ...message.to.map((a) => a.email),
-      ...(message.cc?.map((a) => a.email) ?? []),
-    ].filter(
-      (e) => e && e.toLowerCase() !== myEmail.toLowerCase() && e.toLowerCase() !== to.toLowerCase(),
-    );
-    cc = Array.from(new Set(others)).join(", ");
-  }
+  const recipients = buildReplyRecipients(message, myEmail, all);
+  const to = recipients.to.map(formatComposeAddress).filter(Boolean).join(", ");
+  const cc = recipients.cc.map(formatComposeAddress).filter(Boolean).join(", ");
+  const threading = buildThreadingHeaders(message.references, message.threadId);
   const quoteSourceHtml = sanitizeEmailHtml(message.body || message.preview || "");
   const body = markQuotedCidImagesPending(
     buildReplyQuoteHtml(
@@ -1368,10 +1366,7 @@ function buildReply(
     inlineImages: message.inlineImages,
     inlineMessageId: message.id,
     quoteSourceHtml,
-    inReplyTo: message.threadId || undefined,
-    references: Array.from(
-      new Set([...(message.references ?? []), message.threadId].filter(Boolean)),
-    ),
+    ...threading,
     attachmentSourceRef: attachmentSourceRef ?? undefined,
     existingAttachments:
       normalAttachments.length > 0
@@ -1466,6 +1461,7 @@ function buildEditDraft(message: MailMessage, draftsFolderPath?: string): Compos
     inlineParts: message.inlineParts,
     inlineImages: message.inlineImages,
     inlineMessageId: message.id,
+    ...buildThreadingHeaders(message.references, message.inReplyTo),
   };
 }
 
@@ -3034,6 +3030,7 @@ function MailApp() {
                   mailedBy: result.body.mailedBy ?? base.mailedBy,
                   signedBy: result.body.signedBy ?? base.signedBy,
                   security: result.body.security ?? base.security,
+                  replyTo: result.body.replyTo ?? base.replyTo,
                   hasAttachments: result.body.attachments.length > 0,
                   uidValidity: base.uidValidity ?? result.body.uidValidity,
                 }
@@ -6762,6 +6759,12 @@ function Composer({
     return readDraftDoc(window.localStorage, accountEmail);
   }, [initial, accountEmail, isEditMode]);
   const restored = initialDoc?.snapshot ?? null;
+  const [threadingHeaders] = useState(() =>
+    buildThreadingHeaders(
+      restored?.references ?? initial?.references,
+      restored?.inReplyTo ?? initial?.inReplyTo,
+    ),
+  );
   const autosaveRefreshTrackerRef = useRef<ReturnType<
     typeof createDraftAutosaveRefreshTracker
   > | null>(null);
@@ -7043,6 +7046,8 @@ function Composer({
                 .filter((r) => r.valid)
                 .map((r) => ({ name: r.name ?? "", email: r.email })),
               subject: snapshot.subject,
+              inReplyTo: snapshot.inReplyTo,
+              references: snapshot.references,
               bodyHtml: transportHtml,
               bodyText: stripHtml(transportHtml),
               previousRef: previousRef ?? undefined,
@@ -7654,6 +7659,7 @@ function Composer({
           html,
           showCc: s.showCc,
           showBcc: s.showBcc,
+          ...threadingHeaders,
           inlineImages: serialized.inlineImages,
         });
         const persisted = writeDraftDoc(window.localStorage, s.accountEmail, {
@@ -7698,7 +7704,7 @@ function Composer({
         remoteAutosaveTimerRef.current = null;
       }
     };
-  }, [draftId]);
+  }, [draftId, threadingHeaders]);
 
   // Reschedule whenever any user-editable field changes (body edits bump
   // bodyRev via the input listener below; recipient/subject/attachment
@@ -8366,8 +8372,8 @@ function Composer({
           cc: cc.filter((r) => r.valid).map((r) => ({ name: r.name ?? "", email: r.email })),
           bcc: bcc.filter((r) => r.valid).map((r) => ({ name: r.name ?? "", email: r.email })),
           subject,
-          inReplyTo: initial?.inReplyTo,
-          references: initial?.references,
+          inReplyTo: threadingHeaders.inReplyTo,
+          references: threadingHeaders.references,
           bodyHtml,
           bodyText,
           ...attachmentTransport,
@@ -8604,6 +8610,7 @@ function Composer({
         html,
         showCc,
         showBcc,
+        ...threadingHeaders,
         inlineImages: serialized.inlineImages,
       });
       const persisted = writeDraftDoc(window.localStorage, accountEmail, {

@@ -13,7 +13,7 @@
 // Logs are intentionally PII-free: no address, no subject, no uid, no
 // account identifier is ever printed.
 import type { SupabaseClient } from "@supabase/supabase-js";
-import type { MailAttachment, MailMessage } from "@/lib/mail-types";
+import type { MailAddress, MailAttachment, MailMessage } from "@/lib/mail-types";
 import { INLINE_CID_MAX_COUNT, partitionInlineCidParts } from "@/lib/mail-inline-cid-policy";
 
 /** Bump when the HTML/body pipeline changes: invalidates every stored body. */
@@ -62,6 +62,7 @@ export interface CachedHeadersMeta {
   mailedBy?: string;
   signedBy?: string;
   security?: string;
+  replyTo?: MailAddress[];
 }
 
 export interface CachedBody {
@@ -410,7 +411,23 @@ function sanitizeHeadersMeta(value: unknown): CachedHeadersMeta {
     const raw = v[k];
     return typeof raw === "string" && raw.trim() ? raw.slice(0, 256) : undefined;
   };
-  return { mailedBy: pick("mailedBy"), signedBy: pick("signedBy"), security: pick("security") };
+  const replyTo = Array.isArray(v.replyTo)
+    ? v.replyTo.flatMap((candidate) => {
+        if (!candidate || typeof candidate !== "object") return [];
+        const record = candidate as Record<string, unknown>;
+        const email = typeof record.email === "string" ? record.email.trim() : "";
+        if (!email || /[\r\n]/.test(email) || !/^[^\s@]+@[^\s@]+$/.test(email)) return [];
+        const name =
+          typeof record.name === "string" ? record.name.replace(/[\r\n]+/g, " ").slice(0, 200) : "";
+        return [{ name, email }];
+      })
+    : [];
+  return {
+    mailedBy: pick("mailedBy"),
+    signedBy: pick("signedBy"),
+    security: pick("security"),
+    replyTo: replyTo.length ? replyTo.slice(0, 20) : undefined,
+  };
 }
 
 export function byteLength(s: string): number {

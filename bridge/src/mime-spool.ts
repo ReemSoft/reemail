@@ -7,6 +7,7 @@ import { finished } from "node:stream/promises";
 import { pipeline } from "node:stream/promises";
 import MailComposer from "nodemailer/lib/mail-composer/index.js";
 import type { SendMessagePayload } from "./smtp.js";
+import { normalizeThreadingHeaders } from "./threading-headers.js";
 
 export const MIME_SPOOL_DIR =
   process.env.MAIL_MIME_SPOOL_DIR ||
@@ -65,7 +66,6 @@ export async function readMimeSpoolBuffer(
   return buffer;
 }
 
-
 export async function withMimeSpoolReadStream<T>(
   spool: MimeSpool,
   consume: (raw: Readable) => Promise<T>,
@@ -96,6 +96,7 @@ function composerOptions(
   payload: SendMessagePayload,
   extraHeaders?: Record<string, string>,
 ): Record<string, unknown> {
+  const threading = normalizeThreadingHeaders(payload.inReplyTo, payload.references);
   const address = (value: { name: string; email: string }) =>
     value.name ? `"${value.name}" <${value.email}>` : value.email;
   return {
@@ -104,8 +105,7 @@ function composerOptions(
     ...(payload.cc?.length ? { cc: payload.cc.map(address).join(", ") } : {}),
     ...(payload.bcc?.length ? { bcc: payload.bcc.map(address).join(", ") } : {}),
     subject: payload.subject,
-    ...(payload.inReplyTo ? { inReplyTo: payload.inReplyTo } : {}),
-    ...(payload.references?.length ? { references: payload.references } : {}),
+    ...threading,
     text: payload.bodyText || "",
     html: payload.bodyHtml || "",
     ...(payload.attachments?.length

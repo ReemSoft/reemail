@@ -383,6 +383,8 @@ const DraftSaveClientSchema = z.object({
   cc: z.array(AddressSchema).max(200).optional().default([]),
   bcc: z.array(AddressSchema).max(200).optional().default([]),
   subject: z.string().max(998).optional().default(""),
+  inReplyTo: z.string().min(3).max(998).optional(),
+  references: z.array(z.string().min(3).max(998)).max(100).optional().default([]),
   bodyHtml: z
     .string()
     .max(5 * 1024 * 1024)
@@ -524,6 +526,8 @@ export const bridgeSaveDraft = createServerFn({ method: "POST" })
       cc: parsed.cc,
       bcc: parsed.bcc,
       subject: parsed.subject,
+      inReplyTo: parsed.inReplyTo,
+      references: parsed.references,
       bodyHtml: parsed.bodyHtml,
       bodyText: parsed.bodyText,
       previousRef: parsed.previousRef,

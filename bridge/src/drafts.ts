@@ -133,6 +133,8 @@ export const DraftSavePayloadSchema = z
     cc: z.array(RecipientSchema).max(200).optional().default([]),
     bcc: z.array(RecipientSchema).max(200).optional().default([]),
     subject: z.string().max(998).optional().default(""),
+    inReplyTo: z.string().min(3).max(998).optional(),
+    references: z.array(z.string().min(3).max(998)).max(100).optional().default([]),
     bodyHtml: z.string().max(DRAFT_MAX_TEXT_BYTES).optional(),
     bodyText: z.string().max(DRAFT_MAX_TEXT_BYTES).optional(),
     previousRef: PreviousRefSchema.optional(),
@@ -266,6 +268,8 @@ export function draftMimePayload(input: DraftSavePayload): SendMessagePayload {
     cc: (input.cc ?? []).map(toRecipient),
     bcc: (input.bcc ?? []).map(toRecipient),
     subject: input.subject,
+    inReplyTo: input.inReplyTo,
+    references: input.references,
     bodyHtml: input.bodyHtml,
     bodyText: input.bodyText,
     // Attachments come from the multer disk-streamed layer with identical
