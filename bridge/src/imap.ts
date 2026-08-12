@@ -463,6 +463,24 @@ function decodeText(buf: Buffer, charset?: string): string {
   }
 }
 
+export function decodeDownloadedText(
+  buf: Buffer,
+  bodyStructureCharset: string | undefined,
+  meta: { contentType?: unknown; charset?: unknown } | undefined,
+): string {
+  const downloadCharset = typeof meta?.charset === "string" ? meta.charset : undefined;
+  const contentTypeCharset =
+    /charset\s*=\s*(?:"([^"]+)"|'([^']+)'|([^;\s]+))/i
+      .exec(String(meta?.contentType || ""))
+      ?.slice(1)
+      .find(Boolean) || undefined;
+  // ImapFlow converts known text charsets to UTF-8 while streaming and then
+  // reports meta.charset="utf-8". That output charset must win over the
+  // source BODYSTRUCTURE declaration or the already-converted bytes are
+  // decoded a second time as the legacy charset.
+  return decodeText(buf, downloadCharset || contentTypeCharset || bodyStructureCharset);
+}
+
 /**
  * Downloads one body part.
  *
@@ -742,11 +760,7 @@ export async function getMessageBody(
           ) {
             parsed.bodyTruncated = true;
           }
-          const charset =
-            pick.charset ||
-            /charset="?([\w-]+)"?/i.exec(String(got.meta?.contentType || ""))?.[1] ||
-            (got.meta as any)?.charset;
-          const text = decodeText(got.buf, charset);
+          const text = decodeDownloadedText(got.buf, pick.charset, got.meta);
           if (pick.type === "text/html") {
             html = text;
           } else {
@@ -909,11 +923,7 @@ export async function downloadEntireBodyInMailbox(
     throw new MessageBodyTooLargeError();
   }
 
-  const charset =
-    pick.charset ||
-    /charset="?([\w-]+)"?/i.exec(String(got.meta?.contentType || ""))?.[1] ||
-    (got.meta as { charset?: string })?.charset;
-  const text = decodeText(got.buf, charset);
+  const text = decodeDownloadedText(got.buf, pick.charset, got.meta);
   let html = text;
   if (pick.type !== "text/html") {
     const mini = await simpleParser(
