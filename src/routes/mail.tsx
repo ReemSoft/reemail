@@ -873,6 +873,7 @@ import {
   resolveMessageInlineImages,
 } from "@/lib/mail-message-open.functions";
 import { listMailConversation, type ConversationRow } from "@/lib/mail-conversation.functions";
+import { prepareConversationHistory } from "@/lib/mail-conversation-history";
 import {
   readDraftDoc,
   writeDraftDoc,
@@ -5727,21 +5728,24 @@ function ConversationMessageCard({
 function useConversationRows(messageId: string): ConversationRow[] | null {
   const listConversation = useMailServerFn(listMailConversation);
   const [rows, setRows] = useState<ConversationRow[] | null>(null);
+  const session = getMailSession();
+  const mailSessionToken = session?.mailSessionToken ?? "";
+  const sessionScope = session
+    ? `${session.company?.id ?? session.account.company_id}:${session.account.id}`
+    : "";
 
   useEffect(() => {
     let cancelled = false;
     setRows(null);
-    const session = getMailSession();
     const parsed = parseMessageId(messageId);
-    if (!session?.mailSessionToken || !parsed) {
+    if (!mailSessionToken || !parsed) {
       setRows([]);
       return;
     }
-    const token = session.mailSessionToken;
     const run = () => {
       listConversation({
         data: {
-          mailSessionToken: token,
+          mailSessionToken,
 
           folder: parsed.folder,
           uid: parsed.uid,
@@ -5765,7 +5769,7 @@ function useConversationRows(messageId: string): ConversationRow[] | null {
       if (idle && cancelIdle) cancelIdle(handle as number);
       else window.clearTimeout(handle as number);
     };
-  }, [messageId, listConversation]);
+  }, [mailSessionToken, messageId, listConversation, sessionScope]);
 
   return rows;
 }
@@ -5851,7 +5855,18 @@ function MessageView({
   onComposeFor?: (message: MailMessage, mode: ThreadComposeMode) => void;
 }) {
   const { dir: uiDir } = useLanguage();
-  const threadRows = useConversationRows(message.id);
+  const conversationRows = useConversationRows(message.id);
+  const threadRows = useMemo(
+    () =>
+      conversationRows
+        ? prepareConversationHistory(conversationRows, {
+            id: message.id,
+            uidValidity: message.uidValidity,
+            date: message.date,
+          })
+        : null,
+    [conversationRows, message.date, message.id, message.uidValidity],
+  );
   const hasThreadRows = !!threadRows?.length;
   const [detailsOpen, setDetailsOpen] = useState(false);
 
