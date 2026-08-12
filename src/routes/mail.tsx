@@ -1338,14 +1338,7 @@ function stripHtml(html: string): string {
   return tmp.textContent || tmp.innerText || "";
 }
 
-function buildReply(
-  message: MailMessage,
-  myEmail: string,
-  all: boolean,
-  attachmentSourceRef: AttachmentSourceRef | null,
-): ComposeInitial | null {
-  const normalAttachments = selectNormalComposerAttachments(message);
-  if (normalAttachments.length > 0 && !attachmentSourceRef) return null;
+function buildReply(message: MailMessage, myEmail: string, all: boolean): ComposeInitial {
   const subject = message.subject.startsWith("Re:") ? message.subject : `Re: ${message.subject}`;
   const recipients = buildReplyRecipients(message, myEmail, all);
   const to = recipients.to.map(formatComposeAddress).filter(Boolean).join(", ");
@@ -1371,11 +1364,6 @@ function buildReply(
     inlineMessageId: message.id,
     quoteSourceHtml,
     ...threading,
-    attachmentSourceRef: attachmentSourceRef ?? undefined,
-    existingAttachments:
-      normalAttachments.length > 0
-        ? { messageId: message.id, attachments: normalAttachments }
-        : undefined,
   };
 }
 
@@ -5181,30 +5169,10 @@ function MailApp() {
                 setReading(false);
               }}
               onReply={() => {
-                const next = buildReply(
-                  selectedMessage,
-                  session.account.email_address,
-                  false,
-                  deriveAttachmentSourceRef(selectedMessage, folderPaths),
-                );
-                if (!next) {
-                  toast.error(tr("تعذّر تجهيز مرفقات الرسالة"));
-                  return;
-                }
-                setCompose(next);
+                setCompose(buildReply(selectedMessage, session.account.email_address, false));
               }}
               onReplyAll={() => {
-                const next = buildReply(
-                  selectedMessage,
-                  session.account.email_address,
-                  true,
-                  deriveAttachmentSourceRef(selectedMessage, folderPaths),
-                );
-                if (!next) {
-                  toast.error(tr("تعذّر تجهيز مرفقات الرسالة"));
-                  return;
-                }
-                setCompose(next);
+                setCompose(buildReply(selectedMessage, session.account.email_address, true));
               }}
               onForward={() => {
                 const next = buildForward(
@@ -5229,12 +5197,7 @@ function MailApp() {
                 const next =
                   mode === "forward"
                     ? buildForward(msg, deriveAttachmentSourceRef(msg, folderPaths))
-                    : buildReply(
-                        msg,
-                        session.account.email_address,
-                        mode === "replyAll",
-                        deriveAttachmentSourceRef(msg, folderPaths),
-                      );
+                    : buildReply(msg, session.account.email_address, mode === "replyAll");
                 if (!next) {
                   toast.error(tr("تعذّر تجهيز مرفقات الرسالة"));
                   return;
@@ -6831,7 +6794,7 @@ function Composer({
     return "";
   }, [restored, initial]);
 
-  // Existing Draft/Reply/Forward server attachments stay metadata-only in
+  // Existing Draft/Forward server attachments stay metadata-only in
   // the browser. Save/send uses a durable staged handle or the IMAP source
   // identity; attachment bytes remain entirely on the Bridge data plane.
   const restoredStaged = restored?.stagedAttachments ?? [];

@@ -76,7 +76,7 @@ function normalizeCid(value: string | undefined): string {
   return (value ?? "").replace(/^<|>$/g, "").trim().toLowerCase();
 }
 
-/** One rule for Draft edit, Reply, Reply All and Forward attachment chips. */
+/** One rule for Edit Draft and Forward attachment chips. */
 export function selectNormalComposerAttachments(message: MailMessage): MailAttachment[] {
   const bodyCids = new Set(
     Array.from((message.body ?? "").matchAll(/cid:([^"'\s>)\\]+)/gi), (match) =>

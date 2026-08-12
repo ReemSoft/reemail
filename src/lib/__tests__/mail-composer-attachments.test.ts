@@ -327,17 +327,96 @@ describe("per-attachment transport planning", () => {
 describe("Reply, Reply All, Forward and Composer wiring", () => {
   const route = readFileSync(new URL("../../routes/mail.tsx", import.meta.url), "utf8");
 
-  it("uses one normal-attachment rule for Reply/Reply All, Forward and Edit Draft", () => {
+  it("REPLY_ORIGINAL_ATTACHMENT_NOT_INHERITED and REPLY_ALL_ORIGINAL_ATTACHMENT_NOT_INHERITED", () => {
     const builders = route.slice(
       route.indexOf("function buildReply"),
       route.indexOf("type SortOption"),
     );
-    expect(builders.match(/selectNormalComposerAttachments\(message\)/g)).toHaveLength(3);
-    expect(builders).toContain(
-      "if (normalAttachments.length > 0 && !attachmentSourceRef) return null",
-    );
-    expect(builders.match(/existingAttachments:/g)).toHaveLength(2);
+    const reply = builders.slice(0, builders.indexOf("function buildForward"));
+    expect(reply).not.toContain("selectNormalComposerAttachments(message)");
+    expect(reply).not.toContain("existingAttachments:");
+    expect(reply).not.toContain("attachmentSourceRef:");
+    expect(reply).toContain("const recipients = buildReplyRecipients(message, myEmail, all)");
+
+    expect(builders.match(/selectNormalComposerAttachments\(message\)/g)).toHaveLength(2);
+    expect(builders.match(/existingAttachments:/g)).toHaveLength(1);
     expect(builders).toContain("const existingAttachments =");
+  });
+
+  it("keeps an attachment-free original reply normal", () => {
+    const reply = route.slice(
+      route.indexOf("function buildReply"),
+      route.indexOf("function buildForward"),
+    );
+    expect(reply).not.toContain("message.attachments");
+    expect(reply).toContain("bodyIsHtml: true");
+    expect(reply).toContain("...threading");
+  });
+
+  it("REPLY_NEW_ATTACHMENT_SENT and REPLY_SEND_PAYLOAD_EXCLUDES_ORIGINAL", () => {
+    const plan = buildAttachmentTransportPlan({
+      attachments: [],
+      restoredHandles: new Map(),
+      preservedHandles: new Map(),
+      sourceRef: null,
+    });
+    const transport = buildStagedAttachmentTransport({
+      plan,
+      normal: [
+        {
+          handle: "reply-pdf-handle",
+          filename: "reply.pdf",
+          size: 100,
+          mimeType: "application/pdf",
+          kind: "attachment",
+          expiresAt: 1,
+        },
+      ],
+      inline: [],
+      inlineMetadata: [],
+    });
+    expect(transport).toEqual({
+      attachmentHandles: ["reply-pdf-handle"],
+      stagedInlineImages: [],
+      sourceAttachments: [],
+    });
+  });
+
+  it("ORIGINAL_MESSAGE_ATTACHMENT_PRESERVED and HISTORICAL_MESSAGE_ATTACHMENT_PRESERVED", () => {
+    expect(selectNormalComposerAttachments(message({ attachments: [normal[0]] }))).toEqual([
+      normal[0],
+    ]);
+    expect(route).toContain("<MessageAttachmentsSection message={message} />");
+    expect(route).toContain("afterLatest={<MessageAttachmentsSection message={loaded} />}");
+  });
+
+  it("DRAFT_ATTACHMENT_PRESERVED and DRAFT_ATTACHMENT_NOT_LEAKED_TO_NEW_REPLY", () => {
+    const builders = route.slice(
+      route.indexOf("function buildReply"),
+      route.indexOf("type SortOption"),
+    );
+    const reply = builders.slice(0, builders.indexOf("function buildForward"));
+    const draft = builders.slice(builders.indexOf("function buildEditDraft"));
+    expect(reply).not.toContain("existingAttachments");
+    expect(draft).toContain("const existingAttachments =");
+    expect(draft).toContain("existingAttachments,");
+  });
+
+  it("REPLY_A_TO_REPLY_B_NO_LEAK and Reply to Reply All has no source leakage", () => {
+    const emptyReplyPlan = () =>
+      buildAttachmentTransportPlan({
+        attachments: [],
+        restoredHandles: new Map([["draft", "stale-draft-handle"]]),
+        preservedHandles: new Map([["reply-a", "stale-reply-a-handle"]]),
+        sourceRef,
+      });
+    expect(emptyReplyPlan()).toEqual({
+      attachmentHandles: [],
+      sourceAttachments: [],
+      sourceAttachmentIds: [],
+      unresolvedAttachmentIds: [],
+    });
+    expect(emptyReplyPlan()).toEqual(emptyReplyPlan());
   });
 
   it("initializes existingKept from metadata and performs no normal-byte hydration on mount", () => {
@@ -389,50 +468,47 @@ describe("Reply, Reply All, Forward and Composer wiring", () => {
     expect(route.match(/\.\.\.attachmentTransport/g)).toHaveLength(2);
   });
 
-  it.each(["Reply", "Reply All", "Forward"])(
-    "%s keeps an existing normal source separate from a hydrated inline CID",
-    () => {
-      const plan = buildAttachmentTransportPlan({
-        attachments: [normal[0]],
-        restoredHandles: new Map(),
-        preservedHandles: new Map(),
-        sourceRef,
-      });
-      const transport = buildStagedAttachmentTransport({
-        plan,
-        normal: [],
-        inline: [
-          {
-            handle: "inline-handle",
-            filename: "mm-inline-cid.png",
-            size: 1,
-            mimeType: "image/png",
-            kind: "inline-image",
-            expiresAt: 1,
-          },
-        ],
-        inlineMetadata: [
-          {
-            uploadFilename: "mm-inline-cid.png",
-            cid: "quoted-cid@example",
-            contentType: "image/png",
-          },
-        ],
-      });
-
-      expect(transport.sourceAttachments).toHaveLength(1);
-      expect(transport.sourceAttachments[0].part).toBe("2");
-      expect(transport.attachmentHandles).toEqual([]);
-      expect(transport.stagedInlineImages).toEqual([
+  it("FORWARD_BEHAVIOR_UNCHANGED: keeps its normal source separate from a hydrated inline CID", () => {
+    const plan = buildAttachmentTransportPlan({
+      attachments: [normal[0]],
+      restoredHandles: new Map(),
+      preservedHandles: new Map(),
+      sourceRef,
+    });
+    const transport = buildStagedAttachmentTransport({
+      plan,
+      normal: [],
+      inline: [
         {
           handle: "inline-handle",
+          filename: "mm-inline-cid.png",
+          size: 1,
+          mimeType: "image/png",
+          kind: "inline-image",
+          expiresAt: 1,
+        },
+      ],
+      inlineMetadata: [
+        {
           uploadFilename: "mm-inline-cid.png",
           cid: "quoted-cid@example",
           contentType: "image/png",
         },
-      ]);
-    },
-  );
+      ],
+    });
+
+    expect(transport.sourceAttachments).toHaveLength(1);
+    expect(transport.sourceAttachments[0].part).toBe("2");
+    expect(transport.attachmentHandles).toEqual([]);
+    expect(transport.stagedInlineImages).toEqual([
+      {
+        handle: "inline-handle",
+        uploadFilename: "mm-inline-cid.png",
+        cid: "quoted-cid@example",
+        contentType: "image/png",
+      },
+    ]);
+  });
 
   it("fails closed before Send V2 when a staged result crosses transport buckets", () => {
     const plan = buildAttachmentTransportPlan({
