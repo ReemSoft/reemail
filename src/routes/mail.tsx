@@ -920,7 +920,11 @@ import {
   abortInflightControllers,
   type PrefetchPriority,
 } from "@/lib/mail-prefetch";
-import { NavigationGeneration } from "@/lib/mail-navigation-race";
+import {
+  MessageOpenIntentGeneration,
+  NavigationGeneration,
+  type MessageOpenIntent,
+} from "@/lib/mail-navigation-race";
 import { mailPerf } from "@/lib/mail-performance";
 import { deleteSavedDraft, shouldShowDeleteDraft } from "@/lib/mail-composer-delete-draft";
 import { tombstoneGhostMessage } from "@/lib/mail-ghost-cleanup.functions";
@@ -2869,7 +2873,9 @@ function MailApp() {
 
   type ClientMessageSource = "memory" | "server-cache" | "imap" | "error";
   type ClientMessageResult = { message: MailMessage | null; source: ClientMessageSource };
-  type MessageOpenContext = { kind: "current-list" } | { kind: "historical"; base: MailMessage };
+  type MessageOpenContext =
+    | { kind: "current-list"; intent?: MessageOpenIntent }
+    | { kind: "historical"; base: MailMessage };
   type MessageCacheFacade = {
     get: (id: string) => MailMessage | undefined;
     set: (id: string, message: MailMessage) => void;
@@ -2961,7 +2967,9 @@ function MailApp() {
       if (lane === "background" && !uidValidity) {
         return Promise.resolve({ message: null, source: "error" });
       }
-      const requestKey = `${scope.companyId}|${scope.accountId}|${parsed.folder}|${parsed.uid}|${uidValidity ?? "interactive"}`;
+      const intent = context.kind === "current-list" ? context.intent : undefined;
+      const intentKey = intent ? `|intent:${intent.scope}:${intent.generation}` : "";
+      const requestKey = `${scope.companyId}|${scope.accountId}|${parsed.folder}|${parsed.uid}|${uidValidity ?? "interactive"}${intentKey}`;
       const existing = inflight.current.get(requestKey);
       if (existing) {
         if (lane !== "interactive" || existing.lane !== "background") {
@@ -2998,6 +3006,12 @@ function MailApp() {
           uid: parsed.uid,
           lane,
           allowCache: base != null,
+          ...(context.kind === "current-list" && context.intent
+            ? {
+                openIntentScope: context.intent.scope,
+                openIntentGeneration: context.intent.generation,
+              }
+            : {}),
         },
         signal: controller.signal,
       })
@@ -3141,6 +3155,9 @@ function MailApp() {
   const navigationGenerationRef = useRef<NavigationGeneration | null>(null);
   if (!navigationGenerationRef.current)
     navigationGenerationRef.current = new NavigationGeneration();
+  const messageOpenIntentRef = useRef<MessageOpenIntentGeneration | null>(null);
+  if (!messageOpenIntentRef.current)
+    messageOpenIntentRef.current = new MessageOpenIntentGeneration();
 
   const prefetchCidForMessage = useCallback(
     async (message: MailMessage, signal?: AbortSignal): Promise<void> => {
@@ -3270,6 +3287,7 @@ function MailApp() {
     navigationGenerationRef.current?.invalidate();
     activeScopeGenerationRef.current += 1;
     if (clearMemory) {
+      messageOpenIntentRef.current?.resetScope();
       messageCache.current.clear();
       uidValidityByScopeRef.current.clear();
     }
@@ -3504,6 +3522,7 @@ function MailApp() {
 
   async function openMessage(id: string) {
     if (!(await guardComposerNav())) return;
+    const intent = messageOpenIntentRef.current!.next(id);
     // Drop speculative work queued for the previous intent. An already
     // running single-flight may still be reused by this foreground open.
     const aborted = prefetchQueueRef.current?.pendingKeys().length ?? 0;
@@ -3535,7 +3554,7 @@ function MailApp() {
     try {
       const result = cached
         ? ({ message: cached, source: "memory" } as ClientMessageResult)
-        : await fetchMessage(id, "interactive");
+        : await fetchMessage(id, "interactive", undefined, { kind: "current-list", intent });
       if (!navigationGenerationRef.current!.isCurrent(generation)) {
         mailPerf("stale-response-dropped", { phase: "navigation" });
         return;

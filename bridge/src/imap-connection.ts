@@ -60,6 +60,14 @@ const pending = new Map<string, Promise<Entry>>();
  */
 export type ImapLane = "interactive" | "background" | "transfer";
 
+export class MessageOpenSupersededError extends Error {
+  readonly code = "MESSAGE_OPEN_SUPERSEDED";
+
+  constructor() {
+    super("MESSAGE_OPEN_SUPERSEDED");
+  }
+}
+
 /** Account identity key. Host + user + lane only — never logged. */
 function keyFor(account: MailAccount, lane: ImapLane = "interactive"): string {
   return `${lane}|${account.imap_host.toLowerCase().trim()}:${account.imap_port}:${account.email_address.toLowerCase().trim()}`;
@@ -154,8 +162,10 @@ export async function getMailboxesCached(
   account: MailAccount,
   password: string,
   lane: ImapLane = "interactive",
+  shouldStart?: () => boolean,
 ): Promise<ListResponse[]> {
   const entry = await getEntry(account, password, lane);
+  if (shouldStart && !shouldStart()) throw new MessageOpenSupersededError();
   const now = Date.now();
   if (entry.mailboxes && now - entry.mailboxes.at < LIST_CACHE_MS) return entry.mailboxes.value;
   const t0 = Date.now();
@@ -212,6 +222,7 @@ export async function withAccountMailbox<T>(
   path: string,
   fn: (client: ImapFlow) => Promise<T>,
   lane: ImapLane = "interactive",
+  shouldStart?: () => boolean,
 ): Promise<T> {
   const key = keyFor(account, lane);
 
@@ -220,6 +231,7 @@ export async function withAccountMailbox<T>(
     // Serialize per connection: chain onto the previous operation.
     const run = entry.chain.then(
       async () => {
+        if (shouldStart && !shouldStart()) throw new MessageOpenSupersededError();
         const tLock = Date.now();
         const lock = await entry.client.getMailboxLock(path);
         if (TIMING_ENABLED)
@@ -232,6 +244,7 @@ export async function withAccountMailbox<T>(
         }
       },
       async () => {
+        if (shouldStart && !shouldStart()) throw new MessageOpenSupersededError();
         // Previous op failed — the chain must not stay rejected.
         const e2 = await getEntry(account, password, lane);
         const lock = await e2.client.getMailboxLock(path);

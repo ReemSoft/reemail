@@ -6,11 +6,14 @@
 //   * a deleted/moved (orphan) message can never serve a body
 //   * drafts are never cached
 //   * an oversized body is recorded WITHOUT content, never truncated
+import { readFileSync } from "node:fs";
 import { describe, it, expect, vi } from "vitest";
 import {
+  cleanupBodyCache,
   lookupCachedBody,
   lookupCachedBodyWithMailboxHint,
   storeCachedBody,
+  touchCachedBody,
   isCacheableFolder,
   byteLength,
   BODY_CACHE_VERSION,
@@ -578,5 +581,85 @@ describe("storeCachedBody", () => {
     });
     expect(out).toBe("skipped");
     expect(spy.upserts).toHaveLength(0);
+  });
+
+  it("fails closed when the asynchronous cache store fails", async () => {
+    const chain = {
+      upsert: vi.fn(async () => ({ error: new Error("store failed") })),
+    };
+    const db = { from: vi.fn(() => chain) };
+    const out = await storeCachedBody(db as never, {
+      ...KEY,
+      uidValidity: "100",
+      bodyHtml: "<p>x</p>",
+      preview: "x",
+      inlineParts: [],
+      attachments: [],
+    });
+    expect(out).toBe("skipped");
+  });
+});
+
+describe("cache lifecycle", () => {
+  it("swallows an LRU touch failure without throwing into the response path", async () => {
+    const chain: Record<string, unknown> = {};
+    for (const method of ["update", "eq"]) chain[method] = vi.fn(() => chain);
+    chain.then = (resolve: (value: unknown) => unknown, reject: (error: unknown) => unknown) =>
+      Promise.reject(new Error("touch failed")).then(resolve, reject);
+    const db = { from: vi.fn(() => chain) };
+    expect(() => touchCachedBody(db as never, KEY)).not.toThrow();
+    await Promise.resolve();
+  });
+
+  it("keeps cleanup bounded and outside normal message-open/cache-hit paths", async () => {
+    const responses = [
+      { data: [{ id: "expired" }], error: null },
+      { data: [{ id: "keep-1" }, { id: "keep-2" }, { id: "stale-1" }], error: null },
+      { data: [{ id: "stale-1" }], error: null },
+    ];
+    const limits: number[] = [];
+    const db = {
+      from: vi.fn(() => {
+        const chain: Record<string, unknown> = {};
+        for (const method of ["delete", "eq", "lt", "select", "order", "in"]) {
+          chain[method] = vi.fn(() => chain);
+        }
+        chain.limit = vi.fn((value: number) => {
+          limits.push(value);
+          return chain;
+        });
+        chain.then = (resolve: (value: unknown) => unknown) =>
+          Promise.resolve(responses.shift()).then(resolve);
+        return chain;
+      }),
+    };
+    const evicted = await cleanupBodyCache(
+      db as never,
+      { companyId: "c1", accountId: "a1" },
+      {
+        maxBytes: 512 * 1024,
+        maxAgeDays: 14,
+        maxRowsPerAccount: 2,
+        warmBatch: 5,
+        warmWindow: 100,
+        inlineMaxBytes: 1536 * 1024,
+      },
+    );
+    expect(evicted).toBe(2);
+    expect(db.from).toHaveBeenCalledTimes(3);
+    expect(limits).toEqual([202]);
+
+    const source = readFileSync(
+      new URL("../mail-message-open.functions.ts", import.meta.url),
+      "utf8",
+    );
+    const normalOpen = source.slice(
+      source.indexOf("export const openMailMessage"),
+      source.indexOf("const EntireMessageSchema"),
+    );
+    expect(normalOpen).not.toContain("cleanupBodyCache");
+    expect(source.slice(source.indexOf("export const warmMessageBodies"))).toContain(
+      ".cleanupBodyCache",
+    );
   });
 });

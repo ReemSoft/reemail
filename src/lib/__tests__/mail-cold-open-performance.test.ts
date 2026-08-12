@@ -43,6 +43,10 @@ describe("MAILMAESTRO cold message open", () => {
   it("keeps one protected Bridge route and only constructs paired hints", () => {
     expect(bridgeSource.match(/app\.post\("\/api\/message"/g)).toHaveLength(1);
     expect(bridgeSource).toContain("payload.mailboxPathHint && payload.expectedUidValidity");
-    expect(bridgeSource).toContain("requireKey, messageGate");
+    expect(bridgeSource).toContain("requireKey, registerMessageOpenIntent, messageGate");
+  });
+
+  it("stores a completed shared A -> B -> A fetch only once", () => {
+    expect(normalOpenSource).toContain("r.json.shared !== true");
   });
 });

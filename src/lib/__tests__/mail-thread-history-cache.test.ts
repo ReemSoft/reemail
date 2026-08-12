@@ -147,7 +147,7 @@ describe("MAILMAESTRO historical thread body cache", () => {
 
   it("leaves normal cold opening on the default current-list policy", () => {
     expect(fetchBlock).toContain('context: MessageOpenContext = { kind: "current-list" }');
-    expect(source).toContain(': await fetchMessage(id, "interactive")');
+    expect(source).toContain(': await fetchMessage(id, "interactive", undefined,');
   });
 
   it("leaves normal prefetch calls and policy unchanged", () => {

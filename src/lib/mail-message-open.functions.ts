@@ -21,15 +21,23 @@ const FolderSchema = z.enum([
   "all",
 ]);
 
-const OpenSchema = z.object({
-  mailSessionToken: z.string().min(20).max(4096),
-  password: z.string().min(1).max(1024),
-  folder: FolderSchema,
-  uid: z.number().int().positive(),
-  lane: z.enum(["interactive", "background"]).optional().default("interactive"),
-  /** Set false when the caller has no index row to merge a cached body into. */
-  allowCache: z.boolean().optional().default(true),
-});
+const OpenSchema = z
+  .object({
+    mailSessionToken: z.string().min(20).max(4096),
+    password: z.string().min(1).max(1024),
+    folder: FolderSchema,
+    uid: z.number().int().positive(),
+    lane: z.enum(["interactive", "background"]).optional().default("interactive"),
+    /** Set false when the caller has no index row to merge a cached body into. */
+    allowCache: z.boolean().optional().default(true),
+    openIntentScope: z.string().uuid().optional(),
+    openIntentGeneration: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional(),
+  })
+  .superRefine((value, context) => {
+    if ((value.openIntentScope == null) !== (value.openIntentGeneration == null)) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "Incomplete message-open intent" });
+    }
+  });
 
 export interface CachedBodyPayload {
   bodyHtml: string;
@@ -156,6 +164,14 @@ export const openMailMessage = createServerFn({ method: "POST" })
         folder: data.folder,
         uid: data.uid,
         lane: data.lane,
+        ...(data.openIntentScope && data.openIntentGeneration
+          ? {
+              openIntentScope: data.openIntentScope,
+              openIntentGeneration: data.openIntentGeneration,
+              openIntentCompanyId: auth.companyId,
+              openIntentAccountId: auth.accountId,
+            }
+          : {}),
         ...(mailboxHint && data.folder !== "starred" && data.folder !== "all"
           ? {
               mailboxPathHint: mailboxHint.path,
@@ -188,7 +204,7 @@ export const openMailMessage = createServerFn({ method: "POST" })
       };
     }
 
-    if (msg.uidValidity && cache.isCacheableFolder(data.folder)) {
+    if (r.json.shared !== true && msg.uidValidity && cache.isCacheableFolder(data.folder)) {
       void cache
         .storeCachedBody(supabaseAdmin, {
           ...key,

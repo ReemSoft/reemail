@@ -13,6 +13,7 @@ import {
   getMailboxesCached,
   withAccountMailbox,
   dropAccountConnection,
+  MessageOpenSupersededError,
   TIMING_ENABLED,
   type ImapLane,
 } from "./imap-connection.js";
@@ -640,7 +641,9 @@ export async function withMessageMailbox<T>(
   hint: TrustedMailboxHint | undefined,
   operation: (client: ImapFlow) => Promise<T>,
   deps: MessageMailboxDeps = messageMailboxDeps,
+  shouldStart?: () => boolean,
 ): Promise<T | null> {
+  if (shouldStart && !shouldStart()) throw new MessageOpenSupersededError();
   if (validTrustedMailboxHint(hint)) {
     let operationStarted = false;
     try {
@@ -659,6 +662,7 @@ export async function withMessageMailbox<T>(
           return operation(client);
         },
         lane,
+        shouldStart,
       );
     } catch (error) {
       if (operationStarted || !(error instanceof MailboxHintUidValidityMismatch)) {
@@ -669,10 +673,11 @@ export async function withMessageMailbox<T>(
     }
   }
 
-  const mailboxes = await deps.getMailboxes(account, password, lane);
+  if (shouldStart && !shouldStart()) throw new MessageOpenSupersededError();
+  const mailboxes = await deps.getMailboxes(account, password, lane, shouldStart);
   const path = resolveFolderPath(mailboxes, folder);
   if (!path) return null;
-  return deps.withMailbox(account, password, path, operation, lane);
+  return deps.withMailbox(account, password, path, operation, lane, shouldStart);
 }
 
 /**
@@ -698,6 +703,7 @@ export async function getMessageBody(
   uid: number,
   lane: ImapLane = "interactive",
   mailboxHint?: TrustedMailboxHint,
+  shouldStart?: () => boolean,
 ): Promise<MailMessage | null> {
   const tOpen = Date.now();
   const result = await withMessageMailbox(
@@ -872,6 +878,8 @@ export async function getMessageBody(
 
       return parsed;
     },
+    messageMailboxDeps,
+    shouldStart,
   );
 
   if (TIMING_ENABLED)

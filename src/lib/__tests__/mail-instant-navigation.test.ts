@@ -13,7 +13,7 @@ describe("MAILMAESTRO_INSTANT_NAVIGATION_R1 route integration", () => {
 
   it("does not call the open Server Function on a memory hit", () => {
     expect(source).toMatch(/const result = cached\s*\? \(\{ message: cached, source: "memory" \}/);
-    expect(source).toMatch(/: await fetchMessage\(id, "interactive"\)/);
+    expect(source).toMatch(/: await fetchMessage\(id, "interactive", undefined,/);
   });
 
   it("drops stale navigation responses and clears all async state at scope boundaries", () => {
@@ -91,5 +91,11 @@ describe("MAILMAESTRO_INSTANT_NAVIGATION_R1 route integration", () => {
     expect(source).toContain("inflight.current.get(requestKey)?.promise === p");
     expect(source).toContain("inlineImageFlights.get(messageKey)?.promise === promise");
     expect(source).toContain("inlineImageFlights.get(key)?.promise === promise");
+  });
+
+  it("propagates a scoped latest-intent generation only for current-list opens", () => {
+    expect(source).toContain("messageOpenIntentRef.current!.next(id)");
+    expect(source).toContain("openIntentScope: context.intent.scope");
+    expect(source).toContain("openIntentGeneration: context.intent.generation");
   });
 });

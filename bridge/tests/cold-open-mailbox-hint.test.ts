@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { MessageOpenSupersededError } from "../src/imap-connection.js";
 import { withMessageMailbox } from "../src/imap.js";
 import type { MailAccount } from "../src/types.js";
 
@@ -156,4 +157,22 @@ test("malformed hints fail closed into the existing resolver", async () => {
   );
   assert.equal(result, "body");
   assert.deepEqual(h.stats(), { paths: ["INBOX"], lists: 1, operations: 1 });
+});
+
+test("an obsolete open is rejected before LIST, mailbox selection, or body work", async () => {
+  const h = harness();
+  await assert.rejects(
+    withMessageMailbox(
+      account,
+      "password",
+      "inbox",
+      "interactive",
+      undefined,
+      h.open,
+      h.deps as never,
+      () => false,
+    ),
+    MessageOpenSupersededError,
+  );
+  assert.deepEqual(h.stats(), { paths: [], lists: 0, operations: 0 });
 });

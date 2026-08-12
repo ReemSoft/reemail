@@ -21,6 +21,11 @@ import { DownloadByteCounter, parseDownloadChunkBytes } from "./download-perform
 import { createSendGates } from "./concurrency.js";
 import { createImapGates, loadImapGatesConfigFromEnv, type ImapPriority } from "./imap-gates.js";
 import { createImapGateMiddleware } from "./imap-gate-middleware.js";
+import {
+  LatestMessageOpenTracker,
+  MessageOpenSingleFlight,
+  type MessageOpenIntentLease,
+} from "./message-open-intent.js";
 
 import { z } from "zod";
 import {
@@ -46,6 +51,7 @@ import {
   closeAllImapConnections,
   dropAccountConnection,
   getMailboxesCached,
+  MessageOpenSupersededError,
   withAccountMailbox,
 } from "./imap-connection.js";
 import { sendMessage, sendMessageFast, sentCopyAccountKey } from "./smtp.js";
@@ -364,7 +370,65 @@ const OpenMessagePayloadSchema = MessagePayloadSchema.extend({
   lane: z.enum(["interactive", "background"]).optional().default("interactive"),
   mailboxPathHint: z.string().max(500).optional(),
   expectedUidValidity: z.string().max(64).optional(),
+  openIntentScope: z.string().uuid().optional(),
+  openIntentGeneration: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional(),
+  openIntentCompanyId: z.string().uuid().optional(),
+  openIntentAccountId: z.string().uuid().optional(),
+}).superRefine((value, context) => {
+  const fields = [
+    value.openIntentScope,
+    value.openIntentGeneration,
+    value.openIntentCompanyId,
+    value.openIntentAccountId,
+  ];
+  if (fields.some((field) => field != null) && fields.some((field) => field == null)) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "Incomplete message-open intent" });
+  }
 });
+
+const MessageOpenIntentSchema = z.object({
+  folder: FolderSchema,
+  uid: z.number().int().positive(),
+  lane: z.enum(["interactive", "background"]).optional().default("interactive"),
+  openIntentScope: z.string().uuid().optional(),
+  openIntentGeneration: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional(),
+  openIntentCompanyId: z.string().uuid().optional(),
+  openIntentAccountId: z.string().uuid().optional(),
+});
+
+const latestMessageOpenTracker = new LatestMessageOpenTracker();
+const messageOpenFlights = new MessageOpenSingleFlight<
+  Awaited<ReturnType<typeof getMessageBody>>
+>();
+
+type MessageOpenLocals = {
+  intent?: MessageOpenIntentLease;
+  flightKey?: string;
+};
+
+const registerMessageOpenIntent: express.RequestHandler = (req, res, next) => {
+  const parsed = MessageOpenIntentSchema.safeParse(req.body);
+  if (
+    !parsed.success ||
+    parsed.data.lane === "background" ||
+    !parsed.data.openIntentScope ||
+    !parsed.data.openIntentGeneration ||
+    !parsed.data.openIntentCompanyId ||
+    !parsed.data.openIntentAccountId
+  ) {
+    return next();
+  }
+  const scopeKey = `${parsed.data.openIntentCompanyId}|${parsed.data.openIntentAccountId}|${parsed.data.openIntentScope}`;
+  const messageIdentity = `${parsed.data.folder}:${parsed.data.uid}`;
+  const locals = res.locals as MessageOpenLocals;
+  locals.intent = latestMessageOpenTracker.register(
+    scopeKey,
+    parsed.data.openIntentGeneration!,
+    messageIdentity,
+  );
+  locals.flightKey = `${scopeKey}|${messageIdentity}`;
+  return next();
+};
 
 const EntireMessagePayloadSchema = MessagePayloadSchema.extend({
   mailboxPathHint: z.string().max(500).optional(),
@@ -385,27 +449,40 @@ const messageGate: express.RequestHandler = (req, res, next) => {
   return gate(req, res, next);
 };
 
-app.post("/api/message", requireKey, messageGate, async (req, res) => {
+app.post("/api/message", requireKey, registerMessageOpenIntent, messageGate, async (req, res) => {
   try {
     const payload = OpenMessagePayloadSchema.parse(req.body);
-    const message = await getMessageBody(
-      payload.account as MailAccount,
-      payload.password,
-      payload.folder,
-      payload.uid,
-      payload.lane,
-      payload.mailboxPathHint && payload.expectedUidValidity
-        ? {
-            path: payload.mailboxPathHint,
-            expectedUidValidity: payload.expectedUidValidity,
-          }
-        : undefined,
-    );
+    const locals = res.locals as MessageOpenLocals;
+    if (locals.intent && !locals.intent.isCurrent()) {
+      return res.status(409).json({ ok: false, error: "MESSAGE_OPEN_SUPERSEDED" });
+    }
+    const open = () =>
+      getMessageBody(
+        payload.account as MailAccount,
+        payload.password,
+        payload.folder,
+        payload.uid,
+        payload.lane,
+        payload.mailboxPathHint && payload.expectedUidValidity
+          ? {
+              path: payload.mailboxPathHint,
+              expectedUidValidity: payload.expectedUidValidity,
+            }
+          : undefined,
+        locals.intent?.isCurrent,
+      );
+    const result = locals.flightKey
+      ? await messageOpenFlights.run(locals.flightKey, open)
+      : { value: await open(), leader: true };
+    const message = result.value;
     if (!message) {
       return res.status(404).json({ ok: false, error: "Message not found" });
     }
-    return res.json({ ok: true, message });
+    return res.json({ ok: true, message, shared: !result.leader });
   } catch (err: any) {
+    if (err instanceof MessageOpenSupersededError) {
+      return res.status(409).json({ ok: false, error: err.code });
+    }
     console.error("[bridge] /api/message error:", err);
     return res.status(500).json({ ok: false, error: err?.message || "Failed to fetch message" });
   }
