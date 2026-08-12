@@ -17,17 +17,34 @@ function timestamp(value: string): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+const FOLDER_ORDER: Record<ConversationRow["folder"], number> = {
+  inbox: 0,
+  starred: 1,
+  sent: 2,
+  drafts: 3,
+  spam: 4,
+  trash: 5,
+  archive: 6,
+  all: 7,
+};
+
+function numericIdentity(value: string): bigint {
+  return /^\d+$/.test(value) ? BigInt(value) : 0n;
+}
+
 function comparePhysicalPosition(
   left: Pick<ConversationRow, "folder" | "uid" | "uidValidity" | "date">,
   right: Pick<ConversationRow, "folder" | "uid" | "uidValidity" | "date">,
 ): number {
   const dateDelta = timestamp(left.date) - timestamp(right.date);
   if (dateDelta !== 0) return dateDelta;
-  const folderDelta = left.folder.localeCompare(right.folder);
+  const folderDelta = FOLDER_ORDER[left.folder] - FOLDER_ORDER[right.folder];
   if (folderDelta !== 0) return folderDelta;
   const uidDelta = left.uid - right.uid;
   if (uidDelta !== 0) return uidDelta;
-  return left.uidValidity.localeCompare(right.uidValidity);
+  const leftUidValidity = numericIdentity(left.uidValidity);
+  const rightUidValidity = numericIdentity(right.uidValidity);
+  return leftUidValidity < rightUidValidity ? -1 : leftUidValidity > rightUidValidity ? 1 : 0;
 }
 
 /**
