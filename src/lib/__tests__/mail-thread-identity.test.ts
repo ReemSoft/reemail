@@ -14,6 +14,9 @@ const migration = readFileSync(
   ),
   "utf8",
 );
+const conversationRuntime = migration.slice(
+  migration.indexOf("CREATE OR REPLACE FUNCTION public.get_mail_conversation"),
+);
 
 const base: SyncMessagePayload = {
   uid: 42,
@@ -140,32 +143,52 @@ describe("persistent RFC Message-ID normalization", () => {
 });
 
 describe("collision-safe conversation SQL", () => {
-  it("normalizes historical scalar and reference values inside the RPC", () => {
+  it("normalizes historical scalar and reference values once in a changed-row backfill", () => {
     expect(migration).toContain("public.normalize_mail_rfc_message_id");
-    expect(migration).toContain("normalized_references");
+    expect(migration).toContain("UPDATE public.mail_messages");
+    expect(migration).toContain("IS DISTINCT FROM");
     expect(migration).toContain("WITH ORDINALITY");
+    expect(migration).not.toMatch(/SET\s+(?:body|subject|from_addr|internal_date|size_bytes)/i);
   });
 
-  it("dedupes only one complete logical copy signature", () => {
-    expect(migration).toContain("copy_signature");
+  it("classifies only an encountered exact Message-ID with the approved signature", () => {
+    expect(migration).toContain("mail_rfc_message_id_is_unambiguous");
+    expect(migration).toContain("m.message_id = _message_id");
     expect(migration).toContain("internal_date");
-    expect(migration).toContain("lower(btrim(m.from_addr->>'email'))");
+    expect(migration).toContain("lower(btrim(_from_addr->>'email'))");
     expect(migration).toContain("subject");
     expect(migration).toContain("size_bytes");
-    expect(migration).toContain("count(DISTINCT copy_signature) AS signature_count");
-    expect(migration).toContain("signatures_complete AND signature_count = 1");
   });
 
-  it("fails reused or ambiguous IDs closed for ancestry expansion", () => {
-    expect(migration).toContain("safe_message_ids");
-    expect(migration).toMatch(/JOIN safe_message_ids[\s\S]+connected_ids/);
-    expect(migration).not.toMatch(/PARTITION BY COALESCE\(m\.message_id/);
+  it("rejects the failed account-wide runtime architecture", () => {
+    expect(migration).not.toMatch(/scoped_rows\s+AS\s+MATERIALIZED/i);
+    expect(migration).not.toMatch(/identity_stats\s+AS\s+MATERIALIZED/i);
+    expect(conversationRuntime).not.toMatch(
+      /normalize_mail_rfc_message_id\(m\.(?:message_id|in_reply_to)\)/,
+    );
+  });
+
+  it("drops an ambiguous anchor ID while retaining independently safe ancestry seeds", () => {
+    expect(conversationRuntime).toContain(
+      "ARRAY[a.message_id, a.in_reply_to] || COALESCE(a.references_ids",
+    );
+    expect(conversationRuntime).toMatch(
+      /AS linked\(id\)[\s\S]+WHERE public\.mail_rfc_message_id_is_unambiguous\([\s\S]+linked\.id/,
+    );
+  });
+
+  it("uses three targeted indexable ancestry branches", () => {
+    expect(migration).toContain("m.message_id = current_id.id");
+    expect(migration).toContain("m.in_reply_to = current_id.id");
+    expect(migration).toContain("m.references_ids @> ARRAY[current_id.id]");
+    expect(migration.match(/UNION/g)?.length).toBeGreaterThanOrEqual(3);
   });
 
   it("keeps traversal scoped, cycle-safe and result bounded", () => {
     expect(migration).toContain("m.company_id = _company_id");
     expect(migration).toContain("m.account_id = _account_id");
     expect(migration).toContain("UNION\n");
+    expect(migration).toContain("mail_rfc_message_id_is_unambiguous(");
     expect(migration).toContain("LIMIT LEAST(GREATEST(_limit, 1), 25)");
   });
 
@@ -198,6 +221,17 @@ describe("collision fixtures", () => {
     expect(safeIds(collision, "c1", "a1")).not.toContain("<same@example.com>");
     const incomplete = [fixture("three"), fixture("four", { size: null })];
     expect(safeIds(incomplete, "c1", "a1")).not.toContain("<same@example.com>");
+  });
+
+  it("keeps a safe parent usable when the selected anchor ID is ambiguous", () => {
+    const rows = [
+      fixture("anchor"),
+      fixture("collision", { sender: "other@example.com" }),
+      fixture("parent", { messageId: "<parent@example.com>" }),
+    ];
+    const safe = safeIds(rows, "c1", "a1");
+    expect(safe).not.toContain("<same@example.com>");
+    expect(safe).toContain("<parent@example.com>");
   });
 
   it("keeps malformed, UUID and missing IDs physically distinct", () => {
