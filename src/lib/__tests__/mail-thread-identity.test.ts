@@ -160,12 +160,35 @@ describe("collision-safe conversation SQL", () => {
     expect(migration).toContain("size_bytes");
   });
 
+  it("returns from a two-owner probe before signature work in the common case", () => {
+    expect(migration).toContain("first_two_owners AS MATERIALIZED");
+    expect(migration).toMatch(/first_two_owners[\s\S]+LIMIT 2/);
+    expect(migration).toMatch(/WHEN 0 THEN false[\s\S]+WHEN 1 THEN true[\s\S]+ELSE/);
+    expect(migration.indexOf("WHEN 1 THEN true")).toBeLessThan(
+      migration.indexOf("bool_and(matches.copy_signature IS NOT NULL)"),
+    );
+  });
+
+  it("runs full signature comparison only after the duplicate-owner probe", () => {
+    expect(migration).toMatch(
+      /WHEN 1 THEN true[\s\S]+ELSE \([\s\S]+count\(DISTINCT matches\.copy_signature\) = 1/,
+    );
+  });
+
+  it("dedupes seed and per-expansion IDs before classification", () => {
+    expect(conversationRuntime).toContain("seed_candidates(id) AS (");
+    expect(conversationRuntime).toContain("SELECT DISTINCT linked.id");
+    expect(conversationRuntime).toContain("SELECT DISTINCT next_id.id");
+    expect(conversationRuntime).toContain("next_id.id <> current_id.id");
+  });
+
   it("rejects the failed account-wide runtime architecture", () => {
     expect(migration).not.toMatch(/scoped_rows\s+AS\s+MATERIALIZED/i);
     expect(migration).not.toMatch(/identity_stats\s+AS\s+MATERIALIZED/i);
     expect(conversationRuntime).not.toMatch(
       /normalize_mail_rfc_message_id\(m\.(?:message_id|in_reply_to)\)/,
     );
+    expect(conversationRuntime).not.toContain("normalize_mail_rfc_message_id(_message_id)");
   });
 
   it("drops an ambiguous anchor ID while retaining independently safe ancestry seeds", () => {

@@ -100,16 +100,25 @@ STABLE
 SECURITY INVOKER
 SET search_path = public
 AS $$
-  SELECT CASE
-    WHEN public.normalize_mail_rfc_message_id(_message_id) IS DISTINCT FROM _message_id THEN false
+  WITH first_two_owners AS MATERIALIZED (
+    SELECT m.id
+    FROM public.mail_messages m
+    WHERE m.company_id = _company_id
+      AND m.account_id = _account_id
+      AND m.deleted_at IS NULL
+      AND m.message_id = _message_id
+    LIMIT 2
+  ), owner_probe AS (
+    SELECT count(*) AS owner_count
+    FROM first_two_owners
+  )
+  SELECT CASE owner_probe.owner_count
+    WHEN 0 THEN false
+    WHEN 1 THEN true
     ELSE (
       SELECT
-        count(*) = 1
-        OR (
-          count(*) > 1
-          AND bool_and(matches.copy_signature IS NOT NULL)
-          AND count(DISTINCT matches.copy_signature) = 1
-        )
+        bool_and(matches.copy_signature IS NOT NULL)
+        AND count(DISTINCT matches.copy_signature) = 1
       FROM (
         SELECT public.mail_message_copy_signature(
           m.internal_date,
@@ -125,6 +134,7 @@ AS $$
       ) matches
     )
   END
+  FROM owner_probe
 $$;
 
 REVOKE ALL ON FUNCTION public.normalize_mail_rfc_message_id(text) FROM PUBLIC;
@@ -195,8 +205,8 @@ AS $$
       CASE WHEN m.uidvalidity = f.uidvalidity THEN 0 ELSE 1 END,
       m.id DESC
     LIMIT 1
-  ), seed_ids(id) AS (
-    SELECT linked.id
+  ), seed_candidates(id) AS (
+    SELECT DISTINCT linked.id
     FROM anchor a
     CROSS JOIN LATERAL unnest(
       array_remove(
@@ -204,47 +214,56 @@ AS $$
         NULL
       )
     ) AS linked(id)
+    WHERE linked.id IS NOT NULL
+    LIMIT 256
+  ), seed_ids(id) AS (
+    SELECT candidate.id
+    FROM seed_candidates candidate
     WHERE public.mail_rfc_message_id_is_unambiguous(
       _company_id,
       _account_id,
-      linked.id
+      candidate.id
     )
-    LIMIT 256
   ), connected_ids(id) AS (
     SELECT id FROM seed_ids
     UNION
     SELECT linked.id
     FROM connected_ids current_id
     CROSS JOIN LATERAL (
-      SELECT m.id, m.message_id, m.in_reply_to, m.references_ids
-      FROM public.mail_messages m
-      WHERE m.company_id = _company_id
-        AND m.account_id = _account_id
-        AND m.deleted_at IS NULL
-        AND m.message_id = current_id.id
-      UNION
-      SELECT m.id, m.message_id, m.in_reply_to, m.references_ids
-      FROM public.mail_messages m
-      WHERE m.company_id = _company_id
-        AND m.account_id = _account_id
-        AND m.deleted_at IS NULL
-        AND m.in_reply_to = current_id.id
-      UNION
-      SELECT m.id, m.message_id, m.in_reply_to, m.references_ids
-      FROM public.mail_messages m
-      WHERE m.company_id = _company_id
-        AND m.account_id = _account_id
-        AND m.deleted_at IS NULL
-        AND cardinality(m.references_ids) > 0
-        AND m.references_ids @> ARRAY[current_id.id]
-    ) connected_message
-    CROSS JOIN LATERAL unnest(
-      array_remove(
-        ARRAY[connected_message.message_id, connected_message.in_reply_to]
-          || COALESCE(connected_message.references_ids, '{}'::text[]),
-        NULL
-      )
-    ) AS linked(id)
+      SELECT DISTINCT next_id.id
+      FROM (
+        SELECT m.id, m.message_id, m.in_reply_to, m.references_ids
+        FROM public.mail_messages m
+        WHERE m.company_id = _company_id
+          AND m.account_id = _account_id
+          AND m.deleted_at IS NULL
+          AND m.message_id = current_id.id
+        UNION
+        SELECT m.id, m.message_id, m.in_reply_to, m.references_ids
+        FROM public.mail_messages m
+        WHERE m.company_id = _company_id
+          AND m.account_id = _account_id
+          AND m.deleted_at IS NULL
+          AND m.in_reply_to = current_id.id
+        UNION
+        SELECT m.id, m.message_id, m.in_reply_to, m.references_ids
+        FROM public.mail_messages m
+        WHERE m.company_id = _company_id
+          AND m.account_id = _account_id
+          AND m.deleted_at IS NULL
+          AND cardinality(m.references_ids) > 0
+          AND m.references_ids @> ARRAY[current_id.id]
+      ) connected_message
+      CROSS JOIN LATERAL unnest(
+        array_remove(
+          ARRAY[connected_message.message_id, connected_message.in_reply_to]
+            || COALESCE(connected_message.references_ids, '{}'::text[]),
+          NULL
+        )
+      ) AS next_id(id)
+      WHERE next_id.id IS NOT NULL
+        AND next_id.id <> current_id.id
+    ) linked
     WHERE public.mail_rfc_message_id_is_unambiguous(
       _company_id,
       _account_id,
