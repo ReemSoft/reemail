@@ -1,6 +1,10 @@
 import type { MailAddress, MailMessage } from "@/lib/mail-types";
+import {
+  MAX_PERSISTED_THREAD_REFERENCES,
+  normalizePersistedThreadIdentity,
+} from "@/lib/mail-rfc-message-id";
 
-export const MAX_THREAD_REFERENCES = 100;
+export const MAX_THREAD_REFERENCES = MAX_PERSISTED_THREAD_REFERENCES;
 
 function cleanAddress(address: MailAddress): MailAddress | null {
   const email = address.email.trim();
@@ -19,14 +23,7 @@ export function formatComposeAddress(address: MailAddress): string {
   return clean.name ? `${clean.name} <${clean.email}>` : clean.email;
 }
 
-export function normalizeRfcMessageId(value: unknown): string | null {
-  if (typeof value !== "string") return null;
-  const trimmed = value.trim();
-  if (!trimmed || /[\r\n]/.test(trimmed)) return null;
-  const inner = trimmed.startsWith("<") && trimmed.endsWith(">") ? trimmed.slice(1, -1) : trimmed;
-  if (!/^[^<>\s@]+@[^<>\s@]+$/.test(inner)) return null;
-  return `<${inner}>`;
-}
+export const normalizeRfcMessageId = normalizePersistedThreadIdentity;
 
 export function buildThreadingHeaders(
   references: readonly string[] | undefined,

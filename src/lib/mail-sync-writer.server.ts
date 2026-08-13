@@ -4,6 +4,10 @@
 // Pure helpers (mapSyncMessageToRow, mapFlagStateToUpdate,
 // computeTombstoneUids, shouldWipeForUidValidity) are exported for unit tests.
 import type { supabaseAdmin as SupabaseAdminType } from "@/integrations/supabase/client.server";
+import {
+  normalizePersistedReferenceIds,
+  normalizePersistedThreadIdentity,
+} from "@/lib/mail-rfc-message-id";
 
 type Admin = typeof SupabaseAdminType;
 
@@ -103,9 +107,9 @@ export function mapSyncMessageToRow(
     uid: m.uid,
     uidvalidity: Number(args.uidValidity),
     modseq: m.modseq == null ? null : Number(m.modseq),
-    message_id: m.messageId,
-    in_reply_to: m.inReplyTo,
-    references_ids: m.references ?? [],
+    message_id: normalizePersistedThreadIdentity(m.messageId),
+    in_reply_to: normalizePersistedThreadIdentity(m.inReplyTo),
+    references_ids: normalizePersistedReferenceIds(m.references),
     subject: m.subject && m.subject.length ? m.subject : null,
     from_addr: m.from,
     to_addrs: m.to,
@@ -422,7 +426,6 @@ export async function refreshFolderCounts(
   if (up.error) throw up.error;
   return { total, unread };
 }
-
 
 /** Persist the freshest mailbox-level state onto the folder row. */
 export async function writeFolderMailboxState(
