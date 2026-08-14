@@ -17,12 +17,24 @@ const migration = readFileSync(
 const conversationRuntime = migration.slice(
   migration.indexOf("CREATE OR REPLACE FUNCTION public.get_mail_conversation"),
 );
-const hardenedFunctionSignatures = [
-  "public.normalize_mail_rfc_message_id(text)",
-  "public.normalize_mail_rfc_message_id_array(text[])",
-  "public.mail_message_copy_signature(timestamptz, jsonb, text, bigint)",
-  "public.mail_rfc_message_id_is_unambiguous(uuid, uuid, text)",
-  "public.get_mail_conversation(uuid, uuid, text, bigint, integer)",
+const hardenedFunctionRevocations = [
+  ["public.normalize_mail_rfc_message_id(text)", "PUBLIC, anon, authenticated"],
+  [
+    "public.normalize_mail_rfc_message_id_array(text[])",
+    "PUBLIC, anon, authenticated, service_role",
+  ],
+  [
+    "public.mail_message_copy_signature(timestamptz, jsonb, text, bigint)",
+    "PUBLIC, anon, authenticated",
+  ],
+  [
+    "public.mail_rfc_message_id_is_unambiguous(uuid, uuid, text)",
+    "PUBLIC, anon, authenticated",
+  ],
+  [
+    "public.get_mail_conversation(uuid, uuid, text, bigint, integer)",
+    "PUBLIC, anon, authenticated",
+  ],
 ] as const;
 
 const base: SyncMessagePayload = {
@@ -223,10 +235,8 @@ describe("collision-safe conversation SQL", () => {
   });
 
   it("explicitly revokes runtime execution from public API roles", () => {
-    for (const signature of hardenedFunctionSignatures) {
-      expect(migration).toContain(
-        `REVOKE ALL ON FUNCTION ${signature} FROM PUBLIC, anon, authenticated;`,
-      );
+    for (const [signature, roles] of hardenedFunctionRevocations) {
+      expect(migration).toContain(`REVOKE ALL ON FUNCTION ${signature} FROM ${roles};`);
     }
   });
 
@@ -241,6 +251,9 @@ describe("collision-safe conversation SQL", () => {
     }
     expect(migration).not.toContain(
       "GRANT EXECUTE ON FUNCTION public.normalize_mail_rfc_message_id_array(text[])",
+    );
+    expect(migration).toContain(
+      "REVOKE ALL ON FUNCTION public.normalize_mail_rfc_message_id_array(text[]) FROM PUBLIC, anon, authenticated, service_role;",
     );
   });
 

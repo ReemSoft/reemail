@@ -138,7 +138,7 @@ AS $$
 $$;
 
 REVOKE ALL ON FUNCTION public.normalize_mail_rfc_message_id(text) FROM PUBLIC, anon, authenticated;
-REVOKE ALL ON FUNCTION public.normalize_mail_rfc_message_id_array(text[]) FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.normalize_mail_rfc_message_id_array(text[]) FROM PUBLIC, anon, authenticated, service_role;
 REVOKE ALL ON FUNCTION public.mail_message_copy_signature(timestamptz, jsonb, text, bigint) FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.mail_rfc_message_id_is_unambiguous(uuid, uuid, text) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.normalize_mail_rfc_message_id(text) TO service_role;
