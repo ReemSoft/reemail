@@ -165,13 +165,15 @@ test("one multi-part UID FETCH downloads six CID parts with a hard cap on every 
   assert.equal(requested.length, 12); // 6 content + 6 .mime sections
   assert.ok(requested.every((part) => typeof part.key === "string" && part.key.length > 0));
   assert.ok(requested.every((part) => Number.isSafeInteger(part.maxLength) && part.maxLength > 0));
-  // Content partials are capped at 3x the decoded budget so a legitimate
-  // 256KiB image is never truncated even as quoted-printable.
+  // Content partials are capped at 6x the decoded budget: worst valid RFC
+  // 2045 quoted-printable (3 octets/byte + a soft break per line, allowed
+  // down to one token per line) needs ~6x for a 256KiB image, so a
+  // legitimate part is never truncated.
   const content = requested.filter((part) => !part.key.endsWith(".mime"));
   const mime = requested.filter((part) => part.key.endsWith(".mime"));
   assert.equal(content.length, 6);
   assert.equal(mime.length, 6);
-  assert.ok(content.every((part) => part.maxLength >= 3 * 256 * 1024));
+  assert.ok(content.every((part) => part.maxLength >= 6 * 256 * 1024));
   // MIME header partials are tightly bounded.
   assert.ok(mime.every((part) => part.maxLength <= 16 * 1024));
   assert.equal("messageFlagsAdd" in client, false);
@@ -184,10 +186,10 @@ test("an oversized raw part is rejected fail-closed at the transport cap", async
     bodyParts: Array<{ key: string; maxLength: number }>;
     options: unknown;
   }> = [];
-  // 786433 raw octets == cap+1: the server answers with a literal at the
+  // 1572865 raw octets == cap+1: the server answers with a literal at the
   // requested maxLength, which proves the part is oversized/truncated.
   const client = fetchOneClient(calls, {
-    content: (key) => (key === "4" ? Buffer.alloc(3 * 256 * 1024 + 1, 0x61) : Buffer.from("logo")),
+    content: (key) => (key === "4" ? Buffer.alloc(6 * 256 * 1024 + 1, 0x61) : Buffer.from("logo")),
   });
 
   const result = await downloadInlinePartsInMailbox(client as never, 42, parts(6), "77");
@@ -318,6 +320,40 @@ test("quoted-printable parts decode deterministically", async () => {
   const first = result.images[0];
   assert.equal(first.dataUri, "data:image/png;base64,w6k=");
   assert.equal(first.size, 2);
+});
+
+test("a worst-case valid quoted-printable part at the decoded cap is never rejected", async () => {
+  const decodedBytes = 256 * 1024;
+  // Every octet encoded as "=XX" with a soft line break after every token:
+  // 3D + 3(D-1) = 6D - 3 raw octets -- the strict worst valid RFC 2045 QP for
+  // a decoded D-byte part. Proves 3x would have truncated a legitimate part.
+  const tokens: string[] = [];
+  for (let i = 0; i < decodedBytes; i++) {
+    if (i > 0) tokens.push("=\r\n");
+    tokens.push("=7F");
+  }
+  const worstCase = Buffer.from(tokens.join(""), "latin1");
+  assert.equal(worstCase.length, 6 * decodedBytes - 3);
+  assert.ok(worstCase.length > 3 * decodedBytes, "3x transport cap is insufficient");
+  assert.ok(worstCase.length < 6 * decodedBytes + 1, "worst case must fit under cap+1");
+
+  const calls: Array<{
+    range: string;
+    bodyParts: Array<{ key: string; maxLength: number }>;
+    options: unknown;
+  }> = [];
+  const client = fetchOneClient(calls, {
+    content: (key) => (key === "4" ? worstCase : Buffer.from("logo")),
+    mime: () =>
+      Buffer.from("Content-Type: image/png\r\nContent-Transfer-Encoding: quoted-printable\r\n"),
+  });
+
+  const result = await downloadInlinePartsInMailbox(client as never, 42, parts(6), "77");
+  assert.equal(result.images.length, 6);
+  assert.deepEqual(result.failedCids, []);
+  const worst = result.images.find((image) => image.cid === "image-2");
+  assert.ok(worst, "the 256KiB worst-case QP part must decode, not fail closed");
+  assert.equal(worst.size, decodedBytes);
 });
 
 test("declared total byte budget bounds the multi-part FETCH", async () => {

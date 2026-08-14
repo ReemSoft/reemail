@@ -9,6 +9,7 @@ import { z } from "zod";
 import type { MailAttachment, MailMessage } from "@/lib/mail-types";
 import { classifyBridgeMessageFailure, type BridgeMessageErrorCode } from "@/lib/mail-bridge-error";
 import { partitionInlineCidParts } from "@/lib/mail-inline-cid-policy";
+import { getCloudflareWaitUntil, trackCloudflareWork } from "@/lib/cloudflare-wait-until.server";
 
 const FolderSchema = z.enum([
   "inbox",
@@ -230,8 +231,8 @@ export const openMailMessage = createServerFn({ method: "POST" })
     }
 
     if (r.json.shared !== true && msg.uidValidity && cache.isCacheableFolder(data.folder)) {
-      void cache
-        .storeCachedBody(supabaseAdmin, {
+      trackCloudflareWork(
+        cache.storeCachedBody(supabaseAdmin, {
           ...key,
           uidValidity: msg.uidValidity,
           bodyHtml: msg.body || "",
@@ -246,8 +247,8 @@ export const openMailMessage = createServerFn({ method: "POST" })
             security: msg.security,
             replyTo: msg.replyTo,
           },
-        })
-        .catch(() => undefined);
+        }),
+      );
     }
 
     console.log(`[message-open] total ${Date.now() - t0}ms source=imap`);
@@ -321,8 +322,8 @@ export const prefetchMessageWindow = createServerFn({ method: "POST" })
           if (!message || !Number.isInteger(uid) || message.uidValidity !== expectedUidValidity)
             continue;
           messages.push({ uid, source: "imap", message });
-          void cache
-            .storeCachedBody(supabaseAdmin, {
+          trackCloudflareWork(
+            cache.storeCachedBody(supabaseAdmin, {
               ...scope,
               uid,
               uidValidity: message.uidValidity,
@@ -338,8 +339,8 @@ export const prefetchMessageWindow = createServerFn({ method: "POST" })
                 security: message.security,
                 replyTo: message.replyTo,
               },
-            })
-            .catch(() => undefined);
+            }),
+          );
         }
       }
     }
@@ -484,6 +485,7 @@ export type ResolveInlineImagesResult =
 export const resolveMessageInlineImages = createServerFn({ method: "POST" })
   .inputValidator((value: z.input<typeof InlineBatchSchema>) => InlineBatchSchema.parse(value))
   .handler(async ({ data }): Promise<ResolveInlineImagesResult> => {
+    const waitUntil = getCloudflareWaitUntil();
     const partition = partitionInlineCidParts(data.parts);
     if (partition.smallBatchParts.length !== data.parts.length) {
       return {
@@ -538,8 +540,19 @@ export const resolveMessageInlineImages = createServerFn({ method: "POST" })
             };
           },
           store: data.persist
-            ? (uidValidity, images) =>
-                cache.storeCachedInlineImages(supabaseAdmin, key, uidValidity, images)
+            ? (uidValidity, images) => {
+                const promise = cache.storeCachedInlineImages(
+                  supabaseAdmin,
+                  key,
+                  uidValidity,
+                  images,
+                );
+                // Register the write with the worker lifecycle so the resolve
+                // request can return (and render) before persistence finishes
+                // without the write being terminated after the response.
+                waitUntil?.(promise);
+                return promise;
+              }
             : async () => undefined,
         }),
       );

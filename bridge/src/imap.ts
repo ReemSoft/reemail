@@ -34,13 +34,15 @@ function envInt(name: string, fallback: number): number {
 const INLINE_IMAGE_MAX_BYTES = envInt("INLINE_IMAGE_MAX_BYTES", 256 * 1024);
 const INLINE_IMAGE_TOTAL_BYTES = envInt("INLINE_IMAGE_TOTAL_BYTES", 1024 * 1024);
 const INLINE_IMAGE_MAX_COUNT = envInt("INLINE_IMAGE_MAX_COUNT", 20);
-// Transport-level cap on a single inline part's RAW encoded octets. A decoded
-// 256KiB image occupies at most ~4/3x as base64 or ~3x as quoted-printable,
-// so this bounds the wire payload without ever truncating a legitimate part.
-// Each FETCH requests cap+1 and treats a returned literal at the cap as proof
-// the part was oversized/truncated, so BODYSTRUCTURE declarations are never
-// trusted alone.
-const INLINE_IMAGE_ENCODED_MAX_BYTES = INLINE_IMAGE_MAX_BYTES * 3;
+// Transport-level cap on a single inline part's RAW encoded octets. Worst
+// valid RFC 2045 quoted-printable for a decoded D-byte part: every octet as
+// "=XX" (3 octets) plus a soft line break ("=\r\n") after each line, which RFC
+// 2045 allows down to one token per line -> 3D + 3D = 6D raw octets. 6x the
+// decoded budget therefore covers every valid encoding (base64 needs only
+// ~1.34x), while each FETCH requests cap+1 and treats a returned literal at
+// the cap as proof the part was oversized/truncated -- so BODYSTRUCTURE
+// declarations are never trusted alone.
+const INLINE_IMAGE_ENCODED_MAX_BYTES = INLINE_IMAGE_MAX_BYTES * 6;
 const INLINE_IMAGE_MIME_MAX_BYTES = 8 * 1024;
 const INLINE_IMAGE_STREAM_MAX_BYTES = 5 * 1024 * 1024;
 export const MESSAGE_BODY_MAX_BYTES = 5 * 1024 * 1024;
@@ -759,7 +761,9 @@ export async function getMessageBody(
         // Total waiting incurred before the meta fetch could even start:
         // gate admission + connection reuse/chain + mailbox lock + LIST/path
         // resolution. PII-free stage names and durations only.
-        console.log(`[imap-timing] lane=${lane} pre-fetch-wait ${Date.now() - tOpen - (Date.now() - tFetch)}ms`);
+        console.log(
+          `[imap-timing] lane=${lane} pre-fetch-wait ${Date.now() - tOpen - (Date.now() - tFetch)}ms`,
+        );
       }
 
       // Headers only — cheap, and keeps From/To/Subject/DKIM extraction and the
@@ -1136,17 +1140,25 @@ export async function downloadInlinePartsInMailbox(
 }
 
 /** Parses the MIME section of a part for its Content-Type and transfer encoding. */
-function parseInlinePartMime(rawMime?: Buffer): { contentType?: string; transferEncoding?: string } {
+function parseInlinePartMime(rawMime?: Buffer): {
+  contentType?: string;
+  transferEncoding?: string;
+} {
   if (!rawMime || !rawMime.length) return {};
   const text = rawMime.toString("latin1");
   const clean = (value: string | undefined): string | undefined => {
     const parts = (value ?? "").split(";")[0];
-    return parts ? parts.replace(/\(.*\)/g, "").trim().toLowerCase() : undefined;
+    return parts
+      ? parts
+          .replace(/\(.*\)/g, "")
+          .trim()
+          .toLowerCase()
+      : undefined;
   };
   return {
     contentType: clean(text.match(/^content-type:\s*([^\r\n]+)/im)?.[1]) || undefined,
-    transferEncoding: clean(text.match(/^content-transfer-encoding:\s*([^\r\n]+)/im)?.[1]) ||
-      undefined,
+    transferEncoding:
+      clean(text.match(/^content-transfer-encoding:\s*([^\r\n]+)/im)?.[1]) || undefined,
   };
 }
 
@@ -1168,8 +1180,8 @@ function decodeInlinePartContent(raw: Buffer, transferEncoding: string): Buffer 
 
 /** RFC 2045 quoted-printable decoder, byte-for-byte compatible with libqp. */
 function decodeQuotedPrintable(str: string): Buffer {
-  const cleaned = str.replace(/[\t ]+$/gm, "").replace(/\=(?:\r?\n|$)/g, "");
-  const hexCount = (cleaned.match(/\=[\da-fA-F]{2}/g) ?? []).length;
+  const cleaned = str.replace(/[\t ]+$/gm, "").replace(/=(?:\r?\n|$)/g, "");
+  const hexCount = (cleaned.match(/=[\da-fA-F]{2}/g) ?? []).length;
   const out = Buffer.alloc(cleaned.length - hexCount * 2);
   let pos = 0;
   for (let i = 0, len = cleaned.length; i < len; i++) {
