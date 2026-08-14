@@ -973,6 +973,27 @@ export type Database = {
           uid: number
         }[]
       }
+      mail_message_copy_signature: {
+        Args: {
+          _from_addr: Json
+          _internal_date: string
+          _size_bytes: number
+          _subject: string
+        }
+        Returns: string
+      }
+      mail_rfc_message_id_is_unambiguous: {
+        Args: { _account_id: string; _company_id: string; _message_id: string }
+        Returns: boolean
+      }
+      normalize_mail_rfc_message_id: {
+        Args: { _value: string }
+        Returns: string
+      }
+      normalize_mail_rfc_message_id_array: {
+        Args: { _values: string[] }
+        Returns: string[]
+      }
       record_mail_contact_suggestions: {
         Args: { p_account_id: string; p_company_id: string; p_items: Json }
         Returns: number
