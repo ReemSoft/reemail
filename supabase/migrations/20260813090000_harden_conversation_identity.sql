@@ -216,81 +216,130 @@ AS $$
     ) AS linked(id)
     WHERE linked.id IS NOT NULL
     LIMIT 256
-  ), seed_ids(id) AS (
-    SELECT candidate.id
+  ), seed_state AS (
+    SELECT
+      COALESCE(
+        array_agg(candidate.id ORDER BY candidate.id),
+        '{}'::text[]
+      ) AS seen_candidate_ids,
+      COALESCE(
+        array_agg(candidate.id ORDER BY candidate.id) FILTER (
+          WHERE public.mail_rfc_message_id_is_unambiguous(
+            _company_id,
+            _account_id,
+            candidate.id
+          )
+        ),
+        '{}'::text[]
+      ) AS safe_seed_ids
     FROM seed_candidates candidate
-    WHERE public.mail_rfc_message_id_is_unambiguous(
-      _company_id,
-      _account_id,
-      candidate.id
-    )
+  ), graph_state(seen_candidate_ids, pending_ids, connected_ids) AS (
+    SELECT
+      seed.seen_candidate_ids,
+      seed.safe_seed_ids,
+      seed.safe_seed_ids
+    FROM seed_state seed
+    UNION ALL
+    SELECT
+      state.seen_candidate_ids || discovered.candidate_ids,
+      COALESCE(
+        state.pending_ids[2:cardinality(state.pending_ids)],
+        '{}'::text[]
+      ) || discovered.safe_ids,
+      state.connected_ids || discovered.safe_ids
+    FROM graph_state state
+    CROSS JOIN LATERAL (
+      SELECT state.pending_ids[1] AS id
+    ) current_id
+    CROSS JOIN LATERAL (
+      SELECT
+        COALESCE(
+          array_agg(candidate.id ORDER BY candidate.id),
+          '{}'::text[]
+        ) AS candidate_ids,
+        COALESCE(
+          array_agg(candidate.id ORDER BY candidate.id) FILTER (
+            WHERE public.mail_rfc_message_id_is_unambiguous(
+              _company_id,
+              _account_id,
+              candidate.id
+            )
+          ),
+          '{}'::text[]
+        ) AS safe_ids
+      FROM (
+        SELECT DISTINCT next_id.id
+        FROM (
+          SELECT m.id, m.message_id, m.in_reply_to, m.references_ids
+          FROM public.mail_messages m
+          WHERE m.company_id = _company_id
+            AND m.account_id = _account_id
+            AND m.deleted_at IS NULL
+            AND m.message_id = current_id.id
+          UNION
+          SELECT m.id, m.message_id, m.in_reply_to, m.references_ids
+          FROM public.mail_messages m
+          WHERE m.company_id = _company_id
+            AND m.account_id = _account_id
+            AND m.deleted_at IS NULL
+            AND m.in_reply_to = current_id.id
+          UNION
+          SELECT m.id, m.message_id, m.in_reply_to, m.references_ids
+          FROM public.mail_messages m
+          WHERE m.company_id = _company_id
+            AND m.account_id = _account_id
+            AND m.deleted_at IS NULL
+            AND cardinality(m.references_ids) > 0
+            AND m.references_ids @> ARRAY[current_id.id]
+        ) connected_message
+        CROSS JOIN LATERAL unnest(
+          array_remove(
+            ARRAY[connected_message.message_id, connected_message.in_reply_to]
+              || COALESCE(connected_message.references_ids, '{}'::text[]),
+            NULL
+          )
+        ) AS next_id(id)
+        WHERE next_id.id IS NOT NULL
+          AND next_id.id <> current_id.id
+          AND NOT (next_id.id = ANY(state.seen_candidate_ids))
+      ) candidate
+    ) discovered
+    WHERE cardinality(state.pending_ids) > 0
+  ), final_graph AS (
+    SELECT state.connected_ids
+    FROM graph_state state
+    WHERE cardinality(state.pending_ids) = 0
+    LIMIT 1
   ), connected_ids(id) AS (
-    SELECT id FROM seed_ids
-    UNION
-    SELECT linked.id
+    SELECT DISTINCT connected.id
+    FROM final_graph graph
+    CROSS JOIN LATERAL unnest(graph.connected_ids) AS connected(id)
+  ), candidate_ids(id) AS (
+    SELECT DISTINCT candidate.id
     FROM connected_ids current_id
     CROSS JOIN LATERAL (
-      SELECT DISTINCT next_id.id
-      FROM (
-        SELECT m.id, m.message_id, m.in_reply_to, m.references_ids
-        FROM public.mail_messages m
-        WHERE m.company_id = _company_id
-          AND m.account_id = _account_id
-          AND m.deleted_at IS NULL
-          AND m.message_id = current_id.id
-        UNION
-        SELECT m.id, m.message_id, m.in_reply_to, m.references_ids
-        FROM public.mail_messages m
-        WHERE m.company_id = _company_id
-          AND m.account_id = _account_id
-          AND m.deleted_at IS NULL
-          AND m.in_reply_to = current_id.id
-        UNION
-        SELECT m.id, m.message_id, m.in_reply_to, m.references_ids
-        FROM public.mail_messages m
-        WHERE m.company_id = _company_id
-          AND m.account_id = _account_id
-          AND m.deleted_at IS NULL
-          AND cardinality(m.references_ids) > 0
-          AND m.references_ids @> ARRAY[current_id.id]
-      ) connected_message
-      CROSS JOIN LATERAL unnest(
-        array_remove(
-          ARRAY[connected_message.message_id, connected_message.in_reply_to]
-            || COALESCE(connected_message.references_ids, '{}'::text[]),
-          NULL
-        )
-      ) AS next_id(id)
-      WHERE next_id.id IS NOT NULL
-        AND next_id.id <> current_id.id
-    ) linked
-    WHERE public.mail_rfc_message_id_is_unambiguous(
-      _company_id,
-      _account_id,
-      linked.id
-    )
-  ), candidate_ids(id) AS (
-    SELECT m.id
-    FROM connected_ids current_id
-    JOIN public.mail_messages m ON m.message_id = current_id.id
-    WHERE m.company_id = _company_id
-      AND m.account_id = _account_id
-      AND m.deleted_at IS NULL
-    UNION
-    SELECT m.id
-    FROM connected_ids current_id
-    JOIN public.mail_messages m ON m.in_reply_to = current_id.id
-    WHERE m.company_id = _company_id
-      AND m.account_id = _account_id
-      AND m.deleted_at IS NULL
-    UNION
-    SELECT m.id
-    FROM connected_ids current_id
-    JOIN public.mail_messages m ON m.references_ids @> ARRAY[current_id.id]
-    WHERE m.company_id = _company_id
-      AND m.account_id = _account_id
-      AND m.deleted_at IS NULL
-      AND cardinality(m.references_ids) > 0
+      SELECT m.id
+      FROM public.mail_messages m
+      WHERE m.company_id = _company_id
+        AND m.account_id = _account_id
+        AND m.deleted_at IS NULL
+        AND m.message_id = current_id.id
+      UNION ALL
+      SELECT m.id
+      FROM public.mail_messages m
+      WHERE m.company_id = _company_id
+        AND m.account_id = _account_id
+        AND m.deleted_at IS NULL
+        AND m.in_reply_to = current_id.id
+      UNION ALL
+      SELECT m.id
+      FROM public.mail_messages m
+      WHERE m.company_id = _company_id
+        AND m.account_id = _account_id
+        AND m.deleted_at IS NULL
+        AND cardinality(m.references_ids) > 0
+        AND m.references_ids @> ARRAY[current_id.id]
+    ) candidate
   ), candidate_rows AS (
     SELECT
       m.id,

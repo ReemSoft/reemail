@@ -17,6 +17,10 @@ const migration = readFileSync(
 const conversationRuntime = migration.slice(
   migration.indexOf("CREATE OR REPLACE FUNCTION public.get_mail_conversation"),
 );
+const conversationBody = conversationRuntime.slice(
+  0,
+  conversationRuntime.indexOf("REVOKE ALL ON FUNCTION public.get_mail_conversation"),
+);
 const hardenedFunctionRevocations = [
   ["public.normalize_mail_rfc_message_id(text)", "PUBLIC, anon, authenticated"],
   [
@@ -27,10 +31,7 @@ const hardenedFunctionRevocations = [
     "public.mail_message_copy_signature(timestamptz, jsonb, text, bigint)",
     "PUBLIC, anon, authenticated",
   ],
-  [
-    "public.mail_rfc_message_id_is_unambiguous(uuid, uuid, text)",
-    "PUBLIC, anon, authenticated",
-  ],
+  ["public.mail_rfc_message_id_is_unambiguous(uuid, uuid, text)", "PUBLIC, anon, authenticated"],
   [
     "public.get_mail_conversation(uuid, uuid, text, bigint, integer)",
     "PUBLIC, anon, authenticated",
@@ -118,6 +119,38 @@ function fixture(id: string, overrides: Partial<IdentityFixture> = {}): Identity
   };
 }
 
+function traverseMemoizedGraph(
+  seeds: string[],
+  edges: ReadonlyMap<string, readonly string[]>,
+  safeIds: ReadonlySet<string>,
+): { connected: Set<string>; classifications: Map<string, number> } {
+  const seen = new Set<string>();
+  const connected = new Set<string>();
+  const pending: string[] = [];
+  const classifications = new Map<string, number>();
+  const classify = (id: string) => {
+    classifications.set(id, (classifications.get(id) ?? 0) + 1);
+    if (safeIds.has(id)) {
+      connected.add(id);
+      pending.push(id);
+    }
+  };
+
+  for (const id of new Set(seeds)) {
+    seen.add(id);
+    classify(id);
+  }
+  while (pending.length > 0) {
+    const current = pending.shift()!;
+    for (const id of new Set(edges.get(current) ?? [])) {
+      if (seen.has(id)) continue;
+      seen.add(id);
+      classify(id);
+    }
+  }
+  return { connected, classifications };
+}
+
 describe("persistent RFC Message-ID normalization", () => {
   it.each([
     ["m1@example.com", "<m1@example.com>"],
@@ -194,11 +227,20 @@ describe("collision-safe conversation SQL", () => {
     );
   });
 
-  it("dedupes seed and per-expansion IDs before classification", () => {
+  it("classifies each discovered identity once before allowing traversal", () => {
     expect(conversationRuntime).toContain("seed_candidates(id) AS (");
     expect(conversationRuntime).toContain("SELECT DISTINCT linked.id");
+    expect(conversationRuntime).toContain(
+      "graph_state(seen_candidate_ids, pending_ids, connected_ids) AS (",
+    );
+    expect(conversationRuntime).toContain("state.seen_candidate_ids || discovered.candidate_ids");
+    expect(conversationRuntime).toContain("NOT (next_id.id = ANY(state.seen_candidate_ids))");
     expect(conversationRuntime).toContain("SELECT DISTINCT next_id.id");
     expect(conversationRuntime).toContain("next_id.id <> current_id.id");
+    expect(conversationRuntime).not.toMatch(
+      /\) linked\s+WHERE public\.mail_rfc_message_id_is_unambiguous\([\s\S]+linked\.id/,
+    );
+    expect(conversationBody.match(/mail_rfc_message_id_is_unambiguous\(/g)).toHaveLength(2);
   });
 
   it("rejects the failed account-wide runtime architecture", () => {
@@ -214,24 +256,40 @@ describe("collision-safe conversation SQL", () => {
     expect(conversationRuntime).toContain(
       "ARRAY[a.message_id, a.in_reply_to] || COALESCE(a.references_ids",
     );
+    expect(conversationRuntime).toContain("AS seen_candidate_ids");
+    expect(conversationRuntime).toContain("AS safe_seed_ids");
     expect(conversationRuntime).toMatch(
-      /AS linked\(id\)[\s\S]+WHERE public\.mail_rfc_message_id_is_unambiguous\([\s\S]+linked\.id/,
+      /array_agg\(candidate\.id ORDER BY candidate\.id\) FILTER \([\s\S]+mail_rfc_message_id_is_unambiguous\([\s\S]+candidate\.id/,
     );
   });
 
-  it("uses three targeted indexable ancestry branches", () => {
+  it("uses parameterized index-compatible candidate probes with one final dedupe", () => {
+    expect(conversationRuntime).toMatch(
+      /candidate_ids\(id\) AS \([\s\S]+SELECT DISTINCT candidate\.id[\s\S]+FROM connected_ids current_id[\s\S]+CROSS JOIN LATERAL/,
+    );
     expect(migration).toContain("m.message_id = current_id.id");
     expect(migration).toContain("m.in_reply_to = current_id.id");
     expect(migration).toContain("m.references_ids @> ARRAY[current_id.id]");
-    expect(migration.match(/UNION/g)?.length).toBeGreaterThanOrEqual(3);
+    expect(conversationRuntime).toMatch(/candidate_ids\(id\)[\s\S]+UNION ALL[\s\S]+UNION ALL/);
+    expect(conversationRuntime).not.toMatch(
+      /candidate_ids\(id\) AS \([\s\S]+FROM connected_ids current_id\s+JOIN public\.mail_messages/,
+    );
   });
 
   it("keeps traversal scoped, cycle-safe and result bounded", () => {
     expect(migration).toContain("m.company_id = _company_id");
     expect(migration).toContain("m.account_id = _account_id");
-    expect(migration).toContain("UNION\n");
+    expect(conversationRuntime).toContain("WHERE cardinality(state.pending_ids) > 0");
+    expect(conversationRuntime).toContain("WHERE cardinality(state.pending_ids) = 0");
     expect(migration).toContain("mail_rfc_message_id_is_unambiguous(");
     expect(migration).toContain("LIMIT LEAST(GREATEST(_limit, 1), 25)");
+  });
+
+  it("preserves previous-only ordering and physical-copy identity", () => {
+    expect(conversationRuntime).toContain("c.logical_copy_key <> a.logical_copy_key");
+    expect(conversationRuntime).toMatch(/\) < \([\s\S]+COALESCE\(a\.internal_date/);
+    expect(conversationRuntime).toContain("PARTITION BY c.logical_copy_key");
+    expect(conversationRuntime).toContain("LIMIT LEAST(GREATEST(_limit, 1), 25)");
   });
 
   it("explicitly revokes runtime execution from public API roles", () => {
@@ -325,5 +383,36 @@ describe("collision fixtures", () => {
     ]);
     expect(logicalCopies(rows, "c1", "a2")).toHaveLength(1);
     expect(logicalCopies(rows, "c2", "a1")).toHaveLength(1);
+  });
+
+  it("classifies a target once even when many safe graph nodes reach it", () => {
+    const graph = new Map<string, readonly string[]>([
+      ["a", ["b", "c", "c"]],
+      ["b", ["a", "c"]],
+      ["c", ["a", "b"]],
+    ]);
+    const result = traverseMemoizedGraph(["a"], graph, new Set(["a", "b", "c"]));
+    expect(result.connected).toEqual(new Set(["a", "b", "c"]));
+    expect([...result.classifications.values()]).toEqual([1, 1, 1]);
+  });
+
+  it("records an unsafe unknown identity without traversing through it", () => {
+    const graph = new Map<string, readonly string[]>([
+      ["safe-root", ["unknown"]],
+      ["unknown", ["hidden-safe"]],
+    ]);
+    const result = traverseMemoizedGraph(
+      ["safe-root"],
+      graph,
+      new Set(["safe-root", "hidden-safe"]),
+    );
+    expect(result.connected).toEqual(new Set(["safe-root"]));
+    expect(result.classifications).toEqual(
+      new Map([
+        ["safe-root", 1],
+        ["unknown", 1],
+      ]),
+    );
+    expect(result.classifications.has("hidden-safe")).toBe(false);
   });
 });
