@@ -17,6 +17,13 @@ const migration = readFileSync(
 const conversationRuntime = migration.slice(
   migration.indexOf("CREATE OR REPLACE FUNCTION public.get_mail_conversation"),
 );
+const hardenedFunctionSignatures = [
+  "public.normalize_mail_rfc_message_id(text)",
+  "public.normalize_mail_rfc_message_id_array(text[])",
+  "public.mail_message_copy_signature(timestamptz, jsonb, text, bigint)",
+  "public.mail_rfc_message_id_is_unambiguous(uuid, uuid, text)",
+  "public.get_mail_conversation(uuid, uuid, text, bigint, integer)",
+] as const;
 
 const base: SyncMessagePayload = {
   uid: 42,
@@ -215,12 +222,32 @@ describe("collision-safe conversation SQL", () => {
     expect(migration).toContain("LIMIT LEAST(GREATEST(_limit, 1), 25)");
   });
 
-  it("preserves the one-RPC contract and hardened permissions", () => {
+  it("explicitly revokes runtime execution from public API roles", () => {
+    for (const signature of hardenedFunctionSignatures) {
+      expect(migration).toContain(
+        `REVOKE ALL ON FUNCTION ${signature} FROM PUBLIC, anon, authenticated;`,
+      );
+    }
+  });
+
+  it("preserves the intended service-role-only function grants", () => {
+    for (const signature of [
+      "public.normalize_mail_rfc_message_id(text)",
+      "public.mail_message_copy_signature(timestamptz, jsonb, text, bigint)",
+      "public.mail_rfc_message_id_is_unambiguous(uuid, uuid, text)",
+      "public.get_mail_conversation(uuid, uuid, text, bigint, integer)",
+    ]) {
+      expect(migration).toContain(`GRANT EXECUTE ON FUNCTION ${signature} TO service_role;`);
+    }
+    expect(migration).not.toContain(
+      "GRANT EXECUTE ON FUNCTION public.normalize_mail_rfc_message_id_array(text[])",
+    );
+  });
+
+  it("preserves the one-RPC contract and hardened function definition", () => {
     expect(migration).toContain("CREATE OR REPLACE FUNCTION public.get_mail_conversation(");
     expect(migration).toContain("SECURITY INVOKER");
     expect(migration).toContain("SET search_path = public");
-    expect(migration).toContain("REVOKE ALL ON FUNCTION public.get_mail_conversation");
-    expect(migration).toContain("GRANT EXECUTE ON FUNCTION public.get_mail_conversation");
     expect(migration).not.toMatch(/body_html|body_text|attachment_bytes|cid_bytes/i);
   });
 });

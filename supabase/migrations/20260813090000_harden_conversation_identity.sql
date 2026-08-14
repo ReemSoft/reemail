@@ -137,10 +137,10 @@ AS $$
   FROM owner_probe
 $$;
 
-REVOKE ALL ON FUNCTION public.normalize_mail_rfc_message_id(text) FROM PUBLIC;
-REVOKE ALL ON FUNCTION public.normalize_mail_rfc_message_id_array(text[]) FROM PUBLIC;
-REVOKE ALL ON FUNCTION public.mail_message_copy_signature(timestamptz, jsonb, text, bigint) FROM PUBLIC;
-REVOKE ALL ON FUNCTION public.mail_rfc_message_id_is_unambiguous(uuid, uuid, text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.normalize_mail_rfc_message_id(text) FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.normalize_mail_rfc_message_id_array(text[]) FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.mail_message_copy_signature(timestamptz, jsonb, text, bigint) FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.mail_rfc_message_id_is_unambiguous(uuid, uuid, text) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.normalize_mail_rfc_message_id(text) TO service_role;
 GRANT EXECUTE ON FUNCTION public.mail_message_copy_signature(timestamptz, jsonb, text, bigint) TO service_role;
 GRANT EXECUTE ON FUNCTION public.mail_rfc_message_id_is_unambiguous(uuid, uuid, text) TO service_role;
@@ -421,5 +421,5 @@ AS $$
   LIMIT LEAST(GREATEST(_limit, 1), 25)
 $$;
 
-REVOKE ALL ON FUNCTION public.get_mail_conversation(uuid, uuid, text, bigint, integer) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.get_mail_conversation(uuid, uuid, text, bigint, integer) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.get_mail_conversation(uuid, uuid, text, bigint, integer) TO service_role;
