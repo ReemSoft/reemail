@@ -25,6 +25,14 @@ export function formatComposeAddress(address: MailAddress): string {
 
 export const normalizeRfcMessageId = normalizePersistedThreadIdentity;
 
+export function replySubject(subject: string): string {
+  return /^\s*re\s*:/i.test(subject) ? subject : `Re: ${subject}`;
+}
+
+export function forwardSubject(subject: string): string {
+  return /^\s*fw(?:d)?\s*:/i.test(subject) ? subject : `Fwd: ${subject}`;
+}
+
 export function buildThreadingHeaders(
   references: readonly string[] | undefined,
   parentCandidate: unknown,

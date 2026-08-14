@@ -5,10 +5,23 @@ import {
   MAX_THREAD_REFERENCES,
   buildReplyRecipients,
   buildThreadingHeaders,
+  forwardSubject,
   formatComposeAddress,
   normalizeRfcMessageId,
+  replySubject,
 } from "../mail-reply-metadata";
 import { readDraftDoc, writeDraftDoc, type DraftStorageLike } from "../mail-draft-lifecycle";
+
+describe("compose subject prefixes", () => {
+  it("does not accumulate case-insensitive reply or forward prefixes", () => {
+    expect(replySubject("Topic موضوع")).toBe("Re: Topic موضوع");
+    expect(replySubject("RE: Topic موضوع")).toBe("RE: Topic موضوع");
+    expect(replySubject("Re : Topic")).toBe("Re : Topic");
+    expect(forwardSubject("Topic موضوع")).toBe("Fwd: Topic موضوع");
+    expect(forwardSubject("FW: Topic موضوع")).toBe("FW: Topic موضوع");
+    expect(forwardSubject("FWD : Topic")).toBe("FWD : Topic");
+  });
+});
 
 function message(overrides: Partial<MailMessage> = {}): MailMessage {
   return {

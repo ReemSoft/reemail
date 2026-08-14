@@ -131,6 +131,7 @@ export interface ForwardLabels {
   date: string;
   subject: string;
   to: string;
+  cc: string;
 }
 
 /** Forward body: standard forwarded-message header table + original HTML. */
@@ -144,6 +145,7 @@ export function buildForwardQuoteHtml(
     date: "Date:",
     subject: "Subject:",
     to: "To:",
+    cc: "Cc:",
   },
 ): string {
   const fragment = toQuotableFragment(body);
@@ -154,6 +156,9 @@ export function buildForwardQuoteHtml(
   if (meta.subject) rows.push(`${escapeHtml(labels.subject)} ${bidiIsolate(meta.subject)}`);
   if (meta.to?.length) {
     rows.push(`${escapeHtml(labels.to)} ${bidiIsolate(meta.to.map(formatAddress).join(", "))}`);
+  }
+  if (meta.cc?.length) {
+    rows.push(`${escapeHtml(labels.cc)} ${bidiIsolate(meta.cc.map(formatAddress).join(", "))}`);
   }
   return [
     "<div><br></div><div><br></div>",

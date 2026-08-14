@@ -42,9 +42,15 @@ describe("buildReplyQuoteHtml / buildForwardQuoteHtml", () => {
   });
 
   it("forward includes header rows", () => {
-    const out = buildForwardQuoteHtml("<p>body</p>", { ...meta, subject: "S" }, "en");
+    const out = buildForwardQuoteHtml(
+      "<p>body</p>",
+      { ...meta, subject: "S", cc: [{ name: "Copy", email: "copy@example.com" }] },
+      "en",
+    );
     expect(out).toContain("Forwarded message");
     expect(out).toContain("Subject:");
+    expect(out).toContain("Cc:");
+    expect(out).toContain("copy@example.com");
     expect(out).toContain("<p>body</p>");
   });
 

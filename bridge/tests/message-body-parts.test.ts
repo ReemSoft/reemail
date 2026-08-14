@@ -7,7 +7,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { pickTextPart, collectAttachmentParts } from "../src/imap.js";
+import { pickTextPart, collectAttachmentParts, findUniqueCidAttachment } from "../src/imap.js";
 import { imapConnectionStats, closeAllImapConnections } from "../src/imap-connection.js";
 
 const plainOnly = {
@@ -298,6 +298,29 @@ test("inline image parts remain discoverable with their cid + part number", () =
   assert.equal(logo!.part, "2");
   assert.equal(logo!.mimeType, "image/png");
   assert.equal(logo!.size, 12_000);
+});
+
+test("a duplicated Content-ID is ambiguous and never selects an arbitrary MIME part", () => {
+  const duplicated = [
+    {
+      id: "2",
+      part: "2",
+      filename: "first.png",
+      size: 10,
+      mimeType: "image/png",
+      contentId: "<same@mm>",
+    },
+    {
+      id: "3",
+      part: "3",
+      filename: "second.png",
+      size: 20,
+      mimeType: "image/png",
+      contentId: "SAME@MM",
+    },
+  ];
+  assert.equal(findUniqueCidAttachment(duplicated, "same@mm"), null);
+  assert.equal(findUniqueCidAttachment(duplicated.slice(0, 1), "SAME@MM")?.part, "2");
 });
 
 test("BODYSTRUCTURE attachment filenames are normalized without changing valid Arabic", () => {

@@ -59,6 +59,17 @@ export function partitionInlineCidParts(
   embeddedCids: Iterable<string> = [],
 ): InlineCidPartition {
   const embedded = new Set(Array.from(embeddedCids, (cid) => cid.toLowerCase()));
+  const cidOwners = new Map<string, string>();
+  const ambiguousCids = new Set<string>();
+  for (const part of parts) {
+    const cid = typeof part.cid === "string" ? part.cid.toLowerCase() : "";
+    if (!cid) continue;
+    const mime = typeof part.mimeType === "string" ? normalizeInlineImageMime(part.mimeType) : "";
+    const owner = `${String(part.part)}\u0000${mime}\u0000${String(part.size)}`;
+    const existing = cidOwners.get(cid);
+    if (existing !== undefined && existing !== owner) ambiguousCids.add(cid);
+    else cidOwners.set(cid, owner);
+  }
   const seen = new Set<string>();
   const result: InlineCidPartition = {
     smallBatchParts: [],
@@ -70,7 +81,7 @@ export function partitionInlineCidParts(
 
   for (const part of parts) {
     const cid = typeof part.cid === "string" ? part.cid.toLowerCase() : "";
-    if (embedded.has(cid) || seen.has(cid)) continue;
+    if (embedded.has(cid) || ambiguousCids.has(cid) || seen.has(cid)) continue;
     seen.add(cid);
     if (!isValidPartMetadata(part) || part.size > INLINE_CID_STREAM_MAX_BYTES) {
       result.oversizedUnsafeParts.push(part);

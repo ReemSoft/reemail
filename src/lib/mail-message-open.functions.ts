@@ -343,6 +343,10 @@ const InlineBatchSchema = z.object({
   password: z.string().min(1).max(1024),
   folder: FolderSchema,
   uid: z.number().int().positive(),
+  uidValidity: z
+    .string()
+    .regex(/^[1-9]\d*$/)
+    .max(64),
   parts: z.array(InlinePartSchema).max(20),
 });
 
@@ -383,17 +387,27 @@ export const resolveMessageInlineImages = createServerFn({ method: "POST" })
       canonical: data.folder,
       uid: data.uid,
     };
-    const messageKey = `${auth.companyId}|${auth.accountId}|${data.folder}:${data.uid}`;
+    const messageKey = `${auth.companyId}|${auth.accountId}|${data.folder}:${data.uid}:${data.uidValidity}`;
 
     try {
       const result = await resolver.resolveInlineImageBatchSingleFlight(messageKey, () =>
         resolver.resolveInlineImageBatch(partition.smallBatchParts, {
-          lookup: () => cache.lookupCachedBody(supabaseAdmin, key),
+          lookup: async () => {
+            const cached = await cache.lookupCachedBody(supabaseAdmin, key);
+            return cached?.hit && cached.body.uidValidity === data.uidValidity
+              ? cached
+              : { hit: false, reason: "uidvalidity" };
+          },
           fetchBatch: async (parts) => {
             const response = await bridgeCallResolved(
               auth,
               "/api/message-inline-images",
-              { folder: data.folder, uid: data.uid, parts },
+              {
+                folder: data.folder,
+                uid: data.uid,
+                expectedUidValidity: data.uidValidity,
+                parts,
+              },
               data.password,
             );
             if (!response.ok) throw new Error("INLINE_BATCH_FAILED");

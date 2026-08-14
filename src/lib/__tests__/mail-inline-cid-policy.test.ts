@@ -32,6 +32,18 @@ describe("large inline CID receive policy", () => {
     expect(result.overflowStreamParts).toEqual([]);
   });
 
+  it("fails closed when one CID names different physical MIME parts", () => {
+    const first = { ...part("same", 100), part: "2" };
+    const second = { ...part("SAME", 200), part: "3" };
+    const result = partitionInlineCidParts([first, second]);
+    expect(result.smallBatchParts).toEqual([]);
+    expect(result.largeStreamParts).toEqual([]);
+    expect(result.overflowStreamParts).toEqual([]);
+    expect(result.oversizedUnsafeParts).toEqual([]);
+
+    expect(partitionInlineCidParts([first, { ...first }]).smallBatchParts).toEqual([first]);
+  });
+
   it("enforces 20 parts, 256 KiB each and 1 MiB aggregate for the fast batch", () => {
     const candidates = Array.from({ length: 25 }, (_, index) => part(`small-${index}`, 52 * 1024));
     const result = partitionInlineCidParts(candidates);

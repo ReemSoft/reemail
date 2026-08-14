@@ -7,11 +7,12 @@ const VALID = {
   password: "secret",
   folder: "inbox",
   uid: 42,
+  uidValidity: "77",
   part: "2.1",
 };
 
 describe("dedicated large inline CID route", () => {
-  it("accepts only the protected five-field payload", () => {
+  it("accepts only the protected physical-message payload", () => {
     expect(parseInlinePartRequest(VALID)).toEqual(VALID);
     expect(parseInlinePartRequest({ ...VALID, account: { imap_host: "attacker" } })).toBeNull();
   });
@@ -20,6 +21,8 @@ describe("dedicated large inline CID route", () => {
     expect(parseInlinePartRequest({ ...VALID, folder: "evil" })).toBeNull();
     expect(parseInlinePartRequest({ ...VALID, uid: 0 })).toBeNull();
     expect(parseInlinePartRequest({ ...VALID, uid: 1.5 })).toBeNull();
+    expect(parseInlinePartRequest({ ...VALID, uidValidity: "0" })).toBeNull();
+    expect(parseInlinePartRequest({ ...VALID, uidValidity: "stale" })).toBeNull();
     expect(parseInlinePartRequest({ ...VALID, part: "2.x" })).toBeNull();
     expect(parseInlinePartRequest({ ...VALID, part: "2 BODY.PEEK[]" })).toBeNull();
   });
@@ -28,6 +31,7 @@ describe("dedicated large inline CID route", () => {
     const source = readFileSync("src/routes/api/mail-inline-part.ts", "utf8");
     expect(source).toContain("resolveBridgeAuth(payload.mailSessionToken)");
     expect(source).toContain("account: auth.bridgeAccount");
+    expect(source).toContain("expectedUidValidity: payload.uidValidity");
     expect(source).toContain("/api/message-inline-part");
     expect(source).toContain("new Response(upstream.body");
     expect(source).not.toContain("base64");

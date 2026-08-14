@@ -110,6 +110,7 @@ test("referenced deferred CIDs are body resources while a normal PDF remains vis
 test("one mailbox client downloads six CID parts as one batch without flag mutation", async () => {
   const calls: Array<{ uid: string; part: string; options: unknown }> = [];
   const client = {
+    mailbox: { uidValidity: "77" },
     download: async (uid: string, part: string, options: unknown) => {
       calls.push({ uid, part, options });
       return {
@@ -119,7 +120,7 @@ test("one mailbox client downloads six CID parts as one batch without flag mutat
     },
   };
 
-  const result = await downloadInlinePartsInMailbox(client as never, 42, parts(6));
+  const result = await downloadInlinePartsInMailbox(client as never, 42, parts(6), "77");
   assert.equal(result.images.length, 6);
   assert.deepEqual(result.failedCids, []);
   assert.equal(calls.length, 6);
@@ -131,6 +132,7 @@ test("one mailbox client downloads six CID parts as one batch without flag mutat
 
 test("one failed image does not fail the other five", async () => {
   const client = {
+    mailbox: { uidValidity: "77" },
     download: async (_uid: string, part: string) => {
       if (part === "4") throw new Error("missing part");
       return {
@@ -140,7 +142,22 @@ test("one failed image does not fail the other five", async () => {
     },
   };
 
-  const result = await downloadInlinePartsInMailbox(client as never, 42, parts(6));
+  const result = await downloadInlinePartsInMailbox(client as never, 42, parts(6), "77");
   assert.equal(result.images.length, 5);
   assert.deepEqual(result.failedCids, ["image-2"]);
+});
+
+test("CID batch fails closed before download when UIDVALIDITY changed", async () => {
+  let downloads = 0;
+  const client = {
+    mailbox: { uidValidity: "88" },
+    async download() {
+      downloads += 1;
+      throw new Error("must not download a reused UID");
+    },
+  };
+
+  const result = await downloadInlinePartsInMailbox(client as never, 42, parts(2), "77");
+  assert.deepEqual(result, { images: [], failedCids: ["image-0", "image-1"] });
+  assert.equal(downloads, 0);
 });

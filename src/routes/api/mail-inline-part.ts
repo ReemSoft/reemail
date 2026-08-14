@@ -9,13 +9,21 @@ interface InlinePartRequest {
   password: string;
   folder: string;
   uid: number;
+  uidValidity: string;
   part: string;
 }
 
 export function parseInlinePartRequest(value: unknown): InlinePartRequest | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const candidate = value as Record<string, unknown>;
-  const allowedKeys = new Set(["mailSessionToken", "password", "folder", "uid", "part"]);
+  const allowedKeys = new Set([
+    "mailSessionToken",
+    "password",
+    "folder",
+    "uid",
+    "uidValidity",
+    "part",
+  ]);
   if (Object.keys(candidate).some((key) => !allowedKeys.has(key))) return null;
   if (
     typeof candidate.mailSessionToken !== "string" ||
@@ -26,6 +34,9 @@ export function parseInlinePartRequest(value: unknown): InlinePartRequest | null
     !FOLDERS.has(candidate.folder) ||
     !Number.isInteger(candidate.uid) ||
     Number(candidate.uid) <= 0 ||
+    typeof candidate.uidValidity !== "string" ||
+    !/^[1-9]\d*$/.test(candidate.uidValidity) ||
+    candidate.uidValidity.length > 64 ||
     typeof candidate.part !== "string" ||
     !/^\d+(?:\.\d+)*$/.test(candidate.part)
   ) {
@@ -65,6 +76,7 @@ export const Route = createFileRoute("/api/mail-inline-part")({
               password: payload.password,
               folder: payload.folder,
               uid: payload.uid,
+              expectedUidValidity: payload.uidValidity,
               part: payload.part,
             }),
           });

@@ -161,10 +161,18 @@ const InlinePartSchema = z.object({
 });
 
 const InlineBatchPayloadSchema = MessagePayloadSchema.extend({
+  expectedUidValidity: z
+    .string()
+    .regex(/^[1-9]\d*$/)
+    .max(64),
   parts: z.array(InlinePartSchema).max(20),
 });
 
 const LargeInlinePartPayloadSchema = MessagePayloadSchema.extend({
+  expectedUidValidity: z
+    .string()
+    .regex(/^[1-9]\d*$/)
+    .max(64),
   part: z.string().regex(/^\d+(?:\.\d+)*$/),
 });
 
@@ -526,6 +534,7 @@ app.post("/api/message-inline-images", requireKey, imapGate("interactive"), asyn
       payload.folder,
       payload.uid,
       payload.parts as InlinePartMetadata[],
+      payload.expectedUidValidity,
     );
     return res.json({ ok: true, ...result });
   } catch (err: unknown) {
@@ -552,6 +561,7 @@ app.post("/api/message-inline-part", requireKey, imapGate("interactive"), async 
       payload.folder,
       payload.uid,
       payload.part,
+      payload.expectedUidValidity,
       controller.signal,
     );
     if (controller.signal.aborted) return;

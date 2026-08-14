@@ -587,6 +587,18 @@ export function visibleMessageAttachments(
   });
 }
 
+/** A malformed message with multiple MIME owners for one CID fails closed. */
+export function findUniqueCidAttachment(
+  attachments: readonly MailAttachment[],
+  cid: string,
+): MailAttachment | null {
+  const normalized = cid.replace(/^<|>$/g, "").toLowerCase();
+  const matches = attachments.filter(
+    (attachment) => (attachment.contentId || "").replace(/^<|>$/g, "").toLowerCase() === normalized,
+  );
+  return matches.length === 1 ? matches[0] : null;
+}
+
 export function planInlineImagesForOpen(
   candidates: NonNullable<MailMessage["inlineParts"]>,
   lane: ImapLane,
@@ -800,9 +812,7 @@ export async function getMessageBody(
         }
         const candidates: NonNullable<MailMessage["inlineParts"]> = [];
         for (const cid of referencedCids) {
-          const partInfo = structural.find(
-            (a) => (a.contentId || "").replace(/^<|>$/g, "").toLowerCase() === cid,
-          );
+          const partInfo = findUniqueCidAttachment(structural, cid);
           if (!partInfo?.part) continue;
           candidates.push({
             cid,
@@ -946,9 +956,7 @@ export async function downloadEntireBodyInMailbox(
   }
   const candidates: NonNullable<MailMessage["inlineParts"]> = [];
   for (const cid of referencedCids) {
-    const partInfo = structural.find(
-      (part) => (part.contentId || "").replace(/^<|>$/g, "").toLowerCase() === cid,
-    );
+    const partInfo = findUniqueCidAttachment(structural, cid);
     if (!partInfo?.part) continue;
     candidates.push({
       cid,
@@ -991,7 +999,12 @@ export async function downloadInlinePartsInMailbox(
   client: ImapFlow,
   uid: number,
   candidates: InlinePartMetadata[],
+  expectedUidValidity: string,
 ): Promise<InlineImageBatchResult> {
+  const mailbox = (client as unknown as { mailbox?: { uidValidity?: unknown } }).mailbox;
+  if (mailbox?.uidValidity == null || String(mailbox.uidValidity) !== expectedUidValidity) {
+    return { images: [], failedCids: candidates.map((part) => part.cid) };
+  }
   const images: InlineImageData[] = [];
   const failedCids: string[] = [];
   let totalBytes = 0;
@@ -1040,6 +1053,7 @@ export async function getInlineImagesBatch(
   folder: MailFolder,
   uid: number,
   parts: InlinePartMetadata[],
+  expectedUidValidity: string,
 ): Promise<InlineImageBatchResult> {
   const candidates = parts
     .filter(
@@ -1060,7 +1074,7 @@ export async function getInlineImagesBatch(
     account,
     password,
     path,
-    (client) => downloadInlinePartsInMailbox(client, uid, candidates),
+    (client) => downloadInlinePartsInMailbox(client, uid, candidates, expectedUidValidity),
     "interactive",
   );
 }
@@ -1091,6 +1105,7 @@ export async function getLargeInlinePart(
   folder: MailFolder,
   uid: number,
   part: string,
+  expectedUidValidity: string,
   signal?: AbortSignal,
   dependencies: LargeInlinePartDependencies = largeInlinePartDependencies,
 ): Promise<LargeInlinePartResult | null> {
@@ -1104,15 +1119,20 @@ export async function getLargeInlinePart(
     account,
     password,
     path,
-    (client) =>
-      downloadPartBuffer(
+    (client) => {
+      const mailbox = (client as unknown as { mailbox?: { uidValidity?: unknown } }).mailbox;
+      if (mailbox?.uidValidity == null || String(mailbox.uidValidity) !== expectedUidValidity) {
+        return null;
+      }
+      return downloadPartBuffer(
         client,
         uid,
         part,
         LARGE_INLINE_PART_MAX_BYTES,
         () => dependencies.dropConnection(account, "interactive"),
         signal,
-      ),
+      );
+    },
     "interactive",
   );
   if (!result?.buf.length || result.buf.length > LARGE_INLINE_PART_MAX_BYTES) return null;

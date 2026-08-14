@@ -21,6 +21,7 @@ const account: MailAccount = {
 };
 
 function dependenciesFor(client: object, onDrop = () => {}): LargeInlinePartDependencies {
+  Object.assign(client, { mailbox: { uidValidity: "77" } });
   return {
     getMailboxes: async () => [{ path: "INBOX" }] as never,
     withMailbox: async (_account, _password, path, operation, lane) => {
@@ -60,6 +61,7 @@ test("two large CID requests reuse the interactive mailbox path without connect/
     "inbox",
     42,
     "2",
+    "77",
     undefined,
     dependencies,
   );
@@ -69,6 +71,7 @@ test("two large CID requests reuse the interactive mailbox path without connect/
     "inbox",
     43,
     "2.1",
+    "77",
     undefined,
     dependencies,
   );
@@ -106,12 +109,12 @@ test("large CID endpoint helper enforces raster MIME and the 5 MiB expected-size
   };
   const dependencies = dependenciesFor(client);
   assert.equal(
-    await getLargeInlinePart(account, "password", "inbox", 42, "2", undefined, dependencies),
+    await getLargeInlinePart(account, "password", "inbox", 42, "2", "77", undefined, dependencies),
     null,
   );
   mode = "oversize";
   assert.equal(
-    await getLargeInlinePart(account, "password", "inbox", 42, "2", undefined, dependencies),
+    await getLargeInlinePart(account, "password", "inbox", 42, "2", "77", undefined, dependencies),
     null,
   );
 });
@@ -156,6 +159,7 @@ test("abort poisons and releases the operation before the next shared-session re
     "inbox",
     42,
     "2",
+    "77",
     controller.signal,
     dependencies,
   );
@@ -171,8 +175,35 @@ test("abort poisons and releases the operation before the next shared-session re
     "inbox",
     43,
     "2",
+    "77",
     undefined,
     dependencies,
   );
   assert.equal(next?.bytes.toString(), "next");
+});
+
+test("large CID fails closed before download when UIDVALIDITY changed", async () => {
+  let downloads = 0;
+  const client = {
+    mailbox: { uidValidity: "88" },
+    async download() {
+      downloads += 1;
+      throw new Error("must not download a reused UID");
+    },
+  };
+  const dependencies = dependenciesFor(client);
+  (client.mailbox as { uidValidity: string }).uidValidity = "88";
+
+  const result = await getLargeInlinePart(
+    account,
+    "password",
+    "inbox",
+    42,
+    "2",
+    "77",
+    undefined,
+    dependencies,
+  );
+  assert.equal(result, null);
+  assert.equal(downloads, 0);
 });

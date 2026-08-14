@@ -30,7 +30,9 @@ import { buildReplyQuoteHtml, buildForwardQuoteHtml } from "@/lib/mail-quote";
 import {
   buildReplyRecipients,
   buildThreadingHeaders,
+  forwardSubject,
   formatComposeAddress,
+  replySubject,
 } from "@/lib/mail-reply-metadata";
 import {
   markQuotedCidImagesPending,
@@ -528,6 +530,7 @@ function useInlineImageMappings(
             password: session.password,
             folder: parsed.folder,
             uid: parsed.uid,
+            uidValidity: uidValidity!,
             parts,
           },
           signal: controller.signal,
@@ -572,6 +575,7 @@ function useInlineImageMappings(
     messageKey,
     smallPartition.smallBatchParts,
     resolveInlineImages,
+    uidValidity,
   ]);
 
   useEffect(() => {
@@ -594,6 +598,7 @@ function useInlineImageMappings(
             password: session.password,
             folder: parsed.folder,
             uid: parsed.uid,
+            uidValidity,
             part: part.part,
           }),
           signal,
@@ -607,7 +612,7 @@ function useInlineImageMappings(
     return () => {
       controller.abort();
     };
-  }, [largeReady, largeStreamParts, message.id, messageKey, onLargeCid]);
+  }, [largeReady, largeStreamParts, message.id, messageKey, onLargeCid, uidValidity]);
 
   return resolved.key === messageKey ? resolved.images : [];
 }
@@ -1323,6 +1328,7 @@ type ComposeInitial = {
   inlineParts?: NonNullable<MailMessage["inlineParts"]>;
   inlineImages?: NonNullable<MailMessage["inlineImages"]>;
   inlineMessageId?: string;
+  inlineUidValidity?: string;
   /** Hardened source retained briefly for post-paint quote style isolation. */
   quoteSourceHtml?: string;
   /** RFC threading headers used only for Reply/Reply All, never Forward. */
@@ -1339,7 +1345,7 @@ function stripHtml(html: string): string {
 }
 
 function buildReply(message: MailMessage, myEmail: string, all: boolean): ComposeInitial {
-  const subject = message.subject.startsWith("Re:") ? message.subject : `Re: ${message.subject}`;
+  const subject = replySubject(message.subject);
   const recipients = buildReplyRecipients(message, myEmail, all);
   const to = recipients.to.map(formatComposeAddress).filter(Boolean).join(", ");
   const cc = recipients.cc.map(formatComposeAddress).filter(Boolean).join(", ");
@@ -1362,6 +1368,7 @@ function buildReply(message: MailMessage, myEmail: string, all: boolean): Compos
     inlineParts: message.inlineParts,
     inlineImages: message.inlineImages,
     inlineMessageId: message.id,
+    inlineUidValidity: message.uidValidity,
     quoteSourceHtml,
     ...threading,
   };
@@ -1373,12 +1380,18 @@ function buildForward(
 ): ComposeInitial | null {
   const normalAttachments = selectNormalComposerAttachments(message);
   if (normalAttachments.length > 0 && !attachmentSourceRef) return null;
-  const subject = message.subject.startsWith("Fwd:") ? message.subject : `Fwd: ${message.subject}`;
+  const subject = forwardSubject(message.subject);
   const quoteSourceHtml = sanitizeEmailHtml(message.body || message.preview || "");
   const body = markQuotedCidImagesPending(
     buildForwardQuoteHtml(
       quoteSourceHtml,
-      { from: message.from, to: message.to, subject: message.subject, date: message.date },
+      {
+        from: message.from,
+        to: message.to,
+        cc: message.cc,
+        subject: message.subject,
+        date: message.date,
+      },
       getCurrentLang(),
       {
         header: `---------- ${tr("رسالة معاد توجيهها")} ----------`,
@@ -1386,6 +1399,7 @@ function buildForward(
         date: `${tr("التاريخ:")}`,
         subject: `${tr("الموضوع:")}`,
         to: `${tr("إلى:")}`,
+        cc: `${tr("نسخة:")}`,
       },
     ),
   );
@@ -1397,6 +1411,7 @@ function buildForward(
     inlineParts: message.inlineParts,
     inlineImages: message.inlineImages,
     inlineMessageId: message.id,
+    inlineUidValidity: message.uidValidity,
     quoteSourceHtml,
     attachmentSourceRef: attachmentSourceRef ?? undefined,
     existingAttachments:
@@ -1453,6 +1468,7 @@ function buildEditDraft(message: MailMessage, draftsFolderPath?: string): Compos
     inlineParts: message.inlineParts,
     inlineImages: message.inlineImages,
     inlineMessageId: message.id,
+    inlineUidValidity: message.uidValidity,
     ...buildThreadingHeaders(message.references, message.inReplyTo),
   };
 }
@@ -3174,6 +3190,7 @@ function MailApp() {
             password: session.password,
             folder: parsed.folder,
             uid: parsed.uid,
+            uidValidity,
             parts,
           },
           signal: controller.signal,
@@ -7223,7 +7240,7 @@ function Composer({
         ...draftPartition.overflowStreamParts,
       ];
       const parsed = initial?.inlineMessageId ? parseMessageId(initial.inlineMessageId) : null;
-      if (batchParts.length && parsed && session.mailSessionToken) {
+      if (batchParts.length && parsed && initial?.inlineUidValidity && session.mailSessionToken) {
         try {
           const result = await resolveSourceInlineImages({
             data: {
@@ -7231,6 +7248,7 @@ function Composer({
               password: session.password,
               folder: parsed.folder,
               uid: parsed.uid,
+              uidValidity: initial.inlineUidValidity,
               parts: batchParts,
             },
           });
@@ -7269,7 +7287,7 @@ function Composer({
           /* Ignore malformed cached bytes. */
         }
       }
-      if (parsed && session.mailSessionToken) {
+      if (parsed && initial?.inlineUidValidity && session.mailSessionToken) {
         const attachmentTasks: Promise<void>[] = [];
         await streamInlineCidPartsSequential(streamedParts, {
           signal: streamController.signal,
@@ -7283,6 +7301,7 @@ function Composer({
                 password: session.password,
                 folder: parsed.folder,
                 uid: parsed.uid,
+                uidValidity: initial.inlineUidValidity,
                 part: part.part,
               }),
             }),
