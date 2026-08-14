@@ -9,7 +9,7 @@ import { mapSyncMessageToRow, type SyncMessagePayload } from "@/lib/mail-sync-wr
 
 const migration = readFileSync(
   new URL(
-    "../../../supabase/migrations/20260813090000_harden_conversation_identity.sql",
+    "../../../supabase/migrations/20260814074333_d97433dc-38bc-4691-a4dc-2d8e392fab08.sql",
     import.meta.url,
   ),
   "utf8",
