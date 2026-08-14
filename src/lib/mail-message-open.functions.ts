@@ -65,6 +65,31 @@ export type OpenMessageResult =
       status?: number;
     };
 
+const PrefetchWindowSchema = z.object({
+  mailSessionToken: z.string().min(20).max(4096),
+  password: z.string().min(1).max(1024),
+  folder: FolderSchema,
+  messages: z
+    .array(
+      z.object({
+        uid: z.number().int().positive(),
+        uidValidity: z
+          .string()
+          .regex(/^[1-9]\d*$/)
+          .max(64),
+      }),
+    )
+    .min(1)
+    .max(12),
+});
+
+export interface PrefetchedMessageBody {
+  uid: number;
+  source: "cache" | "imap";
+  body?: CachedBodyPayload;
+  message?: MailMessage;
+}
+
 export const openMailMessage = createServerFn({ method: "POST" })
   .inputValidator((v: z.input<typeof OpenSchema>) => OpenSchema.parse(v))
   .handler(async ({ data }): Promise<OpenMessageResult> => {
@@ -227,6 +252,98 @@ export const openMailMessage = createServerFn({ method: "POST" })
 
     console.log(`[message-open] total ${Date.now() - t0}ms source=imap`);
     return { ok: true, source: "imap", message: msg, body: null };
+  });
+
+/** One client invocation and at most one Bridge invocation for a visible window. */
+export const prefetchMessageWindow = createServerFn({ method: "POST" })
+  .inputValidator((value: z.input<typeof PrefetchWindowSchema>) =>
+    PrefetchWindowSchema.parse(value),
+  )
+  .handler(async ({ data }): Promise<{ ok: boolean; messages: PrefetchedMessageBody[] }> => {
+    const { resolveBridgeAuth } = await import("@/lib/mail-bridge-auth.server");
+    const { bridgeCallResolved } = await import("@/lib/mail-bridge-call.server");
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const cache = await import("@/lib/mail-body-cache.server");
+    const auth = await resolveBridgeAuth(data.mailSessionToken);
+    if (!auth.ok || !cache.isCacheableFolder(data.folder)) return { ok: false, messages: [] };
+
+    const unique = [
+      ...new Map(data.messages.map((message) => [message.uid, message] as const)).values(),
+    ];
+    const scope = {
+      companyId: auth.companyId,
+      accountId: auth.accountId,
+      canonical: data.folder,
+    };
+    const cached = await cache.lookupCachedBodies(
+      supabaseAdmin,
+      scope,
+      unique.map((message) => message.uid),
+    );
+    if (!cached.mailboxHint) return { ok: true, messages: [] };
+    const expectedUidValidity = cached.mailboxHint.expectedUidValidity;
+    const valid = unique.filter((message) => message.uidValidity === expectedUidValidity);
+    const messages: PrefetchedMessageBody[] = [];
+    for (const candidate of valid) {
+      const hit = cached.hits.get(candidate.uid);
+      if (!hit) continue;
+      messages.push({
+        uid: candidate.uid,
+        source: "cache",
+        body: {
+          bodyHtml: hit.bodyHtml,
+          preview: hit.preview,
+          inlineParts: hit.inlineParts,
+          inlineImages: hit.inlineImages,
+          attachments: hit.attachments,
+          mailedBy: hit.headersMeta?.mailedBy,
+          signedBy: hit.headersMeta?.signedBy,
+          security: hit.headersMeta?.security,
+          replyTo: hit.headersMeta?.replyTo,
+          uidValidity: hit.uidValidity,
+        },
+      });
+    }
+
+    const misses = valid.filter((candidate) => !cached.hits.has(candidate.uid));
+    if (misses.length) {
+      const response = await bridgeCallResolved(
+        auth,
+        "/api/messages-prefetch",
+        { folder: data.folder, uids: misses.map((message) => message.uid) },
+        data.password,
+      );
+      if (response.ok) {
+        const results = Array.isArray(response.json.results) ? response.json.results : [];
+        for (const item of results as Array<{ uid?: unknown; message?: unknown }>) {
+          const uid = Number(item.uid);
+          const message = item.message as MailMessage | null;
+          if (!message || !Number.isInteger(uid) || message.uidValidity !== expectedUidValidity)
+            continue;
+          messages.push({ uid, source: "imap", message });
+          void cache
+            .storeCachedBody(supabaseAdmin, {
+              ...scope,
+              uid,
+              uidValidity: message.uidValidity,
+              bodyHtml: message.body || "",
+              bodyTruncated: message.bodyTruncated,
+              preview: message.preview || "",
+              inlineParts: message.inlineParts ?? [],
+              inlineImages: message.inlineImages ?? [],
+              attachments: message.attachments ?? [],
+              headersMeta: {
+                mailedBy: message.mailedBy,
+                signedBy: message.signedBy,
+                security: message.security,
+                replyTo: message.replyTo,
+              },
+            })
+            .catch(() => undefined);
+        }
+      }
+    }
+    return { ok: true, messages };
   });
 
 const EntireMessageSchema = z.object({
@@ -490,17 +607,19 @@ export const warmMessageBodies = createServerFn({ method: "POST" })
     const missing = uids.filter((u) => !have.has(u));
     const todo = missing.slice(0, limits.warmBatch);
     let warmed = 0;
-    // Strictly sequential: one background body at a time per account.
-    for (const uid of todo) {
-      const r = await bridgeCallResolved(
-        auth,
-        "/api/message",
-        { folder: data.folder, uid, lane: "background" },
-        data.password,
-      );
-      if (!r.ok) break;
-      const msg = (r.json.message as MailMessage | null) ?? null;
-      if (!msg?.uidValidity) continue;
+    const batch = todo.length
+      ? await bridgeCallResolved(
+          auth,
+          "/api/messages-prefetch",
+          { folder: data.folder, uids: todo },
+          data.password,
+        )
+      : null;
+    const results = batch?.ok && Array.isArray(batch.json.results) ? batch.json.results : [];
+    for (const item of results as Array<{ uid?: unknown; message?: unknown }>) {
+      const uid = Number(item.uid);
+      const msg = item.message as MailMessage | null;
+      if (!Number.isInteger(uid) || !msg?.uidValidity) continue;
       const outcome = await cache.storeCachedBody(supabaseAdmin, {
         companyId: auth.companyId,
         accountId: auth.accountId,

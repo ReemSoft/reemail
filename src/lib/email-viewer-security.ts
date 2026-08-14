@@ -237,22 +237,30 @@ export function isValidLargeCidApplyPayload(
     value.messageIdentity !== messageIdentity ||
     value.generation !== generation ||
     !Array.isArray(value.images) ||
-    value.images.length !== 1
+    value.images.length < 1 ||
+    value.images.length > 20
   ) {
     return false;
   }
-  const image = value.images[0] as Record<string, unknown> | undefined;
-  return Boolean(
-    image &&
-    typeof image.cid === "string" &&
-    image.cid.length > 0 &&
-    image.cid.length <= 998 &&
-    typeof image.mimeType === "string" &&
-    /^image\/(?:png|jpe?g|gif|webp)$/i.test(image.mimeType.split(";", 1)[0].trim()) &&
-    image.bytes instanceof ArrayBuffer &&
-    image.bytes.byteLength > 0 &&
-    image.bytes.byteLength <= 5 * 1024 * 1024,
-  );
+  let totalBytes = 0;
+  return value.images.every((candidate) => {
+    const image = candidate as Record<string, unknown> | undefined;
+    if (
+      !image ||
+      typeof image.cid !== "string" ||
+      image.cid.length < 1 ||
+      image.cid.length > 998 ||
+      typeof image.mimeType !== "string" ||
+      !/^image\/(?:png|jpe?g|gif|webp)$/i.test(image.mimeType.split(";", 1)[0].trim()) ||
+      !(image.bytes instanceof ArrayBuffer) ||
+      image.bytes.byteLength < 1 ||
+      image.bytes.byteLength > 5 * 1024 * 1024
+    ) {
+      return false;
+    }
+    totalBytes += image.bytes.byteLength;
+    return totalBytes <= 25 * 1024 * 1024;
+  });
 }
 
 /**
@@ -441,16 +449,23 @@ export function buildEmailSrcDoc({
         img.src=localUrl;
       }
       function applyLarge(data){
-        if(!data || data.__mm!=='cid-large' || data.channel!==channel || data.messageIdentity!==messageIdentity || data.generation!==generation || !Array.isArray(data.images) || data.images.length!==1) return;
-        var item=data.images[0];
-        if(!item || typeof item.cid!=='string' || item.cid.length<1 || item.cid.length>998 || !validLargeMime(item.mimeType) || !(item.bytes instanceof ArrayBuffer) || item.bytes.byteLength<1 || item.bytes.byteLength>5242880) return;
-        var cid=item.cid.toLowerCase();
-        var blob=new Blob([item.bytes], {type:item.mimeType.split(';',1)[0].trim().toLowerCase()});
-        if(blob.size<1 || blob.size>5242880) return;
-        var localUrl=URL.createObjectURL(blob);
-        var previous=largeUrls[cid];
-        if(previous) revokeLarge(cid, previous);
-        largeUrls[cid]=localUrl;
+        if(!data || data.__mm!=='cid-large' || data.channel!==channel || data.messageIdentity!==messageIdentity || data.generation!==generation || !Array.isArray(data.images) || data.images.length<1 || data.images.length>20) return;
+        var prepared=[], total=0;
+        for(var i=0;i<data.images.length;i++){
+          var item=data.images[i];
+          if(!item || typeof item.cid!=='string' || item.cid.length<1 || item.cid.length>998 || !validLargeMime(item.mimeType) || !(item.bytes instanceof ArrayBuffer) || item.bytes.byteLength<1 || item.bytes.byteLength>5242880) continue;
+          total+=item.bytes.byteLength;
+          if(total>26214400) return;
+          var cid=item.cid.toLowerCase();
+          var blob=new Blob([item.bytes], {type:item.mimeType.split(';',1)[0].trim().toLowerCase()});
+          if(blob.size<1 || blob.size>5242880) continue;
+          var localUrl=URL.createObjectURL(blob);
+          var previous=largeUrls[cid];
+          if(previous) revokeLarge(cid, previous);
+          largeUrls[cid]=localUrl;
+          prepared.push({cid:cid,url:localUrl});
+        }
+        if(!prepared.length) return;
         batching=true;
         requestAnimationFrame(function(){
           var nodes=document.querySelectorAll('img[data-mm-cid]');
@@ -464,14 +479,17 @@ export function buildEmailSrcDoc({
               requestAnimationFrame(function(){ send(true); });
             }
           }
-          for(var n=0;n<nodes.length;n++){
-            var img=nodes[n], nodeCid=(img.getAttribute('data-mm-cid')||'').toLowerCase();
-            if(nodeCid!==cid) continue;
-            waiting++;
-            bindLargeImage(img, cid, localUrl, done);
+          for(var p=0;p<prepared.length;p++){
+            var current=prepared[p], matched=false;
+            for(var n=0;n<nodes.length;n++){
+              var img=nodes[n], nodeCid=(img.getAttribute('data-mm-cid')||'').toLowerCase();
+              if(nodeCid!==current.cid) continue;
+              matched=true; waiting++;
+              bindLargeImage(img, current.cid, current.url, done);
+            }
+            if(!matched) revokeLarge(current.cid, current.url);
           }
           if(waiting===0){
-            revokeLarge(cid, localUrl);
             finished=true;
             batching=false;
             send(true);

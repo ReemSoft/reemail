@@ -23,7 +23,11 @@ import {
 import type { CidImageMapping, LargeCidByteMapping } from "@/lib/email-viewer-security";
 import {
   partitionInlineCidParts,
+  fetchInlineCidPartsBatch,
   streamInlineCidPartsSequential,
+  readLargeInlineCidSessionCache,
+  storeLargeInlineCidSessionCache,
+  clearLargeInlineCidSessionCache,
 } from "@/lib/mail-inline-cid-policy";
 
 import { buildReplyQuoteHtml, buildForwardQuoteHtml } from "@/lib/mail-quote";
@@ -112,7 +116,7 @@ function EmailBodyFrame({
   messageIdentity: string;
   className?: string;
   onReady?: () => void;
-  largeCidDispatcherRef?: { current: ((image: LargeCidByteMapping) => void) | null };
+  largeCidDispatcherRef?: { current: ((images: LargeCidByteMapping[]) => void) | null };
 }) {
   const ref = useRef<HTMLIFrameElement | null>(null);
   const nonce = useMemo(() => rotatingToken(`${messageIdentity}|${html}`), [html, messageIdentity]);
@@ -212,20 +216,24 @@ function EmailBodyFrame({
 
   useEffect(() => {
     if (!largeCidDispatcherRef) return;
-    const dispatch = (image: LargeCidByteMapping) => {
+    const dispatch = (images: LargeCidByteMapping[]) => {
       const target = ref.current?.contentWindow;
-      if (!target || !frameReady) return;
+      if (!target || !frameReady || images.length === 0) return;
       const payload = {
         __mm: "cid-large" as const,
         channel: channelId,
         messageIdentity,
         generation,
-        images: [image],
+        images,
       };
       if (!isValidLargeCidApplyPayload(payload, channelId, messageIdentity, generation)) return;
-      const byteLength = image.bytes.byteLength;
-      target.postMessage(payload, "*", [image.bytes]);
-      mailPerf("large-cid-applied", { count: 1, bytes: byteLength });
+      const byteLength = images.reduce((total, image) => total + image.bytes.byteLength, 0);
+      target.postMessage(
+        payload,
+        "*",
+        images.map((image) => image.bytes),
+      );
+      mailPerf("large-cid-applied", { count: images.length, bytes: byteLength });
     };
     largeCidDispatcherRef.current = dispatch;
     return () => {
@@ -317,7 +325,7 @@ function ThreadedEmailBody({
   messageIdentity: string;
   className?: string;
   onReady?: () => void;
-  largeCidDispatcherRef?: { current: ((image: LargeCidByteMapping) => void) | null };
+  largeCidDispatcherRef?: { current: ((images: LargeCidByteMapping[]) => void) | null };
   /** Rendered directly under the newest turn (e.g. its own attachments). */
   afterLatest?: React.ReactNode;
   /**
@@ -458,7 +466,7 @@ function useInlineImageMappings(
   message: MailMessage,
   largeReady: boolean,
   onResolved?: (images: NonNullable<MailMessage["inlineImages"]>) => void,
-  onLargeCid?: (image: LargeCidByteMapping) => void,
+  onLargeCid?: (images: LargeCidByteMapping[]) => void,
 ): CidImageMapping[] {
   const resolveInlineImages = useMailServerFn(resolveMessageInlineImages);
   const activeSession = getMailSession();
@@ -585,11 +593,16 @@ function useInlineImageMappings(
     if (!session?.mailSessionToken || !parsed) return;
     const parts = largeStreamParts;
     if (parts.length === 0) return;
+    const cached = readLargeInlineCidSessionCache(messageKey, parts);
+    if (cached.misses.length === 0) {
+      if (cached.hits.length) onLargeCid?.(cached.hits);
+      return;
+    }
 
     const controller = new AbortController();
-    void streamInlineCidPartsSequential(parts, {
+    void fetchInlineCidPartsBatch(cached.misses, {
       signal: controller.signal,
-      fetchPart: (part, signal) =>
+      fetchBatch: (batch, signal) =>
         fetch("/api/mail-inline-part", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -599,15 +612,26 @@ function useInlineImageMappings(
             folder: parsed.folder,
             uid: parsed.uid,
             uidValidity,
-            part: part.part,
+            parts: batch,
           }),
           signal,
         }),
-      onMapping: (mapping) => {
-        if (!controller.signal.aborted) onLargeCid?.(mapping);
-      },
-      onTiming: (event, fields) => mailPerf(event, fields),
-    });
+    })
+      .then((mappings) => {
+        if (controller.signal.aborted) return;
+        if (mappings.length) {
+          storeLargeInlineCidSessionCache(messageKey, cached.misses, mappings);
+        }
+        const resolved = [...cached.hits, ...mappings];
+        if (resolved.length) {
+          onLargeCid?.(resolved);
+          mailPerf("large-cid-applied", {
+            count: resolved.length,
+            bytes: resolved.reduce((total, mapping) => total + mapping.bytes.byteLength, 0),
+          });
+        }
+      })
+      .catch(() => undefined);
 
     return () => {
       controller.abort();
@@ -643,9 +667,9 @@ function MessageBody({
     return sanitizeEmailHtml(html);
   }, [bodyIdentity, html]);
   const [readyIdentity, setReadyIdentity] = useState("");
-  const largeCidDispatcherRef = useRef<((image: LargeCidByteMapping) => void) | null>(null);
-  const dispatchLargeCid = useCallback((image: LargeCidByteMapping) => {
-    largeCidDispatcherRef.current?.(image);
+  const largeCidDispatcherRef = useRef<((images: LargeCidByteMapping[]) => void) | null>(null);
+  const dispatchLargeCid = useCallback((images: LargeCidByteMapping[]) => {
+    largeCidDispatcherRef.current?.(images);
   }, []);
   const cidImages = useInlineImageMappings(
     message,
@@ -880,6 +904,7 @@ import {
 import {
   openEntireMailMessage,
   openMailMessage,
+  prefetchMessageWindow,
   resolveMessageInlineImages,
 } from "@/lib/mail-message-open.functions";
 import { listMailConversation, type ConversationRow } from "@/lib/mail-conversation.functions";
@@ -2718,6 +2743,7 @@ function MailApp() {
 
   // Cache-first open: Postgres body cache → (miss) bridge interactive lane.
   const openMsg = useMailServerFn(openMailMessage);
+  const prefetchWindowFn = useMailServerFn(prefetchMessageWindow);
   const resolveInlineImagesBackground = useMailServerFn(resolveMessageInlineImages);
   const cleanupGhost = useMailServerFn(tombstoneGhostMessage);
 
@@ -3153,6 +3179,11 @@ function MailApp() {
     prefetchQueueRef.current = new AdaptivePrefetchQueue<ClientMessageResult>();
   }
   const prefetchCidWantedRef = useRef<Set<string>>(new Set());
+  const prefetchWindowFlightRef = useRef<{
+    key: string;
+    controller: AbortController;
+    promise: Promise<void>;
+  } | null>(null);
   const hoverPrefetchTimersRef = useRef<Map<string, number>>(new Map());
   const cancelIdlePrefetchRef = useRef<(() => void) | null>(null);
   const uidValidityByScopeRef = useRef<Map<string, string>>(new Map());
@@ -3263,6 +3294,87 @@ function MailApp() {
     [session, folder, fetchMessage, prefetchCidForMessage],
   );
 
+  const prefetchWindow = useCallback(
+    (ids: string[]) => {
+      if (!session || ids.length === 0) return Promise.resolve();
+      const scopeGeneration = activeScopeGenerationRef.current;
+      const candidates = ids.flatMap((id) => {
+        if (messageCache.current.get(id)) return [];
+        const parsed = parseMessageId(id);
+        const base = messagesRef.current.find((message) => message.id === id);
+        const uidValidity = validUidValidity(base?.uidValidity);
+        return parsed?.folder === folder && uidValidity
+          ? [{ id, uid: parsed.uid, uidValidity, base: base! }]
+          : [];
+      });
+      if (!candidates.length) return Promise.resolve();
+      const scopeKey = `${session.company?.id ?? session.account.company_id}|${session.account.id}|${folder}`;
+      const key = `${scopeKey}|${candidates.map((candidate) => `${candidate.uid}:${candidate.uidValidity}`).join(",")}`;
+      const existing = prefetchWindowFlightRef.current;
+      if (existing?.key === key) return existing.promise;
+      existing?.controller.abort();
+      const controller = new AbortController();
+      mailPerf("prefetch-start", { priority: "visible", count: candidates.length, batch: true });
+      const promise = prefetchWindowFn({
+        data: {
+          mailSessionToken: session.mailSessionToken ?? "",
+          password: session.password,
+          folder,
+          messages: candidates.map(({ uid, uidValidity }) => ({ uid, uidValidity })),
+        },
+        signal: controller.signal,
+      })
+        .then((result) => {
+          if (
+            !result.ok ||
+            controller.signal.aborted ||
+            scopeGeneration !== activeScopeGenerationRef.current
+          )
+            return;
+          const byUid = new Map(candidates.map((candidate) => [candidate.uid, candidate]));
+          const scope = {
+            companyId: session.company?.id ?? session.account.company_id,
+            accountId: session.account.id,
+          };
+          for (const item of result.messages) {
+            const candidate = byUid.get(item.uid);
+            if (!candidate) continue;
+            const merged =
+              item.source === "cache" && item.body
+                ? {
+                    ...candidate.base,
+                    body: item.body.bodyHtml,
+                    preview: item.body.preview || candidate.base.preview,
+                    inlineParts: item.body.inlineParts,
+                    inlineImages: item.body.inlineImages,
+                    attachments: item.body.attachments,
+                    mailedBy: item.body.mailedBy ?? candidate.base.mailedBy,
+                    signedBy: item.body.signedBy ?? candidate.base.signedBy,
+                    security: item.body.security ?? candidate.base.security,
+                    replyTo: item.body.replyTo ?? candidate.base.replyTo,
+                    hasAttachments: item.body.attachments.length > 0,
+                  }
+                : item.message
+                  ? { ...candidate.base, ...item.message, id: candidate.id, folder }
+                  : null;
+            if (merged && !controller.signal.aborted) {
+              messageMemoryRef.current?.set(scope, applyPendingOne(merged));
+            }
+          }
+          mailPerf("prefetch-hit", { source: "batch", count: result.messages.length });
+        })
+        .catch(() => undefined)
+        .finally(() => {
+          if (prefetchWindowFlightRef.current?.promise === promise) {
+            prefetchWindowFlightRef.current = null;
+          }
+        });
+      prefetchWindowFlightRef.current = { key, controller, promise };
+      return promise;
+    },
+    [applyPendingOne, folder, prefetchWindowFn, session],
+  );
+
   useCompanyTheme(
     session?.company
       ? { primary: session.company.brand_primary, accent: session.company.brand_accent }
@@ -3287,6 +3399,9 @@ function MailApp() {
     cancelIdlePrefetchRef.current = null;
     abortInflightControllers(inflight.current);
     abortInlineImageFlights();
+    if (clearMemory) clearLargeInlineCidSessionCache();
+    prefetchWindowFlightRef.current?.controller.abort();
+    prefetchWindowFlightRef.current = null;
     prefetchQueueRef.current?.cancelAll();
     prefetchCidWantedRef.current.clear();
     navigationGenerationRef.current?.invalidate();
@@ -3449,7 +3564,7 @@ function MailApp() {
     if (!session || loading || folder === "drafts" || !widePrefetch) return;
     const ids = firstVisiblePrefetchIds(
       filteredMessages.map((message) => message.id),
-      5,
+      10,
     );
     if (ids.length === 0) return;
     let cancelled = false;
@@ -3459,7 +3574,7 @@ function MailApp() {
     };
     const run = () => {
       if (cancelled || document.visibilityState !== "visible") return;
-      ids.forEach((id) => void prefetchMessage(id, "visible"));
+      void prefetchWindow(ids);
     };
     const handle = idleWindow.requestIdleCallback
       ? idleWindow.requestIdleCallback(run, { timeout: 1_500 })
@@ -3477,21 +3592,17 @@ function MailApp() {
       cancel();
       if (cancelIdlePrefetchRef.current === cancel) cancelIdlePrefetchRef.current = null;
     };
-  }, [filteredMessages, folder, loading, prefetchMessage, session, widePrefetch]);
+  }, [filteredMessages, folder, loading, prefetchWindow, session, widePrefetch]);
 
   useEffect(() => {
     if (!selectedId || !session || !widePrefetch) return;
     const ids = adjacentPrefetchIds(
       filteredMessages.map((message) => message.id),
       selectedId,
-      2,
+      5,
     );
-    const selectedIndex = filteredMessages.findIndex((message) => message.id === selectedId);
-    ids.forEach((id) => {
-      const index = filteredMessages.findIndex((message) => message.id === id);
-      void prefetchMessage(id, "adjacent", Math.abs(index - selectedIndex) === 1);
-    });
-  }, [filteredMessages, prefetchMessage, selectedId, session, widePrefetch]);
+    void prefetchWindow([selectedId, ...ids].slice(0, 10));
+  }, [filteredMessages, prefetchWindow, selectedId, session, widePrefetch]);
 
   const cancelHoverPrefetch = useCallback(
     (id: string) => {
@@ -3532,6 +3643,8 @@ function MailApp() {
     // running single-flight may still be reused by this foreground open.
     const aborted = prefetchQueueRef.current?.pendingKeys().length ?? 0;
     prefetchQueueRef.current?.cancelAll({ abortRunning: false });
+    prefetchWindowFlightRef.current?.controller.abort();
+    prefetchWindowFlightRef.current = null;
     if (aborted > 0) mailPerf("prefetch-aborted", { count: aborted });
     prefetchCidWantedRef.current.clear();
     const startedAt = performance.now();

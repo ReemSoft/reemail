@@ -310,6 +310,108 @@ export async function lookupCachedBody(
   return (await lookupCachedBodyWithMailboxHint(supabase, key)).lookup;
 }
 
+/** Three bounded queries for an entire visible prefetch window (folder, cache,
+ * live identities), instead of repeating the single-message lookup pipeline. */
+export async function lookupCachedBodies(
+  supabase: SupabaseClient,
+  scope: Omit<CacheKey, "uid">,
+  uids: number[],
+): Promise<{ hits: Map<number, CachedBody>; mailboxHint?: MailboxHint }> {
+  const requested = [...new Set(uids.filter((uid) => Number.isInteger(uid) && uid > 0))].slice(
+    0,
+    12,
+  );
+  const hits = new Map<number, CachedBody>();
+  if (!requested.length) return { hits };
+
+  const folderResult = await supabase
+    .from("mail_folders")
+    .select("id, uidvalidity, path")
+    .eq("company_id", scope.companyId)
+    .eq("account_id", scope.accountId)
+    .eq("canonical", scope.canonical)
+    .limit(1)
+    .maybeSingle();
+  const folder = folderResult.data as {
+    id: string;
+    uidvalidity: number | null;
+    path: string | null;
+  } | null;
+  if (!folder?.id || !folder.uidvalidity) return { hits };
+  const mailboxHint = folder.path?.trim()
+    ? {
+        folderId: folder.id,
+        path: folder.path,
+        expectedUidValidity: String(folder.uidvalidity),
+      }
+    : undefined;
+
+  const [rowsResult, liveResult] = await Promise.all([
+    supabase
+      .from("mail_message_body_cache")
+      .select(
+        "uid, uid_validity, body_html, body_text, preview, inline_parts, inline_images, attachments, headers_meta, byte_size, oversize",
+      )
+      .eq("company_id", scope.companyId)
+      .eq("account_id", scope.accountId)
+      .eq("canonical", scope.canonical)
+      .eq("uid_validity", folder.uidvalidity)
+      .eq("cache_version", BODY_CACHE_VERSION)
+      .in("uid", requested),
+    supabase
+      .from("mail_messages")
+      .select("uid")
+      .eq("company_id", scope.companyId)
+      .eq("account_id", scope.accountId)
+      .eq("folder_id", folder.id)
+      .eq("uidvalidity", folder.uidvalidity)
+      .is("deleted_at", null)
+      .in("uid", requested),
+  ]);
+  const live = new Set(
+    ((liveResult.data ?? []) as { uid: number }[]).map((row) => Number(row.uid)),
+  );
+  type BatchRow = {
+    uid: number;
+    uid_validity: number;
+    body_html: string | null;
+    body_text: string | null;
+    preview: string | null;
+    inline_parts: unknown;
+    inline_images: unknown;
+    attachments: unknown;
+    headers_meta: unknown;
+    byte_size: number;
+    oversize: boolean;
+  };
+  for (const row of (rowsResult.data ?? []) as BatchRow[]) {
+    const uid = Number(row.uid);
+    if (
+      !live.has(uid) ||
+      row.oversize ||
+      row.headers_meta == null ||
+      (!row.body_html && !row.body_text)
+    ) {
+      continue;
+    }
+    const bodyHtml = row.body_html ?? row.body_text ?? "";
+    const metadata = normalizeCachedInlineMetadata(bodyHtml, row.inline_parts, row.attachments);
+    hits.set(uid, {
+      bodyHtml,
+      preview: row.preview ?? "",
+      inlineParts: metadata.inlineParts,
+      inlineImages: Array.isArray(row.inline_images)
+        ? (row.inline_images as CachedBody["inlineImages"])
+        : [],
+      attachments: metadata.attachments,
+      headersMeta: sanitizeHeadersMeta(row.headers_meta),
+      uidValidity: String(row.uid_validity),
+      byteSize: row.byte_size,
+    });
+  }
+  return { hits, mailboxHint };
+}
+
 /** Non-blocking LRU touch. Never awaited on the response path. */
 export function touchCachedBody(supabase: SupabaseClient, key: CacheKey): void {
   void supabase

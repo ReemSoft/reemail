@@ -161,7 +161,9 @@ describe("large inline CID receive policy", () => {
     );
     expect(viewer).toContain("if (!largeReady || !messageKey) return");
     expect(viewer).toContain("const parts = smallPartition.smallBatchParts");
-    expect(viewer).toContain("streamInlineCidPartsSequential");
+    expect(viewer).toContain("fetchInlineCidPartsBatch");
+    expect(viewer).toContain("parts: batch");
+    expect(viewer).not.toContain("streamInlineCidPartsSequential(parts");
     expect(viewer).toContain('fetch("/api/mail-inline-part"');
     expect(viewer).not.toContain('fetch("/api/mail-attachment"');
     expect(viewer).not.toContain("URL.createObjectURL");

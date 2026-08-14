@@ -2,7 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 
 const INLINE_PART_MAX_BYTES = 5 * 1024 * 1024;
 const FOLDERS = new Set(["inbox", "starred", "sent", "drafts", "spam", "trash", "archive", "all"]);
-const INLINE_MIMES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+const INLINE_MIMES = new Set(["image/png", "image/jpeg", "image/jpg", "image/gif", "image/webp"]);
 
 interface InlinePartRequest {
   mailSessionToken: string;
@@ -10,7 +10,8 @@ interface InlinePartRequest {
   folder: string;
   uid: number;
   uidValidity: string;
-  part: string;
+  part?: string;
+  parts?: Array<{ cid: string; part: string; mimeType: string; size: number }>;
 }
 
 export function parseInlinePartRequest(value: unknown): InlinePartRequest | null {
@@ -23,6 +24,7 @@ export function parseInlinePartRequest(value: unknown): InlinePartRequest | null
     "uid",
     "uidValidity",
     "part",
+    "parts",
   ]);
   if (Object.keys(candidate).some((key) => !allowedKeys.has(key))) return null;
   if (
@@ -36,12 +38,33 @@ export function parseInlinePartRequest(value: unknown): InlinePartRequest | null
     Number(candidate.uid) <= 0 ||
     typeof candidate.uidValidity !== "string" ||
     !/^[1-9]\d*$/.test(candidate.uidValidity) ||
-    candidate.uidValidity.length > 64 ||
-    typeof candidate.part !== "string" ||
-    !/^\d+(?:\.\d+)*$/.test(candidate.part)
+    candidate.uidValidity.length > 64
   ) {
     return null;
   }
+  const singleValid = typeof candidate.part === "string" && /^\d+(?:\.\d+)*$/.test(candidate.part);
+  const parts = Array.isArray(candidate.parts) ? candidate.parts : null;
+  const batchValid =
+    parts !== null &&
+    parts.length > 0 &&
+    parts.length <= 20 &&
+    parts.every(
+      (part) =>
+        part &&
+        typeof part === "object" &&
+        typeof part.cid === "string" &&
+        part.cid.length > 0 &&
+        part.cid.length <= 998 &&
+        typeof part.part === "string" &&
+        /^\d+(?:\.\d+)*$/.test(part.part) &&
+        typeof part.mimeType === "string" &&
+        INLINE_MIMES.has(part.mimeType.split(";", 1)[0].trim().toLowerCase()) &&
+        Number.isInteger(part.size) &&
+        part.size >= 0 &&
+        part.size <= INLINE_PART_MAX_BYTES,
+    ) &&
+    parts.reduce((total, part) => total + part.size, 0) <= 25 * 1024 * 1024;
+  if (singleValid === batchValid) return null;
   return candidate as unknown as InlinePartRequest;
 }
 
@@ -64,22 +87,26 @@ export const Route = createFileRoute("/api/mail-inline-part")({
 
         let upstream: Response;
         try {
-          upstream = await fetch(`${auth.bridgeUrl}/api/message-inline-part`, {
-            method: "POST",
-            signal: request.signal,
-            headers: {
-              "Content-Type": "application/json",
-              "X-Bridge-Key": auth.bridgeKey,
+          const batch = payload.parts !== undefined;
+          upstream = await fetch(
+            `${auth.bridgeUrl}${batch ? "/api/message-inline-parts" : "/api/message-inline-part"}`,
+            {
+              method: "POST",
+              signal: request.signal,
+              headers: {
+                "Content-Type": "application/json",
+                "X-Bridge-Key": auth.bridgeKey,
+              },
+              body: JSON.stringify({
+                account: auth.bridgeAccount,
+                password: payload.password,
+                folder: payload.folder,
+                uid: payload.uid,
+                expectedUidValidity: payload.uidValidity,
+                ...(batch ? { parts: payload.parts } : { part: payload.part }),
+              }),
             },
-            body: JSON.stringify({
-              account: auth.bridgeAccount,
-              password: payload.password,
-              folder: payload.folder,
-              uid: payload.uid,
-              expectedUidValidity: payload.uidValidity,
-              part: payload.part,
-            }),
-          });
+          );
         } catch (error) {
           // Client navigated away / cancelled the image request: not a server fault.
           if (request.signal.aborted || (error as Error)?.name === "AbortError") {
@@ -92,10 +119,31 @@ export const Route = createFileRoute("/api/mail-inline-part")({
           return json({ error: "Inline image unavailable" }, upstream.status);
         }
 
-        const mimeType = (upstream.headers.get("Content-Type") ?? "")
-          .split(";", 1)[0]
-          .trim()
-          .toLowerCase();
+        const rawContentType = upstream.headers.get("Content-Type") ?? "";
+        if (payload.parts) {
+          const contentLength = upstream.headers.get("Content-Length");
+          const declaredBytes = contentLength === null ? null : Number(contentLength);
+          if (
+            !/^multipart\/form-data;\s*boundary=[a-z0-9-]+$/i.test(rawContentType) ||
+            (declaredBytes !== null &&
+              (!Number.isInteger(declaredBytes) ||
+                declaredBytes <= 0 ||
+                declaredBytes > 34 * 1024 * 1024))
+          ) {
+            await upstream.body?.cancel().catch(() => undefined);
+            return json({ error: "Invalid inline image batch" }, 502);
+          }
+          return new Response(upstream.body, {
+            status: 200,
+            headers: {
+              "Content-Type": rawContentType,
+              ...(declaredBytes === null ? {} : { "Content-Length": String(declaredBytes) }),
+              "X-Content-Type-Options": "nosniff",
+              "Cache-Control": "private, no-store",
+            },
+          });
+        }
+        const mimeType = rawContentType.split(";", 1)[0].trim().toLowerCase();
         const contentLength = upstream.headers.get("Content-Length");
         const declaredBytes = contentLength === null ? null : Number(contentLength);
         if (!INLINE_MIMES.has(mimeType)) {

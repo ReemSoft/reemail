@@ -19,7 +19,12 @@ import { pipeline } from "node:stream/promises";
 import { attachmentContentDisposition, sanitizeAttachmentFilename } from "./attachment-transfer.js";
 import { DownloadByteCounter, parseDownloadChunkBytes } from "./download-performance.js";
 import { createSendGates } from "./concurrency.js";
-import { createImapGates, loadImapGatesConfigFromEnv, type ImapPriority } from "./imap-gates.js";
+import {
+  createImapGates,
+  ImapBusyError,
+  loadImapGatesConfigFromEnv,
+  type ImapPriority,
+} from "./imap-gates.js";
 import { createImapGateMiddleware } from "./imap-gate-middleware.js";
 import {
   LatestMessageOpenTracker,
@@ -33,10 +38,12 @@ import {
   getFolderCounts,
   getMessages,
   getMessageBody,
+  getMessageBodiesBatch,
   getEntireMessageBody,
   MessageBodyTooLargeError,
   getInlineImagesBatch,
   getLargeInlinePart,
+  getLargeInlinePartsBatch,
   markRead,
   starMessage,
   moveMessage,
@@ -149,6 +156,10 @@ const MessagePayloadSchema = FolderPayloadSchema.extend({
   uid: z.number().int().positive(),
 });
 
+const MessagePrefetchPayloadSchema = FolderPayloadSchema.extend({
+  uids: z.array(z.number().int().positive()).min(1).max(12),
+});
+
 const InlinePartSchema = z.object({
   cid: z.string().min(1).max(998),
   part: z.string().regex(/^\d+(?:\.\d+)*$/),
@@ -174,6 +185,32 @@ const LargeInlinePartPayloadSchema = MessagePayloadSchema.extend({
     .regex(/^[1-9]\d*$/)
     .max(64),
   part: z.string().regex(/^\d+(?:\.\d+)*$/),
+});
+
+const LargeInlinePartsPayloadSchema = MessagePayloadSchema.extend({
+  expectedUidValidity: z
+    .string()
+    .regex(/^[1-9]\d*$/)
+    .max(64),
+  parts: z
+    .array(
+      z.object({
+        cid: z.string().min(1).max(998),
+        part: z.string().regex(/^\d+(?:\.\d+)*$/),
+        mimeType: z.string().regex(/^image\/(?:png|jpe?g|gif|webp)$/i),
+        size: z
+          .number()
+          .int()
+          .min(0)
+          .max(5 * 1024 * 1024),
+      }),
+    )
+    .min(1)
+    .max(20),
+}).superRefine((value, context) => {
+  if (value.parts.reduce((total, part) => total + part.size, 0) > 25 * 1024 * 1024) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "INLINE_BATCH_TOO_LARGE" });
+  }
 });
 
 const MarkReadPayloadSchema = MessagePayloadSchema.extend({
@@ -496,6 +533,52 @@ app.post("/api/message", requireKey, registerMessageOpenIntent, messageGate, asy
   }
 });
 
+app.post("/api/messages-prefetch", requireKey, async (req, res) => {
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  req.once("aborted", abort);
+  res.once("close", abort);
+  try {
+    const payload = MessagePrefetchPayloadSchema.parse(req.body);
+    const rawAccount = ((req.body as { account?: Record<string, unknown> }).account ??
+      {}) as Record<string, unknown>;
+    const results = await getMessageBodiesBatch(
+      payload.account as MailAccount,
+      payload.password,
+      payload.folder,
+      payload.uids,
+      async (worker) => {
+        const release = await imapGates.acquire({
+          host: String(rawAccount.imap_host ?? "unknown"),
+          company: String(rawAccount.company_id ?? rawAccount.companyId ?? ""),
+          account: String(rawAccount.email_address ?? "unknown"),
+          priority: "background",
+          signal: controller.signal,
+        });
+        try {
+          return await worker();
+        } finally {
+          release();
+        }
+      },
+    );
+    return res.json({ ok: true, results });
+  } catch (err: unknown) {
+    if (err instanceof ImapBusyError) {
+      res.setHeader("Retry-After", String(err.retryAfterSeconds));
+      return res.status(503).json({ ok: false, error: "IMAP_BUSY" });
+    }
+    if (err instanceof z.ZodError) {
+      return res.status(400).json({ ok: false, error: "INVALID_PAYLOAD" });
+    }
+    console.error("[bridge] /api/messages-prefetch error:", err);
+    return res.status(500).json({ ok: false, error: "Failed to prefetch messages" });
+  } finally {
+    req.off("aborted", abort);
+    res.off("close", abort);
+  }
+});
+
 app.post("/api/message-entire", requireKey, imapGate("interactive"), async (req, res) => {
   try {
     const payload = EntireMessagePayloadSchema.parse(req.body);
@@ -580,6 +663,67 @@ app.post("/api/message-inline-part", requireKey, imapGate("interactive"), async 
     }
     console.error("[bridge] /api/message-inline-part error:", err);
     return res.status(500).json({ ok: false, error: "Failed to fetch inline image" });
+  } finally {
+    req.off("aborted", abort);
+    res.off("close", abort);
+  }
+});
+
+app.post("/api/message-inline-parts", requireKey, imapGate("interactive"), async (req, res) => {
+  const controller = new AbortController();
+  const abort = () => {
+    if (!res.writableEnded) controller.abort();
+  };
+  req.once("aborted", abort);
+  res.once("close", abort);
+  try {
+    const payload = LargeInlinePartsPayloadSchema.parse(req.body);
+    const result = await getLargeInlinePartsBatch(
+      payload.account as MailAccount,
+      payload.password,
+      payload.folder,
+      payload.uid,
+      payload.parts as InlinePartMetadata[],
+      payload.expectedUidValidity,
+      controller.signal,
+    );
+    if (controller.signal.aborted) return;
+    const boundary = `mm-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+    const chunks: Buffer[] = [];
+    const metadata = result.images.map((image, index) => ({
+      index,
+      cid: image.cid,
+      part: image.part,
+      mimeType: image.mimeType,
+      size: image.bytes.length,
+    }));
+    chunks.push(
+      Buffer.from(
+        `--${boundary}\r\nContent-Disposition: form-data; name="metadata"\r\nContent-Type: application/json\r\n\r\n${JSON.stringify({ images: metadata, failedCids: result.failedCids })}\r\n`,
+      ),
+    );
+    result.images.forEach((image, index) => {
+      chunks.push(
+        Buffer.from(
+          `--${boundary}\r\nContent-Disposition: form-data; name="image-${index}"; filename="${index}"\r\nContent-Type: ${image.mimeType}\r\n\r\n`,
+        ),
+        image.bytes,
+        Buffer.from("\r\n"),
+      );
+    });
+    chunks.push(Buffer.from(`--${boundary}--\r\n`));
+    const body = Buffer.concat(chunks);
+    res.setHeader("Content-Type", `multipart/form-data; boundary=${boundary}`);
+    res.setHeader("Content-Length", String(body.length));
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("Cache-Control", "private, no-store");
+    return res.send(body);
+  } catch (err: unknown) {
+    if (controller.signal.aborted) return;
+    if (err instanceof z.ZodError)
+      return res.status(400).json({ ok: false, error: "INVALID_PAYLOAD" });
+    console.error("[bridge] /api/message-inline-parts error:", err);
+    return res.status(500).json({ ok: false, error: "Failed to fetch inline images" });
   } finally {
     req.off("aborted", abort);
     res.off("close", abort);

@@ -27,6 +27,25 @@ describe("dedicated large inline CID route", () => {
     expect(parseInlinePartRequest({ ...VALID, part: "2 BODY.PEEK[]" })).toBeNull();
   });
 
+  it("accepts one bounded multi-part request and rejects mixed/surplus payloads", () => {
+    const physical = {
+      mailSessionToken: VALID.mailSessionToken,
+      password: VALID.password,
+      folder: VALID.folder,
+      uid: VALID.uid,
+      uidValidity: VALID.uidValidity,
+    };
+    const parts = Array.from({ length: 5 }, (_, index) => ({
+      cid: `cid-${index}`,
+      part: `2.${index + 1}`,
+      mimeType: "image/png",
+      size: 300 * 1024,
+    }));
+    expect(parseInlinePartRequest({ ...physical, parts })).toEqual({ ...physical, parts });
+    expect(parseInlinePartRequest({ ...VALID, parts })).toBeNull();
+    expect(parseInlinePartRequest({ ...physical, parts: Array(21).fill(parts[0]) })).toBeNull();
+  });
+
   it("resolves authenticated Bridge account data and streams no Base64", () => {
     const source = readFileSync("src/routes/api/mail-inline-part.ts", "utf8");
     expect(source).toContain("resolveBridgeAuth(payload.mailSessionToken)");

@@ -110,6 +110,74 @@ export interface InlineCidBytesMapping {
   bytes: ArrayBuffer;
 }
 
+const LARGE_CID_SESSION_MAX_BYTES = 20 * 1024 * 1024;
+const largeCidSessionCache = new Map<
+  string,
+  { cid: string; mimeType: string; bytes: Uint8Array; lastUsed: number }
+>();
+let largeCidSessionBytes = 0;
+
+function largeCidCacheKey(messageKey: string, part: InlineCidPart): string {
+  return `${messageKey}|${part.part}|${part.cid.toLowerCase()}`;
+}
+
+export function readLargeInlineCidSessionCache(
+  messageKey: string,
+  parts: readonly InlineCidPart[],
+): { hits: InlineCidBytesMapping[]; misses: InlineCidPart[] } {
+  const hits: InlineCidBytesMapping[] = [];
+  const misses: InlineCidPart[] = [];
+  for (const part of parts) {
+    const entry = largeCidSessionCache.get(largeCidCacheKey(messageKey, part));
+    if (!entry) {
+      misses.push(part);
+      continue;
+    }
+    entry.lastUsed = Date.now();
+    hits.push({
+      cid: entry.cid,
+      mimeType: entry.mimeType,
+      bytes: entry.bytes.slice().buffer,
+    });
+  }
+  return { hits, misses };
+}
+
+export function storeLargeInlineCidSessionCache(
+  messageKey: string,
+  parts: readonly InlineCidPart[],
+  images: readonly InlineCidBytesMapping[],
+): void {
+  const byCid = new Map(parts.map((part) => [part.cid.toLowerCase(), part]));
+  for (const image of images) {
+    const part = byCid.get(image.cid.toLowerCase());
+    if (!part || image.bytes.byteLength > INLINE_CID_STREAM_MAX_BYTES) continue;
+    const key = largeCidCacheKey(messageKey, part);
+    const previous = largeCidSessionCache.get(key);
+    if (previous) largeCidSessionBytes -= previous.bytes.byteLength;
+    const bytes = new Uint8Array(image.bytes.slice(0));
+    largeCidSessionCache.set(key, {
+      cid: image.cid,
+      mimeType: image.mimeType,
+      bytes,
+      lastUsed: Date.now(),
+    });
+    largeCidSessionBytes += bytes.byteLength;
+  }
+  while (largeCidSessionBytes > LARGE_CID_SESSION_MAX_BYTES && largeCidSessionCache.size) {
+    const oldest = [...largeCidSessionCache.entries()].reduce((a, b) =>
+      a[1].lastUsed <= b[1].lastUsed ? a : b,
+    );
+    largeCidSessionCache.delete(oldest[0]);
+    largeCidSessionBytes -= oldest[1].bytes.byteLength;
+  }
+}
+
+export function clearLargeInlineCidSessionCache(): void {
+  largeCidSessionCache.clear();
+  largeCidSessionBytes = 0;
+}
+
 export interface StreamInlineCidDependencies {
   signal: AbortSignal;
   fetchPart: (part: InlineCidPart, signal: AbortSignal) => Promise<Response>;
@@ -122,6 +190,63 @@ export interface StreamInlineCidDependencies {
       | "large-cid-bytes",
     fields: { elapsedMs: number; bytes: number },
   ) => void;
+}
+
+export interface BatchInlineCidDependencies {
+  signal: AbortSignal;
+  fetchBatch: (parts: readonly InlineCidPart[], signal: AbortSignal) => Promise<Response>;
+}
+
+/** Parse one authenticated multipart response into one atomic render mapping. */
+export async function fetchInlineCidPartsBatch(
+  parts: readonly InlineCidPart[],
+  dependencies: BatchInlineCidDependencies,
+): Promise<InlineCidBytesMapping[]> {
+  if (!parts.length || dependencies.signal.aborted) return [];
+  const response = await dependencies.fetchBatch(parts, dependencies.signal);
+  if (!response.ok || dependencies.signal.aborted) return [];
+  const form = await response.formData();
+  const rawMetadata = form.get("metadata");
+  if (typeof rawMetadata !== "string") return [];
+  let metadata: unknown;
+  try {
+    metadata = JSON.parse(rawMetadata);
+  } catch {
+    return [];
+  }
+  const rows = (metadata as { images?: unknown })?.images;
+  if (!Array.isArray(rows) || rows.length > 20) return [];
+  const requested = new Map(parts.map((part) => [part.cid.toLowerCase(), part]));
+  let totalBytes = 0;
+  const mappings: InlineCidBytesMapping[] = [];
+  for (const row of rows) {
+    if (!row || typeof row !== "object") continue;
+    const value = row as Record<string, unknown>;
+    const cid = typeof value.cid === "string" ? value.cid : "";
+    const expected = requested.get(cid.toLowerCase());
+    const index = Number(value.index);
+    const mimeType = typeof value.mimeType === "string" ? value.mimeType : "";
+    const size = Number(value.size);
+    const file = Number.isInteger(index) ? form.get(`image-${index}`) : null;
+    if (
+      !expected ||
+      value.part !== expected.part ||
+      !areInlineImageMimesCompatible(expected.mimeType, mimeType) ||
+      !Number.isInteger(size) ||
+      size <= 0 ||
+      size > INLINE_CID_STREAM_MAX_BYTES ||
+      !(file instanceof Blob) ||
+      file.size !== size ||
+      totalBytes + size > 25 * 1024 * 1024
+    ) {
+      continue;
+    }
+    const bytes = await file.arrayBuffer();
+    if (dependencies.signal.aborted) return [];
+    totalBytes += bytes.byteLength;
+    mappings.push({ cid, mimeType, bytes });
+  }
+  return mappings;
 }
 
 /** Low-priority, strictly sequential streaming. A failed CID never fails the message. */

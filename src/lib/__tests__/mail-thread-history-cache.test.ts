@@ -150,9 +150,10 @@ describe("MAILMAESTRO historical thread body cache", () => {
     expect(source).toContain(': await fetchMessage(id, "interactive", undefined,');
   });
 
-  it("leaves normal prefetch calls and policy unchanged", () => {
+  it("keeps hover prefetch while batching visible/adjacent windows", () => {
     expect(source).toContain("const result = await fetchMessage(id, lane, signal)");
-    expect(source).toContain('prefetchMessage(id, "adjacent"');
+    expect(source).toContain('prefetchMessage(id, "hover"');
+    expect(source).toContain("void prefetchWindow([selectedId, ...ids].slice(0, 10))");
   });
 
   it("preserves account and company privacy clearing", () => {

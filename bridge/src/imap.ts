@@ -897,6 +897,34 @@ export async function getMessageBody(
   return result;
 }
 
+/**
+ * One Bridge boundary for a bounded visible-message prefetch window. The
+ * background lane owns one reusable per-account connection; each unit releases
+ * its mailbox lock before the next so interactive work on its separate lane is
+ * never queued behind the whole window.
+ */
+export async function getMessageBodiesBatch(
+  account: MailAccount,
+  password: string,
+  folder: MailFolder,
+  uids: number[],
+  runUnit: <T>(worker: () => Promise<T>) => Promise<T> = (worker) => worker(),
+): Promise<Array<{ uid: number; message: MailMessage | null }>> {
+  const unique = [...new Set(uids.filter((uid) => Number.isInteger(uid) && uid > 0))].slice(0, 12);
+  const results: Array<{ uid: number; message: MailMessage | null }> = [];
+  for (const uid of unique) {
+    try {
+      results.push({
+        uid,
+        message: await runUnit(() => getMessageBody(account, password, folder, uid, "background")),
+      });
+    } catch {
+      results.push({ uid, message: null });
+    }
+  }
+  return results;
+}
+
 export interface EntireMessageBody {
   body: string;
   bodyTruncated: false;
@@ -1084,6 +1112,111 @@ export const LARGE_INLINE_PART_MAX_BYTES = 5 * 1024 * 1024;
 export interface LargeInlinePartResult {
   bytes: Buffer;
   mimeType: string;
+}
+
+export interface LargeInlineBatchImage extends LargeInlinePartResult {
+  cid: string;
+  part: string;
+}
+
+export interface LargeInlineBatchResult {
+  images: LargeInlineBatchImage[];
+  failedCids: string[];
+}
+
+/** One mailbox selection/lock for all deferred large CID parts. */
+export async function getLargeInlinePartsBatch(
+  account: MailAccount,
+  password: string,
+  folder: MailFolder,
+  uid: number,
+  parts: InlinePartMetadata[],
+  expectedUidValidity: string,
+  signal?: AbortSignal,
+): Promise<LargeInlineBatchResult> {
+  const owners = new Map<string, string>();
+  const ambiguous = new Set<string>();
+  for (const part of parts) {
+    const cid = part.cid.toLowerCase();
+    const owner = `${part.part}\u0000${part.mimeType.toLowerCase()}\u0000${part.size}`;
+    const previous = owners.get(cid);
+    if (previous !== undefined && previous !== owner) ambiguous.add(cid);
+    else owners.set(cid, owner);
+  }
+  const seen = new Set<string>();
+  const candidates = parts
+    .filter((part) => {
+      const cid = part.cid.toLowerCase();
+      if (ambiguous.has(cid) || seen.has(cid)) return false;
+      seen.add(cid);
+      return (
+        /^\d+(?:\.\d+)*$/.test(part.part) &&
+        INLINE_IMAGE_SAFE_MIME.test(part.mimeType) &&
+        part.size >= 0 &&
+        part.size <= LARGE_INLINE_PART_MAX_BYTES
+      );
+    })
+    .slice(0, INLINE_IMAGE_MAX_COUNT);
+  const rejectedCids = [...ambiguous];
+  if (!candidates.length) return { images: [], failedCids: rejectedCids };
+  const mailboxes = await getMailboxesCached(account, password, "interactive");
+  const path = resolveFolderPath(mailboxes, folder);
+  if (!path || signal?.aborted) {
+    return { images: [], failedCids: [...rejectedCids, ...candidates.map((part) => part.cid)] };
+  }
+  return withAccountMailbox(
+    account,
+    password,
+    path,
+    async (client) => {
+      const mailbox = (client as unknown as { mailbox?: { uidValidity?: unknown } }).mailbox;
+      if (mailbox?.uidValidity == null || String(mailbox.uidValidity) !== expectedUidValidity) {
+        return {
+          images: [],
+          failedCids: [...rejectedCids, ...candidates.map((part) => part.cid)],
+        };
+      }
+      const images: LargeInlineBatchImage[] = [];
+      const failedCids: string[] = [...rejectedCids];
+      let totalBytes = 0;
+      for (const part of candidates) {
+        if (signal?.aborted || totalBytes + part.size > 25 * 1024 * 1024) {
+          failedCids.push(part.cid);
+          continue;
+        }
+        try {
+          const result = await downloadPartBuffer(
+            client,
+            uid,
+            part.part,
+            LARGE_INLINE_PART_MAX_BYTES,
+            () => dropAccountConnection(account, "interactive"),
+            signal,
+          );
+          const mimeType = String(result?.meta?.contentType || part.mimeType)
+            .split(";", 1)[0]
+            .trim()
+            .toLowerCase()
+            .replace("image/jpg", "image/jpeg");
+          if (
+            !result?.buf.length ||
+            result.buf.length > LARGE_INLINE_PART_MAX_BYTES ||
+            totalBytes + result.buf.length > 25 * 1024 * 1024 ||
+            !INLINE_IMAGE_SAFE_MIME.test(mimeType)
+          ) {
+            failedCids.push(part.cid);
+            continue;
+          }
+          totalBytes += result.buf.length;
+          images.push({ cid: part.cid, part: part.part, mimeType, bytes: result.buf });
+        } catch {
+          failedCids.push(part.cid);
+        }
+      }
+      return { images, failedCids };
+    },
+    "interactive",
+  );
 }
 
 export interface LargeInlinePartDependencies {
