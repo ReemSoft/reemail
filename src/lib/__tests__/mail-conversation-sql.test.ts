@@ -5,7 +5,7 @@ import { prepareConversationHistory } from "@/lib/mail-conversation-history";
 
 const migration = readFileSync(
   new URL(
-    "../../../supabase/migrations/20260812104500_fix_nearest_thread_history.sql",
+    "../../../supabase/migrations/20260813090000_harden_conversation_identity.sql",
     import.meta.url,
   ),
   "utf8",
@@ -52,21 +52,27 @@ describe("get_mail_conversation nearest-previous SQL window", () => {
     expect(migration).toContain("CREATE OR REPLACE FUNCTION public.get_mail_conversation(");
     expect(migration).toContain("_limit integer DEFAULT 50");
     expect(migration).toContain("RETURNS TABLE(");
-    expect(migration).toContain("LANGUAGE sql\nSTABLE\nSET search_path = public");
+    expect(migration).toContain("LANGUAGE sql\nSTABLE\nSECURITY INVOKER\nSET search_path = public");
     expect(migration).toContain("REVOKE ALL ON FUNCTION public.get_mail_conversation");
     expect(migration).toContain("GRANT EXECUTE ON FUNCTION public.get_mail_conversation");
-    expect(migration).not.toMatch(
-      /ALTER TABLE|CREATE TABLE|CREATE INDEX|DROP TABLE|UPDATE public|DELETE FROM/,
+    expect(migration).not.toMatch(/ALTER TABLE|CREATE TABLE|CREATE INDEX|DROP TABLE|DELETE FROM/);
+    expect(migration.match(/UPDATE public\./g)).toHaveLength(1);
+    expect(migration).toContain(
+      "UPDATE public.mail_messages m\nSET\n  message_id = n.message_id,\n  in_reply_to = n.in_reply_to,\n  references_ids = n.references_ids\nFROM normalized_values n\nWHERE m.id = n.id\n  AND (m.message_id, m.in_reply_to, m.references_ids)\n      IS DISTINCT FROM\n      (n.message_id, n.in_reply_to, n.references_ids);",
     );
   });
 
   it("anchors once, filters before ordering, and preserves one bounded result", () => {
     expect(migration.match(/anchor AS \(/g)).toHaveLength(1);
     expect(migration).toContain("CASE WHEN m.uidvalidity = f.uidvalidity THEN 0 ELSE 1 END");
-    expect(migration).toContain("CROSS JOIN anchor a");
+    expect(migration).toContain("CROSS JOIN anchor_identity a");
     expect(migration).toContain("WHERE c.copy_rank = 1");
+    expect(migration).toContain("c.logical_copy_key <> a.logical_copy_key");
     expect(migration).toContain(
-      "COALESCE(c.message_id, c.id::text) <> COALESCE(a.message_id, a.id::text)",
+      "WHEN safe_message_id.id IS NOT NULL\n          AND signatures.copy_signature IS NOT NULL\n        THEN m.message_id || E'\\x1f' || signatures.copy_signature\n        ELSE m.id::text\n      END AS logical_copy_key",
+    );
+    expect(migration).toContain(
+      "WHEN safe_message_id.id IS NOT NULL\n          AND signatures.copy_signature IS NOT NULL\n        THEN a.message_id || E'\\x1f' || signatures.copy_signature\n        ELSE a.id::text\n      END AS logical_copy_key",
     );
     expect(migration).toContain("COALESCE(c.internal_date, 'epoch'::timestamptz)");
     expect(migration).toContain("LIMIT LEAST(GREATEST(_limit, 1), 25)");
