@@ -202,10 +202,10 @@ test("background prefetch defers every CID part (metadata only, zero bytes)", ()
 // ---------------------------------------------------------------------------
 // 6 + 7. Explicit normal click AND Previous Message expansion both use BODY
 // ---------------------------------------------------------------------------
-test("explicit message click uses the highest-priority interactive gate", () => {
+test("explicit message click uses the highest-priority reserved BODY gate", () => {
   assert.match(
     index,
-    /const gate = lane === "background" \? imapGate\("background"\) : imapGate\("interactive"\);/,
+    /const gate = lane === "background" \? imapGate\("background"\) : imapGate\("body"\);/,
   );
   assert.match(
     index,
@@ -217,7 +217,7 @@ test("explicit message click uses the highest-priority interactive gate", () => 
   );
 });
 
-test("Previous Message expansion is a BODY request on the interactive lane", () => {
+test("Previous Message expansion is a BODY request on the reserved body gate", () => {
   assert.match(mailRoute, /fetchMessage\(base\.id, "interactive", undefined, \{/);
   assert.match(mailRoute, /kind: "historical"/);
 });
@@ -275,12 +275,12 @@ test("a queued media op yields to an incoming BODY open (gate-level proof)", asy
   const g = createImapGates(cfg);
   const r0 = await g.acquire({ host: "h", company: "c", account: "a", priority: "media" });
   const order: string[] = [];
-  const track = (label: string, priority: "interactive" | "media") =>
+  const track = (label: string, priority: "body" | "media") =>
     g.acquire({ host: "h", company: "c", account: "a", priority }).then((rel) => {
       order.push(label);
       rel();
     });
-  const all = Promise.all([track("media", "media"), track("body", "interactive")]);
+  const all = Promise.all([track("media", "media"), track("body", "body")]);
   r0();
   await all;
   assert.deepEqual(order, ["body", "media"]);

@@ -486,12 +486,14 @@ const EntireMessagePayloadSchema = MessagePayloadSchema.extend({
 }).strict();
 
 /**
- * Lane-aware gate: a background body-warm request must never consume an
- * interactive permit (and must never queue ahead of a user click).
+ * Lane-aware gate: a background body-warm request must never consume the
+ * reserved BODY permit. Explicit body opens (current message / Previous
+ * Message expansion) use the reserved `body` class; background warming uses
+ * `background`.
  */
 const messageGate: express.RequestHandler = (req, res, next) => {
   const lane = (req.body as { lane?: string } | undefined)?.lane;
-  const gate = lane === "background" ? imapGate("background") : imapGate("interactive");
+  const gate = lane === "background" ? imapGate("background") : imapGate("body");
   return gate(req, res, next);
 };
 
@@ -592,7 +594,7 @@ app.post("/api/messages-prefetch", requireKey, async (req, res) => {
   }
 });
 
-app.post("/api/message-entire", requireKey, imapGate("interactive"), async (req, res) => {
+app.post("/api/message-entire", requireKey, imapGate("body"), async (req, res) => {
   try {
     const payload = EntireMessagePayloadSchema.parse(req.body);
     const body = await getEntireMessageBody(
@@ -1627,7 +1629,7 @@ app.get("/api/direct/attachment-download", async (req, res) => {
   }
 });
 
-app.post("/api/attachment", requireKey, imapGate("interactive"), async (req, res) => {
+app.post("/api/attachment", requireKey, imapGate("transfer"), async (req, res) => {
   try {
     const payload = AttachmentPayloadSchema.parse(req.body);
     const result = await downloadAttachment(

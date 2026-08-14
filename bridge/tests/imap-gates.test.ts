@@ -125,7 +125,7 @@ test("global cap blocks across everything", async () => {
   r3();
 });
 
-test("fairness: interactive preferred but background admitted after 3 in a row", async () => {
+test("round-robin: non-body classes (interactive/media/transfer/background) share the one slot fairly", async () => {
   const g = makeGates({
     globalMax: 1,
     perHostMax: 1,
@@ -137,7 +137,10 @@ test("fairness: interactive preferred but background admitted after 3 in a row",
   const r0 = await g.acquire({ host: "h", company: "c", account: "a0", priority: "interactive" });
 
   // Every waiter auto-releases on admission so the next slot opens. This
-  // captures the admission order without deadlocking on await order.
+  // captures the admission order without deadlocking on await order. Only
+  // interactive + background are queued; the round-robin rotation walks
+  // [interactive, media, transfer, background] and serves the first eligible,
+  // so media/transfer (empty) just advance the cursor.
   const order: string[] = [];
   const track = (label: string, priority: "interactive" | "background") =>
     g.acquire({ host: "h", company: "c", account: label, priority }).then((rel) => {
@@ -155,10 +158,11 @@ test("fairness: interactive preferred but background admitted after 3 in a row",
 
   r0();
   await all;
-  // Streak was 1 from the priming r0 (interactive fast-path). Two more
-  // interactive admissions push the streak to 3, then fairness yields to
-  // the background waiter, then the final interactive drains.
-  assert.deepEqual(order, ["i1", "i2", "bg", "i3", "i4"]);
+  // The priming r0 was admitted on the fast path, which advances the
+  // non-body cursor from 0 -> 1 (media). Drain therefore starts the rotation
+  // at media, walks to transfer (empty), then background -> bg is served
+  // first; the interactive waiters drain in order after that.
+  assert.deepEqual(order, ["bg", "i1", "i2", "i3", "i4"]);
 });
 
 test("overflow: wait queue full rejects with IMAP_BUSY", async () => {
@@ -410,8 +414,8 @@ test("media can never hold both per-account permits (media cap = 1 < account cap
   assert.equal(m2Resolved, false, "second media op must queue (media cap is 1)");
 
   // A BODY open for the same account is still admitted immediately: media
-  // holds 1 of 2 permits, so the interactive fast path must not block.
-  const body = await g.acquire({ host: "h", company: "c", account: "a", priority: "interactive" });
+  // holds 1 of 2 permits, so the reserved body class must not block.
+  const body = await g.acquire({ host: "h", company: "c", account: "a", priority: "body" });
   assert.equal(m2Resolved, false, "body open must not wait behind queued media");
 
   body();
@@ -421,7 +425,7 @@ test("media can never hold both per-account permits (media cap = 1 < account cap
   assert.equal(g.stats().activeGlobal, 0);
 });
 
-test("interactive BODY jumps ahead of queued media on a shared slot", async () => {
+test("BODY jumps ahead of queued media on a shared slot", async () => {
   const g = makeGates({
     globalMax: 1,
     perHostMax: 10,
@@ -434,13 +438,13 @@ test("interactive BODY jumps ahead of queued media on a shared slot", async () =
   const r0 = await g.acquire({ host: "h", company: "c", account: "a", priority: "media" });
 
   const order: string[] = [];
-  const track = (label: string, priority: "interactive" | "media" | "background") =>
+  const track = (label: string, priority: "body" | "media" | "background") =>
     g.acquire({ host: "h", company: "c", account: "a", priority }).then((rel) => {
       order.push(label);
       rel();
     });
 
-  const all = Promise.all([track("media1", "media"), track("body1", "interactive")]);
+  const all = Promise.all([track("media1", "media"), track("body1", "body")]);
   r0();
   await all;
   assert.deepEqual(order, ["body1", "media1"], "a queued media op must never overtake a BODY open");
@@ -453,6 +457,9 @@ test("media defaults keep every existing gate limit unchanged", () => {
   assert.equal(c.perCompanyMax, 4);
   assert.equal(c.perAccountMax, 2);
   assert.equal(c.mediaPerAccountMax, 1);
+  assert.equal(c.nonBodyPerAccountMax, 1);
+  assert.equal(c.bodyWaitTimeoutMs, 8000);
+  assert.equal(c.transferWaitTimeoutMs, 15000);
 });
 
 test("stats exposes waitingMedia and the media per-account limit", async () => {
@@ -467,6 +474,7 @@ test("stats exposes waitingMedia and the media per-account limit", async () => {
   await sleep(20);
   assert.equal(g.stats().waitingMedia, 1);
   assert.equal(g.stats().limits.mediaPerAccountMax, 1);
+  assert.equal(g.stats().limits.nonBodyPerAccountMax, 1);
   r1();
   (await p2)();
 });

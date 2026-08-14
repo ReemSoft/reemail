@@ -121,13 +121,13 @@ test("explicit and initial operations share the MIME picker and message/rfc822 b
   });
 });
 
-test("dedicated endpoint is protected, interactive-gated, validates input and maps the ceiling", () => {
+test("dedicated endpoint is protected, body-gated, validates input and maps the ceiling", () => {
   const source = readFileSync(new URL("../src/index.ts", import.meta.url), "utf8");
   const route = source.slice(
     source.indexOf('app.post("/api/message-entire"'),
     source.indexOf('app.post("/api/message-inline-images"'),
   );
-  assert.match(route, /requireKey, imapGate\("interactive"\)/);
+  assert.match(route, /requireKey, imapGate\("body"\)/);
   assert.match(route, /EntireMessagePayloadSchema\.parse\(req\.body\)/);
   assert.match(route, /status\(400\).*INVALID_PAYLOAD/s);
   assert.match(route, /status\(413\).*err\.code/s);
