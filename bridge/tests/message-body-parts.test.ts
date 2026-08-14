@@ -358,20 +358,20 @@ test("connection stats expose bounded config only (no host/account identifiers)"
     "maxConnectionsPerAccount",
     "openConnections",
   ]);
-  assert.deepEqual(Object.keys(s.lanes).sort(), ["background", "interactive", "transfer"]);
+  assert.deepEqual(Object.keys(s.lanes).sort(), ["background", "interactive", "media", "transfer"]);
 
   assert.equal(typeof s.openConnections, "number");
   assert.ok(s.idleCloseMs > 0);
   assert.ok(s.listCacheMs > 0);
 
   // 2. lane counters are non-negative numbers
-  for (const v of [s.lanes.interactive, s.lanes.background, s.lanes.transfer]) {
+  for (const v of [s.lanes.interactive, s.lanes.media, s.lanes.background, s.lanes.transfer]) {
     assert.equal(typeof v, "number");
     assert.ok(Number.isFinite(v) && v >= 0);
   }
 
-  // 3. two connections per account max (interactive + background)
-  assert.equal(s.maxConnectionsPerAccount, 3);
+  // 3. four connections per account max (interactive + media + background + transfer)
+  assert.equal(s.maxConnectionsPerAccount, 4);
 
   // 4. no PII / identifiers among the VALUES: every leaf value is a number,
   //    so no host, account, company, email or any personal identifier can leak.
@@ -381,6 +381,7 @@ test("connection stats expose bounded config only (no host/account identifiers)"
     s.idleCloseMs,
     s.listCacheMs,
     s.lanes.interactive,
+    s.lanes.media,
     s.lanes.background,
     s.lanes.transfer,
   ];
@@ -397,6 +398,7 @@ test("connection stats expose bounded config only (no host/account identifiers)"
   const after = imapConnectionStats();
   assert.equal(after.openConnections, 0);
   assert.equal(after.lanes.interactive, 0);
+  assert.equal(after.lanes.media, 0);
   assert.equal(after.lanes.background, 0);
   assert.equal(after.lanes.transfer, 0);
 });

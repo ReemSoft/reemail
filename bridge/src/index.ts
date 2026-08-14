@@ -621,7 +621,7 @@ app.post("/api/message-entire", requireKey, imapGate("interactive"), async (req,
   }
 });
 
-app.post("/api/message-inline-images", requireKey, imapGate("interactive"), async (req, res) => {
+app.post("/api/message-inline-images", requireKey, imapGate("media"), async (req, res) => {
   try {
     const payload = InlineBatchPayloadSchema.parse(req.body);
     const result = await getInlineImagesBatch(
@@ -642,7 +642,7 @@ app.post("/api/message-inline-images", requireKey, imapGate("interactive"), asyn
   }
 });
 
-app.post("/api/message-inline-part", requireKey, imapGate("interactive"), async (req, res) => {
+app.post("/api/message-inline-part", requireKey, imapGate("media"), async (req, res) => {
   const controller = new AbortController();
   const abort = () => {
     if (!res.writableEnded) controller.abort();
@@ -682,7 +682,7 @@ app.post("/api/message-inline-part", requireKey, imapGate("interactive"), async 
   }
 });
 
-app.post("/api/message-inline-parts", requireKey, imapGate("interactive"), async (req, res) => {
+app.post("/api/message-inline-parts", requireKey, imapGate("media"), async (req, res) => {
   const controller = new AbortController();
   const abort = () => {
     if (!res.writableEnded) controller.abort();

@@ -392,3 +392,81 @@ test("env loader ignores invalid numeric overrides and keeps defaults", () => {
   assert.equal(c.globalMax, 16);
   assert.equal(c.perHostMax, 12);
 });
+
+test("media can never hold both per-account permits (media cap = 1 < account cap)", async () => {
+  const g = makeGates({
+    globalMax: 10,
+    perHostMax: 10,
+    perCompanyMax: 10,
+    perAccountMax: 2,
+  });
+  const m1 = await g.acquire({ host: "h", company: "c", account: "a", priority: "media" });
+  let m2Resolved = false;
+  const m2 = g.acquire({ host: "h", company: "c", account: "a", priority: "media" }).then((r) => {
+    m2Resolved = true;
+    return r;
+  });
+  await sleep(20);
+  assert.equal(m2Resolved, false, "second media op must queue (media cap is 1)");
+
+  // A BODY open for the same account is still admitted immediately: media
+  // holds 1 of 2 permits, so the interactive fast path must not block.
+  const body = await g.acquire({ host: "h", company: "c", account: "a", priority: "interactive" });
+  assert.equal(m2Resolved, false, "body open must not wait behind queued media");
+
+  body();
+  m1();
+  const m2r = await m2;
+  m2r();
+  assert.equal(g.stats().activeGlobal, 0);
+});
+
+test("interactive BODY jumps ahead of queued media on a shared slot", async () => {
+  const g = makeGates({
+    globalMax: 1,
+    perHostMax: 10,
+    perCompanyMax: 10,
+    perAccountMax: 2,
+    interactiveWaitTimeoutMs: 5000,
+    mediaWaitTimeoutMs: 5000,
+  });
+  // Prime the single global slot with a media op for account a.
+  const r0 = await g.acquire({ host: "h", company: "c", account: "a", priority: "media" });
+
+  const order: string[] = [];
+  const track = (label: string, priority: "interactive" | "media" | "background") =>
+    g.acquire({ host: "h", company: "c", account: "a", priority }).then((rel) => {
+      order.push(label);
+      rel();
+    });
+
+  const all = Promise.all([track("media1", "media"), track("body1", "interactive")]);
+  r0();
+  await all;
+  assert.deepEqual(order, ["body1", "media1"], "a queued media op must never overtake a BODY open");
+});
+
+test("media defaults keep every existing gate limit unchanged", () => {
+  const c = loadImapGatesConfigFromEnv({});
+  assert.equal(c.globalMax, 32);
+  assert.equal(c.perHostMax, 12);
+  assert.equal(c.perCompanyMax, 4);
+  assert.equal(c.perAccountMax, 2);
+  assert.equal(c.mediaPerAccountMax, 1);
+});
+
+test("stats exposes waitingMedia and the media per-account limit", async () => {
+  const g = makeGates({
+    globalMax: 1,
+    perAccountMax: 2,
+    interactiveWaitTimeoutMs: 5000,
+    mediaWaitTimeoutMs: 5000,
+  });
+  const r1 = await g.acquire({ host: "h", company: "c", account: "a", priority: "media" });
+  const p2 = g.acquire({ host: "h", company: "c", account: "a", priority: "media" }).then((r) => r);
+  await sleep(20);
+  assert.equal(g.stats().waitingMedia, 1);
+  assert.equal(g.stats().limits.mediaPerAccountMax, 1);
+  r1();
+  (await p2)();
+});

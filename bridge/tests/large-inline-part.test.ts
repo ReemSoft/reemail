@@ -26,17 +26,17 @@ function dependenciesFor(client: object, onDrop = () => {}): LargeInlinePartDepe
     getMailboxes: async () => [{ path: "INBOX" }] as never,
     withMailbox: async (_account, _password, path, operation, lane) => {
       assert.equal(path, "INBOX");
-      assert.equal(lane, "interactive");
+      assert.equal(lane, "media");
       return operation(client as never);
     },
     dropConnection: (_account, lane) => {
-      assert.equal(lane, "interactive");
+      assert.equal(lane, "media");
       onDrop();
     },
   };
 }
 
-test("two large CID requests reuse the interactive mailbox path without connect/login", async () => {
+test("two large CID requests reuse the media mailbox path without connect/login", async () => {
   const calls: Array<{ uid: string; part: string; options: unknown }> = [];
   const streams: Readable[] = [];
   const client = {

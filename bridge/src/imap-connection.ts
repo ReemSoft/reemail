@@ -52,13 +52,19 @@ const entries = new Map<string, Entry>();
 const pending = new Map<string, Promise<Entry>>();
 
 /**
- * Connection lanes. At most THREE connections per active account:
- *   * interactive — everything the user started (opening a message, flags…)
+ * Connection lanes. At most FOUR connections per active account:
+ *   * interactive — explicit user body opens (message click / Previous
+ *                   Message expansion) and other direct user actions. This is
+ *                   the highest-priority BODY chain.
+ *   * media       — CID / inline-image byte hydration. A separate reusable
+ *                   serialized connection so image downloads can never queue a
+ *                   body open behind them.
  *   * background  — sync + body-cache warming
- *   * transfer     â€” long attachment streams, isolated from message-open
- * Each lane serializes its own commands, so a transfer can not delay a click.
+ *   * transfer    — long attachment streams, isolated from message-open
+ * Each lane serializes its own commands, so CID/media, background and transfer
+ * work can never delay a click.
  */
-export type ImapLane = "interactive" | "background" | "transfer";
+export type ImapLane = "interactive" | "media" | "background" | "transfer";
 
 export class MessageOpenSupersededError extends Error {
   readonly code = "MESSAGE_OPEN_SUPERSEDED";
@@ -176,7 +182,7 @@ export async function getMailboxesCached(
 }
 
 export function invalidateMailboxCache(account: MailAccount) {
-  for (const lane of ["interactive", "background", "transfer"] as ImapLane[]) {
+  for (const lane of ["interactive", "media", "background", "transfer"] as ImapLane[]) {
     const e = entries.get(keyFor(account, lane));
     if (e) e.mailboxes = undefined;
   }
@@ -187,7 +193,7 @@ export function invalidateMailboxCache(account: MailAccount) {
  * errored or was destroyed mid-literal). The next request reconnects cleanly.
  */
 export function dropAccountConnection(account: MailAccount, lane?: ImapLane): void {
-  const lanes: ImapLane[] = lane ? [lane] : ["interactive", "background", "transfer"];
+  const lanes: ImapLane[] = lane ? [lane] : ["interactive", "media", "background", "transfer"];
   for (const l of lanes) {
     const key = keyFor(account, l);
     const e = entries.get(key);
@@ -290,16 +296,17 @@ export async function closeAllImapConnections(): Promise<void> {
 
 /** Bounded, PII-free stats for /api/health style surfaces. */
 export function imapConnectionStats() {
-  const lanes = { interactive: 0, background: 0, transfer: 0 };
+  const lanes = { interactive: 0, media: 0, background: 0, transfer: 0 };
   for (const k of entries.keys()) {
     if (k.startsWith("background|")) lanes.background++;
     else if (k.startsWith("transfer|")) lanes.transfer++;
+    else if (k.startsWith("media|")) lanes.media++;
     else lanes.interactive++;
   }
   return {
     openConnections: entries.size,
     lanes,
-    maxConnectionsPerAccount: 3,
+    maxConnectionsPerAccount: 4,
     idleCloseMs: IDLE_CLOSE_MS,
     listCacheMs: LIST_CACHE_MS,
   };

@@ -1198,9 +1198,10 @@ function decodeQuotedPrintable(str: string): Buffer {
 }
 
 /**
- * Fetch every eligible CID while holding one mailbox lock on one reused
- * interactive connection. ImapFlow downloads use BODY.PEEK. One bad part is
- * isolated and never fails the remaining images.
+ * Fetch every eligible CID while holding one mailbox lock on one reused media
+ * connection. ImapFlow downloads use BODY.PEEK. One bad part is isolated and
+ * never fails the remaining images. Media runs on its own lane so image bytes
+ * never queue behind (or ahead of) a message-body open.
  */
 export async function getInlineImagesBatch(
   account: MailAccount,
@@ -1221,7 +1222,7 @@ export async function getInlineImagesBatch(
     .slice(0, INLINE_IMAGE_MAX_COUNT);
   if (!candidates.length) return { images: [], failedCids: [] };
 
-  const mailboxes = await getMailboxesCached(account, password, "interactive");
+  const mailboxes = await getMailboxesCached(account, password, "media");
   const path = resolveFolderPath(mailboxes, folder);
   if (!path) return { images: [], failedCids: candidates.map((part) => part.cid) };
 
@@ -1230,7 +1231,7 @@ export async function getInlineImagesBatch(
     password,
     path,
     (client) => downloadInlinePartsInMailbox(client, uid, candidates, expectedUidValidity),
-    "interactive",
+    "media",
   );
 }
 
@@ -1286,7 +1287,7 @@ export async function getLargeInlinePartsBatch(
     .slice(0, INLINE_IMAGE_MAX_COUNT);
   const rejectedCids = [...ambiguous];
   if (!candidates.length) return { images: [], failedCids: rejectedCids };
-  const mailboxes = await getMailboxesCached(account, password, "interactive");
+  const mailboxes = await getMailboxesCached(account, password, "media");
   const path = resolveFolderPath(mailboxes, folder);
   if (!path || signal?.aborted) {
     return { images: [], failedCids: [...rejectedCids, ...candidates.map((part) => part.cid)] };
@@ -1317,7 +1318,7 @@ export async function getLargeInlinePartsBatch(
             uid,
             part.part,
             LARGE_INLINE_PART_MAX_BYTES,
-            () => dropAccountConnection(account, "interactive"),
+            () => dropAccountConnection(account, "media"),
             signal,
           );
           const mimeType = String(result?.meta?.contentType || part.mimeType)
@@ -1342,7 +1343,7 @@ export async function getLargeInlinePartsBatch(
       }
       return { images, failedCids };
     },
-    "interactive",
+    "media",
   );
 }
 
@@ -1358,7 +1359,7 @@ const largeInlinePartDependencies: LargeInlinePartDependencies = {
   dropConnection: dropAccountConnection,
 };
 
-/** Fetches one automatic large CID through the reused interactive connection. */
+/** Fetches one automatic large CID through the reused media connection. */
 export async function getLargeInlinePart(
   account: MailAccount,
   password: string,
@@ -1370,7 +1371,7 @@ export async function getLargeInlinePart(
   dependencies: LargeInlinePartDependencies = largeInlinePartDependencies,
 ): Promise<LargeInlinePartResult | null> {
   if (!Number.isInteger(uid) || uid <= 0 || !/^\d+(?:\.\d+)*$/.test(part)) return null;
-  const mailboxes = await dependencies.getMailboxes(account, password, "interactive");
+  const mailboxes = await dependencies.getMailboxes(account, password, "media");
   const path = resolveFolderPath(mailboxes, folder);
   if (!path || signal?.aborted) return null;
 
@@ -1389,11 +1390,11 @@ export async function getLargeInlinePart(
         uid,
         part,
         LARGE_INLINE_PART_MAX_BYTES,
-        () => dependencies.dropConnection(account, "interactive"),
+        () => dependencies.dropConnection(account, "media"),
         signal,
       );
     },
-    "interactive",
+    "media",
   );
   if (!result?.buf.length || result.buf.length > LARGE_INLINE_PART_MAX_BYTES) return null;
   const expectedSize = Number(result.meta?.expectedSize);
@@ -1406,7 +1407,7 @@ export async function getLargeInlinePart(
   if (!INLINE_IMAGE_SAFE_MIME.test(mimeType)) return null;
   if (TIMING_ENABLED) {
     console.log(
-      `[imap-timing] lane=interactive large-inline-part ${Date.now() - startedAt}ms ${result.buf.length}B`,
+      `[imap-timing] lane=media large-inline-part ${Date.now() - startedAt}ms ${result.buf.length}B`,
     );
   }
   return { bytes: result.buf, mimeType };

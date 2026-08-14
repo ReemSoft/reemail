@@ -8,11 +8,15 @@
  *   * per-account— per-mailbox (email address, lowercased)
  *
  * Callers do one `acquire` per real IMAP connection and release in a
- * `finally` block. `release` is idempotent. Waiters use two FIFO queues
- * (interactive / background) with weighted fairness (3:1 preferring
- * interactive; background is reserved 25% of admissions so it cannot
- * starve). Overflow / timeout / cancellation all fail fast with an
- * `ImapBusyError` — callers translate that into HTTP 503 + `IMAP_BUSY`.
+ * `finally` block. `release` is idempotent. Waiters use three FIFO queues
+ * (interactive / media / background). MEDIA (CID/image hydration) is admitted
+ * strictly below interactive — it yields to every body request and is capped
+ * per-account (mediaPerAccountMax, default 1) so it can never consume all of
+ * an account's capacity and starve a body open. Interactive and background
+ * keep the existing weighted fairness (3:1 preferring interactive;
+ * background is reserved 25% of admissions so it cannot starve). Overflow /
+ * timeout / cancellation all fail fast with an `ImapBusyError` — callers
+ * translate that into HTTP 503 + `IMAP_BUSY`.
  *
  * Feature-flagged behind `IMAP_GATES_ENABLED`. When disabled every
  * `acquire` resolves immediately with a no-op release — behaviour is
@@ -23,7 +27,7 @@
  * ever included in metrics or logs.
  */
 
-export type ImapPriority = "interactive" | "background";
+export type ImapPriority = "interactive" | "media" | "background";
 
 export interface ImapGatesConfig {
   enabled: boolean;
@@ -34,6 +38,15 @@ export interface ImapGatesConfig {
   waitQueueMax: number;
   interactiveWaitTimeoutMs: number;
   backgroundWaitTimeoutMs: number;
+  /**
+   * Cap on concurrent MEDIA (CID/image) admissions per account. Kept strictly
+   * below perAccountMax so media can never consume all of an account's
+   * capacity and starve an explicit BODY open. Optional for back-compat with
+   * config literals; defaults to 1 when absent.
+   */
+  mediaPerAccountMax?: number;
+  /** Optional; defaults to a value between interactive and background. */
+  mediaWaitTimeoutMs?: number;
 }
 
 export function normalizeHost(host: string): string {
@@ -117,6 +130,7 @@ export interface ImapGateStats {
    * exposed here — this is a bounded count for capacity monitoring only. */
   activeHostCount: number;
   waitingInteractive: number;
+  waitingMedia: number;
   waitingBackground: number;
   admitted: number;
   rejected: number;
@@ -130,6 +144,7 @@ export interface ImapGateStats {
     perHostMax: number;
     perCompanyMax: number;
     perAccountMax: number;
+    mediaPerAccountMax: number;
     waitQueueMax: number;
     interactiveWaitTimeoutMs: number;
     backgroundWaitTimeoutMs: number;
@@ -137,12 +152,15 @@ export interface ImapGateStats {
 }
 
 export function createImapGates(cfg: ImapGatesConfig): ImapGates {
+  const mediaPerAccountMax = Math.max(1, cfg.mediaPerAccountMax ?? 1);
   let activeGlobal = 0;
   const activeByHost = new Map<string, number>();
   const activeByCompany = new Map<string, number>();
   const activeByAccount = new Map<string, number>();
+  const mediaByAccount = new Map<string, number>();
 
   const waitingInteractive: Waiter[] = [];
+  const waitingMedia: Waiter[] = [];
   const waitingBackground: Waiter[] = [];
 
   // Weighted fairness: after this many consecutive interactive admissions,
@@ -197,11 +215,17 @@ export function createImapGates(cfg: ImapGatesConfig): ImapGates {
     return true;
   }
 
+  /** MEDIA additionally caps how many of an account's permits it may hold. */
+  function canAdmitMediaKey(key: { host: string; company: string; account: string }): boolean {
+    return (mediaByAccount.get(key.account) ?? 0) < mediaPerAccountMax;
+  }
+
   function admit(waiter: Waiter): ImapGateRelease {
     activeGlobal++;
     inc(activeByHost, waiter.key.host);
     inc(activeByCompany, waiter.key.company);
     inc(activeByAccount, waiter.key.account);
+    if (waiter.priority === "media") inc(mediaByAccount, waiter.key.account);
     counters.admitted++;
     recordWait(Math.max(0, Date.now() - waiter.enqueuedAtMs));
 
@@ -213,6 +237,7 @@ export function createImapGates(cfg: ImapGatesConfig): ImapGates {
       dec(activeByHost, waiter.key.host);
       dec(activeByCompany, waiter.key.company);
       dec(activeByAccount, waiter.key.account);
+      if (waiter.priority === "media") dec(mediaByAccount, waiter.key.account);
       drain();
     };
     return release;
@@ -223,15 +248,21 @@ export function createImapGates(cfg: ImapGatesConfig): ImapGates {
     if (activeGlobal >= cfg.globalMax) return null;
 
     const interactiveEligible = firstEligible(waitingInteractive);
+    const mediaEligible = firstEligibleMedia(waitingMedia);
     const backgroundEligible = firstEligible(waitingBackground);
 
-    if (!interactiveEligible && !backgroundEligible) return null;
-    if (!interactiveEligible) return backgroundEligible;
-    if (!backgroundEligible) return interactiveEligible;
+    if (!interactiveEligible && !mediaEligible && !backgroundEligible) return null;
+    if (!interactiveEligible) {
+      // No body work waiting: serve MEDIA ahead of background (both are lower
+      // than interactive), while still reserving the background slot below.
+      if (mediaEligible) return mediaEligible;
+      return backgroundEligible!;
+    }
 
-    // Weighted fairness: after FAIRNESS_WEIGHT interactive admits in a row,
-    // yield to a waiting background slot so it can never starve.
-    if (interactiveStreak >= FAIRNESS_WEIGHT) return backgroundEligible;
+    // Interactive is the absolute highest priority and retains its 3:1
+    // fairness relationship with background (unchanged). MEDIA yields to every
+    // interactive request — a queued image can never overtake a body open.
+    if (backgroundEligible && interactiveStreak >= FAIRNESS_WEIGHT) return backgroundEligible;
     return interactiveEligible;
   }
 
@@ -244,8 +275,22 @@ export function createImapGates(cfg: ImapGatesConfig): ImapGates {
     return null;
   }
 
+  function firstEligibleMedia(queue: Waiter[]): Waiter | null {
+    for (let i = 0; i < queue.length; i++) {
+      const w = queue[i];
+      if (w.settled) continue;
+      if (canAdmitKey(w.key) && canAdmitMediaKey(w.key)) return w;
+    }
+    return null;
+  }
+
   function removeFromQueue(waiter: Waiter): void {
-    const queue = waiter.priority === "interactive" ? waitingInteractive : waitingBackground;
+    const queue =
+      waiter.priority === "interactive"
+        ? waitingInteractive
+        : waiter.priority === "media"
+          ? waitingMedia
+          : waitingBackground;
     const idx = queue.indexOf(waiter);
     if (idx >= 0) queue.splice(idx, 1);
   }
@@ -297,8 +342,17 @@ export function createImapGates(cfg: ImapGatesConfig): ImapGates {
     };
 
     // Fast path: capacity available AND no one ahead of us in this class.
-    const queue = opts.priority === "interactive" ? waitingInteractive : waitingBackground;
-    if (queue.length === 0 && canAdmitKey(key)) {
+    const queue =
+      opts.priority === "interactive"
+        ? waitingInteractive
+        : opts.priority === "media"
+          ? waitingMedia
+          : waitingBackground;
+    if (
+      queue.length === 0 &&
+      canAdmitKey(key) &&
+      (opts.priority !== "media" || canAdmitMediaKey(key))
+    ) {
       const w: Waiter = {
         id: nextWaiterId++,
         key,
@@ -333,7 +387,9 @@ export function createImapGates(cfg: ImapGatesConfig): ImapGates {
       opts.waitTimeoutMs ??
       (opts.priority === "interactive"
         ? cfg.interactiveWaitTimeoutMs
-        : cfg.backgroundWaitTimeoutMs);
+        : opts.priority === "media"
+          ? (cfg.mediaWaitTimeoutMs ?? 15000)
+          : cfg.backgroundWaitTimeoutMs);
 
     return new Promise<ImapGateRelease>((resolve, reject) => {
       const waiter: Waiter = {
@@ -382,6 +438,7 @@ export function createImapGates(cfg: ImapGatesConfig): ImapGates {
       activeGlobal,
       activeHostCount: activeByHost.size,
       waitingInteractive: waitingInteractive.length,
+      waitingMedia: waitingMedia.length,
       waitingBackground: waitingBackground.length,
 
       admitted: counters.admitted,
@@ -395,6 +452,7 @@ export function createImapGates(cfg: ImapGatesConfig): ImapGates {
         perHostMax: cfg.perHostMax,
         perCompanyMax: cfg.perCompanyMax,
         perAccountMax: cfg.perAccountMax,
+        mediaPerAccountMax,
         waitQueueMax: cfg.waitQueueMax,
         interactiveWaitTimeoutMs: cfg.interactiveWaitTimeoutMs,
         backgroundWaitTimeoutMs: cfg.backgroundWaitTimeoutMs,
@@ -405,8 +463,10 @@ export function createImapGates(cfg: ImapGatesConfig): ImapGates {
   function _reset(): void {
     // Test-only: drop counters + queues. Live acquires are unaffected.
     for (const w of waitingInteractive) settleWaiter(w);
+    for (const w of waitingMedia) settleWaiter(w);
     for (const w of waitingBackground) settleWaiter(w);
     waitingInteractive.length = 0;
+    waitingMedia.length = 0;
     waitingBackground.length = 0;
     counters.admitted = 0;
     counters.rejectedQueueFull = 0;
@@ -442,6 +502,8 @@ export function loadImapGatesConfigFromEnv(env: NodeJS.ProcessEnv = process.env)
     perHostMax: num("IMAP_PER_HOST_MAX", 12),
     perCompanyMax: num("IMAP_PER_COMPANY_MAX", 4),
     perAccountMax: num("IMAP_PER_ACCOUNT_MAX", 2),
+    mediaPerAccountMax: num("IMAP_MEDIA_PER_ACCOUNT_MAX", 1),
+    mediaWaitTimeoutMs: num("IMAP_MEDIA_WAIT_TIMEOUT_MS", 15000),
     waitQueueMax: num("IMAP_WAIT_QUEUE_MAX", 200),
     interactiveWaitTimeoutMs: num("IMAP_INTERACTIVE_WAIT_TIMEOUT_MS", 8000),
     backgroundWaitTimeoutMs: num("IMAP_BACKGROUND_WAIT_TIMEOUT_MS", 30000),
