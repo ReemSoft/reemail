@@ -526,7 +526,47 @@ describe("storeCachedBody", () => {
     expect(out).toBe("stored");
     const row = spy.upserts[0] as Record<string, unknown>;
     expect(row["inline_parts"]).toEqual([largePart]);
-    expect(row["inline_images"]).toEqual([]);
+    // An empty embedded-image set leaves `inline_images` untouched so a later
+    // interactive CID resolution can persist bytes without being overwritten.
+    expect("inline_images" in row).toBe(false);
+  });
+
+  it("a body refresh without embedded images preserves previously persisted bytes", async () => {
+    const spy = { upserts: [] as unknown[] };
+    const db = fakeSupabase({}, spy);
+    await storeCachedBody(db, {
+      ...KEY,
+      uidValidity: "100",
+      bodyHtml: "<p>hi</p>",
+      preview: "hi",
+      inlineParts: [],
+      inlineImages: [
+        {
+          cid: "logo",
+          part: "2",
+          mimeType: "image/png",
+          size: 4,
+          dataUri: "data:image/png;base64,AAAA",
+        },
+      ],
+      attachments: [],
+    });
+    const withImages = spy.upserts[0] as Record<string, unknown>;
+    expect(withImages["inline_images"]).toHaveLength(1);
+
+    // The deferred-CID open path re-stores the body with no embedded images;
+    // the upsert must NOT clobber the persisted inline_images column.
+    await storeCachedBody(db, {
+      ...KEY,
+      uidValidity: "100",
+      bodyHtml: "<p>hi</p>",
+      preview: "hi",
+      inlineParts: [],
+      inlineImages: [],
+      attachments: [],
+    });
+    const refreshed = spy.upserts[1] as Record<string, unknown>;
+    expect("inline_images" in refreshed).toBe(false);
   });
 
   it("demotes oversized inline images to lazy metadata instead of dropping them", async () => {

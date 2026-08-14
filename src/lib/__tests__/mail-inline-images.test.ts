@@ -136,4 +136,48 @@ describe("MAILMAESTRO_BODY_FIRST_SINGLE_BATCH_CID", () => {
     release();
     await Promise.all([first, second]);
   });
+
+  it("does not block image display on the persistence write", async () => {
+    const never = new Promise<never>(() => {});
+    const store = vi.fn(async () => never);
+    const result = await resolveInlineImageBatch(SIX_PARTS, {
+      lookup: async () => hit([]),
+      fetchBatch: async (parts) => ({ images: parts.map(image), failedCids: [] }),
+      store,
+    });
+    expect(result.images).toHaveLength(6);
+    expect(result.source).toBe("bridge");
+    // The store ran (started) but the batch result was not held back for it.
+    expect(store).toHaveBeenCalledTimes(1);
+  });
+
+  it("persists only successful mappings, never failed CIDs", async () => {
+    const stored: InlineImage[][] = [];
+    const result = await resolveInlineImageBatch(SIX_PARTS, {
+      lookup: async () => hit([]),
+      fetchBatch: async () => ({
+        images: [image(SIX_PARTS[0])],
+        failedCids: SIX_PARTS.slice(1).map((part) => part.cid),
+      }),
+      store: async (_uidValidity, images) => {
+        stored.push(images);
+      },
+    });
+    expect(result.images).toHaveLength(1);
+    expect(result.failedCids).toHaveLength(5);
+    expect(stored).toHaveLength(1);
+    expect(stored[0].map((item) => item.cid)).toEqual(["cid-0"]);
+  });
+
+  it("serves a fully-cached CID batch with zero Bridge calls (reload path)", async () => {
+    const fetchBatch = vi.fn();
+    const result = await resolveInlineImageBatch(SIX_PARTS, {
+      lookup: async () => hit(SIX_PARTS.map(image)),
+      fetchBatch,
+      store: vi.fn(),
+    });
+    expect(result.source).toBe("cache");
+    expect(result.images).toHaveLength(6);
+    expect(fetchBatch).not.toHaveBeenCalled();
+  });
 });

@@ -63,4 +63,17 @@ describe("MAILMAESTRO_GMAIL_LATENCY_FIX", () => {
     );
     expect(historicalCall).toContain('kind: "historical"');
   });
+
+  it("only the interactive viewer persists resolved CID bytes", () => {
+    const viewer = source.slice(
+      source.indexOf("const promise = resolveInlineImages({"),
+      source.indexOf("const promise = resolveInlineImages({") + 400,
+    );
+    expect(viewer).toContain("persist: true");
+    const background = source.slice(
+      source.indexOf("const promise = resolveInlineImagesBackground({"),
+      source.indexOf("const promise = resolveInlineImagesBackground({") + 400,
+    );
+    expect(background).toContain("persist: false");
+  });
 });

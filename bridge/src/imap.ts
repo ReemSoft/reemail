@@ -34,6 +34,14 @@ function envInt(name: string, fallback: number): number {
 const INLINE_IMAGE_MAX_BYTES = envInt("INLINE_IMAGE_MAX_BYTES", 256 * 1024);
 const INLINE_IMAGE_TOTAL_BYTES = envInt("INLINE_IMAGE_TOTAL_BYTES", 1024 * 1024);
 const INLINE_IMAGE_MAX_COUNT = envInt("INLINE_IMAGE_MAX_COUNT", 20);
+// Transport-level cap on a single inline part's RAW encoded octets. A decoded
+// 256KiB image occupies at most ~4/3x as base64 or ~3x as quoted-printable,
+// so this bounds the wire payload without ever truncating a legitimate part.
+// Each FETCH requests cap+1 and treats a returned literal at the cap as proof
+// the part was oversized/truncated, so BODYSTRUCTURE declarations are never
+// trusted alone.
+const INLINE_IMAGE_ENCODED_MAX_BYTES = INLINE_IMAGE_MAX_BYTES * 3;
+const INLINE_IMAGE_MIME_MAX_BYTES = 8 * 1024;
 const INLINE_IMAGE_STREAM_MAX_BYTES = 5 * 1024 * 1024;
 export const MESSAGE_BODY_MAX_BYTES = 5 * 1024 * 1024;
 const MESSAGE_ENTIRE_BODY_HARD_MAX_BYTES = 25 * 1024 * 1024;
@@ -1055,42 +1063,67 @@ export async function downloadInlinePartsInMailbox(
   }
 
   // Fetch every selected part in ONE multi-part UID FETCH. ImapFlow builds
-  // BODY.PEEK[section] atoms, so no message is ever marked \Seen, and it
-  // decodes each part's transfer encoding and returns per-part metadata.
-  // The whole batch replaces N sequential round trips. Each part is still
-  // validated against the per-image and total byte budgets after decode.
+  // BODY.PEEK[section]<0.N> atoms, so no message is ever marked \Seen, and
+  // per-part partials give every part a hard transport-level byte cap that is
+  // enforced by the server. The whole batch replaces N sequential round trips;
+  // each part is still validated against the per-image and total byte budgets
+  // after its transfer encoding is decoded.
   if (selected.length) {
     try {
-      const downloaded = await client.downloadMany(
+      const response = await client.fetchOne(
         String(uid),
-        selected.map((part) => part.part),
+        {
+          uid: true,
+          bodyParts: selected.flatMap((part) => [
+            { key: part.part, maxLength: INLINE_IMAGE_ENCODED_MAX_BYTES + 1 },
+            { key: `${part.part}.mime`, maxLength: INLINE_IMAGE_MIME_MAX_BYTES + 1 },
+          ]),
+        },
         { uid: true },
       );
-      let totalBytes = 0;
-      for (const part of selected) {
-        const got = downloaded?.[part.part];
-        const mimeType = String(got?.meta?.contentType || part.mimeType)
-          .split(";", 1)[0]
-          .trim()
-          .toLowerCase();
-        if (
-          !got?.content ||
-          !got.content.length ||
-          got.content.length > INLINE_IMAGE_MAX_BYTES ||
-          totalBytes + got.content.length > INLINE_IMAGE_TOTAL_BYTES ||
-          !/^image\//i.test(mimeType)
-        ) {
-          failedCids.push(part.cid);
-          continue;
+      if (!response || !response.bodyParts) {
+        failedCids.push(...selected.map((part) => part.cid));
+      } else {
+        let totalBytes = 0;
+        for (const part of selected) {
+          const raw = response.bodyParts.get(part.part);
+          const rawMime = response.bodyParts.get(`${part.part}.mime`);
+          if (
+            !raw ||
+            !raw.length ||
+            raw.length >= INLINE_IMAGE_ENCODED_MAX_BYTES + 1 ||
+            (rawMime != null && rawMime.length >= INLINE_IMAGE_MIME_MAX_BYTES + 1)
+          ) {
+            failedCids.push(part.cid);
+            continue;
+          }
+          const mime = parseInlinePartMime(rawMime);
+          const mimeType = (mime.contentType || part.mimeType).split(";")[0].trim().toLowerCase();
+          let decoded: Buffer;
+          try {
+            decoded = decodeInlinePartContent(raw, mime.transferEncoding ?? "");
+          } catch {
+            failedCids.push(part.cid);
+            continue;
+          }
+          if (
+            !decoded.length ||
+            decoded.length > INLINE_IMAGE_MAX_BYTES ||
+            totalBytes + decoded.length > INLINE_IMAGE_TOTAL_BYTES ||
+            !INLINE_IMAGE_SAFE_MIME.test(mimeType)
+          ) {
+            failedCids.push(part.cid);
+            continue;
+          }
+          totalBytes += decoded.length;
+          images.push({
+            cid: part.cid,
+            part: part.part,
+            mimeType,
+            size: decoded.length,
+            dataUri: `data:${mimeType};base64,${decoded.toString("base64")}`,
+          });
         }
-        totalBytes += got.content.length;
-        images.push({
-          cid: part.cid,
-          part: part.part,
-          mimeType,
-          size: got.content.length,
-          dataUri: `data:${mimeType};base64,${got.content.toString("base64")}`,
-        });
       }
     } catch {
       // A hard FETCH failure fails the whole batch closed; the message body
@@ -1100,6 +1133,56 @@ export async function downloadInlinePartsInMailbox(
   }
 
   return { images, failedCids };
+}
+
+/** Parses the MIME section of a part for its Content-Type and transfer encoding. */
+function parseInlinePartMime(rawMime?: Buffer): { contentType?: string; transferEncoding?: string } {
+  if (!rawMime || !rawMime.length) return {};
+  const text = rawMime.toString("latin1");
+  const clean = (value: string | undefined): string | undefined => {
+    const parts = (value ?? "").split(";")[0];
+    return parts ? parts.replace(/\(.*\)/g, "").trim().toLowerCase() : undefined;
+  };
+  return {
+    contentType: clean(text.match(/^content-type:\s*([^\r\n]+)/im)?.[1]) || undefined,
+    transferEncoding: clean(text.match(/^content-transfer-encoding:\s*([^\r\n]+)/im)?.[1]) ||
+      undefined,
+  };
+}
+
+/**
+ * Decodes a part's raw literal by its Content-Transfer-Encoding. Mirrors the
+ * library's own transfer-decoding behavior (libbase64/libqp) so a cached body
+ * and a fresh IMAP fetch decode identically.
+ */
+function decodeInlinePartContent(raw: Buffer, transferEncoding: string): Buffer {
+  switch (transferEncoding) {
+    case "base64":
+      return Buffer.from(raw.toString("latin1"), "base64");
+    case "quoted-printable":
+      return decodeQuotedPrintable(raw.toString("latin1"));
+    default:
+      return raw;
+  }
+}
+
+/** RFC 2045 quoted-printable decoder, byte-for-byte compatible with libqp. */
+function decodeQuotedPrintable(str: string): Buffer {
+  const cleaned = str.replace(/[\t ]+$/gm, "").replace(/\=(?:\r?\n|$)/g, "");
+  const hexCount = (cleaned.match(/\=[\da-fA-F]{2}/g) ?? []).length;
+  const out = Buffer.alloc(cleaned.length - hexCount * 2);
+  let pos = 0;
+  for (let i = 0, len = cleaned.length; i < len; i++) {
+    const chr = cleaned.charAt(i);
+    const hex = cleaned.substr(i + 1, 2);
+    if (chr === "=" && /[\da-fA-F]{2}/.test(hex)) {
+      out[pos++] = parseInt(hex, 16);
+      i += 2;
+    } else {
+      out[pos++] = chr.charCodeAt(0);
+    }
+  }
+  return out;
 }
 
 /**

@@ -465,6 +465,10 @@ const InlineBatchSchema = z.object({
     .regex(/^[1-9]\d*$/)
     .max(64),
   parts: z.array(InlinePartSchema).max(20),
+  // Only an interactive CID fetch persists resolved bytes into the body cache.
+  // Background/prefetch callers pass false so they never populate the
+  // persistent cache (and they never fetch CID bytes in the first place).
+  persist: z.boolean().default(true),
 });
 
 export type ResolveInlineImagesResult =
@@ -533,8 +537,10 @@ export const resolveMessageInlineImages = createServerFn({ method: "POST" })
               failedCids: (response.json.failedCids ?? []) as string[],
             };
           },
-          store: (uidValidity, images) =>
-            cache.storeCachedInlineImages(supabaseAdmin, key, uidValidity, images),
+          store: data.persist
+            ? (uidValidity, images) =>
+                cache.storeCachedInlineImages(supabaseAdmin, key, uidValidity, images)
+            : async () => undefined,
         }),
       );
       return { ok: true, ...result };

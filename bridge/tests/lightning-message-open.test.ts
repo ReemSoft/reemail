@@ -39,7 +39,10 @@ describe("lightning message-open Bridge boundaries", () => {
       imap.indexOf("export async function downloadInlinePartsInMailbox("),
       imap.indexOf("export async function getInlineImagesBatch("),
     );
-    assert.equal((inline.match(/downloadMany\(/g) ?? []).length, 1);
+    assert.equal((inline.match(/fetchOne\(/g) ?? []).length, 1);
+    assert.doesNotMatch(inline, /downloadMany/);
+    assert.match(inline, /maxLength/);
+    assert.match(inline, /INLINE_IMAGE_ENCODED_MAX_BYTES \+ 1/);
     assert.doesNotMatch(inline, /messageFlagsAdd|messageFlagsRemove|markRead/);
   });
 });

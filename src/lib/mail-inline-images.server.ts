@@ -40,8 +40,11 @@ export async function resolveInlineImageBatch(
 
   // The body write is intentionally non-blocking on message-open. Re-check
   // after IMAP so a write that raced the first lookup can now receive images.
+  // The persistence write itself never blocks image display: the batch result
+  // is already computed, so `store` runs in the background and failures are
+  // swallowed (the images are still returned and rendered in-memory).
   if (!cached?.hit) cached = await deps.lookup().catch(() => null);
-  if (cached?.hit) await deps.store(cached.body.uidValidity, images).catch(() => undefined);
+  if (cached?.hit) void deps.store(cached.body.uidValidity, images).catch(() => undefined);
 
   return { images, failedCids: fetched.failedCids, source: "bridge" };
 }

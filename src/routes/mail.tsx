@@ -540,6 +540,7 @@ function useInlineImageMappings(
             uid: parsed.uid,
             uidValidity: uidValidity!,
             parts,
+            persist: true,
           },
           signal: controller.signal,
         }).finally(() => {
@@ -3212,6 +3213,7 @@ function MailApp() {
             uid: parsed.uid,
             uidValidity,
             parts,
+            persist: false,
           },
           signal: controller.signal,
         }).finally(() => {

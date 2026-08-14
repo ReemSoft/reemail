@@ -487,13 +487,17 @@ export async function storeCachedBody(
       body_text: null,
       preview: input.preview.slice(0, 512),
       inline_parts: inlineParts,
-      inline_images: keepImages ? images : [],
       attachments: input.attachments ?? [],
       headers_meta: sanitizeHeadersMeta(input.headersMeta),
       byte_size: byteSize,
       oversize,
       cached_at: now,
       last_accessed_at: now,
+      // Only embedded images are written here. A body refresh that carries no
+      // inline images (the deferred-CID open path) leaves the column untouched
+      // so a racing or later `storeCachedInlineImages` batch is never wiped;
+      // new rows still default to `[]` from the schema.
+      ...(images.length > 0 ? { inline_images: keepImages ? images : [] } : {}),
     },
     { onConflict: "company_id,account_id,canonical,uid,uid_validity" },
   );
