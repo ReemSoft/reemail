@@ -39,6 +39,7 @@
  */
 import type { RequestHandler } from "express";
 import { ImapBusyError, type ImapGates, type ImapPriority } from "./imap-gates.js";
+import { TIMING_ENABLED } from "./imap-connection.js";
 
 export interface GateMetaExtractor {
   (req: Parameters<RequestHandler>[0]): {
@@ -89,6 +90,7 @@ export function createImapGateMiddleware(
     };
 
     let release: (() => void) | null = null;
+    const gateStart = Date.now();
     try {
       release = await gates.acquire({ ...meta, priority, signal: ac.signal });
     } catch (err) {
@@ -104,6 +106,8 @@ export function createImapGateMiddleware(
       }
       return next(err);
     }
+    if (TIMING_ENABLED)
+      console.log(`[imap-timing] lane=${priority} gate-wait ${Date.now() - gateStart}ms`);
 
     // Admitted. Waiter listeners are no longer relevant; the response
     // path owns the permit lifecycle from here.

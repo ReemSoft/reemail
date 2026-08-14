@@ -599,16 +599,23 @@ export function findUniqueCidAttachment(
   return matches.length === 1 ? matches[0] : null;
 }
 
+/**
+ * Inline-image plan for a single message open.
+ *
+ * Interactive opens stop at CID metadata; the bytes are fetched by one
+ * explicit viewer batch after the body has painted. Background prefetch
+ * behaves the same way — it warms the body/structure/metadata and must NOT
+ * spend 3-15s downloading every CID part on a low-priority lane. CID bytes
+ * are only ever fetched when the user actually opens a message.
+ */
 export function planInlineImagesForOpen(
   candidates: NonNullable<MailMessage["inlineParts"]>,
-  lane: ImapLane,
+  _lane: ImapLane,
 ): {
   deferred: NonNullable<MailMessage["inlineParts"]>;
   toDownload: NonNullable<MailMessage["inlineParts"]>;
 } {
-  return lane === "interactive"
-    ? { deferred: candidates, toDownload: [] }
-    : { deferred: [], toDownload: candidates };
+  return { deferred: candidates, toDownload: [] };
 }
 
 export interface TrustedMailboxHint {
@@ -739,8 +746,13 @@ export async function getMessageBody(
         { uid: true },
       );
       if (!msg) return null;
-      if (TIMING_ENABLED)
+      if (TIMING_ENABLED) {
         console.log(`[imap-timing] lane=${lane} fetch-meta ${Date.now() - tFetch}ms`);
+        // Total waiting incurred before the meta fetch could even start:
+        // gate admission + connection reuse/chain + mailbox lock + LIST/path
+        // resolution. PII-free stage names and durations only.
+        console.log(`[imap-timing] lane=${lane} pre-fetch-wait ${Date.now() - tOpen - (Date.now() - tFetch)}ms`);
+      }
 
       // Headers only — cheap, and keeps From/To/Subject/DKIM extraction and the
       // X-MailMaestro-Draft-ID lookup byte-identical to the previous behaviour.
@@ -799,11 +811,12 @@ export async function getMessageBody(
 
       // ---- inline (cid:) images referenced by THIS html ---------------------
       // ROOT MODEL (MAILMAESTRO_INLINE_IMAGES_IN_SESSION):
-      // Interactive opens stop at metadata. Background warming retains its
-      // bounded embedding behavior and never runs in the user-facing lane.
+      // Every open stops at CID metadata — interactive and background alike.
+      // CID bytes are downloaded only after the user actually opens the
+      // message, through ONE protected multi-part batch. This is what removes
+      // the 3-15s of sequential CID downloads from background prefetch.
       const structural = collectAttachmentParts(msg.bodyStructure);
       const deferredInline: NonNullable<MailMessage["inlineParts"]> = [];
-      const embedded: NonNullable<MailMessage["inlineImages"]> = [];
       const referencedCids = new Set<string>();
 
       if (html) {
@@ -824,55 +837,21 @@ export async function getMessageBody(
 
         // Smallest first: the visible signature logos win the budget.
         candidates.sort((a, b) => (a.size || 0) - (b.size || 0));
-        // MAILMAESTRO_BODY_FIRST_SINGLE_BATCH_CID: the interactive open returns
-        // metadata only. CID bytes are fetched after paint by one batch call.
-        // Composer-created drafts may contain inline images up to the existing
-        // 5 MiB per-file / 10-file / 25 MiB upload limits. Return metadata for
-        // those parts so Edit Draft can stream them through the authenticated
-        // attachment route. Normal message-open batching remains at 256 KiB.
-        const interactiveCandidates = selectInlineMetadataCandidates(candidates, folder);
-        const inlinePlan = planInlineImagesForOpen(
-          lane === "interactive" ? interactiveCandidates : candidates,
-          lane,
-        );
+        // MAILMAESTRO_BODY_FIRST_SINGLE_BATCH_CID: the open returns
+        // metadata only — the exact same sanitized set for interactive and
+        // background prefetch. CID bytes are fetched after paint by one batch
+        // call. Composer-created drafts may contain inline images up to the
+        // existing 5 MiB per-file / 10-file / 25 MiB upload limits. Return
+        // metadata for those parts so Edit Draft can stream them through the
+        // authenticated attachment route. Normal message-open batching stays
+        // at 256 KiB.
+        const metadataCandidates = selectInlineMetadataCandidates(candidates, folder);
+        const inlinePlan = planInlineImagesForOpen(metadataCandidates, lane);
         deferredInline.push(...inlinePlan.deferred);
 
-        const tInline = Date.now();
-        let spent = 0;
-        for (const c of inlinePlan.toDownload) {
-          const eligible =
-            embedded.length < INLINE_IMAGE_MAX_COUNT &&
-            (c.size || 0) <= INLINE_IMAGE_MAX_BYTES &&
-            spent + (c.size || 0) <= INLINE_IMAGE_TOTAL_BYTES &&
-            /^image\//i.test(c.mimeType);
-          if (!eligible) {
-            deferredInline.push(c);
-            continue;
-          }
-          try {
-            const got = await downloadPartBuffer(client, uid, c.part, INLINE_IMAGE_MAX_BYTES, () =>
-              dropAccountConnection(account, lane),
-            );
-            if (!got || !got.buf.length) {
-              deferredInline.push(c);
-              continue;
-            }
-            spent += got.buf.length;
-            embedded.push({
-              cid: c.cid,
-              part: c.part,
-              mimeType: c.mimeType,
-              size: got.buf.length,
-              dataUri: `data:${c.mimeType};base64,${got.buf.toString("base64")}`,
-            });
-          } catch {
-            // Never let one bad part fail the open — fall back to lazy.
-            deferredInline.push(c);
-          }
-        }
         if (TIMING_ENABLED && candidates.length)
           console.log(
-            `[imap-timing] lane=${lane} inline-images ${Date.now() - tInline}ms embedded=${embedded.length} deferred=${deferredInline.length} ${spent}B`,
+            `[imap-timing] lane=${lane} inline-metadata deferred=${deferredInline.length} parts`,
           );
       }
 
@@ -884,7 +863,6 @@ export async function getMessageBody(
       parsed.attachments = visible;
       parsed.hasAttachments = visible.length > 0;
       if (deferredInline.length) parsed.inlineParts = deferredInline;
-      if (embedded.length) parsed.inlineImages = embedded;
 
       return parsed;
     },
@@ -1033,37 +1011,91 @@ export async function downloadInlinePartsInMailbox(
   if (mailbox?.uidValidity == null || String(mailbox.uidValidity) !== expectedUidValidity) {
     return { images: [], failedCids: candidates.map((part) => part.cid) };
   }
-  const images: InlineImageData[] = [];
-  const failedCids: string[] = [];
-  let totalBytes = 0;
 
+  // Duplicate Content-IDs that map to different physical parts are ambiguous —
+  // we must fail closed instead of guessing which image the body references.
+  const owners = new Map<string, string>();
+  const ambiguous = new Set<string>();
   for (const part of candidates) {
-    if (totalBytes + part.size > INLINE_IMAGE_TOTAL_BYTES) {
+    const cid = part.cid.toLowerCase();
+    const owner = `${part.part}\u0000${part.mimeType.toLowerCase()}\u0000${part.size}`;
+    const previous = owners.get(cid);
+    if (previous !== undefined && previous !== owner) ambiguous.add(cid);
+    else owners.set(cid, owner);
+  }
+
+  // Select only unambiguous, image parts with a known positive size that fit
+  // the per-image, count and total byte budget. Parts we will not fetch are
+  // reported as failed so the caller never renders a guess.
+  const images: InlineImageData[] = [];
+  const failedCids: string[] = [...ambiguous];
+  const selected: InlinePartMetadata[] = [];
+  const seen = new Set<string>();
+  let declaredBytes = 0;
+  for (const part of candidates) {
+    const cid = part.cid.toLowerCase();
+    if (ambiguous.has(cid) || seen.has(cid)) {
+      continue;
+    }
+    seen.add(cid);
+    if (
+      !/^\d+(?:\.\d+)*$/.test(part.part) ||
+      !/^image\//i.test(part.mimeType) ||
+      !Number.isInteger(part.size) ||
+      part.size <= 0 ||
+      part.size > INLINE_IMAGE_MAX_BYTES ||
+      selected.length >= INLINE_IMAGE_MAX_COUNT ||
+      declaredBytes + part.size > INLINE_IMAGE_TOTAL_BYTES
+    ) {
       failedCids.push(part.cid);
       continue;
     }
+    declaredBytes += part.size;
+    selected.push(part);
+  }
+
+  // Fetch every selected part in ONE multi-part UID FETCH. ImapFlow builds
+  // BODY.PEEK[section] atoms, so no message is ever marked \Seen, and it
+  // decodes each part's transfer encoding and returns per-part metadata.
+  // The whole batch replaces N sequential round trips. Each part is still
+  // validated against the per-image and total byte budgets after decode.
+  if (selected.length) {
     try {
-      const got = await downloadPartBuffer(client, uid, part.part, INLINE_IMAGE_MAX_BYTES);
-      const mimeType = String(got?.meta?.contentType || part.mimeType).toLowerCase();
-      if (
-        !got?.buf.length ||
-        got.buf.length > INLINE_IMAGE_MAX_BYTES ||
-        totalBytes + got.buf.length > INLINE_IMAGE_TOTAL_BYTES ||
-        !/^image\//i.test(mimeType)
-      ) {
-        failedCids.push(part.cid);
-        continue;
+      const downloaded = await client.downloadMany(
+        String(uid),
+        selected.map((part) => part.part),
+        { uid: true },
+      );
+      let totalBytes = 0;
+      for (const part of selected) {
+        const got = downloaded?.[part.part];
+        const mimeType = String(got?.meta?.contentType || part.mimeType)
+          .split(";", 1)[0]
+          .trim()
+          .toLowerCase();
+        if (
+          !got?.content ||
+          !got.content.length ||
+          got.content.length > INLINE_IMAGE_MAX_BYTES ||
+          totalBytes + got.content.length > INLINE_IMAGE_TOTAL_BYTES ||
+          !/^image\//i.test(mimeType)
+        ) {
+          failedCids.push(part.cid);
+          continue;
+        }
+        totalBytes += got.content.length;
+        images.push({
+          cid: part.cid,
+          part: part.part,
+          mimeType,
+          size: got.content.length,
+          dataUri: `data:${mimeType};base64,${got.content.toString("base64")}`,
+        });
       }
-      totalBytes += got.buf.length;
-      images.push({
-        cid: part.cid,
-        part: part.part,
-        mimeType,
-        size: got.buf.length,
-        dataUri: `data:${mimeType};base64,${got.buf.toString("base64")}`,
-      });
     } catch {
-      failedCids.push(part.cid);
+      // A hard FETCH failure fails the whole batch closed; the message body
+      // is already painted and the viewer simply retries on a later open.
+      failedCids.push(...selected.map((part) => part.cid));
     }
   }
 

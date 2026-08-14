@@ -3002,26 +3002,15 @@ function MailApp() {
       const requestKey = `${scope.companyId}|${scope.accountId}|${parsed.folder}|${parsed.uid}|${uidValidity ?? "interactive"}${intentKey}`;
       const existing = inflight.current.get(requestKey);
       if (existing) {
-        if (lane !== "interactive" || existing.lane !== "background") {
+        if (existing.lane === "background" && lane === "interactive") {
+          // A speculative background prefetch must never gate a user click.
+          // The click proceeds with its own interactive request immediately;
+          // the background request keeps running and fills the same memory
+          // cache, so its network work is not discarded.
+          inflight.current.delete(requestKey);
+        } else {
           return existing.promise;
         }
-
-        // Reuse an already-started prefetch when it succeeds; this is
-        // normally faster than discarding completed network work.
-        const prefetched = await existing.promise;
-        if (prefetched.message) return prefetched;
-        if (signal?.aborted) return { message: null, source: "error" };
-
-        // The speculative request failed or was cancelled. Exactly one
-        // foreground caller replaces it; concurrent clicks share that retry.
-        const replacement = inflight.current.get(requestKey);
-        if (replacement && replacement.promise !== existing.promise) {
-          return replacement.promise;
-        }
-        if (replacement?.promise === existing.promise) {
-          inflight.current.delete(requestKey);
-        }
-        mailPerf("prefetch-retry", { upgradedToInteractive: true });
       }
       const scopeGeneration = activeScopeGenerationRef.current;
       const controller = new AbortController();
@@ -5243,8 +5232,10 @@ function MailApp() {
                     onCancelPrefetch={() => cancelHoverPrefetch(m.id)}
                     onImmediatePrefetch={() => {
                       cancelHoverPrefetch(m.id);
-                      if (widePrefetch)
-                        void prefetchMessage(m.id, "adjacent", false, "interactive");
+                      // Speculative pointer-down intent is background work: it
+                      // must never run on the interactive lane, where it would
+                      // delay an explicit open or occupy the user's gate quota.
+                      if (widePrefetch) void prefetchMessage(m.id, "adjacent", false, "background");
                     }}
                     senderFolderColorKey={senderFolderMap.get(m.from.email.toLowerCase())?.color}
                     onSenderFolder={() => openSenderFolderDialog(m)}

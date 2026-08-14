@@ -59,6 +59,7 @@ import {
   dropAccountConnection,
   getMailboxesCached,
   MessageOpenSupersededError,
+  TIMING_ENABLED,
   withAccountMailbox,
 } from "./imap-connection.js";
 import { sendMessage, sendMessageFast, sentCopyAccountKey } from "./smtp.js";
@@ -496,6 +497,7 @@ const messageGate: express.RequestHandler = (req, res, next) => {
 
 app.post("/api/message", requireKey, registerMessageOpenIntent, messageGate, async (req, res) => {
   try {
+    const tOpen = Date.now();
     const payload = OpenMessagePayloadSchema.parse(req.body);
     const locals = res.locals as MessageOpenLocals;
     if (locals.intent && !locals.intent.isCurrent()) {
@@ -519,6 +521,14 @@ app.post("/api/message", requireKey, registerMessageOpenIntent, messageGate, asy
     const result = locals.flightKey
       ? await messageOpenFlights.run(locals.flightKey, open)
       : { value: await open(), leader: true };
+    if (TIMING_ENABLED) {
+      const flightKey = locals.flightKey;
+      if (flightKey && !result.leader) {
+        // A concurrent interactive open for the exact same message is already
+        // running — measure how long this request waited for that leader.
+        console.log(`[imap-timing] lane=interactive single-flight-wait ${Date.now() - tOpen}ms`);
+      }
+    }
     const message = result.value;
     if (!message) {
       return res.status(404).json({ ok: false, error: "Message not found" });
@@ -548,6 +558,7 @@ app.post("/api/messages-prefetch", requireKey, async (req, res) => {
       payload.folder,
       payload.uids,
       async (worker) => {
+        const gateStart = Date.now();
         const release = await imapGates.acquire({
           host: String(rawAccount.imap_host ?? "unknown"),
           company: String(rawAccount.company_id ?? rawAccount.companyId ?? ""),
@@ -555,6 +566,8 @@ app.post("/api/messages-prefetch", requireKey, async (req, res) => {
           priority: "background",
           signal: controller.signal,
         });
+        if (TIMING_ENABLED)
+          console.log(`[imap-timing] lane=background gate-wait ${Date.now() - gateStart}ms`);
         try {
           return await worker();
         } finally {

@@ -27,4 +27,19 @@ describe("lightning message-open Bridge boundaries", () => {
     assert.doesNotMatch(batch, /markRead|messageFlagsAdd|messageFlagsRemove/);
     assert.equal((index.match(/"\/api\/message-inline-parts"/g) ?? []).length, 1);
   });
+
+  it("fetches the small inline batch with ONE multi-part FETCH and defers on background", () => {
+    const body = imap.slice(
+      imap.indexOf("export async function getMessageBody("),
+      imap.indexOf("export async function getMessageBodiesBatch("),
+    );
+    assert.match(body, /planInlineImagesForOpen\(metadataCandidates, lane\)/);
+    assert.doesNotMatch(body, /toDownload: candidates/);
+    const inline = imap.slice(
+      imap.indexOf("export async function downloadInlinePartsInMailbox("),
+      imap.indexOf("export async function getInlineImagesBatch("),
+    );
+    assert.equal((inline.match(/downloadMany\(/g) ?? []).length, 1);
+    assert.doesNotMatch(inline, /messageFlagsAdd|messageFlagsRemove|markRead/);
+  });
 });

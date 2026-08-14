@@ -78,7 +78,7 @@ test("message-open path cannot invoke the normal attachment downloader", () => {
   assert.match(messageRoute, /getMessageBody/);
   assert.doesNotMatch(messageRoute, /downloadAttachment|attachment-download/);
   assert.doesNotMatch(messageBody, /downloadAttachment/);
-  assert.match(messageBody, /lane === "interactive"/);
+  assert.match(messageBody, /selectInlineMetadataCandidates/);
   assert.match(messageBody, /metadata only/);
 });
 

@@ -1,4 +1,3 @@
-import { Readable } from "node:stream";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
@@ -107,38 +106,41 @@ test("referenced deferred CIDs are body resources while a normal PDF remains vis
   );
 });
 
-test("one mailbox client downloads six CID parts as one batch without flag mutation", async () => {
-  const calls: Array<{ uid: string; part: string; options: unknown }> = [];
+test("one multi-part UID FETCH downloads six CID parts without flag mutation", async () => {
+  const calls: Array<{ range: string; parts: string[]; options: unknown }> = [];
   const client = {
     mailbox: { uidValidity: "77" },
-    download: async (uid: string, part: string, options: unknown) => {
-      calls.push({ uid, part, options });
-      return {
-        content: Readable.from([Buffer.from("logo")]),
-        meta: { contentType: "image/png" },
-      };
+    downloadMany: async (range: string, parts: string[], options: unknown) => {
+      calls.push({ range, parts, options });
+      const data: Record<string, { content: Buffer; meta: { contentType: string } }> = {};
+      for (const part of parts) {
+        data[part] = { content: Buffer.from("logo"), meta: { contentType: "image/png" } };
+      }
+      return data;
     },
   };
 
   const result = await downloadInlinePartsInMailbox(client as never, 42, parts(6), "77");
   assert.equal(result.images.length, 6);
   assert.deepEqual(result.failedCids, []);
-  assert.equal(calls.length, 6);
-  assert.ok(calls.every((call) => call.uid === "42"));
-  assert.ok(calls.every((call) => JSON.stringify(call.options).includes('"uid":true')));
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].range, "42");
+  assert.deepEqual(calls[0].parts, ["2", "3", "4", "5", "6", "7"]);
+  assert.ok(JSON.stringify(calls[0].options).includes('"uid":true'));
   assert.equal("messageFlagsAdd" in client, false);
   assert.equal("messageFlagsSet" in client, false);
 });
 
-test("one failed image does not fail the other five", async () => {
+test("one missing part fails closed while the other five download", async () => {
   const client = {
     mailbox: { uidValidity: "77" },
-    download: async (_uid: string, part: string) => {
-      if (part === "4") throw new Error("missing part");
-      return {
-        content: Readable.from([Buffer.from("logo")]),
-        meta: { contentType: "image/png" },
-      };
+    downloadMany: async (_range: string, parts: string[]) => {
+      const data: Record<string, { content: Buffer; meta: { contentType: string } }> = {};
+      for (const part of parts) {
+        if (part === "4") continue; // a missing part is simply omitted
+        data[part] = { content: Buffer.from("logo"), meta: { contentType: "image/png" } };
+      }
+      return data;
     },
   };
 
@@ -148,16 +150,97 @@ test("one failed image does not fail the other five", async () => {
 });
 
 test("CID batch fails closed before download when UIDVALIDITY changed", async () => {
-  let downloads = 0;
+  let calls = 0;
   const client = {
     mailbox: { uidValidity: "88" },
-    async download() {
-      downloads += 1;
+    async downloadMany() {
+      calls += 1;
       throw new Error("must not download a reused UID");
     },
   };
 
   const result = await downloadInlinePartsInMailbox(client as never, 42, parts(2), "77");
   assert.deepEqual(result, { images: [], failedCids: ["image-0", "image-1"] });
-  assert.equal(downloads, 0);
+  assert.equal(calls, 0);
+});
+
+test("ambiguous duplicate Content-ID fails closed without a guess", async () => {
+  let calls = 0;
+  const client = {
+    mailbox: { uidValidity: "77" },
+    async downloadMany() {
+      calls += 1;
+      return {};
+    },
+  };
+  const ambiguous = [
+    { cid: "logo", part: "2", mimeType: "image/png", size: 100 },
+    { cid: "logo", part: "3", mimeType: "image/png", size: 100 },
+  ];
+  const result = await downloadInlinePartsInMailbox(client as never, 42, ambiguous, "77");
+  assert.deepEqual(result, { images: [], failedCids: ["logo"] });
+  assert.equal(calls, 0);
+});
+
+test("unknown/zero-size parts fail closed without any FETCH", async () => {
+  let calls = 0;
+  const client = {
+    mailbox: { uidValidity: "77" },
+    async downloadMany() {
+      calls += 1;
+      return {};
+    },
+  };
+  const zeroSized = [{ cid: "zero", part: "2", mimeType: "image/png", size: 0 }];
+  const result = await downloadInlinePartsInMailbox(client as never, 42, zeroSized, "77");
+  assert.deepEqual(result, { images: [], failedCids: ["zero"] });
+  assert.equal(calls, 0);
+});
+
+test("per-image byte budget is enforced after decode", async () => {
+  const tooBig = Buffer.alloc(256 * 1024 + 1, 0x61);
+  const client = {
+    mailbox: { uidValidity: "77" },
+    downloadMany: async (_range: string, parts: string[]) => {
+      const data: Record<string, { content: Buffer; meta: { contentType: string } }> = {};
+      for (const part of parts) {
+        data[part] = { content: tooBig, meta: { contentType: "image/png" } };
+      }
+      return data;
+    },
+  };
+  const three = parts(3).map((part) => ({ ...part, size: 256 * 1024 }));
+  const result = await downloadInlinePartsInMailbox(client as never, 42, three, "77");
+  assert.equal(result.images.length, 0);
+  assert.deepEqual(
+    result.failedCids,
+    three.map((part) => part.cid),
+  );
+});
+
+test("declared total byte budget bounds the multi-part FETCH", async () => {
+  const client = {
+    mailbox: { uidValidity: "77" },
+    downloadMany: async (_range: string, parts: string[]) => {
+      const data: Record<string, { content: Buffer; meta: { contentType: string } }> = {};
+      for (const part of parts) {
+        data[part] = { content: Buffer.alloc(60 * 1024), meta: { contentType: "image/png" } };
+      }
+      return data;
+    },
+  };
+  // Declared 20 x 60KiB = 1.2MiB > 1MiB total budget -> only the first 17
+  // (1020KiB) are selected for the single FETCH; the rest fail closed.
+  const twenty = parts(20).map((part) => ({ ...part, size: 60 * 1024 }));
+  const result = await downloadInlinePartsInMailbox(client as never, 42, twenty, "77");
+  assert.equal(result.images.length, 17);
+  assert.deepEqual(result.failedCids, ["image-17", "image-18", "image-19"]);
+});
+
+test("background prefetch defers every CID part (metadata only)", () => {
+  const six = parts(6);
+  assert.deepEqual(planInlineImagesForOpen(six, "background"), {
+    deferred: six,
+    toDownload: [],
+  });
 });

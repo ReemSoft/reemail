@@ -227,15 +227,21 @@ export async function withAccountMailbox<T>(
   const key = keyFor(account, lane);
 
   const runOnce = async (): Promise<T> => {
+    const tEntry = Date.now();
     const entry = await getEntry(account, password, lane);
+    if (TIMING_ENABLED)
+      console.log(`[imap-timing] lane=${lane} connection-chain ${Date.now() - tEntry}ms`);
     // Serialize per connection: chain onto the previous operation.
+    const chainStart = Date.now();
     const run = entry.chain.then(
       async () => {
         if (shouldStart && !shouldStart()) throw new MessageOpenSupersededError();
+        if (TIMING_ENABLED)
+          console.log(`[imap-timing] lane=${lane} chain-wait ${Date.now() - chainStart}ms`);
         const tLock = Date.now();
         const lock = await entry.client.getMailboxLock(path);
         if (TIMING_ENABLED)
-          console.log(`[imap-timing] lane=${lane} select ${Date.now() - tLock}ms`);
+          console.log(`[imap-timing] lane=${lane} mailbox-lock ${Date.now() - tLock}ms`);
         try {
           return await fn(entry.client);
         } finally {
