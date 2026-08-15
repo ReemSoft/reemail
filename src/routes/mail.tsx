@@ -883,6 +883,8 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { MailSignatureButton } from "@/components/mail-signature-button";
+import { insertSignatureIntoEditor } from "@/lib/mail-signature";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useServerFn } from "@tanstack/react-start";
 import { toast } from "sonner";
