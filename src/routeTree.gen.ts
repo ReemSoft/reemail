@@ -16,8 +16,8 @@ import { Route as DemoRouteImport } from './routes/demo'
 import { Route as CompanyRouteImport } from './routes/company'
 import { Route as AuthenticatedRouteRouteImport } from './routes/_authenticated/route'
 import { Route as IndexRouteImport } from './routes/index'
-import { Route as ApiMailSentCopyStatusRouteImport } from './routes/api/mail-sent-copy-status'
 import { Route as ApiMailStagedReleaseRouteImport } from './routes/api/mail-staged-release'
+import { Route as ApiMailSentCopyStatusRouteImport } from './routes/api/mail-sent-copy-status'
 import { Route as ApiMailSendV2RouteImport } from './routes/api/mail-send-v2'
 import { Route as ApiMailSendRouteImport } from './routes/api/mail-send'
 import { Route as ApiMailInlinePartRouteImport } from './routes/api/mail-inline-part'
@@ -62,14 +62,14 @@ const IndexRoute = IndexRouteImport.update({
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ApiMailSentCopyStatusRoute = ApiMailSentCopyStatusRouteImport.update({
-  id: '/api/mail-sent-copy-status',
-  path: '/api/mail-sent-copy-status',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const ApiMailStagedReleaseRoute = ApiMailStagedReleaseRouteImport.update({
   id: '/api/mail-staged-release',
   path: '/api/mail-staged-release',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiMailSentCopyStatusRoute = ApiMailSentCopyStatusRouteImport.update({
+  id: '/api/mail-sent-copy-status',
+  path: '/api/mail-sent-copy-status',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiMailSendV2Route = ApiMailSendV2RouteImport.update({
@@ -311,18 +311,18 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/mail-sent-copy-status': {
-      id: '/api/mail-sent-copy-status'
-      path: '/api/mail-sent-copy-status'
-      fullPath: '/api/mail-sent-copy-status'
-      preLoaderRoute: typeof ApiMailSentCopyStatusRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/api/mail-staged-release': {
       id: '/api/mail-staged-release'
       path: '/api/mail-staged-release'
       fullPath: '/api/mail-staged-release'
       preLoaderRoute: typeof ApiMailStagedReleaseRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/mail-sent-copy-status': {
+      id: '/api/mail-sent-copy-status'
+      path: '/api/mail-sent-copy-status'
+      fullPath: '/api/mail-sent-copy-status'
+      preLoaderRoute: typeof ApiMailSentCopyStatusRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/mail-send-v2': {
