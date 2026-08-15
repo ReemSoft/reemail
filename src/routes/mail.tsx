@@ -1644,6 +1644,15 @@ function useMailData(session: MailSession | null) {
   const loadReqIdRef = useRef(0);
   const PAGE = 50;
 
+  // Draft initial-sync gate: background Draft synchronization must not compete
+  // with the UI-priority first-page source. Cleared on folder/account change;
+  // set true once the visible list has settled (index hit, Bridge fallback
+  // applied, or Bridge fallback failed). Non-Draft folders ignore it.
+  const [draftListSettled, setDraftListSettled] = useState(false);
+  useEffect(() => {
+    setDraftListSettled(false);
+  }, [folder, session?.account.id]);
+
   // Pending Flag Overrides — persist optimistic star/read across any
   // server-list arrival (Local Index, Bridge, background sync, pagination,
   // deep search). Entries are cleared on mutation failure (rollback) or
@@ -1981,12 +1990,16 @@ function useMailData(session: MailSession | null) {
         setUseMock(false);
         setSource("bridge");
         setIndexCursor(null);
+        setDraftListSettled(true);
       } catch (err: unknown) {
         if (loadReqIdRef.current !== reqId || listScopeKeyRef.current !== requestScope) return;
         setBridgeError(errorMessage(err, tr("تعذّر الاتصال بخادم البريد")));
         setHasMore(false);
         setUseMock(false);
         setIndexCursor(null);
+        // UI-priority attempt settled (with an error) — allow background sync
+        // to recover the index rather than leaving Draft sync disabled.
+        setDraftListSettled(true);
       }
     },
     [session, folder, sort, getMessages, applyPending, reconcilePendingMovesForRead],
@@ -2081,6 +2094,7 @@ function useMailData(session: MailSession | null) {
             setUseMock(false);
             setBridgeError(null);
             setIndexReady((prev) => (prev[folder] ? prev : { ...prev, [folder]: true }));
+            setDraftListSettled(true);
             gcHiddenBefore(pendingHiddenRef.current, startedAt);
             return;
           }
@@ -2326,7 +2340,11 @@ function useMailData(session: MailSession | null) {
       // uniqueness of mail_folders, so a starred sync round would just
       // overwrite the inbox folder row with duplicate work and never serve
       // starred correctly. Bridge listing owns starred; do not sync it here.
-      folder !== "starred",
+      folder !== "starred" &&
+      // Drafts: background initial sync is gated on the visible list having
+      // settled (index hit or Bridge fallback applied/failed) so it never
+      // competes with the UI-priority first page. Non-Draft folders unaffected.
+      (folder !== "drafts" || draftListSettled),
     onSynced: () => {
       // Background rounds only: refresh the current folder from the index
       // when the sync actually changed something (the hook already gates on
@@ -2503,7 +2521,10 @@ function useMailData(session: MailSession | null) {
       }));
     },
     refreshAfterComposerClose: async () => {
-      await loadCounts();
+      // Draft V4: a successful save/delete already wrote the projection and
+      // count (Local Index write-through + lifecycle delta), so NO global
+      // /api/folders count sweep is needed. Refresh only the current list from
+      // the Local Index when viewing Drafts.
       if (folder === "drafts") await loadMessages();
     },
     // Pending Flag Overrides — exposed so MailApp toggleStar/toggleRead can
