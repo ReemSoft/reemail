@@ -69,6 +69,7 @@ import {
   type AttachmentSourceRef,
 } from "@/lib/mail-composer-attachments";
 import { runEntireMessageSingleFlight, samePhysicalMessage } from "@/lib/mail-entire-message";
+import { releaseStagedHandles } from "@/lib/mail-staged-release.browser";
 
 // Kept as a thin wrapper — the heavy lifting (DOMPurify + CSS url()/@import
 // stripping + anchor hardening) lives in `@/lib/email-viewer-security` and is
@@ -7053,6 +7054,67 @@ function Composer({
 
   const saverRef = useRef<DraftSaver | null>(null);
 
+  // Stable, always-current token ref so the release helpers (including the
+  // one-shot editor input listener) never capture a stale session token.
+  const mailSessionTokenRef = useRef<string>(session.mailSessionToken ?? "");
+  mailSessionTokenRef.current = session.mailSessionToken ?? "";
+
+  // ----- Explicit staged-handle release (best-effort, never blocks the UI) -----
+  // Handles are released only when genuinely abandoned: an attachment or inline
+  // image removed, a draft deleted, or the composer discarded. A failed release
+  // is harmless — unreachable staged files expire naturally by TTL.
+  function releaseStagedHandle(handle: string | undefined | null, onReleased?: () => void) {
+    if (!handle) return;
+    const token = mailSessionTokenRef.current;
+    if (!token) return;
+    void releaseStagedHandles(token, [handle])
+      .then((released) => {
+        if (released) onReleased?.();
+      })
+      .catch(() => undefined);
+  }
+
+  function collectOwnedStagedHandles(): string[] {
+    const handles: string[] = [];
+    for (const handle of restoredHandleByAttachmentIdRef.current.values()) handles.push(handle);
+    for (const handle of preservedSourceHandlesRef.current.values()) handles.push(handle);
+    for (const handle of restoredInlineHandlesRef.current.values()) handles.push(handle);
+    for (const file of filesRef.current) {
+      const ready = getStagedReady(stagedReadyRef.current, file, "attachment", file.name);
+      if (ready?.handle) handles.push(ready.handle);
+    }
+    for (const image of inlineImagesRef.current) {
+      const ready = getStagedReady(
+        stagedReadyRef.current,
+        image.file,
+        "inline-image",
+        image.uploadFilename,
+      );
+      if (ready?.handle) handles.push(ready.handle);
+    }
+    return handles;
+  }
+
+  function clearOwnedStagedHandles() {
+    restoredHandleByAttachmentIdRef.current.clear();
+    preservedSourceHandlesRef.current.clear();
+    restoredInlineHandlesRef.current.clear();
+    stagedReadyRef.current = new WeakMap();
+    stagedUploadsRef.current = new WeakMap();
+  }
+
+  function releaseAllOwnedStagedHandles() {
+    const handles = collectOwnedStagedHandles();
+    if (handles.length === 0) return;
+    const token = mailSessionTokenRef.current;
+    if (!token) return;
+    void releaseStagedHandles(token, handles)
+      .then((released) => {
+        if (released) clearOwnedStagedHandles();
+      })
+      .catch(() => undefined);
+  }
+
   function ensureStaged(file: File, kind: StagedAttachmentKind, filename = file.name) {
     return getOrCreateStagedUpload(stagedUploadsRef.current, file, kind, filename, () => {
       const restoredHandle =
@@ -7911,6 +7973,20 @@ function Composer({
         for (const image of removed) {
           URL.revokeObjectURL(image.objectUrl);
           void deleteInlineImage(inlineScope, image.id).catch(() => undefined);
+          const staged = getStagedReady(
+            stagedReadyRef.current,
+            image.file,
+            "inline-image",
+            image.uploadFilename,
+          );
+          const restoredHandle = restoredInlineHandlesRef.current.get(image.uploadFilename);
+          const handle = staged?.handle ?? restoredHandle;
+          if (handle) {
+            releaseStagedHandle(handle, () => {
+              stagedReadyRef.current.get(image.file)?.delete("inline-image");
+              restoredInlineHandlesRef.current.delete(image.uploadFilename);
+            });
+          }
         }
         setInlineImages((current) => current.filter((image) => ids.has(image.id)));
       }
@@ -8027,6 +8103,8 @@ function Composer({
       } catch {
         /* noop */
       }
+      // Discard abandons every staged handle owned by this composer session.
+      releaseAllOwnedStagedHandles();
       // Force clean so beforeunload/guard don't re-trap on the way out.
       savedGenerationRef.current = generationRef.current;
       lastSavedAtRef.current = Date.now();
@@ -8096,12 +8174,30 @@ function Composer({
       existingKeptRef.current = next;
       return next;
     });
-    restoredHandleByAttachmentIdRef.current.delete(id);
-    preservedSourceHandlesRef.current.delete(id);
+    const restoredHandle = restoredHandleByAttachmentIdRef.current.get(id);
+    const preservedHandle = preservedSourceHandlesRef.current.get(id);
+    const handle = restoredHandle ?? preservedHandle;
+    if (!handle) {
+      restoredHandleByAttachmentIdRef.current.delete(id);
+      preservedSourceHandlesRef.current.delete(id);
+      return;
+    }
+    releaseStagedHandle(handle, () => {
+      restoredHandleByAttachmentIdRef.current.delete(id);
+      preservedSourceHandlesRef.current.delete(id);
+    });
   }
 
   function removeFile(index: number) {
+    const file = files[index];
     setFiles((prev) => prev.filter((_, i) => i !== index));
+    if (!file) return;
+    const staged = getStagedReady(stagedReadyRef.current, file, "attachment", file.name);
+    if (!staged?.handle) return;
+    releaseStagedHandle(staged.handle, () => {
+      stagedReadyRef.current.get(file)?.delete("attachment");
+      stagedUploadsRef.current.get(file)?.delete("attachment");
+    });
   }
 
   function exec(command: string, value?: string) {
@@ -8904,6 +9000,10 @@ function Composer({
       setDeletingDraft(false);
       if (isDirtyRef.current) autosaveRef.current?.schedule();
       toast.error(tr("تعذّر حذف المسودة. احتفظنا بنسختك؛ حاول مرة أخرى."));
+    } else {
+      // Explicit draft delete abandons every staged handle owned by this
+      // composer session (the draft will no longer reference them).
+      releaseAllOwnedStagedHandles();
     }
   }
 

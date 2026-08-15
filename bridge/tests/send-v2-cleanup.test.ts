@@ -19,8 +19,20 @@ test("send-v2 releases client handles only after SMTP success", () => {
   assert.match(sendV2, /sourceHandles/);
 });
 
-test("draft-save-v2 retains staged handles for reuse", () => {
-  assert.doesNotMatch(draftV2, /cleanupSendStagedAttachments|releaseStagedAttachment/);
+test("draft-save-v2 releases fresh source staging only on failure, retains on success", () => {
+  // The failure path must release the fresh server-source attachments staged
+  // for this save (the client never learned their handles), while a successful
+  // save returns them for reuse by the next save/send.
+  assert.match(draftV2, /saveSucceeded = true/);
+  assert.match(draftV2, /sourceAttachmentHandles: preserved\.map/);
+  assert.match(
+    draftV2,
+    /if \(stagedAccount && preservedSourceHandles\.length > 0 && !saveSucceeded\)/,
+  );
+  assert.match(
+    draftV2,
+    /releaseStagedAttachments\(BRIDGE_API_KEY, preservedSourceHandles, stagedAccount\)/,
+  );
 });
 
 test("active send-v2 acknowledges SMTP before bounded Sent finalization", () => {

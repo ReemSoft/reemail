@@ -8,9 +8,11 @@ import { accountBinding, openTransferTicket, sealTransferTicket } from "./transf
 import {
   cleanupSendStagedAttachments,
   cleanupStagedAttachments,
+  releaseStagedAttachments,
   resolveStagedAttachment,
   stageAttachmentStream,
   stagedAttachmentStats,
+  validateStagedHandle,
 } from "./staged-attachments.js";
 import { configuredAppOrigins, isAllowedAppOrigin, publicBridgeBase } from "./public-bridge-url.js";
 import { TransferConcurrency } from "./transfer-concurrency.js";
@@ -1195,6 +1197,9 @@ app.post("/api/send-status", requireKey, (req, res) => {
 });
 
 app.post("/api/draft-save-v2", requireKey, imapGate("interactive"), async (req, res) => {
+  let stagedAccount: string | null = null;
+  let preservedSourceHandles: string[] = [];
+  let saveSucceeded = false;
   try {
     const payload = DraftSavePayloadSchema.parse(req.body);
     const contract = DraftV2AttachmentSchema.parse(req.body);
@@ -1207,6 +1212,7 @@ app.post("/api/draft-save-v2", requireKey, imapGate("interactive"), async (req, 
       return res.status(413).json({ ok: false, error: "ATTACHMENTS_TOO_LARGE" });
     }
     const account = accountBinding(payload.account as MailAccount);
+    stagedAccount = account;
     const resolvedNormal = await Promise.all(
       contract.attachmentHandles.map((handle) =>
         resolveStagedAttachment(BRIDGE_API_KEY, handle, account),
@@ -1236,6 +1242,7 @@ app.post("/api/draft-save-v2", requireKey, imapGate("interactive"), async (req, 
       })),
       maxBytes: SEND_MAX_TOTAL_BYTES,
     });
+    preservedSourceHandles = preserved.map(({ staged }) => staged.handle);
     const all = [
       ...resolvedNormal,
       ...preserved.map(({ resolved }) => resolved),
@@ -1280,6 +1287,7 @@ app.post("/api/draft-save-v2", requireKey, imapGate("interactive"), async (req, 
             : 500;
       return res.status(status).json(result);
     }
+    saveSucceeded = true;
     return res.json({
       ...result,
       sourceAttachmentHandles: preserved.map(({ staged }) => staged.handle),
@@ -1291,6 +1299,41 @@ app.post("/api/draft-save-v2", requireKey, imapGate("interactive"), async (req, 
         : error instanceof Error
           ? error.message
           : "IMAP_ERROR";
+    return res.status(400).json({ ok: false, error: code });
+  } finally {
+    // On failure, fresh server-source attachments staged for this draft save
+    // are owned by no one (the client only learns the returned handles when
+    // the save succeeds). Release them so they cannot leak forever. On success
+    // the client keeps them for reuse by the next save/send.
+    if (stagedAccount && preservedSourceHandles.length > 0 && !saveSucceeded) {
+      await releaseStagedAttachments(BRIDGE_API_KEY, preservedSourceHandles, stagedAccount).catch(
+        () => undefined,
+      );
+    }
+  }
+});
+
+const StagedReleasePayloadSchema = z.object({
+  account: AccountSchema,
+  handles: z.array(z.string().min(20).max(32 * 1024)).min(1).max(64),
+});
+
+app.post("/api/staged-release", requireKey, async (req, res) => {
+  try {
+    const payload = StagedReleasePayloadSchema.parse(req.body);
+    const account = accountBinding(payload.account as MailAccount);
+    // Validate every handle before releasing any so a tampered, foreign-account
+    // or expired payload cannot cause a partial release.
+    const uniqueHandles = [...new Set(payload.handles)];
+    for (const handle of uniqueHandles) {
+      if (!validateStagedHandle(BRIDGE_API_KEY, handle, account)) {
+        return res.status(400).json({ ok: false, error: "INVALID_STAGE_HANDLE" });
+      }
+    }
+    const released = await releaseStagedAttachments(BRIDGE_API_KEY, uniqueHandles, account);
+    return res.json({ ok: true, released });
+  } catch (error) {
+    const code = error instanceof z.ZodError ? "INVALID_PAYLOAD" : "RELEASE_FAILED";
     return res.status(400).json({ ok: false, error: code });
   }
 });
@@ -1797,17 +1840,28 @@ for (const sig of ["SIGTERM", "SIGINT"] as const) {
   });
 }
 
-app.listen(PORT, HOST, () => {
-  console.log(`[bridge] MailMaestro Bridge running on ${HOST}:${PORT}`);
-  // Best-effort sweep of stale uploads from a previous crashed run.
-  startupCleanup()
-    .then((n) => n > 0 && console.log(`[bridge] cleaned ${n} stale upload(s)`))
-    .catch(() => {});
-  cleanupStaleMimeSpools()
-    .then((n) => n > 0 && console.log(`[bridge] cleaned ${n} stale MIME spool(s)`))
-    .catch(() => {});
-  cleanupStagedAttachments()
-    .then((n) => n > 0 && console.log(`[bridge] cleaned ${n} stale staged attachment(s)`))
-    .catch(() => {});
-  setInterval(() => cleanupStagedAttachments().catch(() => {}), 15 * 60_000).unref();
-});
+async function startServer() {
+  // Fail-closed accounting barrier: reconcile in-memory staged-attachment
+  // counters against disk BEFORE accepting traffic so quota decisions are
+  // exact from the very first request (this also accounts for any .bin files
+  // left behind by a previous run instead of assuming the counters start at 0).
+  try {
+    await cleanupStagedAttachments();
+  } catch (error) {
+    console.error("[bridge] failed to initialize staged-attachment accounting:", error);
+    process.exit(1);
+  }
+  app.listen(PORT, HOST, () => {
+    console.log(`[bridge] MailMaestro Bridge running on ${HOST}:${PORT}`);
+    // Best-effort sweep of stale uploads from a previous crashed run.
+    startupCleanup()
+      .then((n) => n > 0 && console.log(`[bridge] cleaned ${n} stale upload(s)`))
+      .catch(() => {});
+    cleanupStaleMimeSpools()
+      .then((n) => n > 0 && console.log(`[bridge] cleaned ${n} stale MIME spool(s)`))
+      .catch(() => {});
+    setInterval(() => cleanupStagedAttachments().catch(() => {}), 15 * 60_000).unref();
+  });
+}
+
+void startServer();

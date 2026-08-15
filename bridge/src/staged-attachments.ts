@@ -16,7 +16,7 @@ export const STAGE_TTL_MS = Number(process.env.MAIL_STAGE_TTL_MS || 24 * 60 * 60
 export const STAGE_GLOBAL_BYTES = Number(process.env.MAIL_STAGE_GLOBAL_BYTES || 2 * 1024 ** 3);
 export const STAGE_ACCOUNT_BYTES = Number(process.env.MAIL_STAGE_ACCOUNT_BYTES || 250 * 1024 ** 2);
 export const STAGE_GLOBAL_FILES = Number(process.env.MAIL_STAGE_GLOBAL_FILES || 10_000);
-export const STAGE_ACCOUNT_FILES = Number(process.env.MAIL_STAGE_ACCOUNT_FILES || 100);
+export const STAGE_ACCOUNT_FILES = Number(process.env.MAIL_STAGE_ACCOUNT_FILES || 300);
 
 export interface StagedAttachment {
   handle: string;
@@ -35,6 +35,44 @@ const accountBytes = new Map<string, number>();
 const accountFiles = new Map<string, number>();
 let trackedGlobalBytes = 0;
 let trackedGlobalFiles = 0;
+
+// Promise-chain mutex so accounting mutations (reserve/commit/release/cleanup)
+// are serialized. Quota checks compare committed + in-flight reservations so a
+// burst of concurrent uploads cannot overshoot the limits.
+let chain: Promise<unknown> = Promise.resolve();
+function runExclusive<T>(fn: () => Promise<T>): Promise<T> {
+  const result = chain.then(fn, fn);
+  chain = result.catch(() => undefined);
+  return result;
+}
+
+interface StageReservation {
+  account: string;
+  bytes: number;
+}
+
+// In-flight uploads that have reserved quota but have not committed yet.
+// Reserved bytes/files are counted against quota but never written into the
+// committed counters (accountBytes/accountFiles/tracked*), which stay exactly
+// equal to the files actually present on disk.
+const activeReservations = new Map<string, StageReservation>();
+
+function reservedBytes(account?: string): number {
+  let total = 0;
+  for (const reservation of activeReservations.values()) {
+    if (account === undefined || reservation.account === account) total += reservation.bytes;
+  }
+  return total;
+}
+
+function reservedFiles(account?: string): number {
+  if (account === undefined) return activeReservations.size;
+  let total = 0;
+  for (const reservation of activeReservations.values()) {
+    if (reservation.account === account) total += 1;
+  }
+  return total;
+}
 
 async function ensureDir() {
   await mkdir(STAGE_DIR, { recursive: true, mode: 0o700 });
@@ -109,20 +147,24 @@ export async function stageAttachmentStream(input: {
   now?: number;
 }): Promise<StagedAttachment> {
   await ensureDir();
-  const currentAccount = accountBytes.get(input.account) ?? 0;
-  const currentAccountFiles = accountFiles.get(input.account) ?? 0;
-  const reservationSize =
-    input.exactSize === false ? (input.maxSize ?? input.declaredSize) : input.declaredSize;
-  if (
-    trackedGlobalBytes + reservationSize > STAGE_GLOBAL_BYTES ||
-    currentAccount + reservationSize > STAGE_ACCOUNT_BYTES ||
-    trackedGlobalFiles >= STAGE_GLOBAL_FILES ||
-    currentAccountFiles >= STAGE_ACCOUNT_FILES
-  ) {
-    throw new Error("STAGE_QUOTA_EXCEEDED");
-  }
   const id = `${input.account}-${crypto.randomUUID()}`;
   const target = safePath(id);
+  const reservationSize =
+    input.exactSize === false ? (input.maxSize ?? input.declaredSize) : input.declaredSize;
+  await runExclusive(async () => {
+    const currentAccountBytes = (accountBytes.get(input.account) ?? 0) + reservedBytes(input.account);
+    const currentAccountFiles = (accountFiles.get(input.account) ?? 0) + reservedFiles(input.account);
+    if (
+      trackedGlobalBytes + reservedBytes() + reservationSize > STAGE_GLOBAL_BYTES ||
+      currentAccountBytes + reservationSize > STAGE_ACCOUNT_BYTES ||
+      trackedGlobalFiles + reservedFiles() >= STAGE_GLOBAL_FILES ||
+      currentAccountFiles >= STAGE_ACCOUNT_FILES
+    ) {
+      throw new Error("STAGE_QUOTA_EXCEEDED");
+    }
+    activeReservations.set(id, { account: input.account, bytes: reservationSize });
+  });
+  let committed = false;
   let bytes = 0;
   const limiter = new Transform({
     transform(chunk: Buffer, _encoding, callback) {
@@ -136,10 +178,14 @@ export async function stageAttachmentStream(input: {
     if (input.exactSize !== false && bytes !== input.declaredSize) {
       throw new Error("UPLOAD_SIZE_MISMATCH");
     }
-    trackedGlobalBytes += bytes;
-    trackedGlobalFiles += 1;
-    accountBytes.set(input.account, currentAccount + bytes);
-    accountFiles.set(input.account, currentAccountFiles + 1);
+    await runExclusive(async () => {
+      activeReservations.delete(id);
+      trackedGlobalBytes += bytes;
+      trackedGlobalFiles += 1;
+      accountBytes.set(input.account, (accountBytes.get(input.account) ?? 0) + bytes);
+      accountFiles.set(input.account, (accountFiles.get(input.account) ?? 0) + 1);
+      committed = true;
+    });
     const expiresAt = (input.now ?? Date.now()) + STAGE_TTL_MS;
     const handle = sealTransferTicket(input.secret, {
       purpose: "staged-attachment",
@@ -164,6 +210,17 @@ export async function stageAttachmentStream(input: {
   } catch (error) {
     input.stream.destroy();
     await unlink(target).catch(() => undefined);
+    await runExclusive(async () => {
+      if (activeReservations.has(id)) {
+        // The stream never committed: drop the reservation without touching
+        // the committed counters (the file was never counted).
+        activeReservations.delete(id);
+      } else if (committed) {
+        // The commit already ran but something after it failed (e.g. ticket
+        // sealing): decrement committed usage to match the removed file.
+        decrementTrackedUsage(input.account, bytes);
+      }
+    });
     throw error;
   }
 }
@@ -198,12 +255,20 @@ export async function releaseStagedAttachment(
   const filePath = safePath(data.id);
   try {
     await unlink(filePath);
-    decrementTrackedUsage(account, data.size);
-    return true;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
     throw error;
   }
+  await runExclusive(async () => {
+    if (activeReservations.has(data.id)) {
+      // Released before its upload committed (e.g. a cancelled in-flight
+      // upload): only drop the reservation; the file was never counted.
+      activeReservations.delete(data.id);
+    } else {
+      decrementTrackedUsage(account, data.size);
+    }
+  });
+  return true;
 }
 
 export async function releaseStagedAttachments(
@@ -235,38 +300,60 @@ export async function cleanupStagedAttachments(
   maxAgeMs = STAGE_TTL_MS,
   now = Date.now(),
 ): Promise<number> {
-  await ensureDir();
-  let removed = 0;
-  const freshByAccount = new Map<string, number>();
-  const freshFilesByAccount = new Map<string, number>();
-  let freshGlobal = 0;
-  let freshGlobalFiles = 0;
-  for (const name of await readdir(STAGE_DIR).catch(() => [] as string[])) {
-    const match = name.match(/^([0-9a-f]{64})-[0-9a-f-]{36}\.bin$/i);
-    if (!match) continue;
-    const filePath = path.join(STAGE_DIR, name);
-    try {
-      const info = await stat(filePath);
-      if (now - info.mtimeMs > maxAgeMs) {
-        await unlink(filePath);
-        removed += 1;
-      } else {
-        freshGlobal += info.size;
-        freshGlobalFiles += 1;
-        freshByAccount.set(match[1], (freshByAccount.get(match[1]) ?? 0) + info.size);
-        freshFilesByAccount.set(match[1], (freshFilesByAccount.get(match[1]) ?? 0) + 1);
+  return runExclusive(async () => {
+    await ensureDir();
+    let removed = 0;
+    const freshByAccount = new Map<string, number>();
+    const freshFilesByAccount = new Map<string, number>();
+    let freshGlobal = 0;
+    let freshGlobalFiles = 0;
+    for (const name of await readdir(STAGE_DIR).catch(() => [] as string[])) {
+      const match = name.match(/^([0-9a-f]{64})-[0-9a-f-]{36}\.bin$/i);
+      if (!match) continue;
+      const fileId = name.slice(0, -4);
+      if (activeReservations.has(fileId)) {
+        // In-flight upload: its commit (or failure path) owns accounting for
+        // this file. Counting it here would double-count on commit.
+        continue;
       }
-    } catch {
-      // Concurrent cleanup is harmless.
+      const filePath = path.join(STAGE_DIR, name);
+      try {
+        const info = await stat(filePath);
+        if (now - info.mtimeMs > maxAgeMs) {
+          await unlink(filePath);
+          removed += 1;
+        } else {
+          freshGlobal += info.size;
+          freshGlobalFiles += 1;
+          freshByAccount.set(match[1], (freshByAccount.get(match[1]) ?? 0) + info.size);
+          freshFilesByAccount.set(match[1], (freshFilesByAccount.get(match[1]) ?? 0) + 1);
+        }
+      } catch {
+        // Concurrent cleanup is harmless.
+      }
     }
+    accountBytes.clear();
+    accountFiles.clear();
+    for (const [account, bytes] of freshByAccount) accountBytes.set(account, bytes);
+    for (const [account, files] of freshFilesByAccount) accountFiles.set(account, files);
+    trackedGlobalBytes = freshGlobal;
+    trackedGlobalFiles = freshGlobalFiles;
+    return removed;
+  });
+}
+
+export function validateStagedHandle(
+  secret: string,
+  handle: string,
+  account: string,
+  now = Date.now(),
+): boolean {
+  try {
+    readStagedTicket(secret, handle, account, now);
+    return true;
+  } catch {
+    return false;
   }
-  accountBytes.clear();
-  accountFiles.clear();
-  for (const [account, bytes] of freshByAccount) accountBytes.set(account, bytes);
-  for (const [account, files] of freshFilesByAccount) accountFiles.set(account, files);
-  trackedGlobalBytes = freshGlobal;
-  trackedGlobalFiles = freshGlobalFiles;
-  return removed;
 }
 
 export function stagedAttachmentStats() {
