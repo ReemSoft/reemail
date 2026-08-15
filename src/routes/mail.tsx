@@ -883,6 +883,8 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { MailSignatureButton } from "@/components/mail-signature-button";
+import { insertSignatureIntoEditor } from "@/lib/mail-signature";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useServerFn } from "@tanstack/react-start";
 import { toast } from "sonner";
@@ -9677,6 +9679,15 @@ function Composer({
             <Paperclip className="h-4 w-4" />
             <span className="hidden sm:inline">{tr("إرفاق")}</span>
           </button>
+          <MailSignatureButton
+            disabled={sending}
+            onInsert={(html) => {
+              const editor = editorRef.current;
+              if (!editor) return;
+              insertSignatureIntoEditor(editor, html);
+              notifyEditorChange();
+            }}
+          />
           <button
             type="button"
             onClick={() => void handleSaveAsDraft()}
@@ -9688,6 +9699,7 @@ function Composer({
             <FileText className="h-4 w-4" />
             <span className="hidden sm:inline">{tr("حفظ كمسودة")}</span>
           </button>
+
           {shouldShowDeleteDraft(hasLocalDraft, hasRemoteDraft) && (
             <button
               type="button"
