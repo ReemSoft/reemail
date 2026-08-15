@@ -5,8 +5,17 @@
  * click (and cached for the tab session afterwards). Nothing runs on app
  * start, on opening a message, or on opening the composer.
  */
-import { useState } from "react";
-import { PenLine, Loader2, Pencil } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import {
+  AlignCenter,
+  AlignLeft,
+  AlignRight,
+  Image,
+  Link,
+  Loader2,
+  PenLine,
+  Pencil,
+} from "lucide-react";
 import { toast } from "sonner";
 import { tr } from "@/i18n";
 import {
@@ -26,6 +35,7 @@ import {
 } from "@/components/ui/dialog";
 import { isSignatureEmpty } from "@/lib/mail-signature";
 import { loadSignature, saveSignature } from "@/lib/mail-signature.browser";
+import { Button } from "@/components/ui/button";
 
 export function MailSignatureButton({
   disabled,
@@ -139,7 +149,100 @@ function SignatureEditorDialog({
   onCancel: () => void;
   onSave: (html: string) => void;
 }) {
-  const [node, setNode] = useState<HTMLDivElement | null>(null);
+  const editorRef = useRef<HTMLDivElement | null>(null);
+  const selectionRef = useRef<Range | null>(null);
+
+  useEffect(() => {
+    if (!open || !editorRef.current) return;
+    editorRef.current.innerHTML = initialHtml;
+    selectionRef.current = null;
+  }, [initialHtml, open]);
+
+  function rememberSelection() {
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0 || !editorRef.current) return;
+    const range = selection.getRangeAt(0);
+    if (editorRef.current.contains(range.commonAncestorContainer)) {
+      selectionRef.current = range.cloneRange();
+    }
+  }
+
+  function restoreSelection() {
+    const editor = editorRef.current;
+    if (!editor) return;
+    editor.focus();
+    const range = selectionRef.current;
+    if (!range) return;
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+  }
+
+  function exec(command: string) {
+    restoreSelection();
+    document.execCommand(command);
+    rememberSelection();
+  }
+
+  function safeHttpsUrl(value: string): string | null {
+    try {
+      const url = new URL(value);
+      return url.protocol === "https:" ? url.toString() : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function insertLink() {
+    rememberSelection();
+    const value = window.prompt(tr("رابط URL (يبدأ بـ https://):"), "https://");
+    if (!value) return;
+    const url = safeHttpsUrl(value);
+    if (!url) {
+      toast.error(tr("رابط غير صالح"));
+      return;
+    }
+    restoreSelection();
+    const selection = window.getSelection();
+    if (selection && !selection.isCollapsed) {
+      document.execCommand("createLink", false, url);
+    } else {
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.target = "_blank";
+      anchor.rel = "noopener noreferrer";
+      anchor.textContent = url;
+      document.execCommand("insertHTML", false, anchor.outerHTML);
+    }
+    rememberSelection();
+  }
+
+  function insertImage() {
+    rememberSelection();
+    const value = window.prompt(tr("رابط الصورة (https://):"), "https://");
+    if (!value) return;
+    const url = safeHttpsUrl(value);
+    if (!url) {
+      toast.error(tr("رابط صورة غير مدعوم"));
+      return;
+    }
+    restoreSelection();
+    const image = document.createElement("img");
+    image.src = url;
+    image.alt = "";
+    image.style.maxWidth = "100%";
+    image.style.height = "auto";
+    const wrapper = document.createElement("div");
+    wrapper.appendChild(image);
+    document.execCommand("insertHTML", false, wrapper.outerHTML);
+    rememberSelection();
+  }
+
+  const tools = [
+    { command: "bold", label: "B", className: "font-bold", title: tr("عريض (Ctrl+B)") },
+    { command: "italic", label: "I", className: "italic", title: "Italic" },
+    { command: "underline", label: "U", className: "underline", title: "Underline" },
+  ];
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onCancel()}>
@@ -150,55 +253,63 @@ function SignatureEditorDialog({
             {tr("اكتب توقيعك هنا. سيُدرج في نهاية رسالتك عند الضغط على إدخال التوقيع.")}
           </DialogDescription>
         </DialogHeader>
-        <div className="flex items-center gap-1 border-b border-border/70 pb-2">
-          {(
-            [
-              ["bold", "B", "font-bold"],
-              ["italic", "I", "italic"],
-              ["underline", "U", "underline"],
-            ] as const
-          ).map(([cmd, label, cls]) => (
-            <button
-              key={cmd}
+        <div className="flex flex-wrap items-center gap-1 border-b border-border/70 pb-2">
+          {tools.map((tool) => (
+            <Button
+              key={tool.command}
               type="button"
               onMouseDown={(e) => {
                 e.preventDefault();
-                document.execCommand(cmd);
+                exec(tool.command);
               }}
-              className={`h-7 w-7 rounded-md text-xs transition hover:bg-muted ${cls}`}
+              variant="ghost"
+              size="icon"
+              className={`h-8 w-8 text-xs ${tool.className}`}
+              title={tool.title}
+              aria-label={tool.title}
             >
-              {label}
-            </button>
+              {tool.label}
+            </Button>
           ))}
+          <span className="mx-1 h-5 w-px bg-border" aria-hidden="true" />
+          <Button type="button" variant="ghost" size="icon" className="h-8 w-8" onMouseDown={(e) => { e.preventDefault(); insertLink(); }} title={tr("إدراج رابط")} aria-label={tr("إدراج رابط")}><Link /></Button>
+          <Button type="button" variant="ghost" size="icon" className="h-8 w-8" onMouseDown={(e) => { e.preventDefault(); insertImage(); }} title={tr("إدراج صورة")} aria-label={tr("إدراج صورة")}><Image /></Button>
+          <span className="mx-1 h-5 w-px bg-border" aria-hidden="true" />
+          <Button type="button" variant="ghost" size="icon" className="h-8 w-8" onMouseDown={(e) => { e.preventDefault(); exec("justifyLeft"); }} title={tr("محاذاة لليسار")} aria-label={tr("محاذاة لليسار")}><AlignLeft /></Button>
+          <Button type="button" variant="ghost" size="icon" className="h-8 w-8" onMouseDown={(e) => { e.preventDefault(); exec("justifyCenter"); }} title={tr("توسيط")} aria-label={tr("توسيط")}><AlignCenter /></Button>
+          <Button type="button" variant="ghost" size="icon" className="h-8 w-8" onMouseDown={(e) => { e.preventDefault(); exec("justifyRight"); }} title={tr("محاذاة لليمين")} aria-label={tr("محاذاة لليمين")}><AlignRight /></Button>
         </div>
         <div
-          key={open ? "open" : "closed"}
           ref={(el) => {
-            setNode(el);
-            if (el && el.innerHTML === "") el.innerHTML = initialHtml;
+            editorRef.current = el;
           }}
           contentEditable
           dir="auto"
           suppressContentEditableWarning
+          onInput={rememberSelection}
+          onKeyUp={rememberSelection}
+          onMouseUp={rememberSelection}
           className="composer-editor min-h-[140px] w-full overflow-auto rounded-lg border border-input bg-background p-3 text-sm outline-none focus:border-primary"
         />
         <DialogFooter className="flex-col-reverse gap-2 sm:flex-row sm:justify-start">
-          <button
+          <Button
             type="button"
-            onClick={() => onSave(node?.innerHTML ?? "")}
+            onClick={() => onSave(editorRef.current?.innerHTML ?? "")}
             disabled={saving}
-            className="inline-flex items-center gap-2 rounded-lg bg-brand-gradient px-4 py-2 text-xs font-semibold text-white shadow-brand transition hover:opacity-95 disabled:opacity-60"
+            size="sm"
+            className="bg-brand-gradient shadow-brand hover:opacity-95"
           >
             {saving && <Loader2 className="h-4 w-4 animate-spin" />}
             {tr("حفظ التوقيع")}
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
             onClick={onCancel}
-            className="rounded-lg border border-input bg-background px-3 py-2 text-xs text-muted-foreground transition hover:border-primary hover:text-foreground"
+            variant="outline"
+            size="sm"
           >
             {tr("إلغاء")}
-          </button>
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
