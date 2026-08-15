@@ -149,7 +149,6 @@ function SignatureEditorDialog({
   onCancel: () => void;
   onSave: (html: string) => void;
 }) {
-  const [node, setNode] = useState<HTMLDivElement | null>(null);
   const editorRef = useRef<HTMLDivElement | null>(null);
   const selectionRef = useRef<Range | null>(null);
 
@@ -283,7 +282,6 @@ function SignatureEditorDialog({
         <div
           ref={(el) => {
             editorRef.current = el;
-            setNode(el);
           }}
           contentEditable
           dir="auto"
@@ -296,7 +294,7 @@ function SignatureEditorDialog({
         <DialogFooter className="flex-col-reverse gap-2 sm:flex-row sm:justify-start">
           <Button
             type="button"
-            onClick={() => onSave(node?.innerHTML ?? "")}
+            onClick={() => onSave(editorRef.current?.innerHTML ?? "")}
             disabled={saving}
             size="sm"
             className="bg-brand-gradient shadow-brand hover:opacity-95"
