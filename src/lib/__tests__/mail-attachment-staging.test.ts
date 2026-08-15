@@ -6,6 +6,7 @@ import {
   getOrCreateStagedUpload,
   getStagedReady,
   isAttachmentPreparationProtocolError,
+  isAttachmentSizeLimitError,
   uploadAttachmentDirect,
   type StagedAttachmentKind,
   type StagedAttachmentResult,
@@ -235,5 +236,14 @@ describe("kind-aware attachment staging", () => {
     expect(tr(ATTACHMENT_PREPARATION_MESSAGE_KEY)).toBe(
       "Attachments could not be prepared for sending. Please try again.",
     );
+  });
+
+  it("classifies attachment size-limit codes for clear surfacing", () => {
+    expect(isAttachmentSizeLimitError("ATTACHMENTS_TOO_LARGE")).toBe(true);
+    expect(isAttachmentSizeLimitError("SOURCE_ATTACHMENT_TOO_LARGE")).toBe(true);
+    expect(isAttachmentSizeLimitError("ATTACHMENT_LIMIT_EXCEEDED")).toBe(true);
+    expect(isAttachmentSizeLimitError("ATTACHMENT_KIND_MISMATCH")).toBe(false);
+    expect(isAttachmentSizeLimitError("SEND_BUSY")).toBe(false);
+    expect(isAttachmentSizeLimitError(undefined)).toBe(false);
   });
 });

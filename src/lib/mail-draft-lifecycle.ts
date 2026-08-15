@@ -324,6 +324,13 @@ export interface CreateDraftSaverOptions {
     draftId: string;
     snapshot: DraftSnapshot;
     previousRef: DraftServerRef | null;
+    /**
+     * The revision this exact remote run is persisting. Callers may use it
+     * to bind request-scoped bookkeeping (e.g. an attachment signature
+     * captured from the transport inputs of THIS run) to the generation
+     * that `onCompleted` echoes back.
+     */
+    generation: number;
   }) => Promise<SaveRemoteResult>;
   onStatus?: (status: DraftSaveStatus) => void;
   onServerRef?: (ref: DraftServerRef) => void;
@@ -387,7 +394,7 @@ export function createDraftSaver(draftId: string, opts: CreateDraftSaverOptions)
     let result: SaveRemoteResult;
     try {
       const effectivePreviousRef = latestKnownServerRef ?? previousRef;
-      result = await opts.saveRemote({ draftId, snapshot, previousRef: effectivePreviousRef });
+      result = await opts.saveRemote({ draftId, snapshot, previousRef: effectivePreviousRef, generation });
     } catch {
       // Thrown remote is a transport failure → NETWORK class.
       result = { ok: false, code: "NETWORK" };

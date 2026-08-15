@@ -1,5 +1,6 @@
 const QUOTED_CID_ATTR = "data-mm-source-cid";
 const BLOCKED_REMOTE_IMAGE_ATTR = "data-mm-remote-image-blocked";
+const REMOTE_IMAGE_URL_ATTR = "data-mm-remote-image-url";
 
 const SAFE_STYLE_PROPERTIES = new Set([
   "display",
@@ -137,6 +138,10 @@ function blockRemoteImageSources(root: ParentNode): void {
     image.removeAttribute("srcset");
     const src = (image.getAttribute("src") ?? "").trim();
     if (!/^(?:https?:)?\/\//i.test(src)) continue;
+    // Keep the classified remote URL as inert internal metadata (never a live
+    // `src`), so detached outgoing serialization can restore it for recipients
+    // without the live Composer ever fetching it.
+    image.setAttribute(REMOTE_IMAGE_URL_ATTR, src);
     image.removeAttribute("src");
     image.setAttribute(BLOCKED_REMOTE_IMAGE_ATTR, "1");
     image.style.visibility = "hidden";
@@ -160,7 +165,13 @@ function isolateSourceSelectors(root: ParentNode): void {
 /** Prevent native broken-image chrome before asynchronous CID hydration starts. */
 export function markQuotedCidImagesPending(html: string): string {
   if (typeof document === "undefined") {
-    return html.replace(/\ssrc=(['"])((?:cid:|https?:\/\/|\/\/)[^'"]+)\1/gi, "");
+    return html
+      .replace(
+        /\ssrc=(["'])((?:https?:)?\/\/[^"']+)\1/gi,
+        (_match, _quote, url) =>
+          ` ${REMOTE_IMAGE_URL_ATTR}="${String(url).replace(/&/g, "&amp;").replace(/"/g, "&quot;")}"`,
+      )
+      .replace(/\ssrc=(["'])cid:[^"']*\1/gi, "");
   }
   const template = document.createElement("template");
   template.innerHTML = html;
@@ -362,3 +373,4 @@ export async function prepareQuotedEmailForComposer(hardenedHtml: string): Promi
 
 export const QUOTED_SOURCE_CID_ATTR = QUOTED_CID_ATTR;
 export const QUOTED_BLOCKED_REMOTE_IMAGE_ATTR = BLOCKED_REMOTE_IMAGE_ATTR;
+export const QUOTED_REMOTE_IMAGE_URL_ATTR = REMOTE_IMAGE_URL_ATTR;

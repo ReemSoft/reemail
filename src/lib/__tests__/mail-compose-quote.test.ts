@@ -310,6 +310,101 @@ describe("quoted email preparation", () => {
     expect(html).not.toMatch(/(?:src|srcset)=["'](?:https?:)?\/\//i);
   });
 
+  it("preserves the classified remote URL inertly without a live src", () => {
+    const html = markQuotedCidImagesPending(
+      '<img src="https://tracker.example/pixel.png" srcset="https://tracker.example/2x.png 2x" width="1" height="1">',
+    );
+    const template = document.createElement("template");
+    template.innerHTML = html;
+    const image = template.content.querySelector<HTMLImageElement>("img");
+    expect(image?.hasAttribute("src")).toBe(false);
+    expect(image?.hasAttribute("srcset")).toBe(false);
+    expect(image?.dataset.mmRemoteImageUrl).toBe("https://tracker.example/pixel.png");
+    expect(image?.dataset.mmRemoteImageBlocked).toBe("1");
+    expect(html).toContain('data-mm-remote-image-url="https://tracker.example/pixel.png"');
+    expect(html).not.toMatch(/<img[^>]*\ssrc=/i);
+  });
+
+  it("serializes blocked remote images back to their exact safe URL on the detached copy", () => {
+    const editor = document.createElement("div");
+    editor.innerHTML =
+      '<p>a</p><img data-mm-remote-image-blocked="1" data-mm-remote-image-url="https://cdn.example/img.png" style="visibility:hidden" aria-hidden="true" width="40"><p>b</p>';
+    const result = serializeInlineImages(editor.innerHTML, []);
+    expect(result.html).toContain('src="https://cdn.example/img.png"');
+    expect(result.html).not.toContain("data-mm-remote-image");
+    expect(result.html).not.toContain("aria-hidden");
+    expect(result.html).not.toContain("visibility");
+    expect(result.html).toContain('width="40"');
+    expect(editor.querySelector("img")?.hasAttribute("src")).toBe(false);
+  });
+
+  it("restores protocol-relative and http remote URLs in outgoing HTML", () => {
+    const editor = document.createElement("div");
+    editor.innerHTML =
+      '<img data-mm-remote-image-blocked="1" data-mm-remote-image-url="//tracker.example/p.png"><img data-mm-remote-image-url="http://legacy.example/i.png">';
+    const result = serializeInlineImages(editor.innerHTML, []);
+    expect(result.html).toContain('src="//tracker.example/p.png"');
+    expect(result.html).toContain('src="http://legacy.example/i.png"');
+  });
+
+  it("removes blocked images whose preserved URL is missing or unsafe instead of a broken img", () => {
+    const editor = document.createElement("div");
+    editor.innerHTML =
+      '<img data-mm-remote-image-blocked="1" width="10"><img data-mm-remote-image-url="javascript:alert(1)"><img data-mm-remote-image-url="data:image/png;base64,AA=="><img data-mm-remote-image-url="https://ok.example/x.png">';
+    const result = serializeInlineImages(editor.innerHTML, []);
+    expect(result.html.match(/<img\b/g)).toHaveLength(1);
+    expect(result.html).toContain('src="https://ok.example/x.png"');
+    expect(result.html).not.toContain("javascript:");
+    expect(result.html).not.toContain("data:image");
+  });
+
+  it("keeps the blocked state in a keepEditorIds draft snapshot (no live src)", () => {
+    const editor = document.createElement("div");
+    editor.innerHTML =
+      '<img data-mm-remote-image-blocked="1" data-mm-remote-image-url="https://cdn.example/img.png" style="visibility:hidden" aria-hidden="true">';
+    const draft = serializeInlineImages(editor.innerHTML, [], { keepEditorIds: true });
+    expect(draft.html).toContain('data-mm-remote-image-url="https://cdn.example/img.png"');
+    expect(draft.html).not.toMatch(/<img[^>]*\ssrc=/i);
+  });
+
+  it("preserves and restores remote images for both Reply and Forward quotes", () => {
+    const source = '<img src="https://cdn.example/logo.png" width="80">';
+    const reply = markQuotedCidImagesPending(buildReplyQuoteHtml(source, meta, "en"));
+    const forward = markQuotedCidImagesPending(buildForwardQuoteHtml(source, meta, "en"));
+    for (const html of [reply, forward]) {
+      const serialized = serializeInlineImages(html, []);
+      expect(serialized.html).toContain('src="https://cdn.example/logo.png"');
+      expect(serialized.html).not.toContain("data-mm-remote-image");
+      expect(serialized.html).not.toContain("aria-hidden");
+      expect(serialized.html).not.toContain("visibility");
+    }
+  });
+
+  it("leaves CID hydration and data:/blob: safety unchanged while restoring remote URLs", () => {
+    const originalCreate = URL.createObjectURL;
+    URL.createObjectURL = () => "blob:unchanged-logo";
+    try {
+      const file = new File([new Uint8Array([1, 2, 3])], "logo.png", { type: "image/png" });
+      const hydrated = createInlineComposeImage(file);
+      const editor = document.createElement("div");
+      editor.innerHTML = [
+        `<img src="${hydrated.objectUrl}" data-mm-inline-id="${hydrated.id}" data-mm-source-cid="old@example">`,
+        '<img src="data:image/png;base64,AA==">',
+        '<img src="blob:not-hydrated">',
+        '<img data-mm-remote-image-blocked="1" data-mm-remote-image-url="https://cdn.example/x.png">',
+      ].join("");
+      const result = serializeInlineImages(editor.innerHTML, [hydrated]);
+      expect(result.html).toContain(`src="cid:${hydrated.cid}"`);
+      expect(result.html).not.toContain("data:image");
+      expect(result.html).not.toContain("blob:");
+      expect(result.html).not.toContain("data-mm-source-cid");
+      expect(result.html).toContain('src="https://cdn.example/x.png"');
+      expect(result.inlineImages).toHaveLength(1);
+    } finally {
+      URL.createObjectURL = originalCreate;
+    }
+  });
+
   it("keeps the editor pre-wrap contract isolated from a normal-whitespace quote", () => {
     const reply = buildReplyQuoteHtml("<p>Old</p>", meta, "en");
     const forward = buildForwardQuoteHtml("<p>Old</p>", meta, "en");

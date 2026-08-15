@@ -92,6 +92,43 @@ test("staging removes declared-size mismatches", async () => {
   );
 });
 
+test("decoded-stream limiter rejects bytes above maxSize (authoritative size check)", async () => {
+  // An encoded server-source attachment is always larger than its decoded
+  // bytes, so the limit must be enforced on the DECODED stream, not on any
+  // encoded metadata. Streaming 64 decoded bytes with a 10-byte cap must
+  // fail with UPLOAD_TOO_LARGE.
+  await assert.rejects(
+    stageAttachmentStream({
+      secret,
+      account,
+      filename: "over.bin",
+      mimeType: "application/octet-stream",
+      kind: "attachment",
+      declaredSize: 64,
+      maxSize: 10,
+      exactSize: false,
+      stream: Readable.from(Buffer.alloc(64, 0x62)),
+    }),
+    /UPLOAD_TOO_LARGE/,
+  );
+});
+
+test("decoded stream at exactly maxSize is allowed (limit is strictly greater)", async () => {
+  const staged = await stageAttachmentStream({
+    secret,
+    account,
+    filename: "at-limit.bin",
+    mimeType: "application/octet-stream",
+    kind: "attachment",
+    declaredSize: 10,
+    maxSize: 10,
+    exactSize: false,
+    stream: Readable.from(Buffer.alloc(10, 0x63)),
+  });
+  assert.equal(staged.size, 10);
+  await releaseStagedAttachment(secret, staged.handle, account);
+});
+
 test("staged handle rejects wrong account, expiry, missing file, and tampering", async () => {
   const staged = await stageAttachmentStream({
     secret,

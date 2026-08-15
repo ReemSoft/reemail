@@ -170,3 +170,105 @@ export function isDraftEmpty(input: DraftEmptinessInput): boolean {
     input.filesCount === 0
   );
 }
+
+// -------------------------------------------------- attachment-set size block
+// After an authoritative attachment-size-limit failure (Bridge decoded-byte
+// rejection), automatic remote draft-saves must NOT re-download the same
+// attachment set every autosave tick. The block is keyed by a signature of
+// the attachment set only, so body/recipient/subject edits never clear it and
+// never retrigger the download. The signature changes only when the
+// attachment set itself changes (add/remove/replace kept attachment, local
+// file, or inline image).
+
+export interface AttachmentSetSignatureItem {
+  id?: string;
+  filename?: string;
+  size?: number;
+  part?: string;
+  name?: string;
+  lastModified?: number;
+  uploadFilename?: string;
+}
+
+export interface AttachmentSetSignatureInput {
+  existingKept: readonly AttachmentSetSignatureItem[];
+  files: readonly AttachmentSetSignatureItem[];
+  inlineImages: readonly AttachmentSetSignatureItem[];
+}
+
+export function attachmentSetSignature(input: AttachmentSetSignatureInput): string {
+  const kept = input.existingKept
+    .map((a) => [a.id ?? "", a.filename ?? "", a.size ?? 0, a.part ?? ""].join("|"))
+    .join(",");
+  const local = input.files
+    .map((f) => [f.name ?? "", f.size ?? 0, f.lastModified ?? 0].join("|"))
+    .join(",");
+  const inline = input.inlineImages
+    .map((i) => [i.uploadFilename ?? "", i.filename ?? "", i.size ?? 0].join("|"))
+    .join(",");
+  return `${input.existingKept.length}#${kept};${input.files.length}#${local};${input.inlineImages.length}#${inline}`;
+}
+
+export interface AttachmentSizeBlockDecisionInput {
+  blockedSignature: string | null;
+  currentSignature: string;
+}
+
+export interface AttachmentSizeBlockDecision {
+  /** False => skip the automatic remote save (attachment set still blocked). */
+  remoteSaveAllowed: boolean;
+  /** True => caller should clear its recorded size-block. */
+  clearBlock: boolean;
+}
+
+export function decideAttachmentSizeBlock(
+  input: AttachmentSizeBlockDecisionInput,
+): AttachmentSizeBlockDecision {
+  if (input.blockedSignature === null) {
+    return { remoteSaveAllowed: true, clearBlock: false };
+  }
+  if (input.blockedSignature === input.currentSignature) {
+    return { remoteSaveAllowed: false, clearBlock: false };
+  }
+  return { remoteSaveAllowed: true, clearBlock: true };
+}
+
+// -------------------------------------------------- request-bound signatures
+// A save's failure may block ONLY the attachment set that request actually
+// transported. The composer captures the attachment signature inside
+// `saveRemote` (from the same attachment values it builds the transport from)
+// and keys it by that request's generation. `onCompleted` then consumes the
+// entry for the echoed generation instead of reading the live composer refs,
+// so a late failure for an older request can never attribute the block to a
+// newer attachment set that changed while the request was in flight.
+// Entries are consumed (deleted) on completion, so the store never grows.
+
+export interface RequestBoundSignatureStore {
+  /** Bind a signature to the request that is about to transport those attachments. */
+  capture(generation: number, signature: string): void;
+  /**
+   * Read and remove the signature captured for `generation`. Returns null
+   * when no capture exists for that generation (e.g. the run short-circuited
+   * before building a transport).
+   */
+  consume(generation: number): string | null;
+  /** Number of entries still pending completion (for tests/diagnostics). */
+  size(): number;
+}
+
+export function createRequestBoundSignatureStore(): RequestBoundSignatureStore {
+  const byGeneration = new Map<number, string>();
+  return {
+    capture(generation, signature) {
+      byGeneration.set(generation, signature);
+    },
+    consume(generation) {
+      const signature = byGeneration.get(generation) ?? null;
+      byGeneration.delete(generation);
+      return signature;
+    },
+    size() {
+      return byGeneration.size;
+    },
+  };
+}

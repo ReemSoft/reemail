@@ -54,6 +54,7 @@ import {
   type StagedAttachmentResult,
   type StagedUploadCache,
   isAttachmentPreparationProtocolError,
+  isAttachmentSizeLimitError,
 } from "@/lib/mail-attachment-staging";
 import {
   buildStagedAttachmentTransport,
@@ -932,6 +933,10 @@ import {
   attachInputListener,
   attachBeforeUnloadGuard,
   isDraftEmpty,
+  attachmentSetSignature,
+  decideAttachmentSizeBlock,
+  createRequestBoundSignatureStore,
+  type RequestBoundSignatureStore,
 } from "@/lib/mail-composer-autosave";
 import {
   createDraftAutosaveRefreshTracker,
@@ -6965,6 +6970,20 @@ function Composer({
 
   // Diagnostic: last hard-failure code from the saver (null on success).
   const lastFailCodeRef = useRef<string | null>(null);
+  // Attachment-set signature recorded after an authoritative attachment-size
+  // failure. While the signature is unchanged, automatic remote draft-saves
+  // are skipped so a size-blocked Forward stops re-downloading its IMAP
+  // attachments on every autosave tick. Cleared when the set changes or a
+  // remote save succeeds. Manual Save/Send never consult this ref.
+  const sizeBlockedAttachmentSignatureRef = useRef<string | null>(null);
+  // request generation -> attachment signature of the transport THAT request
+  // actually built (captured inside saveRemote, consumed on completion). A
+  // late failure for an older request is attributed to its own signature,
+  // never to the live composer refs at completion time.
+  const requestSignatureByGenerationRef = useRef<RequestBoundSignatureStore | null>(null);
+  if (requestSignatureByGenerationRef.current === null) {
+    requestSignatureByGenerationRef.current = createRequestBoundSignatureStore();
+  }
   const recomputeDirty = () => {
     isDirtyRef.current = generationRef.current > savedGenerationRef.current;
   };
@@ -7085,7 +7104,7 @@ function Composer({
 
   if (!saverRef.current) {
     saverRef.current = createDraftSaver(draftId, {
-      saveRemote: async ({ snapshot, previousRef }) => {
+      saveRemote: async ({ snapshot, previousRef, generation }) => {
         const token = session.mailSessionToken;
         if (!token) return { ok: false, code: "SESSION_REQUIRED" };
         const currentFiles = filesRef.current;
@@ -7098,6 +7117,19 @@ function Composer({
           usedUploadNames.has(image.uploadFilename),
         );
         const transportHtml = sanitizeComposerHtml(transport.html);
+        // Bind the attachment signature to THIS request's generation, from
+        // the exact attachment values this transport is built from. The
+        // signature must never be taken from the live composer refs at
+        // completion time — by then the user may have switched to a newer
+        // attachment set that this request never transported.
+        requestSignatureByGenerationRef.current!.capture(
+          generation,
+          attachmentSetSignature({
+            existingKept: existingKeptRef.current,
+            files: currentFiles,
+            inlineImages: currentInlineImages,
+          }),
+        );
         try {
           const attachmentPlan = buildAttachmentTransportPlan({
             attachments: existingKeptRef.current,
@@ -7108,12 +7140,7 @@ function Composer({
           if (attachmentPlan.unresolvedAttachmentIds.length > 0) {
             return { ok: false, code: "SOURCE_ATTACHMENT_UNRESOLVED" };
           }
-          const keptBytes = existingKeptRef.current.reduce(
-            (sum, attachment) => sum + (attachment.size || 0),
-            0,
-          );
           const totalAttachmentBytes =
-            keptBytes +
             currentFiles.reduce((sum, file) => sum + file.size, 0) +
             transportImages.reduce((sum, image) => sum + image.file.size, 0);
           if (
@@ -7214,6 +7241,12 @@ function Composer({
       onServerRef: (r) => setServerRef(r),
       onCompleted: ({ completedGeneration, status, serverRef, code }) => {
         const wasAutomatic = automaticSaveGenerationsRef.current.delete(completedGeneration);
+        // Consume this request's bound attachment signature before any early
+        // return so the store cannot grow. Only a size-limit failure may use
+        // it to (re)arm the block — and it must attribute the block to the
+        // attachment set THIS request transported, never the live refs.
+        const requestAttachmentSignature =
+          requestSignatureByGenerationRef.current!.consume(completedGeneration);
         if (sendCompletedRef.current) return;
         if (wasAutomatic && status === "saved") {
           lastSuccessfulAutomaticSaveAtRef.current = Date.now();
@@ -7231,6 +7264,9 @@ function Composer({
           setSavedAt(lastSavedAtRef.current);
           lastFailCodeRef.current = null;
           if (status === "saved") {
+            // A persisted remote save means the attachment set is not
+            // size-blocked anymore.
+            sizeBlockedAttachmentSignatureRef.current = null;
             setHasRemoteDraft(true);
             const tracked = autosaveRefreshTrackerRef.current!.noteRemoteSave();
             if (tracked.incrementDraftCount) onDraftCreated();
@@ -7244,6 +7280,15 @@ function Composer({
           // (helps distinguish APPEND_FAILED / SAFE_DRAFT_REPLACE_UNSUPPORTED
           // / SESSION_REQUIRED / IMAP_ERROR / UNKNOWN without leaking PII).
           lastFailCodeRef.current = code ?? "UNKNOWN";
+          // Authoritative attachment-size rejection (Bridge decoded bytes or
+          // the local reliable-byte guard): block ONLY the attachment set this
+          // exact request transported. The signature was captured inside
+          // saveRemote and is consumed above — the live composer refs at
+          // completion time (which may already be a newer set B) are never
+          // used to attribute failure of request A.
+          if (isAttachmentSizeLimitError(code) && requestAttachmentSignature !== null) {
+            sizeBlockedAttachmentSignatureRef.current = requestAttachmentSignature;
+          }
           // Also log to the browser console for support triage. No PII.
           try {
             console.error("[draft-save] failed code=", lastFailCodeRef.current);
@@ -7558,9 +7603,12 @@ function Composer({
     };
   }, []);
 
-  const existingBytes = existingKept.reduce((acc, a) => acc + (a.size || 0), 0);
   const inlineBytes = inlineImages.reduce((acc, image) => acc + image.file.size, 0);
-  const totalBytes = files.reduce((acc, f) => acc + f.size, 0) + existingBytes + inlineBytes;
+  // Hard size validation only counts byte sizes that are genuinely known
+  // locally: new Files and hydrated inline-image Files. Existing IMAP
+  // server-source attachments only expose BODYSTRUCTURE encoded metadata;
+  // their real decoded size is enforced by the Bridge after staging.
+  const totalBytes = files.reduce((acc, f) => acc + f.size, 0) + inlineBytes;
   const totalCount = files.length + existingKept.length + inlineImages.length;
 
   // Ref mirror so the (persistent) saveRemote closure created at first mount
@@ -7695,6 +7743,24 @@ function Composer({
       remoteAutosaveTimerRef.current = null;
       const pending = pendingRemoteSaveRef.current;
       if (!pending || sendInProgressRef.current) return;
+      // Attachment-size block: after an authoritative size failure the same
+      // attachment set must not be re-downloaded every autosave tick. The
+      // local draft was already written by the scheduler before this ran.
+      // Manual Save/Send never go through this path and stay allowed.
+      const sizeBlockDecision = decideAttachmentSizeBlock({
+        blockedSignature: sizeBlockedAttachmentSignatureRef.current,
+        currentSignature: attachmentSetSignature({
+          existingKept: existingKeptRef.current,
+          files: filesRef.current,
+          inlineImages: inlineImagesRef.current,
+        }),
+      });
+      if (sizeBlockDecision.clearBlock) sizeBlockedAttachmentSignatureRef.current = null;
+      if (!sizeBlockDecision.remoteSaveAllowed) {
+        pendingRemoteSaveRef.current = null;
+        automaticSaveGenerationsRef.current.clear();
+        return;
+      }
       if (pending.hasAttachments && lastSuccessfulAutomaticSaveAtRef.current) {
         const remaining = Math.max(
           0,
@@ -8504,9 +8570,11 @@ function Composer({
       };
       if (!result.ok) {
         toast.error(
-          isAttachmentPreparationProtocolError(result.error)
-            ? tr(ATTACHMENT_PREPARATION_MESSAGE_KEY)
-            : result.error || tr("فشل إرسال الرسالة"),
+          isAttachmentSizeLimitError(result.error)
+            ? tr("تجاوزت حدود المرفقات المسموحة")
+            : isAttachmentPreparationProtocolError(result.error)
+              ? tr(ATTACHMENT_PREPARATION_MESSAGE_KEY)
+              : result.error || tr("فشل إرسال الرسالة"),
         );
         return;
       }
@@ -8754,10 +8822,11 @@ function Composer({
         return "saved_local";
       }
       // Hard failure — do NOT show a "success" toast.
+      const failCode = lastFailCodeRef.current ?? "UNKNOWN";
       toast.error(
-        trf("تعذّر حفظ المسودّة على الخادم — حاول لاحقاً ({{code}})", {
-          code: lastFailCodeRef.current ?? "UNKNOWN",
-        }),
+        isAttachmentSizeLimitError(failCode)
+          ? tr("تجاوزت حدود المرفقات المسموحة")
+          : trf("تعذّر حفظ المسودّة على الخادم — حاول لاحقاً ({{code}})", { code: failCode }),
       );
       return "failed";
     } finally {

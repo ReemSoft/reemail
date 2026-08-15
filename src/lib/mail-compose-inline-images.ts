@@ -6,6 +6,13 @@ export const INLINE_IMAGE_WRAPPER_ATTR = "data-mm-inline-wrapper";
 export const INLINE_IMAGE_POSITION_ATTR = "data-mm-image-position";
 export const INLINE_IMAGE_MAX_VERTICAL_GAP = 1200;
 
+// Mirrors mail-compose-quote's quote blocker: http(s) or protocol-relative
+// `//` only. Anything else (javascript:, data:, blob:, filesystem:, relative)
+// is never restored.
+const BLOCKED_REMOTE_IMAGE_ATTR = "data-mm-remote-image-blocked";
+const REMOTE_IMAGE_URL_ATTR = "data-mm-remote-image-url";
+const REMOTE_IMAGE_SRC_RE = /^(?:https?:)?\/\/[^\s"'<>]+$/i;
+
 export type InlineImageAlignment = "left" | "center" | "right";
 
 export interface InlineImageDropTarget {
@@ -733,6 +740,28 @@ export function serializeInlineImages(
     'img[src^="blob:"],img[src^="data:"],img[src^="cid:" i],img[data-mm-source-cid]',
   ))
     if (!serializedNodes.has(unsafe)) unsafe.remove();
+  if (!options.keepEditorIds) {
+    // Remote images blocked for compose privacy are restored to their original
+    // safe URL on this detached copy only; the live Composer never sees it.
+    for (const blocked of root.querySelectorAll<HTMLImageElement>(
+      `img[${BLOCKED_REMOTE_IMAGE_ATTR}],img[${REMOTE_IMAGE_URL_ATTR}]`,
+    )) {
+      const url = (blocked.getAttribute(REMOTE_IMAGE_URL_ATTR) ?? "").trim();
+      if (!REMOTE_IMAGE_SRC_RE.test(url)) {
+        blocked.remove();
+        continue;
+      }
+      blocked.setAttribute("src", url);
+      blocked.removeAttribute(REMOTE_IMAGE_URL_ATTR);
+      blocked.removeAttribute(BLOCKED_REMOTE_IMAGE_ATTR);
+      blocked.removeAttribute("aria-hidden");
+      blocked.style.removeProperty("visibility");
+    }
+    // Fail closed: never emit an <img> with no usable source.
+    for (const srcLess of root.querySelectorAll<HTMLImageElement>("img")) {
+      if (!srcLess.hasAttribute("src")) srcLess.remove();
+    }
+  }
   for (const node of root.querySelectorAll<HTMLElement>(
     "[data-mm-image-tool],[data-mm-drop-marker]",
   ))

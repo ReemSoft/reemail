@@ -243,6 +243,61 @@ describe("createDraftSaver — serverRef freshness", () => {
   });
 });
 
+describe("createDraftSaver — generation threading", () => {
+  it("passes each run's exact generation to saveRemote and echoes it back in onCompleted", async () => {
+    const seenGenerations: number[] = [];
+    const completions: number[] = [];
+    const gates: Array<{ resolve: (v: SaveRemoteResult) => void }> = [];
+    const saver = createDraftSaver("d-gen", {
+      saveRemote: async ({ generation }) => {
+        seenGenerations.push(generation);
+        const d = deferred<SaveRemoteResult>();
+        gates.push({ resolve: d.resolve });
+        return d.promise;
+      },
+      onCompleted: (info) => completions.push(info.completedGeneration),
+    });
+    const p1 = saver.requestSave(snap({ subject: "a" }), null, 10);
+    await Promise.resolve();
+    const p2 = saver.requestSave(snap({ subject: "b" }), null, 11);
+    gates[0].resolve({ ok: true, serverRef: { folderPath: "Drafts", uid: 1, uidValidity: "v" } });
+    await p1;
+    gates[1].resolve({ ok: true, serverRef: { folderPath: "Drafts", uid: 2, uidValidity: "v" } });
+    await p2;
+    expect(seenGenerations).toEqual([10, 11]);
+    expect(completions).toEqual([10, 11]);
+  });
+
+  it("reports the merged generation for a follow-up that coalesced older requests", async () => {
+    const seen: Array<{ generation: number; subject: string }> = [];
+    const completions: number[] = [];
+    const gates: Array<{ resolve: (v: SaveRemoteResult) => void }> = [];
+    const saver = createDraftSaver("d-coalesce", {
+      saveRemote: async ({ snapshot, generation }) => {
+        seen.push({ generation, subject: snapshot.subject });
+        const d = deferred<SaveRemoteResult>();
+        gates.push({ resolve: d.resolve });
+        return d.promise;
+      },
+      onCompleted: (info) => completions.push(info.completedGeneration),
+    });
+    const p1 = saver.requestSave(snap({ subject: "one" }), null, 1);
+    const p2 = saver.requestSave(snap({ subject: "two" }), null, 2);
+    const p3 = saver.requestSave(snap({ subject: "three" }), null, 3);
+    expect(seen).toEqual([{ generation: 1, subject: "one" }]);
+    gates[0].resolve({ ok: true, serverRef: { folderPath: "Drafts", uid: 1, uidValidity: "v" } });
+    await p1;
+    // The follow-up carries the newest merged snapshot AND its generation.
+    expect(seen).toEqual([
+      { generation: 1, subject: "one" },
+      { generation: 3, subject: "three" },
+    ]);
+    gates[1].resolve({ ok: true, serverRef: { folderPath: "Drafts", uid: 2, uidValidity: "v" } });
+    await Promise.all([p2, p3]);
+    expect(completions).toEqual([1, 3]);
+  });
+});
+
 describe("createDraftSaver", () => {
   it("emits saving → saved on successful remote save and updates serverRef", async () => {
     const events: DraftSaveStatus[] = [];

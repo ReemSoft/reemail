@@ -55,16 +55,16 @@ export async function stageServerAttachmentSources(input: {
             }
             const download = await client.download(source.uid.toString(), source.part, {
               uid: true,
-              maxBytes: input.maxBytes,
+              // ImapFlow's own cap truncates the DECODED stream at the limit
+              // without an error, so `maxBytes` equal to the limit would hide
+              // genuine overflow from the authoritative decoded-byte limiter
+              // in stageAttachmentStream below. Widen the fetch window by one
+              // byte: the decoded limiter then observes and rejects anything
+              // at/over the limit instead of silently truncating, and the
+              // transfer still aborts at ~the limit on rejection.
+              maxBytes: input.maxBytes + 1,
             });
             if (!download?.content) throw new Error("SOURCE_ATTACHMENT_MISSING");
-            const expectedSize = Number(
-              (download.meta as { expectedSize?: number }).expectedSize ?? source.size,
-            );
-            if (Number.isFinite(expectedSize) && expectedSize > input.maxBytes) {
-              download.content.destroy();
-              throw new Error("SOURCE_ATTACHMENT_TOO_LARGE");
-            }
             return stageAttachmentStream({
               secret: input.secret,
               account,
@@ -78,6 +78,14 @@ export async function stageServerAttachmentSources(input: {
               maxSize: input.maxBytes,
               exactSize: false,
               stream: download.content,
+            }).catch((error) => {
+              // The decoded-stream limiter is the authoritative size check;
+              // surface its rejection as the standard attachment-limit
+              // condition instead of the raw stream code.
+              if (error instanceof Error && error.message === "UPLOAD_TOO_LARGE") {
+                throw new Error("SOURCE_ATTACHMENT_TOO_LARGE");
+              }
+              throw error;
             });
           },
           "transfer",

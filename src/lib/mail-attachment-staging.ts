@@ -8,6 +8,19 @@ export function isAttachmentPreparationProtocolError(error: unknown): boolean {
   return error === "ATTACHMENT_KIND_MISMATCH";
 }
 
+/**
+ * Bridge/frontend codes that mean the decoded attachment set exceeded a size
+ * limit. The frontend shows the same clear attachment-limit message used by
+ * its own local guard instead of a raw protocol code.
+ */
+export function isAttachmentSizeLimitError(error: unknown): boolean {
+  return (
+    error === "ATTACHMENTS_TOO_LARGE" ||
+    error === "SOURCE_ATTACHMENT_TOO_LARGE" ||
+    error === "ATTACHMENT_LIMIT_EXCEEDED"
+  );
+}
+
 export interface StagedAttachmentResult {
   handle: string;
   filename: string;

@@ -39,3 +39,13 @@ test("direct upload exposes coarse stage timing without changing its raw stream 
   assert.match(upload, /Server-Timing/);
   assert.doesNotMatch(upload, /Buffer\.concat|express\.json/);
 });
+
+test("aggregate decoded-size limit remains enforced after staging", () => {
+  // The per-attachment decoded limiter covers a single file; the aggregate
+  // check across every resolved attachment (client + source + inline) must
+  // stay intact for send-v2 and draft-save-v2.
+  assert.match(sendV2, /all\.reduce\(\(sum, item\) => sum \+ item\.size, 0\) > SEND_MAX_TOTAL_BYTES/);
+  assert.match(sendV2, /"ATTACHMENTS_TOO_LARGE"/);
+  assert.match(draftV2, /all\.reduce\(\(sum, item\) => sum \+ item\.size, 0\) > SEND_MAX_TOTAL_BYTES/);
+  assert.match(draftV2, /"ATTACHMENTS_TOO_LARGE"/);
+});

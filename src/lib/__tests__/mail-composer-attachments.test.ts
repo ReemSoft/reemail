@@ -449,6 +449,33 @@ describe("Reply, Reply All, Forward and Composer wiring", () => {
     expect(route).toContain("const totalBytes =");
   });
 
+  it("hard size guard counts only locally-known bytes, never BODYSTRUCTURE metadata", () => {
+    const sizeTotal = route.slice(route.indexOf("const inlineBytes"), route.indexOf("const totalCount"));
+    expect(sizeTotal).toContain("files.reduce((acc, f) => acc + f.size, 0)");
+    expect(sizeTotal).toContain("image.file.size");
+    expect(sizeTotal).not.toContain("existingKept");
+    expect(route).not.toContain(
+      "files.reduce((acc, f) => acc + f.size, 0) + existingBytes + inlineBytes",
+    );
+  });
+
+  it("autosave size validation excludes unreliable BODYSTRUCTURE metadata", () => {
+    const saveRemoteSize = route.slice(
+      route.indexOf("const totalAttachmentBytes"),
+      route.indexOf("const stagedFiles"),
+    );
+    expect(saveRemoteSize).toContain("currentFiles.reduce((sum, file) => sum + file.size, 0)");
+    expect(saveRemoteSize).toContain(
+      "transportImages.reduce((sum, image) => sum + image.file.size, 0)",
+    );
+    expect(saveRemoteSize).not.toContain("keptBytes");
+  });
+
+  it("surfaces Bridge attachment-size rejections with the clear local message", () => {
+    expect(route).toContain("isAttachmentSizeLimitError(result.error)");
+    expect(route).toContain("tr(\"تجاوزت حدود المرفقات المسموحة\")");
+  });
+
   it("persists and restores local source metadata without byte hydration", () => {
     expect(route).toContain("const restoredSource = restored?.sourceAttachments");
     expect(route).toContain("...(restoredSource?.attachments ?? [])");
