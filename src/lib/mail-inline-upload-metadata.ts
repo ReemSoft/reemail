@@ -8,7 +8,7 @@ export const InlineUploadMetadataSchema = z
       contentType: z.enum(["image/png", "image/jpeg", "image/gif", "image/webp"]),
     }),
   )
-  .max(10)
+  .max(20)
   .superRefine((items, ctx) => {
     if (
       new Set(items.map((item) => item.uploadFilename)).size !== items.length ||

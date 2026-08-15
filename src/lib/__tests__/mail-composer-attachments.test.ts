@@ -6,6 +6,11 @@ import {
   buildStagedAttachmentTransport,
   deriveAttachmentSourceRef,
   selectNormalComposerAttachments,
+  classifyAttachmentLimitExceeded,
+  COMPOSE_MAX_TOTAL_BYTES,
+  COMPOSE_MAX_NORMAL_ATTACHMENTS,
+  COMPOSE_MAX_INLINE_IMAGES,
+  COMPOSE_MAX_TOTAL_FILE_PARTS,
   type AttachmentSourceRef,
 } from "../mail-composer-attachments";
 import {
@@ -441,16 +446,21 @@ describe("Reply, Reply All, Forward and Composer wiring", () => {
     expect(route).not.toContain("preservedSourceHandlesRef.current.size ||");
   });
 
-  it("attachment mention and limits include retained existing attachments", () => {
+  it("attachment mention and limits use separate normal and inline counts", () => {
     expect(route).toContain("existingKept.length + files.length === 0");
-    expect(route).toContain(
+    expect(route).toContain("const normalAttachmentCount = files.length + existingKept.length");
+    expect(route).toContain("const inlineImageCount = inlineImages.length");
+    expect(route).toContain("const totalBytes =");
+    expect(route).not.toContain(
       "const totalCount = files.length + existingKept.length + inlineImages.length",
     );
-    expect(route).toContain("const totalBytes =");
   });
 
   it("hard size guard counts only locally-known bytes, never BODYSTRUCTURE metadata", () => {
-    const sizeTotal = route.slice(route.indexOf("const inlineBytes"), route.indexOf("const totalCount"));
+    const sizeTotal = route.slice(
+      route.indexOf("const inlineBytes"),
+      route.indexOf("const normalAttachmentCount"),
+    );
     expect(sizeTotal).toContain("files.reduce((acc, f) => acc + f.size, 0)");
     expect(sizeTotal).toContain("image.file.size");
     expect(sizeTotal).not.toContain("existingKept");
@@ -485,7 +495,7 @@ describe("Reply, Reply All, Forward and Composer wiring", () => {
 
   it("keeps Ctrl/Cmd+Enter attachment limits and mention state current", () => {
     expect(route).toContain(
-      "[to, cc, bcc, subject, files, existingKept, inlineImages, totalCount, totalBytes]",
+      "[to, cc, bcc, subject, files, existingKept, inlineImages, normalAttachmentCount, inlineImageCount, totalBytes]",
     );
     expect(route).toContain("existingKept.length + files.length === 0");
   });
@@ -555,5 +565,107 @@ describe("Reply, Reply All, Forward and Composer wiring", () => {
     expect(() =>
       buildStagedAttachmentTransport({ plan, normal: [wrong], inline: [], inlineMetadata: [] }),
     ).toThrow("NORMAL_ATTACHMENT_KIND_MISMATCH");
+  });
+
+  it("separates normal and inline resource classes in every hard-count guard", () => {
+    expect(route).toContain("const normalAttachmentCount = files.length + existingKept.length");
+    expect(route).toContain("const inlineImageCount = inlineImages.length");
+    expect(route).toContain('tr("الحد الأقصى للمرفقات هو 10 ملفات")');
+    expect(route).toContain('tr("تجاوزت الرسالة الحد المسموح للصور المضمنة")');
+    expect(route).toContain('exceeded === "bytes"');
+    expect(route).not.toContain(
+      "const totalCount = files.length + existingKept.length + inlineImages.length",
+    );
+    expect(route).not.toContain("totalCount > COMPOSE_MAX_FILES");
+  });
+
+  it("normal attachment adding is gated only by the normal 10-cap, never by inline images", () => {
+    const addFiles = route.slice(
+      route.indexOf("function addFiles"),
+      route.indexOf("function removeExistingAttachment"),
+    );
+    expect(addFiles).toContain("runningNormal >= COMPOSE_MAX_NORMAL_ATTACHMENTS");
+    expect(addFiles).toContain('tr("الحد الأقصى للمرفقات هو 10 ملفات")');
+    expect(addFiles).not.toContain("inlineImageCount");
+  });
+
+  it("inline image insertion is gated only by the inline 20-cap, never by normal attachments", () => {
+    expect(route).toContain("inlineImageCount + added.length > COMPOSE_MAX_INLINE_IMAGES");
+    expect(route).toContain('tr("تجاوزت الرسالة الحد المسموح للصور المضمنة")');
+    expect(route).not.toContain("totalCount + added.length >= COMPOSE_MAX_FILES");
+  });
+
+  it("attach button disable follows the normal class only, inline images never disable it", () => {
+    expect(route).toContain(
+      "disabled={sending || normalAttachmentCount >= COMPOSE_MAX_NORMAL_ATTACHMENTS}",
+    );
+    expect(route).not.toContain("disabled={sending || totalCount >= COMPOSE_MAX_FILES}");
+  });
+
+  it("saveRemote/autosave enforces the same split with transportImages for the inline class", () => {
+    const saveRemote = route.slice(
+      route.indexOf("const totalAttachmentBytes"),
+      route.indexOf("const stagedFiles"),
+    );
+    expect(saveRemote).toContain("const normalParts = existingKeptRef.current.length + currentFiles.length");
+    expect(saveRemote).toContain("const inlineParts = transportImages.length");
+    expect(saveRemote).toContain("classifyAttachmentLimitExceeded({");
+    expect(saveRemote).not.toContain(
+      "existingKeptRef.current.length + currentFiles.length + transportImages.length",
+    );
+  });
+});
+
+describe("classifyAttachmentLimitExceeded resource-class model", () => {
+  it("allows 4 existing normal attachments + 7 inline images", () => {
+    expect(
+      classifyAttachmentLimitExceeded({ normalAttachmentCount: 4, inlineImageCount: 7, totalBytes: 1 }),
+    ).toBeNull();
+  });
+
+  it("allows exactly 10 normal + 20 inline images", () => {
+    expect(
+      classifyAttachmentLimitExceeded({
+        normalAttachmentCount: 10,
+        inlineImageCount: 20,
+        totalBytes: 1,
+      }),
+    ).toBeNull();
+  });
+
+  it("rejects 11 normal attachments with 0 inline images", () => {
+    expect(
+      classifyAttachmentLimitExceeded({ normalAttachmentCount: 11, inlineImageCount: 0, totalBytes: 1 }),
+    ).toBe("normal");
+  });
+
+  it("rejects 4 normal attachments + 21 inline images", () => {
+    expect(
+      classifyAttachmentLimitExceeded({ normalAttachmentCount: 4, inlineImageCount: 21, totalBytes: 1 }),
+    ).toBe("inline");
+  });
+
+  it("rejects the shared byte budget beyond 25 MiB with inline bytes included", () => {
+    expect(
+      classifyAttachmentLimitExceeded({
+        normalAttachmentCount: 1,
+        inlineImageCount: 1,
+        totalBytes: COMPOSE_MAX_TOTAL_BYTES + 1,
+      }),
+    ).toBe("bytes");
+    expect(
+      classifyAttachmentLimitExceeded({
+        normalAttachmentCount: 1,
+        inlineImageCount: 1,
+        totalBytes: COMPOSE_MAX_TOTAL_BYTES,
+      }),
+    ).toBeNull();
+  });
+
+  it("pins the resource-class constants to the approved model", () => {
+    expect(COMPOSE_MAX_NORMAL_ATTACHMENTS).toBe(10);
+    expect(COMPOSE_MAX_INLINE_IMAGES).toBe(20);
+    expect(COMPOSE_MAX_TOTAL_FILE_PARTS).toBe(30);
+    expect(COMPOSE_MAX_TOTAL_BYTES).toBe(25 * 1024 * 1024);
   });
 });

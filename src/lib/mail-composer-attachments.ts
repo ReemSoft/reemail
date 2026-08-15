@@ -25,6 +25,28 @@ export interface AttachmentTransportPlan {
   unresolvedAttachmentIds: string[];
 }
 
+export const COMPOSE_MAX_TOTAL_BYTES = 25 * 1024 * 1024;
+export const COMPOSE_MAX_NORMAL_ATTACHMENTS = 10;
+export const COMPOSE_MAX_INLINE_IMAGES = 20;
+export const COMPOSE_MAX_TOTAL_FILE_PARTS = 30;
+
+export type AttachmentLimitKind = "normal" | "inline" | "bytes";
+
+export interface AttachmentLimitInput {
+  normalAttachmentCount: number;
+  inlineImageCount: number;
+  totalBytes: number;
+}
+
+export function classifyAttachmentLimitExceeded(
+  input: AttachmentLimitInput,
+): AttachmentLimitKind | null {
+  if (input.normalAttachmentCount > COMPOSE_MAX_NORMAL_ATTACHMENTS) return "normal";
+  if (input.inlineImageCount > COMPOSE_MAX_INLINE_IMAGES) return "inline";
+  if (input.totalBytes > COMPOSE_MAX_TOTAL_BYTES) return "bytes";
+  return null;
+}
+
 export function buildStagedAttachmentTransport(input: {
   plan: AttachmentTransportPlan;
   normal: readonly StagedAttachmentResult[];

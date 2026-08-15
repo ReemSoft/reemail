@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mapUploadedAttachments } from "../src/inline-images.js";
+import { mapUploadedAttachments, InlineImageMetadataSchema } from "../src/inline-images.js";
 import { compileMime } from "../src/mime-spool.js";
 import type { SendMessagePayload } from "../src/smtp.js";
 import { draftMimePayload } from "../src/drafts.js";
@@ -193,4 +193,16 @@ test("remote draft MIME preserves the CID attachment for later edit/send", async
   assert.match(mime, new RegExp(`cid:${cid}`, "i"));
   assert.match(mime, new RegExp(`Content-ID: <${cid}>`, "i"));
   assert.doesNotMatch(mime, /Content-Disposition: attachment/i);
+});
+
+test("InlineImageMetadataSchema accepts exactly 20 distinct entries and rejects 21", () => {
+  const hex = (n: number) => n.toString(16).padStart(32, "0");
+  const entry = (n: number) => ({
+    uploadFilename: `mm-inline-${hex(n)}.png`,
+    cid: `mm-inline-${hex(n)}@mailmaestro`,
+    contentType: "image/png",
+  });
+  const twenty = Array.from({ length: 20 }, (_, i) => entry(i));
+  assert.equal(InlineImageMetadataSchema.safeParse(twenty).success, true);
+  assert.equal(InlineImageMetadataSchema.safeParse([...twenty, entry(20)]).success, false);
 });

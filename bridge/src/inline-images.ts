@@ -19,7 +19,7 @@ export const InlineImageMetadataSchema = z
       contentType: z.enum(INLINE_IMAGE_MIME_TYPES),
     }),
   )
-  .max(10)
+  .max(20)
   .superRefine((items, ctx) => {
     const names = new Set<string>();
     const cids = new Set<string>();

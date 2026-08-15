@@ -777,4 +777,17 @@ describe("composer inline images", () => {
     expect(InlineUploadMetadataSchema.safeParse([safe, safe]).success).toBe(false);
     expect(JSON.stringify([safe])).not.toContain("base64");
   });
+
+  it("accepts exactly 20 distinct inline image entries and rejects 21", () => {
+    const id = (n: number) => n.toString(16).padStart(32, "0");
+    const entry = (n: number) => ({
+      uploadFilename: `mm-inline-${id(n)}.png`,
+      cid: `mm-inline-${id(n)}@mailmaestro`,
+      contentType: "image/png",
+    });
+    const twenty = Array.from({ length: 20 }, (_, i) => entry(i));
+    expect(InlineUploadMetadataSchema.safeParse(twenty).success).toBe(true);
+    const twentyOne = [...twenty, entry(20)];
+    expect(InlineUploadMetadataSchema.safeParse(twentyOne).success).toBe(false);
+  });
 });

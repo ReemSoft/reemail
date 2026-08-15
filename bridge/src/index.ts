@@ -290,7 +290,7 @@ const SendV2PayloadSchema = SendPayloadSchema.extend({
     )
     .max(10)
     .default([]),
-  stagedInlineImages: z.array(StagedInlineSchema).max(10).default([]),
+  stagedInlineImages: z.array(StagedInlineSchema).max(20).default([]),
   sourceAttachments: z.array(ServerAttachmentSourceSchema).max(10).default([]),
 });
 
@@ -304,7 +304,7 @@ const DraftV2AttachmentSchema = z.object({
     )
     .max(10)
     .default([]),
-  stagedInlineImages: z.array(StagedInlineSchema).max(10).default([]),
+  stagedInlineImages: z.array(StagedInlineSchema).max(20).default([]),
   sourceAttachments: z.array(ServerAttachmentSourceSchema).max(10).default([]),
 });
 
@@ -916,6 +916,13 @@ app.post("/api/send", requireKey, async (req, res) => {
 // from the send contract on file-size, count, or storage.
 const SEND_MAX_TOTAL_BYTES = Number(process.env.SEND_MAX_TOTAL_BYTES || 25 * 1024 * 1024);
 const SEND_MAX_FILES = Number(process.env.SEND_MAX_FILES || 10);
+// Separate bounded resource classes: normal attachments (staged handles +
+// server-source attachments) cap at 10, MIME inline/CID images cap at 20, and
+// the absolute MIME file-part count caps at 30. Inline images never consume
+// the user's normal-attachment quota and vice versa. Byte limits stay shared.
+const MAX_NORMAL_ATTACHMENTS = 10;
+const MAX_INLINE_IMAGES = 20;
+const MAX_TOTAL_FILE_PARTS = 30;
 
 const SEND_GLOBAL_MAX = Number(process.env.SEND_GLOBAL_MAX || 20);
 const SEND_PER_ACCOUNT_MAX = Number(process.env.SEND_PER_ACCOUNT_MAX || 3);
@@ -1032,6 +1039,16 @@ app.post("/api/send-v2", requireKey, async (req, res) => {
   let sendSucceeded = false;
   try {
     const payload = SendV2PayloadSchema.parse(req.body);
+    // Raw-payload fail-fast: both arrays are schema-capped individually (10
+    // each), so a combined normal count above MAX_NORMAL_ATTACHMENTS must be
+    // rejected before resolving handles or staging server sources — otherwise
+    // an invalid payload would trigger avoidable IMAP/download/staging work.
+    if (
+      payload.attachmentHandles.length + payload.sourceAttachments.length >
+      MAX_NORMAL_ATTACHMENTS
+    ) {
+      return res.status(413).json({ ok: false, error: "ATTACHMENTS_TOO_LARGE" });
+    }
     const account = accountBinding(payload.account as MailAccount);
     stagedAccount = account;
     clientHandles = [
@@ -1078,8 +1095,17 @@ app.post("/api/send-v2", requireKey, async (req, res) => {
     }
     const all = [...normal, ...inline.map(({ staged }) => staged)];
     all.push(...sourceAttachments.map(({ resolved }) => resolved));
+    // Authoritative semantic counts: normal attachments arrive partly as
+    // staged client handles and partly as server-source attachments, so the
+    // normal 10-cap applies to the combined resolved set. Inline/CID images
+    // get their own 20-cap; the absolute MIME file-part count caps at 30.
+    // The shared decoded-byte budget stays unchanged.
+    const normalParts = normal.length + sourceAttachments.length;
+    const inlineParts = inline.length;
     if (
-      all.length > SEND_MAX_FILES ||
+      normalParts > MAX_NORMAL_ATTACHMENTS ||
+      inlineParts > MAX_INLINE_IMAGES ||
+      normalParts + inlineParts > MAX_TOTAL_FILE_PARTS ||
       all.reduce((sum, item) => sum + item.size, 0) > SEND_MAX_TOTAL_BYTES
     ) {
       return res.status(413).json({ ok: false, error: "ATTACHMENTS_TOO_LARGE" });
@@ -1172,6 +1198,14 @@ app.post("/api/draft-save-v2", requireKey, imapGate("interactive"), async (req, 
   try {
     const payload = DraftSavePayloadSchema.parse(req.body);
     const contract = DraftV2AttachmentSchema.parse(req.body);
+    // Raw-payload fail-fast: reject an impossible combined normal count before
+    // resolving handles or staging server sources (see send-v2).
+    if (
+      contract.attachmentHandles.length + contract.sourceAttachments.length >
+      MAX_NORMAL_ATTACHMENTS
+    ) {
+      return res.status(413).json({ ok: false, error: "ATTACHMENTS_TOO_LARGE" });
+    }
     const account = accountBinding(payload.account as MailAccount);
     const resolvedNormal = await Promise.all(
       contract.attachmentHandles.map((handle) =>
@@ -1207,8 +1241,15 @@ app.post("/api/draft-save-v2", requireKey, imapGate("interactive"), async (req, 
       ...preserved.map(({ resolved }) => resolved),
       ...resolvedInline.map(({ staged }) => staged),
     ];
+    // Same authoritative semantic counts as send-v2: normal 10-cap covers
+    // staged client handles + server-source attachments combined, inline/CID
+    // images cap at 20, absolute file parts cap at 30, shared bytes unchanged.
+    const normalParts = resolvedNormal.length + preserved.length;
+    const inlineParts = resolvedInline.length;
     if (
-      all.length > SEND_MAX_FILES ||
+      normalParts > MAX_NORMAL_ATTACHMENTS ||
+      inlineParts > MAX_INLINE_IMAGES ||
+      normalParts + inlineParts > MAX_TOTAL_FILE_PARTS ||
       all.reduce((sum, item) => sum + item.size, 0) > SEND_MAX_TOTAL_BYTES
     ) {
       return res.status(413).json({ ok: false, error: "ATTACHMENTS_TOO_LARGE" });

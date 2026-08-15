@@ -62,6 +62,10 @@ import {
   buildAttachmentTransportPlan,
   deriveAttachmentSourceRef,
   selectNormalComposerAttachments,
+  classifyAttachmentLimitExceeded,
+  COMPOSE_MAX_TOTAL_BYTES,
+  COMPOSE_MAX_NORMAL_ATTACHMENTS,
+  COMPOSE_MAX_INLINE_IMAGES,
   type AttachmentSourceRef,
 } from "@/lib/mail-composer-attachments";
 import { runEntireMessageSingleFlight, samePhysicalMessage } from "@/lib/mail-entire-message";
@@ -6405,9 +6409,6 @@ function LoadingViewer({ onBack }: { onBack: () => void }) {
   );
 }
 
-const COMPOSE_MAX_TOTAL_BYTES = 25 * 1024 * 1024;
-const COMPOSE_MAX_FILES = 10;
-
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
@@ -7143,11 +7144,14 @@ function Composer({
           const totalAttachmentBytes =
             currentFiles.reduce((sum, file) => sum + file.size, 0) +
             transportImages.reduce((sum, image) => sum + image.file.size, 0);
-          if (
-            existingKeptRef.current.length + currentFiles.length + transportImages.length >
-              COMPOSE_MAX_FILES ||
-            totalAttachmentBytes > COMPOSE_MAX_TOTAL_BYTES
-          ) {
+          const normalParts = existingKeptRef.current.length + currentFiles.length;
+          const inlineParts = transportImages.length;
+          const saveExceeded = classifyAttachmentLimitExceeded({
+            normalAttachmentCount: normalParts,
+            inlineImageCount: inlineParts,
+            totalBytes: totalAttachmentBytes,
+          });
+          if (saveExceeded !== null) {
             return { ok: false, code: "ATTACHMENT_LIMIT_EXCEEDED" };
           }
           const stagedFiles = await Promise.all(
@@ -7609,7 +7613,8 @@ function Composer({
   // server-source attachments only expose BODYSTRUCTURE encoded metadata;
   // their real decoded size is enforced by the Bridge after staging.
   const totalBytes = files.reduce((acc, f) => acc + f.size, 0) + inlineBytes;
-  const totalCount = files.length + existingKept.length + inlineImages.length;
+  const normalAttachmentCount = files.length + existingKept.length;
+  const inlineImageCount = inlineImages.length;
 
   // Ref mirror so the (persistent) saveRemote closure created at first mount
   // always reads the latest kept-attachment list without being torn down.
@@ -8067,19 +8072,19 @@ function Composer({
     if (incoming.length === 0) return;
     const merged: File[] = [...files];
     let runningTotal = totalBytes;
-    let runningCount = totalCount;
+    let runningNormal = normalAttachmentCount;
     for (const f of incoming) {
-      if (runningCount >= COMPOSE_MAX_FILES) {
-        toast.error(trf("الحد الأقصى {{count}} ملفات", { count: COMPOSE_MAX_FILES }));
+      if (runningNormal >= COMPOSE_MAX_NORMAL_ATTACHMENTS) {
+        toast.error(tr("الحد الأقصى للمرفقات هو 10 ملفات"));
         break;
       }
       if (runningTotal + f.size > COMPOSE_MAX_TOTAL_BYTES) {
-        toast.error(tr("تجاوزت الحد الكلّي (25MB)"));
+        toast.error(tr("تجاوزت حدود المرفقات المسموحة"));
         break;
       }
       merged.push(f);
       runningTotal += f.size;
-      runningCount += 1;
+      runningNormal += 1;
     }
     setFiles(merged);
     if (fileInputRef.current) fileInputRef.current.value = "";
@@ -8269,12 +8274,15 @@ function Composer({
         );
         continue;
       }
+      if (inlineImageCount + added.length > COMPOSE_MAX_INLINE_IMAGES) {
+        toast.error(tr("تجاوزت الرسالة الحد المسموح للصور المضمنة"));
+        continue;
+      }
       if (
-        totalCount + added.length >= COMPOSE_MAX_FILES ||
         totalBytes + added.reduce((n, image) => n + image.file.size, 0) + file.size >
-          COMPOSE_MAX_TOTAL_BYTES
+        COMPOSE_MAX_TOTAL_BYTES
       ) {
-        toast.error(tr("تجاوزت الصور حدود المرفقات المسموحة"));
+        toast.error(tr("تجاوزت حدود المرفقات المسموحة"));
         continue;
       }
       const image = createInlineComposeImage(file);
@@ -8675,8 +8683,19 @@ function Composer({
       toast.error(trf("عنوان بريد غير صالح: {{email}}", { email: invalid[0].email }));
       return;
     }
-    if (totalCount > COMPOSE_MAX_FILES || totalBytes > COMPOSE_MAX_TOTAL_BYTES) {
-      toast.error(tr("تجاوزت حدود المرفقات المسموحة"));
+    const exceeded = classifyAttachmentLimitExceeded({
+      normalAttachmentCount,
+      inlineImageCount,
+      totalBytes,
+    });
+    if (exceeded !== null) {
+      toast.error(
+        exceeded === "bytes"
+          ? tr("تجاوزت حدود المرفقات المسموحة")
+          : exceeded === "inline"
+            ? tr("تجاوزت الرسالة الحد المسموح للصور المضمنة")
+            : tr("الحد الأقصى للمرفقات هو 10 ملفات"),
+      );
       return;
     }
     if (!subject.trim()) {
@@ -8709,7 +8728,7 @@ function Composer({
     el?.addEventListener("keydown", onKey);
     return () => el?.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [to, cc, bcc, subject, files, existingKept, inlineImages, totalCount, totalBytes]);
+  }, [to, cc, bcc, subject, files, existingKept, inlineImages, normalAttachmentCount, inlineImageCount, totalBytes]);
 
   // Inline mode: composer fills the message-viewer pane on the same
   // light bg-surface used elsewhere, wrapped in an elegant card.
@@ -8741,8 +8760,19 @@ function Composer({
   type SaveNowResult = "saved_server" | "saved_local" | "failed" | "empty";
   async function saveDraftNow(): Promise<SaveNowResult> {
     if (typeof window === "undefined") return "failed";
-    if (totalCount > COMPOSE_MAX_FILES || totalBytes > COMPOSE_MAX_TOTAL_BYTES) {
-      toast.error(tr("تجاوزت حدود المرفقات المسموحة"));
+    const exceeded = classifyAttachmentLimitExceeded({
+      normalAttachmentCount,
+      inlineImageCount,
+      totalBytes,
+    });
+    if (exceeded !== null) {
+      toast.error(
+        exceeded === "bytes"
+          ? tr("تجاوزت حدود المرفقات المسموحة")
+          : exceeded === "inline"
+            ? tr("تجاوزت الرسالة الحد المسموح للصور المضمنة")
+            : tr("الحد الأقصى للمرفقات هو 10 ملفات"),
+      );
       return "failed";
     }
     if (savingNowRef.current) {
@@ -9511,7 +9541,7 @@ function Composer({
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}
-            disabled={sending || totalCount >= COMPOSE_MAX_FILES}
+            disabled={sending || normalAttachmentCount >= COMPOSE_MAX_NORMAL_ATTACHMENTS}
             className="inline-flex items-center gap-1.5 rounded-lg border border-input bg-background px-2.5 py-2 text-xs text-muted-foreground transition hover:bg-muted hover:text-foreground disabled:opacity-40 sm:px-3"
             aria-label={tr("إرفاق ملف")}
             title={tr("إرفاق ملف")}
