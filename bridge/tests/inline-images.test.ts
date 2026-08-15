@@ -206,3 +206,18 @@ test("InlineImageMetadataSchema accepts exactly 20 distinct entries and rejects 
   assert.equal(InlineImageMetadataSchema.safeParse(twenty).success, true);
   assert.equal(InlineImageMetadataSchema.safeParse([...twenty, entry(20)]).success, false);
 });
+
+test("declared image/png with JPEG bytes stays rejected (actual bytes win)", async () => {
+  const file = [
+    { originalname: filename, path: "/tmp/jpeg-as-png", mimetype: "image/png", size: 4 },
+  ];
+  await assert.rejects(
+    () =>
+      mapUploadedAttachments(
+        file,
+        [{ uploadFilename: filename, cid, contentType: "image/png" }],
+        async () => Buffer.from("ffd8ffe0", "hex"),
+      ),
+    /INVALID_INLINE_IMAGE/,
+  );
+});

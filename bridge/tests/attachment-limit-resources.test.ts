@@ -70,7 +70,7 @@ test("per-inline 5 MiB limit is unchanged", () => {
 test("InlineImageMetadataSchema keeps security validation at the higher 20-cap", () => {
   assert.match(inlineImagesSource, /\.max\(20\)/);
   assert.match(inlineImagesSource, /DUPLICATE_INLINE_IMAGE/);
-  assert.match(inlineImagesSource, /sniffMime/);
+  assert.match(inlineImagesSource, /sniffImageMime/);
   assert.match(inlineImagesSource, /INLINE_IMAGE_MIME_TYPES/);
 });
 

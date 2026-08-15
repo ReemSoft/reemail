@@ -235,7 +235,7 @@ describe("composer inline images", () => {
   });
 
   it("keeps the hydrated quoted CID staging filename identical to the Send V2 declaration", () => {
-    const file = dataUriToFile("data:image/png;base64,eA==", "inline-image", "image/png");
+    const file = dataUriToFile("data:image/png;base64,iVBORw0KGgo=", "inline-image", "image/png");
     const image = createInlineComposeImage(file);
     const [transport] = metadataToTransport([image]);
 
@@ -245,6 +245,35 @@ describe("composer inline images", () => {
     const stagedFilename = image.uploadFilename;
     const bridgeRejects = stagedFilename !== transport.uploadFilename;
     expect(bridgeRejects).toBe(false);
+  });
+
+  it("dataUriToFile canonicalizes JPEG bytes declared image/png to image/jpeg", () => {
+    const file = dataUriToFile("data:image/png;base64,/9j/", "inline-image", "image/png");
+    expect(file.type).toBe("image/jpeg");
+  });
+
+  it("dataUriToFile canonicalizes PNG bytes declared image/jpeg to image/png", () => {
+    const file = dataUriToFile("data:image/jpeg;base64,iVBORw0KGgo=", "inline-image", "image/jpeg");
+    expect(file.type).toBe("image/png");
+  });
+
+  it("dataUriToFile keeps a canonical correct image unchanged", () => {
+    const file = dataUriToFile("data:image/png;base64,iVBORw0KGgo=", "inline-image", "image/png");
+    expect(file.type).toBe("image/png");
+  });
+
+  it("dataUriToFile fails closed for unknown/malformed bytes", () => {
+    expect(() => dataUriToFile("data:image/png;base64,eA==", "inline-image", "image/png")).toThrow(
+      "INLINE_IMAGE_DATA",
+    );
+  });
+
+  it("dataUriToFile output passes createInlineComposeImage with truthful metadata", () => {
+    const file = dataUriToFile("data:image/png;base64,/9j/", "inline-image", "image/png");
+    expect(validateInlineImageFile(file)).toEqual({ ok: true, mimeType: "image/jpeg" });
+    const image = createInlineComposeImage(file);
+    expect(image.mimeType).toBe("image/jpeg");
+    expect(image.uploadFilename.endsWith(".jpg")).toBe(true);
   });
 
   it("enforces resize minimum and editor maximum", () => {

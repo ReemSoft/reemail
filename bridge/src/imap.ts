@@ -9,6 +9,7 @@ import iconv from "iconv-lite";
 import type { Readable } from "node:stream";
 import type { MailAccount, MailFolder, FolderCount, MailMessage, MailAttachment } from "./types.js";
 import { normalizeAttachmentFilename } from "./attachment-filename.js";
+import { sniffImageMime } from "./image-signature.js";
 import {
   getMailboxesCached,
   withAccountMailbox,
@@ -1102,7 +1103,6 @@ export async function downloadInlinePartsInMailbox(
             continue;
           }
           const mime = parseInlinePartMime(rawMime);
-          const mimeType = (mime.contentType || part.mimeType).split(";")[0].trim().toLowerCase();
           let decoded: Buffer;
           try {
             decoded = decodeInlinePartContent(raw, mime.transferEncoding ?? "");
@@ -1110,11 +1110,16 @@ export async function downloadInlinePartsInMailbox(
             failedCids.push(part.cid);
             continue;
           }
+          // Canonicalize the MIME from the actual decoded bytes, never the
+          // BODYSTRUCTURE / MIME-header declaration. A part whose real bytes
+          // are not one of the four supported raster formats fails closed
+          // instead of being promoted by a stale image/* label.
+          const mimeType = sniffImageMime(decoded);
           if (
+            !mimeType ||
             !decoded.length ||
             decoded.length > INLINE_IMAGE_MAX_BYTES ||
-            totalBytes + decoded.length > INLINE_IMAGE_TOTAL_BYTES ||
-            !INLINE_IMAGE_SAFE_MIME.test(mimeType)
+            totalBytes + decoded.length > INLINE_IMAGE_TOTAL_BYTES
           ) {
             failedCids.push(part.cid);
             continue;
@@ -1321,16 +1326,12 @@ export async function getLargeInlinePartsBatch(
             () => dropAccountConnection(account, "media"),
             signal,
           );
-          const mimeType = String(result?.meta?.contentType || part.mimeType)
-            .split(";", 1)[0]
-            .trim()
-            .toLowerCase()
-            .replace("image/jpg", "image/jpeg");
+          const mimeType = result?.buf ? sniffImageMime(result.buf) : null;
           if (
+            !mimeType ||
             !result?.buf.length ||
             result.buf.length > LARGE_INLINE_PART_MAX_BYTES ||
-            totalBytes + result.buf.length > 25 * 1024 * 1024 ||
-            !INLINE_IMAGE_SAFE_MIME.test(mimeType)
+            totalBytes + result.buf.length > 25 * 1024 * 1024
           ) {
             failedCids.push(part.cid);
             continue;
@@ -1399,12 +1400,10 @@ export async function getLargeInlinePart(
   if (!result?.buf.length || result.buf.length > LARGE_INLINE_PART_MAX_BYTES) return null;
   const expectedSize = Number(result.meta?.expectedSize);
   if (Number.isFinite(expectedSize) && expectedSize > LARGE_INLINE_PART_MAX_BYTES) return null;
-  const rawMimeType = String(result.meta?.contentType || "")
-    .split(";", 1)[0]
-    .trim()
-    .toLowerCase();
-  const mimeType = rawMimeType === "image/jpg" ? "image/jpeg" : rawMimeType;
-  if (!INLINE_IMAGE_SAFE_MIME.test(mimeType)) return null;
+  // Canonicalize the MIME from the actual decoded bytes; a non-image part
+  // (or one whose declared type disagreed with the real format) fails closed.
+  const mimeType = sniffImageMime(result.buf);
+  if (!mimeType) return null;
   if (TIMING_ENABLED) {
     console.log(
       `[imap-timing] lane=media large-inline-part ${Date.now() - startedAt}ms ${result.buf.length}B`,

@@ -9,6 +9,9 @@ import {
 } from "../src/imap.js";
 import type { MailAccount } from "../src/types.js";
 
+const PNG_BYTES = Buffer.from("89504e470d0a1a0a", "hex");
+const JPEG_BYTES = Buffer.from("ffd8ffe0", "hex");
+
 const account: MailAccount = {
   email_address: "user@example.com",
   display_name: null,
@@ -45,11 +48,11 @@ test("two large CID requests reuse the media mailbox path without connect/login"
     },
     async download(uid: string, part: string, options: unknown) {
       calls.push({ uid, part, options });
-      const content = Readable.from([Buffer.from("png-bytes")]);
+      const content = Readable.from([PNG_BYTES]);
       streams.push(content);
       return {
         content,
-        meta: { contentType: "image/png", expectedSize: 9 },
+        meta: { contentType: "image/png", expectedSize: PNG_BYTES.length },
       };
     },
   };
@@ -76,8 +79,8 @@ test("two large CID requests reuse the media mailbox path without connect/login"
     dependencies,
   );
 
-  assert.equal(first?.bytes.toString(), "png-bytes");
-  assert.equal(second?.bytes.toString(), "png-bytes");
+  assert.equal(first?.bytes.toString("hex"), PNG_BYTES.toString("hex"));
+  assert.equal(second?.bytes.toString("hex"), PNG_BYTES.toString("hex"));
   assert.equal(calls.length, 2);
   assert.deepEqual(calls[0].options, { uid: true, maxBytes: LARGE_INLINE_PART_MAX_BYTES });
   assert.ok(
@@ -94,14 +97,14 @@ test("two large CID requests reuse the media mailbox path without connect/login"
   assert.doesNotMatch(sharedPath, /makeImapClient|\.connect\(|\.logout\(/);
 });
 
-test("large CID endpoint helper enforces raster MIME and the 5 MiB expected-size cap", async () => {
-  let mode: "svg" | "oversize" = "svg";
+test("large CID endpoint helper fails closed for non-image bytes and the 5 MiB expected-size cap", async () => {
+  let mode: "non-image" | "oversize" = "non-image";
   const client = {
     async download() {
       return {
-        content: Readable.from([Buffer.from("bytes")]),
+        content: Readable.from([mode === "non-image" ? Buffer.from("<svg>") : PNG_BYTES]),
         meta:
-          mode === "svg"
+          mode === "non-image"
             ? { contentType: "image/svg+xml", expectedSize: 5 }
             : { contentType: "image/png", expectedSize: LARGE_INLINE_PART_MAX_BYTES + 1 },
       };
@@ -138,8 +141,8 @@ test("abort poisons and releases the operation before the next shared-session re
         };
       }
       return {
-        content: Readable.from([Buffer.from("next")]),
-        meta: { contentType: "image/png", expectedSize: 4 },
+        content: Readable.from([PNG_BYTES]),
+        meta: { contentType: "image/png", expectedSize: PNG_BYTES.length },
       };
     },
   };
@@ -179,7 +182,7 @@ test("abort poisons and releases the operation before the next shared-session re
     undefined,
     dependencies,
   );
-  assert.equal(next?.bytes.toString(), "next");
+  assert.equal(next?.bytes.toString("hex"), PNG_BYTES.toString("hex"));
 });
 
 test("large CID fails closed before download when UIDVALIDITY changed", async () => {
@@ -206,4 +209,39 @@ test("large CID fails closed before download when UIDVALIDITY changed", async ()
   );
   assert.equal(result, null);
   assert.equal(downloads, 0);
+});
+
+test("large single part canonicalizes MIME from decoded bytes (JPEG declared image/png)", async () => {
+  const client = {
+    async download() {
+      return {
+        content: Readable.from([JPEG_BYTES]),
+        meta: { contentType: "image/png", expectedSize: JPEG_BYTES.length },
+      };
+    },
+  };
+  const dependencies = dependenciesFor(client);
+  const result = await getLargeInlinePart(
+    account,
+    "password",
+    "inbox",
+    42,
+    "2",
+    "77",
+    undefined,
+    dependencies,
+  );
+  assert.equal(result?.mimeType, "image/jpeg");
+  assert.equal(result?.bytes.toString("hex"), JPEG_BYTES.toString("hex"));
+});
+
+test("large batch canonicalizes MIME from decoded bytes (source guard)", () => {
+  const source = readFileSync("src/imap.ts", "utf8");
+  const batch = source.slice(
+    source.indexOf("export async function getLargeInlinePartsBatch"),
+    source.indexOf("export interface LargeInlinePartDependencies"),
+  );
+  assert.match(batch, /sniffImageMime\(result\.buf\)/);
+  assert.doesNotMatch(batch, /result\?\.meta\?\.contentType/);
+  assert.doesNotMatch(batch, /\.replace\("image\/jpg", "image\/jpeg"\)/);
 });

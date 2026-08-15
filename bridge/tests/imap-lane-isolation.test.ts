@@ -143,8 +143,8 @@ test("a large CID request rides the media lane through the reused mailbox path",
     async download(uid: string, part: string, options: unknown) {
       calls.push({ uid, part, options });
       return {
-        content: Readable.from([Buffer.from("png-bytes")]),
-        meta: { contentType: "image/png", expectedSize: 9 },
+        content: Readable.from([Buffer.from("89504e470d0a1a0a", "hex")]),
+        meta: { contentType: "image/png", expectedSize: 8 },
       };
     },
   };
@@ -168,7 +168,7 @@ test("a large CID request rides the media lane through the reused mailbox path",
     undefined,
     dependencies,
   );
-  assert.equal(result?.bytes.toString(), "png-bytes");
+  assert.equal(result?.bytes.toString("hex"), "89504e470d0a1a0a");
   assert.equal(calls.length, 1);
 });
 

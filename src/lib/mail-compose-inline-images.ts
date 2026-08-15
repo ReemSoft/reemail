@@ -119,7 +119,24 @@ export function dataUriToFile(dataUri: string, filename: string, mimeType: Inlin
   const prefix = `data:${mimeType};base64,`;
   if (!dataUri.startsWith(prefix)) throw new Error("INLINE_IMAGE_DATA");
   const bytes = Uint8Array.from(atob(dataUri.slice(prefix.length)), (char) => char.charCodeAt(0));
-  return new File([bytes], filename, { type: mimeType });
+  // Legacy cached inline images may carry a declared MIME that no longer
+  // matches the physical bytes. Sniff the already-decoded bytes and build the
+  // File with the canonical actual MIME so staging/send metadata is truthful.
+  const actual = sniffInlineImageMime(bytes);
+  if (!actual) throw new Error("INLINE_IMAGE_DATA");
+  return new File([bytes], filename, { type: actual });
+}
+
+/** Canonicalizes a supported raster MIME from at most 12 leading bytes. */
+export function sniffInlineImageMime(bytes: Uint8Array): InlineImageMime | null {
+  const head = Array.from(bytes.subarray(0, 12));
+  const hex = head.map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  const ascii = String.fromCharCode(...head);
+  if (hex.startsWith("89504e470d0a1a0a")) return "image/png";
+  if (hex.startsWith("ffd8ff")) return "image/jpeg";
+  if (ascii.startsWith("GIF87a") || ascii.startsWith("GIF89a")) return "image/gif";
+  if (ascii.startsWith("RIFF") && ascii.slice(8, 12) === "WEBP") return "image/webp";
+  return null;
 }
 
 export function toInlineImageMetadata(image: InlineComposeImage): InlineImageMetadata {

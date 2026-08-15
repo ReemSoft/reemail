@@ -2,6 +2,7 @@ import { z } from "zod";
 import { open } from "node:fs/promises";
 import type { SendAttachment } from "./smtp.js";
 import { normalizeAttachmentFilename } from "./attachment-filename.js";
+import { sniffImageMime } from "./image-signature.js";
 
 export const INLINE_IMAGE_MIME_TYPES = [
   "image/png",
@@ -50,17 +51,6 @@ async function readFilePrefix(path: string): Promise<Buffer> {
   }
 }
 
-function sniffMime(prefix: Uint8Array): string | null {
-  const bytes = Buffer.from(prefix);
-  const hex = bytes.toString("hex");
-  const ascii = bytes.toString("ascii");
-  if (hex.startsWith("89504e470d0a1a0a")) return "image/png";
-  if (hex.startsWith("ffd8ff")) return "image/jpeg";
-  if (ascii.startsWith("GIF87a") || ascii.startsWith("GIF89a")) return "image/gif";
-  if (ascii.startsWith("RIFF") && ascii.slice(8, 12) === "WEBP") return "image/webp";
-  return null;
-}
-
 export async function mapUploadedAttachments(
   files: UploadedInlineFile[],
   rawMetadata: unknown,
@@ -86,7 +76,7 @@ export async function mapUploadedAttachments(
       if (
         file.size > INLINE_IMAGE_MAX_BYTES ||
         file.mimetype !== inline.contentType ||
-        (await readPrefix(file.path).then(sniffMime)) !== inline.contentType ||
+        (await readPrefix(file.path).then(sniffImageMime)) !== inline.contentType ||
         !INLINE_IMAGE_MIME_TYPES.includes(file.mimetype as (typeof INLINE_IMAGE_MIME_TYPES)[number])
       )
         throw new Error("INVALID_INLINE_IMAGE");

@@ -18,6 +18,9 @@ function parts(count: number): InlinePartMetadata[] {
   }));
 }
 
+const PNG_BYTES = Buffer.from("89504e470d0a1a0a", "hex");
+const JPEG_BYTES = Buffer.from("ffd8ffe0", "hex");
+
 function bodyPartsMap(
   query: Array<{ key: string; maxLength: number }>,
   overrides?: { content?: (key: string) => Buffer; mime?: (key: string) => Buffer },
@@ -30,7 +33,7 @@ function bodyPartsMap(
         : Buffer.from("Content-Type: image/png\r\n");
       if (mime) map.set(key, mime);
     } else {
-      const content = overrides?.content ? overrides.content(key) : Buffer.from("logo");
+      const content = overrides?.content ? overrides.content(key) : PNG_BYTES;
       if (content) map.set(key, content);
     }
   }
@@ -189,7 +192,7 @@ test("an oversized raw part is rejected fail-closed at the transport cap", async
   // 1572865 raw octets == cap+1: the server answers with a literal at the
   // requested maxLength, which proves the part is oversized/truncated.
   const client = fetchOneClient(calls, {
-    content: (key) => (key === "4" ? Buffer.alloc(6 * 256 * 1024 + 1, 0x61) : Buffer.from("logo")),
+    content: (key) => (key === "4" ? Buffer.alloc(6 * 256 * 1024 + 1, 0x61) : PNG_BYTES),
   });
 
   const result = await downloadInlinePartsInMailbox(client as never, 42, parts(6), "77");
@@ -205,7 +208,7 @@ test("one missing part fails closed while the other five download", async () => 
     options: unknown;
   }> = [];
   const client = fetchOneClient(calls, {
-    content: (key) => (key === "4" ? undefined : Buffer.from("logo")),
+    content: (key) => (key === "4" ? undefined : PNG_BYTES),
   }) as { mailbox: { uidValidity: string }; fetchOne: () => Promise<unknown> };
 
   const result = await downloadInlinePartsInMailbox(client as never, 42, parts(6), "77");
@@ -290,7 +293,7 @@ test("base64-encoded parts decode deterministically and bound after decode", asy
   const oversized = Buffer.alloc(300 * 1024, 0x61);
   const client = fetchOneClient(calls, {
     content: (key) =>
-      key === "4" ? Buffer.from(oversized.toString("base64")) : Buffer.from("bG9nbw=="),
+      key === "4" ? Buffer.from(oversized.toString("base64")) : Buffer.from(PNG_BYTES.toString("base64")),
     mime: () => Buffer.from("Content-Type: image/png\r\nContent-Transfer-Encoding: base64\r\n"),
   });
 
@@ -298,8 +301,8 @@ test("base64-encoded parts decode deterministically and bound after decode", asy
   assert.equal(result.images.length, 5);
   assert.deepEqual(result.failedCids, ["image-2"]);
   const logo = result.images[0];
-  assert.equal(logo.dataUri, "data:image/png;base64,bG9nbw==");
-  assert.equal(logo.size, 4);
+  assert.equal(logo.dataUri, `data:image/png;base64,${PNG_BYTES.toString("base64")}`);
+  assert.equal(logo.size, PNG_BYTES.length);
 });
 
 test("quoted-printable parts decode deterministically", async () => {
@@ -308,8 +311,9 @@ test("quoted-printable parts decode deterministically", async () => {
     bodyParts: Array<{ key: string; maxLength: number }>;
     options: unknown;
   }> = [];
+  const pngQp = "=89=50=4E=47=0D=0A=1A=0A";
   const client = fetchOneClient(calls, {
-    content: (key) => (key === "4" ? Buffer.from("=C3=A9=\r\nx") : Buffer.from("=C3=A9")),
+    content: (key) => (key === "4" ? Buffer.from("=89=50=4E=47=\r\n=0D=0A=1A=0A") : Buffer.from(pngQp)),
     mime: () =>
       Buffer.from("Content-Type: image/png\r\nContent-Transfer-Encoding: quoted-printable\r\n"),
   });
@@ -318,8 +322,8 @@ test("quoted-printable parts decode deterministically", async () => {
   assert.equal(result.images.length, 6);
   assert.deepEqual(result.failedCids, []);
   const first = result.images[0];
-  assert.equal(first.dataUri, "data:image/png;base64,w6k=");
-  assert.equal(first.size, 2);
+  assert.equal(first.dataUri, `data:image/png;base64,${PNG_BYTES.toString("base64")}`);
+  assert.equal(first.size, PNG_BYTES.length);
 });
 
 test("a worst-case valid quoted-printable part at the decoded cap is never rejected", async () => {
@@ -327,10 +331,12 @@ test("a worst-case valid quoted-printable part at the decoded cap is never rejec
   // Every octet encoded as "=XX" with a soft line break after every token:
   // 3D + 3(D-1) = 6D - 3 raw octets -- the strict worst valid RFC 2045 QP for
   // a decoded D-byte part. Proves 3x would have truncated a legitimate part.
+  const pngSignature = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
   const tokens: string[] = [];
   for (let i = 0; i < decodedBytes; i++) {
     if (i > 0) tokens.push("=\r\n");
-    tokens.push("=7F");
+    const byte = i < pngSignature.length ? pngSignature[i] : 0x7f;
+    tokens.push("=" + byte.toString(16).padStart(2, "0").toUpperCase());
   }
   const worstCase = Buffer.from(tokens.join(""), "latin1");
   assert.equal(worstCase.length, 6 * decodedBytes - 3);
@@ -343,7 +349,7 @@ test("a worst-case valid quoted-printable part at the decoded cap is never rejec
     options: unknown;
   }> = [];
   const client = fetchOneClient(calls, {
-    content: (key) => (key === "4" ? worstCase : Buffer.from("logo")),
+    content: (key) => (key === "4" ? worstCase : PNG_BYTES),
     mime: () =>
       Buffer.from("Content-Type: image/png\r\nContent-Transfer-Encoding: quoted-printable\r\n"),
   });
@@ -362,8 +368,10 @@ test("declared total byte budget bounds the multi-part FETCH", async () => {
     bodyParts: Array<{ key: string; maxLength: number }>;
     options: unknown;
   }> = [];
+  const sixtyKib = Buffer.alloc(60 * 1024);
+  PNG_BYTES.copy(sixtyKib, 0);
   const client = fetchOneClient(calls, {
-    content: () => Buffer.alloc(60 * 1024),
+    content: () => sixtyKib,
   });
   // Declared 20 x 60KiB = 1.2MiB > 1MiB total budget -> only the first 17
   // (1020KiB) are selected for the single FETCH; the rest fail closed.
@@ -379,4 +387,40 @@ test("background prefetch defers every CID part (metadata only)", () => {
     deferred: six,
     toDownload: [],
   });
+});
+
+test("small batch canonicalizes MIME from decoded bytes (JPEG declared image/png)", async () => {
+  const calls: Array<{
+    range: string;
+    bodyParts: Array<{ key: string; maxLength: number }>;
+    options: unknown;
+  }> = [];
+  const client = fetchOneClient(calls, {
+    content: () => JPEG_BYTES,
+    mime: () => Buffer.from("Content-Type: image/png\r\n"),
+  });
+
+  const result = await downloadInlinePartsInMailbox(client as never, 42, parts(2), "77");
+  assert.equal(result.images.length, 2);
+  assert.deepEqual(result.failedCids, []);
+  for (const image of result.images) {
+    assert.equal(image.mimeType, "image/jpeg");
+    assert.ok(image.dataUri.startsWith("data:image/jpeg;base64,"));
+  }
+});
+
+test("small batch fails closed when decoded bytes are not a supported image", async () => {
+  const calls: Array<{
+    range: string;
+    bodyParts: Array<{ key: string; maxLength: number }>;
+    options: unknown;
+  }> = [];
+  const client = fetchOneClient(calls, {
+    content: () => Buffer.from("not-an-image"),
+    mime: () => Buffer.from("Content-Type: image/png\r\n"),
+  });
+
+  const result = await downloadInlinePartsInMailbox(client as never, 42, parts(2), "77");
+  assert.equal(result.images.length, 0);
+  assert.deepEqual(result.failedCids, ["image-0", "image-1"]);
 });
