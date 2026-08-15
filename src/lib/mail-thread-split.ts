@@ -9,7 +9,7 @@
 /** Markers that indicate the start of quoted history inside an email body. */
 const MARKERS: RegExp[] = [
   /<blockquote\b/i,
-  /<div[^>]*class="[^"]*(?:gmail_quote|yahoo_quoted|moz-cite-prefix|OutlookMessageHeader)[^"]*"/i,
+  /<div[^>]*class="[^"]*(?:gmail_quote|yahoo_quoted|moz-cite-prefix|OutlookMessageHeader|mm_quote)[^"]*"/i,
   /<div[^>]*id="(?:divRplyFwdMsg|appendonsend)"/i,
   /<hr[^>]*id="stopSpelling"/i,
   /-{2,}\s*(?:Original Message|Forwarded message|رسالة أصلية|رسالة معاد توجيهها)\s*-{2,}/i,
@@ -20,7 +20,7 @@ const MARKERS: RegExp[] = [
 /** Structural quote starts safe enough for display-only historical trimming. */
 const HISTORICAL_QUOTE_MARKERS: RegExp[] = [
   /<blockquote\b/i,
-  /<div[^>]*class="[^"]*(?:gmail_quote|yahoo_quoted|protonmail_quote|moz-cite-prefix|OutlookMessageHeader)[^"]*"/i,
+  /<div[^>]*class="[^"]*(?:gmail_quote|yahoo_quoted|protonmail_quote|moz-cite-prefix|OutlookMessageHeader|mm_quote)[^"]*"/i,
   /<div[^>]*id="(?:divRplyFwdMsg|appendonsend)"/i,
   /<hr[^>]*id="stopSpelling"/i,
   /<(?:div|p)\b[^>]*>\s*-{2,}\s*(?:Original Message|Forwarded message|رسالة أصلية|رسالة معاد توجيهها)\s*-{2,}/i,

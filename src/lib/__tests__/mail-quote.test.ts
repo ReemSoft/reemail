@@ -96,6 +96,16 @@ describe("splitQuotedHtml", () => {
     expect(r.quoted).toContain("Ali wrote:");
   });
 
+  it("returns the whole Mail Maestro mm_quote wrapper in quoted", () => {
+    const html =
+      '<div>رد جديد</div><div><br></div><div class="mm_quote"><div style="color:#71717a;font-size:12px;margin:0 0 8px"><bdi>15/08/2026, 4:45 م</bdi> — <bdi>Hussam Hussam &lt;iamhusam@gmail.com&gt;</bdi> كتب:</div><blockquote style="margin:0;color:#3f3f46"><div data-mm-quoted-content="1" dir="auto" style="padding-inline-start:12px">تم استلام الملف</div></blockquote></div>';
+    const r = splitQuotedHtml(html);
+    expect(r.latest).toBe("<div>رد جديد</div><div><br></div>");
+    expect(r.quoted.startsWith('<div class="mm_quote">')).toBe(true);
+    expect(r.quoted).toContain("كتب:");
+    expect(r.quoted).toContain("تم استلام الملف");
+  });
+
   it("returns no quote when the body is entirely a quote", () => {
     const r = splitQuotedHtml("<blockquote>old</blockquote>");
     expect(r.quoted).toBe("");

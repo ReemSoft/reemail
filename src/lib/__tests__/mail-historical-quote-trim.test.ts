@@ -25,6 +25,14 @@ describe("trimHistoricalQuotedContent", () => {
     expect(trimHistoricalQuotedContent(html)).toBe("<p>New answer</p>");
   });
 
+  it("removes the whole Mail Maestro mm_quote wrapper including its date-first attribution", () => {
+    const html =
+      '<div>رد جديد</div><div><br></div><div class="mm_quote"><div style="color:#71717a;font-size:12px;margin:0 0 8px"><bdi>15/08/2026, 4:45 م</bdi> — <bdi>Hussam Hussam &lt;iamhusam@gmail.com&gt;</bdi> كتب:</div><blockquote style="margin:0;color:#3f3f46"><div data-mm-quoted-content="1" dir="auto" style="padding-inline-start:12px">تم استلام الملف</div></blockquote></div>';
+    expect(trimHistoricalQuotedContent(html)).toBe(
+      "<div>رد جديد</div><div><br></div>",
+    );
+  });
+
   it("removes an Outlook original-message tail", () => {
     const html =
       "<div>New answer</div><div>-----Original Message-----<br>From: Sam<br>Old answer</div>";
