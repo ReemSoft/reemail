@@ -112,46 +112,44 @@ test("3. MEDIA outranks transfer and interactive too", async () => {
 });
 
 test("4. bounded fairness: after 3 media admissions a waiting lower-priority request is served next", async () => {
-  // Three media ops on distinct accounts occupy both a per-account slot and
-  // the company cap (3), so a background waiter and a 4th media waiter queue.
-  // Releasing m1 makes both eligible at once; the media streak is at the
-  // limit, so the background waiter is served before m4.
-  const g = makeGates({ perCompanyMax: 3, perHostMax: 10 });
+  // PER-ACCOUNT streak semantics: three media admissions for the SAME account
+  // are queued back-to-back so the streak reaches 3 for that account. A
+  // same-account background waiter then receives one bounded yield before the
+  // account's 4th media op.
+  const g = makeGates();
 
   const releases: ImapGateRelease[] = [];
   const order: string[] = [];
-  const hold = async (label: string, account: string) => {
-    const rel = await g.acquire({ host: HOST, company: COMPANY, account, priority: "media" });
+  const hold = async (label: string) => {
+    const rel = await g.acquire({ host: HOST, company: COMPANY, account: "a", priority: "media" });
     order.push(label);
     releases.push(rel);
   };
-  const track = (label: string, account: string, priority: ImapPriority) =>
-    g.acquire({ host: HOST, company: COMPANY, account, priority }).then((rel) => {
+  const track = (label: string, priority: ImapPriority) =>
+    g.acquire({ host: HOST, company: COMPANY, account: "a", priority }).then((rel) => {
       order.push(label);
       rel();
     });
 
-  await hold("m1", "a1"); // media streak 1, company 1
-  await hold("m2", "a2"); // media streak 2, company 2
-  await hold("m3", "a3"); // media streak 3, company 3
-
-  const bg1 = track("bg1", "a4", "background"); // queued: company cap full
-  const m4 = track("m4", "a1", "media"); // queued: a1 slot held by m1
+  // First media admitted on the fast path (streak 1); the rest queue behind it.
+  await hold("m1");
+  const bg1 = track("bg1", "background"); // queued: non-body slot held by m1
+  const m2 = track("m2", "media"); // queued
+  const m3 = track("m3", "media"); // queued
+  const m4 = track("m4", "media"); // queued
   await sleep(20);
-  assert.deepEqual(order, ["m1", "m2", "m3"], "bg1 and m4 must stay queued");
+  assert.deepEqual(order, ["m1"], "m2/m3/m4 and bg1 must stay queued behind m1");
 
-  // m1 releases: m4 (eligible) and bg1 (eligible) compete. The media streak is
-  // maxed, so the fairness yield serves bg1 before m4.
+  // Releasing m1 lets the queue cascade (each op auto-releases on admission):
+  // m2 (streak 2), m3 (streak 3), then at the account's streak limit bg1
+  // (same account) is yielded ahead of m4, and m4 resumes media priority.
   releases[0]();
-  await Promise.all([bg1, m4]);
+  await Promise.all([bg1, m2, m3, m4]);
   assert.deepEqual(
     order,
     ["m1", "m2", "m3", "bg1", "m4"],
-    "at streak limit the lower-priority waiter is served before the 4th media",
+    "at the account's streak limit its own lower waiter is served before its 4th media",
   );
-
-  releases[1]();
-  releases[2]();
   await sleep(20);
   assert.equal(g.stats().activeGlobal, 0);
 });

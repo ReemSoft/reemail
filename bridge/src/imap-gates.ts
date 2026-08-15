@@ -29,12 +29,14 @@
  * Non-body classes (interactive / media / transfer / background) share the
  * single non-body slot. MEDIA (CID/image fetches for the currently visible
  * message) is the foreground class: it is admitted ahead of interactive /
- * transfer / background. Fairness is bounded — after MEDIA_STREAK_LIMIT
- * consecutive media admissions, one already-waiting lower-priority non-body
- * request is served next — and the lower classes keep a round-robin rotation
- * among themselves so none starves. BODY always outranks every non-body
- * waiter. Overflow / timeout / cancellation all fail fast with an
- * `ImapBusyError` — callers translate that into HTTP 503 + `IMAP_BUSY`.
+ * transfer / background. Fairness is bounded AND PER-ACCOUNT — after
+ * MEDIA_STREAK_LIMIT consecutive media admissions for one account, a
+ * lower-priority waiter belonging to that SAME account is served next, then
+ * media priority resumes. One account's media or lower-class traffic never
+ * consumes, resets, or rotates another account's fairness budget. BODY always
+ * outranks every non-body waiter. Overflow / timeout / cancellation all fail
+ * fast with an `ImapBusyError` — callers translate that into HTTP 503 +
+ * `IMAP_BUSY`.
  *
  * Feature-flagged behind `IMAP_GATES_ENABLED`. When disabled every
  * `acquire` resolves immediately with a no-op release — behaviour is
@@ -217,8 +219,17 @@ export function createImapGates(cfg: ImapGatesConfig): ImapGates {
   // outranks every non-body waiter and is never part of this logic.
   const NON_BODY_ROTATION: ImapPriority[] = ["interactive", "transfer", "background"];
   const MEDIA_STREAK_LIMIT = 3;
+  // Global rotation for the no-media lower-class scan (legacy round-robin). It
+  // only orders relative picks among lower-priority work when NO media waits;
+  // it can never change an account's media-vs-lower decision.
   let nonBodyCursor = 0;
-  let mediaStreak = 0;
+  // PER-ACCOUNT fairness state: one account's media/lower traffic must never
+  // consume, reset, or rotate another account's fairness budget. Entries are
+  // removed as soon as the account returns to idle (no active and no queued
+  // non-body work), so the maps never grow with retired accounts.
+  const mediaStreakByAccount = new Map<string, number>();
+  const lowerNonBodyCursorByAccount = new Map<string, number>();
+  const queuedNonBodyByAccount = new Map<string, number>();
 
   const counters: Counters = {
     admitted: 0,
@@ -300,14 +311,17 @@ export function createImapGates(cfg: ImapGatesConfig): ImapGates {
     }
     if (waiter.priority === "media") {
       inc(mediaByAccount, waiter.key.account);
-      // Media is the foreground class: admissions raise the streak instead of
-      // rotating the lower-priority classes.
-      mediaStreak++;
+      // Media is the foreground class: admissions raise THIS account's streak
+      // instead of rotating its lower classes.
+      mediaStreakByAccount.set(waiter.key.account, mediaStreakFor(waiter.key.account) + 1);
     } else if (NON_BODY_PRIORITIES.has(waiter.priority)) {
-      // A lower-priority admission is the fairness yield — it resets the media
-      // streak and advances the lower-class rotation.
+      // A lower-priority admission is a fairness yield for THIS account: it
+      // resets that account's media streak and advances that account's own
+      // lower-class rotation. Unrelated accounts are never touched.
+      mediaStreakByAccount.set(waiter.key.account, 0);
+      const cursor = lowerCursorFor(waiter.key.account);
+      lowerNonBodyCursorByAccount.set(waiter.key.account, (cursor + 1) % NON_BODY_ROTATION.length);
       nonBodyCursor = (nonBodyCursor + 1) % NON_BODY_ROTATION.length;
-      mediaStreak = 0;
     }
     counters.admitted++;
     recordWait(Math.max(0, Date.now() - waiter.enqueuedAtMs));
@@ -321,7 +335,10 @@ export function createImapGates(cfg: ImapGatesConfig): ImapGates {
       dec(activeByCompany, waiter.key.company);
       dec(activeByAccount, waiter.key.account);
       if (waiter.priority === "media") dec(mediaByAccount, waiter.key.account);
-      if (NON_BODY_PRIORITIES.has(waiter.priority)) dec(nonBodyByAccount, waiter.key.account);
+      if (NON_BODY_PRIORITIES.has(waiter.priority)) {
+        dec(nonBodyByAccount, waiter.key.account);
+        cleanupAccountFairnessState(waiter.key.account);
+      }
       drain();
     };
     return release;
@@ -337,13 +354,16 @@ export function createImapGates(cfg: ImapGatesConfig): ImapGates {
     if (bodyEligible) return bodyEligible;
 
     // MEDIA is the foreground non-body class for visible-message CID/image
-    // fetches: it outranks interactive / transfer / background. Bounded
-    // fairness: after MEDIA_STREAK_LIMIT consecutive media admissions, one
-    // already-waiting lower-priority non-body request is served first.
+    // fetches: it outranks interactive / transfer / background. Bounded,
+    // PER-ACCOUNT fairness: once this account's own media streak reaches
+    // MEDIA_STREAK_LIMIT, one already-waiting lower-priority waiter belonging
+    // to the SAME account is served first. Unrelated accounts can neither
+    // consume this budget nor claim this yield.
     const mediaEligible = firstEligible(waitingMedia);
     if (mediaEligible) {
-      if (mediaStreak < MEDIA_STREAK_LIMIT) return mediaEligible;
-      const lowerEligible = firstEligibleLowerNonBody();
+      const account = mediaEligible.key.account;
+      if (mediaStreakFor(account) < MEDIA_STREAK_LIMIT) return mediaEligible;
+      const lowerEligible = firstEligibleLowerNonBodyForAccount(account);
       if (lowerEligible) return lowerEligible;
       return mediaEligible;
     }
@@ -360,6 +380,53 @@ export function createImapGates(cfg: ImapGatesConfig): ImapGates {
       if (eligible) return eligible;
     }
     return null;
+  }
+
+  /**
+   * Fairness yield scoped to ONE account: round-robin across that account's
+   * own lower-priority classes, filtering by the same account whose media
+   * streak reached the limit. No other account's waiters are considered.
+   */
+  function firstEligibleLowerNonBodyForAccount(account: string): Waiter | null {
+    const cursor = lowerCursorFor(account);
+    for (let i = 0; i < NON_BODY_ROTATION.length; i++) {
+      const cls = NON_BODY_ROTATION[(cursor + i) % NON_BODY_ROTATION.length];
+      const eligible = firstEligibleForAccount(queueFor(cls), account);
+      if (eligible) return eligible;
+    }
+    return null;
+  }
+
+  /** First admissible waiter in a queue that belongs to the given account. */
+  function firstEligibleForAccount(queue: Waiter[], account: string): Waiter | null {
+    for (let i = 0; i < queue.length; i++) {
+      const w = queue[i];
+      if (w.settled) continue;
+      if (w.key.account !== account) continue;
+      if (isAdmissible(w.key, w.priority)) return w;
+    }
+    return null;
+  }
+
+  function mediaStreakFor(account: string): number {
+    return mediaStreakByAccount.get(account) ?? 0;
+  }
+
+  function lowerCursorFor(account: string): number {
+    return lowerNonBodyCursorByAccount.get(account) ?? 0;
+  }
+
+  /**
+   * Drop an account's fairness state as soon as it has no queued and no active
+   * non-body work left. O(1): relies only on the active/queued maps, never
+   * scans queues. A fresh media burst after the account returns to idle starts
+   * a new streak, and retired accounts leave no state behind.
+   */
+  function cleanupAccountFairnessState(account: string): void {
+    if (nonBodyByAccount.has(account)) return;
+    if (queuedNonBodyByAccount.has(account)) return;
+    mediaStreakByAccount.delete(account);
+    lowerNonBodyCursorByAccount.delete(account);
   }
 
   function queueFor(cls: ImapPriority): Waiter[] {
@@ -407,6 +474,9 @@ export function createImapGates(cfg: ImapGatesConfig): ImapGates {
       waiter.onAbort = null;
     }
     removeFromQueue(waiter);
+    if (NON_BODY_PRIORITIES.has(waiter.priority)) {
+      dec(queuedNonBodyByAccount, waiter.key.account);
+    }
   }
 
   function drain(): void {
@@ -521,6 +591,9 @@ export function createImapGates(cfg: ImapGatesConfig): ImapGates {
       }
 
       queue.push(waiter);
+      if (NON_BODY_PRIORITIES.has(waiter.priority)) {
+        inc(queuedNonBodyByAccount, waiter.key.account);
+      }
       // In case capacity opened between fast-path check and enqueue.
       drain();
     });
@@ -577,7 +650,9 @@ export function createImapGates(cfg: ImapGatesConfig): ImapGates {
     waitHistCount = 0;
     waitHistCursor = 0;
     nonBodyCursor = 0;
-    mediaStreak = 0;
+    mediaStreakByAccount.clear();
+    lowerNonBodyCursorByAccount.clear();
+    queuedNonBodyByAccount.clear();
   }
 
   return { acquire, stats, _reset };
