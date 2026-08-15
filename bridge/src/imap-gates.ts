@@ -27,10 +27,14 @@
  *     when physical account capacity is already consumed by BODY work.
  *
  * Non-body classes (interactive / media / transfer / background) share the
- * single non-body slot with round-robin admission so no class starves; BODY
- * always outranks every non-body waiter. Overflow / timeout / cancellation
- * all fail fast with an `ImapBusyError` — callers translate that into
- * HTTP 503 + `IMAP_BUSY`.
+ * single non-body slot. MEDIA (CID/image fetches for the currently visible
+ * message) is the foreground class: it is admitted ahead of interactive /
+ * transfer / background. Fairness is bounded — after MEDIA_STREAK_LIMIT
+ * consecutive media admissions, one already-waiting lower-priority non-body
+ * request is served next — and the lower classes keep a round-robin rotation
+ * among themselves so none starves. BODY always outranks every non-body
+ * waiter. Overflow / timeout / cancellation all fail fast with an
+ * `ImapBusyError` — callers translate that into HTTP 503 + `IMAP_BUSY`.
  *
  * Feature-flagged behind `IMAP_GATES_ENABLED`. When disabled every
  * `acquire` resolves immediately with a no-op release — behaviour is
@@ -206,11 +210,15 @@ export function createImapGates(cfg: ImapGatesConfig): ImapGates {
   const waitingTransfer: Waiter[] = [];
   const waitingBackground: Waiter[] = [];
 
-  // Round-robin cursor across the non-body classes so none starves forever
-  // while sharing the single per-account non-body slot. BODY always outranks
-  // every non-body waiter and is never part of this rotation.
-  const NON_BODY_ORDER: ImapPriority[] = ["interactive", "media", "transfer", "background"];
+  // MEDIA (visible-message CID/image fetches) is the foreground non-body class:
+  // it is served ahead of the other non-body classes up to a bounded streak
+  // (MEDIA_STREAK_LIMIT) so it can never starve them forever. The remaining
+  // classes rotate round-robin behind media via NON_BODY_ROTATION. BODY always
+  // outranks every non-body waiter and is never part of this logic.
+  const NON_BODY_ROTATION: ImapPriority[] = ["interactive", "transfer", "background"];
+  const MEDIA_STREAK_LIMIT = 3;
   let nonBodyCursor = 0;
+  let mediaStreak = 0;
 
   const counters: Counters = {
     admitted: 0,
@@ -287,10 +295,19 @@ export function createImapGates(cfg: ImapGatesConfig): ImapGates {
     inc(activeByHost, waiter.key.host);
     inc(activeByCompany, waiter.key.company);
     inc(activeByAccount, waiter.key.account);
-    if (waiter.priority === "media") inc(mediaByAccount, waiter.key.account);
     if (NON_BODY_PRIORITIES.has(waiter.priority)) {
       inc(nonBodyByAccount, waiter.key.account);
-      nonBodyCursor = (nonBodyCursor + 1) % NON_BODY_ORDER.length;
+    }
+    if (waiter.priority === "media") {
+      inc(mediaByAccount, waiter.key.account);
+      // Media is the foreground class: admissions raise the streak instead of
+      // rotating the lower-priority classes.
+      mediaStreak++;
+    } else if (NON_BODY_PRIORITIES.has(waiter.priority)) {
+      // A lower-priority admission is the fairness yield — it resets the media
+      // streak and advances the lower-class rotation.
+      nonBodyCursor = (nonBodyCursor + 1) % NON_BODY_ROTATION.length;
+      mediaStreak = 0;
     }
     counters.admitted++;
     recordWait(Math.max(0, Date.now() - waiter.enqueuedAtMs));
@@ -319,9 +336,26 @@ export function createImapGates(cfg: ImapGatesConfig): ImapGates {
     const bodyEligible = firstEligible(waitingBody);
     if (bodyEligible) return bodyEligible;
 
-    // No body waiting: round-robin the non-body classes so none starves.
-    for (let i = 0; i < NON_BODY_ORDER.length; i++) {
-      const cls = NON_BODY_ORDER[(nonBodyCursor + i) % NON_BODY_ORDER.length];
+    // MEDIA is the foreground non-body class for visible-message CID/image
+    // fetches: it outranks interactive / transfer / background. Bounded
+    // fairness: after MEDIA_STREAK_LIMIT consecutive media admissions, one
+    // already-waiting lower-priority non-body request is served first.
+    const mediaEligible = firstEligible(waitingMedia);
+    if (mediaEligible) {
+      if (mediaStreak < MEDIA_STREAK_LIMIT) return mediaEligible;
+      const lowerEligible = firstEligibleLowerNonBody();
+      if (lowerEligible) return lowerEligible;
+      return mediaEligible;
+    }
+
+    // No body or media waiting: rotate the lower-priority non-body classes.
+    return firstEligibleLowerNonBody();
+  }
+
+  /** Round-robin across the lower-priority non-body classes (no media). */
+  function firstEligibleLowerNonBody(): Waiter | null {
+    for (let i = 0; i < NON_BODY_ROTATION.length; i++) {
+      const cls = NON_BODY_ROTATION[(nonBodyCursor + i) % NON_BODY_ROTATION.length];
       const eligible = firstEligible(queueFor(cls));
       if (eligible) return eligible;
     }
@@ -543,6 +577,7 @@ export function createImapGates(cfg: ImapGatesConfig): ImapGates {
     waitHistCount = 0;
     waitHistCursor = 0;
     nonBodyCursor = 0;
+    mediaStreak = 0;
   }
 
   return { acquire, stats, _reset };
