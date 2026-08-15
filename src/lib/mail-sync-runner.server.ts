@@ -53,6 +53,14 @@ export interface RunMailSyncCoreInput {
   toUid?: number;
   flagsFromUid?: number;
   flagsToUid?: number;
+  /**
+   * When true, `canonical` is authoritative and `ensureFolderRow` may repair a
+   * stale/wrong canonical on the existing physical-path row. Callers that pair a
+   * bridge-resolved path with a validated logical canonical set this to true;
+   * callers whose path is not fully trusted (move destination, worker) leave it
+   * false so an existing canonical is never stolen.
+   */
+  trustedCanonical?: boolean;
 }
 
 export type RunMailSyncCoreResult =
@@ -144,6 +152,7 @@ export async function runMailSyncCore(
     companyId: input.companyId,
     path: input.folderPath,
     canonical: input.canonical ?? null,
+    trustedCanonical: input.trustedCanonical === true,
   });
 
   // Drafts must never import soft-deleted (\Deleted) copies; exclude them from

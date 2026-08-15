@@ -89,7 +89,7 @@ describe("writeDraftProjection", () => {
 
   it("first save: inserts the canonical row and bumps the draft count +1 exactly once", async () => {
     const sb = makeChain([
-      { data: { id: FID, uidvalidity: 1000 } }, // ensureFolderRow select (exists)
+      { data: { id: FID, uidvalidity: 1000, canonical: "drafts" } }, // ensureFolderRow select (exists)
       { data: [{ id: "row1" }] }, // upsert .select()
       { data: true }, // rpc adjustFolderCountsDelta (+1)
     ]);
@@ -113,7 +113,7 @@ describe("writeDraftProjection", () => {
 
   it("replacement: tombstones the previous projected UID (net count 0)", async () => {
     const sb = makeChain([
-      { data: { id: FID, uidvalidity: 1000 } }, // ensureFolderRow select
+      { data: { id: FID, uidvalidity: 1000, canonical: "drafts" } }, // ensureFolderRow select
       { data: { id: "old", seen: true } }, // tombstoneSourceRow .select() -> changed
       { data: true }, // rpc adjust (-1)
       { data: [{ id: "row2" }] }, // upsert .select()
@@ -132,7 +132,7 @@ describe("writeDraftProjection", () => {
 
   it("does not tombstone a previousRef from another folder or uidvalidity", async () => {
     const sb = makeChain([
-      { data: { id: FID, uidvalidity: 1000 } }, // ensureFolderRow select
+      { data: { id: FID, uidvalidity: 1000, canonical: "drafts" } }, // ensureFolderRow select
       { data: [{ id: "row3" }] }, // upsert .select()
       { data: true }, // rpc adjust (+1)
     ]);
@@ -162,7 +162,7 @@ describe("tombstoneDraftProjection", () => {
 
   it("tombstones a live projected row and decrements the count once", async () => {
     const sb = makeChain([
-      { data: { id: FID, uidvalidity: 1000 } }, // ensureFolderRow select
+      { data: { id: FID, uidvalidity: 1000, canonical: "drafts" } }, // ensureFolderRow select
       { data: { id: "row" } }, // .update().select().maybeSingle() -> live row
       { data: true }, // rpc adjust (-1)
     ]);
@@ -176,7 +176,7 @@ describe("tombstoneDraftProjection", () => {
 
   it("is idempotent: an already-tombstoned row returns changed=false and does NOT decrement", async () => {
     const sb = makeChain([
-      { data: { id: FID, uidvalidity: 1000 } }, // ensureFolderRow select
+      { data: { id: FID, uidvalidity: 1000, canonical: "drafts" } }, // ensureFolderRow select
       { data: null }, // .update().select().maybeSingle() -> no live row
     ]);
     const res = await tombstoneDraftProjection(sb, delInput());

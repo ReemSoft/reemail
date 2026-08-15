@@ -32,6 +32,13 @@ const InputSchema = z
     password: z.string().min(1).max(1024),
     folderPath: z.string().min(1).max(500).default("INBOX"),
     canonical: z.string().min(1).max(32).optional(),
+    /**
+     * True only when the caller paired a TRUSTED physical folder path (Bridge /
+     * SPECIAL-USE authoritative resolution) with a validated logical canonical.
+     * Defaults false so an index-derived path can never authorize a canonical
+     * reassignment (MAILMAESTRO_CANONICAL_SELFHEAL path provenance).
+     */
+    trustedCanonical: z.boolean().optional(),
     mode: z.enum(["initial", "incremental", "reconcile"]),
     limit: z.number().int().positive().max(300).optional(),
     // reconcile-only
@@ -131,5 +138,9 @@ export const runMailSync = createServerFn({ method: "POST" })
       toUid: data.toUid,
       flagsFromUid: data.flagsFromUid,
       flagsToUid: data.flagsToUid,
+      // The browser folder sync passes an authoritative (Bridge-resolved) path,
+      // so a stale canonical may be safely repaired. The flag is opt-in from the
+      // caller; an index-derived path never sets it (MAILMAESTRO_CANONICAL_SELFHEAL).
+      trustedCanonical: data.trustedCanonical === true,
     });
   });

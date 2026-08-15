@@ -33,6 +33,12 @@ export interface UseMailIndexSyncArgs {
   intervalMs?: number;
   reconcileMs?: number;
   enabled?: boolean;
+  /**
+   * True only when `folderPath` was resolved by the Bridge / SPECIAL-USE
+   * (authoritative), not merely read from Local Index metadata. Only an
+   * authoritative path may authorize a canonical self-heal reassignment.
+   */
+  pathTrusted?: boolean;
 }
 
 export interface RunOpts {
@@ -68,6 +74,7 @@ export function useMailIndexSync(args: UseMailIndexSyncArgs): UseMailIndexSyncHa
     intervalMs = DEFAULT_INCREMENTAL_MS,
     reconcileMs = DEFAULT_RECONCILE_MS,
     enabled = true,
+    pathTrusted = false,
   } = args;
 
   const sync = useMailServerFn(runMailSync);
@@ -76,14 +83,14 @@ export function useMailIndexSync(args: UseMailIndexSyncArgs): UseMailIndexSyncHa
   const didInitialRef = useRef<boolean>(indexed);
   const flagsNeedReconcileRef = useRef<boolean>(false);
   const lastReconcileAtRef = useRef<number>(0);
-  const paramsRef = useRef({ session, folderPath, canonical, enabled });
+  const paramsRef = useRef({ session, folderPath, canonical, enabled, pathTrusted });
   const onSyncedRef = useRef(onSynced);
   const indexedRef = useRef(indexed);
   const bootstrappedKeyRef = useRef<string>("");
 
   useEffect(() => {
-    paramsRef.current = { session, folderPath, canonical, enabled };
-  }, [session, folderPath, canonical, enabled]);
+    paramsRef.current = { session, folderPath, canonical, enabled, pathTrusted };
+  }, [session, folderPath, canonical, enabled, pathTrusted]);
   useEffect(() => {
     onSyncedRef.current = onSynced;
   }, [onSynced]);
@@ -109,6 +116,8 @@ export function useMailIndexSync(args: UseMailIndexSyncArgs): UseMailIndexSyncHa
           folderPath: p.folderPath,
           canonical: p.canonical,
           mode,
+          // Canonical self-heal is authorized ONLY when the path is authoritative.
+          trustedCanonical: p.pathTrusted === true,
         },
       })
         .then((res) => {

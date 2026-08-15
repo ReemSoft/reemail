@@ -1626,6 +1626,13 @@ function useMailData(session: MailSession | null) {
     all: { total: 0, unread: 0, supported: true },
   });
   const [folderPaths, setFolderPaths] = useState<Partial<Record<MailFolder, string>>>({});
+  // Authoritative physical paths, populated ONLY from the Bridge folder
+  // resolution (SPECIAL-USE/well-known). Never fed from Local Index metadata,
+  // which is exactly what production has shown can be corrupted. Only these
+  // paths may authorize a canonical self-heal reassignment.
+  const [authoritativeFolderPaths, setAuthoritativeFolderPaths] = useState<
+    Partial<Record<MailFolder, string>>
+  >({});
   const [messages, setMessages] = useState<MailMessage[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadingMoreScope, setLoadingMoreScope] = useState<string | null>(null);
@@ -1755,8 +1762,6 @@ function useMailData(session: MailSession | null) {
     }
   }, [currentAccountId, persistPendingMoves]);
 
-  const folderPath = folderPaths[folder] ?? null;
-
   const loadCounts = useCallback(async () => {
     if (!session) return;
     // Batch A / Fix #1: capture the mutation generation BEFORE the network
@@ -1794,6 +1799,8 @@ function useMailData(session: MailSession | null) {
         return map;
       });
       setFolderPaths(paths);
+      // This is a Bridge `/api/folders` sweep — authoritative path provenance.
+      setAuthoritativeFolderPaths(paths);
       setBridgeError(null);
     } catch (err: unknown) {
       if (countsMutationGen.current !== gen) return;
@@ -1831,10 +1838,21 @@ function useMailData(session: MailSession | null) {
         if (countsMutationGen.current !== gen) return;
 
         if (res.ok && res.counts.length > 0) {
+          // Deterministic duplicate-canonical handling: a canonical that maps
+          // to MORE than one Local Index row is ambiguous (corruption). Its
+          // physical path must never be promoted (array order must not decide
+          // folderPaths.trash), and its count is left unchanged until the
+          // authoritative bridge sweep or a trusted sync reconciles it.
+          const canonicalOccurrences = new Map<MailFolder, number>();
+          for (const c of res.counts) {
+            canonicalOccurrences.set(c.folder, (canonicalOccurrences.get(c.folder) ?? 0) + 1);
+          }
+          const isAmbiguous = (f: MailFolder) => (canonicalOccurrences.get(f) ?? 0) > 1;
           setCounts((prev) => {
             const next = { ...prev };
             for (const c of res.counts) {
               if (!c.hasUidvalidity) continue;
+              if (isAmbiguous(c.folder)) continue;
               // V4 count race guard: skip starred.total while a mutation is
               // hot; keep the optimistic value the toggle already applied.
               if (c.folder === "starred" && isStarCountHot() && prev.starred) {
@@ -1855,6 +1873,7 @@ function useMailData(session: MailSession | null) {
             let changed = false;
             const next = { ...prev };
             for (const c of res.counts) {
+              if (isAmbiguous(c.folder)) continue;
               if (c.path && next[c.folder] !== c.path) {
                 next[c.folder] = c.path;
                 changed = true;
@@ -1905,6 +1924,27 @@ function useMailData(session: MailSession | null) {
             });
             if (countsMutationGen.current !== gen) return;
             if (authoritative.ok) {
+              // MAILMAESTRO_CANONICAL_SELFHEAL bootstrap: the bridge resolves
+              // physical paths authoritatively (SPECIAL-USE/well-known). Record
+              // them separately as trusted path provenance, and also fill/correct
+              // folderPaths so ordinary reads stay consistent. A path that came
+              // only from Local Index metadata is never fed into the trusted map.
+              const authPaths: Partial<Record<MailFolder, string>> = {};
+              for (const c of authoritative.counts) {
+                if (c.path) authPaths[c.folder] = c.path;
+              }
+              setAuthoritativeFolderPaths(authPaths);
+              setFolderPaths((prev) => {
+                let changed = false;
+                const next = { ...prev };
+                for (const c of authoritative.counts) {
+                  if (c.path && next[c.folder] !== c.path) {
+                    next[c.folder] = c.path;
+                    changed = true;
+                  }
+                }
+                return changed ? next : prev;
+              });
               const starredCount = authoritative.counts.find((c) => c.folder === "starred");
               if (starredCount) {
                 setCounts((prev) => {
@@ -2326,10 +2366,16 @@ function useMailData(session: MailSession | null) {
   // afterwards, plus a 5-minute reconcile once the folder is indexed.
   // Pauses when the tab is hidden and never overlaps itself.
   const isFolderIndexed = indexReady[folder] === true;
+  // The sync must only ever run on an authoritative (Bridge-resolved) path.
+  // `folderPaths` may contain index-derived (potentially corrupted) paths, so
+  // it is NOT used here; only the authoritative map authorizes a sync round
+  // and, in turn, a canonical self-heal reassignment.
+  const authoritativeFolderPath = authoritativeFolderPaths[folder] ?? null;
   const { reconcileNow, incrementalNow, shouldReconcile } = useMailIndexSync({
     session,
-    folderPath,
+    folderPath: authoritativeFolderPath,
     canonical: folder,
+    pathTrusted: authoritativeFolderPath != null,
     indexed: isFolderIndexed,
     enabled:
       MAIL_INDEX_ENABLED &&

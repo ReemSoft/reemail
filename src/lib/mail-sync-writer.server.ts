@@ -157,19 +157,52 @@ export async function ensureFolderRow(
     canonical?: string | null;
     delimiter?: string | null;
     supported?: boolean;
+    /**
+     * When true, a non-null `canonical` is treated as authoritative and may
+     * repair a stale/wrong canonical on an existing row (MAILMAESTRO_CANONICAL_SELFHEAL).
+     * When false, the supplied canonical is treated as workflow intent only and
+     * is NEVER persisted as authoritative classification: an existing canonical
+     * is left untouched and a new row is created with `canonical = NULL`.
+     */
+    trustedCanonical?: boolean;
   },
 ): Promise<{ folderId: string; storedUidValidity: string | null }> {
   const sel = await admin
     .from("mail_folders")
-    .select("id, uidvalidity")
+    .select("id, uidvalidity, canonical")
     .eq("account_id", args.accountId)
     .eq("path", args.path)
     .maybeSingle();
   if (sel.error) throw sel.error;
   if (sel.data?.id) {
+    const row = sel.data as { id: string; uidvalidity: string | number | null; canonical: string | null };
+    const wantCanonical =
+      typeof args.canonical === "string" && args.canonical.length > 0 ? args.canonical : null;
+    const existingCanonical = row.canonical == null ? null : String(row.canonical);
+
+    // Self-heal canonical:
+    //   * caller canonical null → NEVER touch an existing canonical (rule A).
+    //   * untrusted caller → NEVER change an existing canonical (rule F).
+    //   * trusted caller + non-null canonical + existing differs (incl. NULL) → repair.
+    // Repair is scoped to the exact (id, account_id, company_id) and preserves
+    // uidvalidity, cursors, messages and counts (rule C/D/E).
+    if (
+      args.trustedCanonical === true &&
+      wantCanonical != null &&
+      existingCanonical !== wantCanonical
+    ) {
+      const up = await admin
+        .from("mail_folders")
+        .update({ canonical: wantCanonical })
+        .eq("id", row.id)
+        .eq("account_id", args.accountId)
+        .eq("company_id", args.companyId);
+      if (up.error) throw up.error;
+    }
+
     return {
-      folderId: sel.data.id,
-      storedUidValidity: sel.data.uidvalidity != null ? String(sel.data.uidvalidity) : null,
+      folderId: row.id,
+      storedUidValidity: row.uidvalidity != null ? String(row.uidvalidity) : null,
     };
   }
 
@@ -179,7 +212,10 @@ export async function ensureFolderRow(
       account_id: args.accountId,
       company_id: args.companyId,
       path: args.path,
-      canonical: args.canonical ?? null,
+      // Untrusted canonical is workflow intent only — never persisted as
+      // authoritative classification. A later trusted provider resolution
+      // (SPECIAL-USE / authoritative folder mapping) promotes NULL → canonical.
+      canonical: args.trustedCanonical === true ? (args.canonical ?? null) : null,
       delimiter: args.delimiter ?? null,
       supported: args.supported ?? true,
     })

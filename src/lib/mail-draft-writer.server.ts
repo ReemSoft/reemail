@@ -55,6 +55,10 @@ export async function writeDraftProjection(
     path: input.folderPath,
     canonical: "drafts",
     supported: true,
+    // The Drafts path is server-resolved (SPECIAL-USE) by the Bridge, so this
+    // pairing is authoritative — a stale/wrong canonical on this physical row
+    // (e.g. mislabelled "trash") is safely repaired here.
+    trustedCanonical: true,
   });
   const folderId = folder.folderId;
 
@@ -170,6 +174,8 @@ export async function tombstoneDraftProjection(
     path: input.folderPath,
     canonical: "drafts",
     supported: true,
+    // Same trusted-pairing repair as writeDraftProjection.
+    trustedCanonical: true,
   });
 
   const up = await supabase

@@ -45,7 +45,7 @@ export type IndexListResult =
       total: number;
       unread: number;
     }
-  | { ok: true; indexed: false; reason: "NO_FOLDER" | "NO_UIDVALIDITY" }
+  | { ok: true; indexed: false; reason: "NO_FOLDER" | "NO_UIDVALIDITY" | "AMBIGUOUS_FOLDER" }
   | { ok: false; error: string; code: string };
 
 export const indexListMessages = createServerFn({ method: "POST" })
@@ -81,23 +81,38 @@ export const indexListMessages = createServerFn({ method: "POST" })
     }
 
     // ---- 2) Resolve folder row by (account_id, canonical) ----
+    // `.limit(2)` (instead of `.maybeSingle()`) so a duplicate-canonical
+    // corruption (two physical folders sharing one canonical) degrades into a
+    // clean Bridge fallback rather than a server error — the trusted sync then
+    // repairs the classification (MAILMAESTRO_CANONICAL_SELFHEAL). We never
+    // serve an arbitrary row from a duplicate set.
     const folderQ = await supabaseAdmin
       .from("mail_folders")
       .select("id, uidvalidity, total, unread")
       .eq("account_id", accountId)
       .eq("company_id", companyId)
       .eq("canonical", canonical)
-      .maybeSingle();
+      .limit(2);
     if (folderQ.error) {
       console.error("[indexListMessages] folder lookup failed", folderQ.error);
       return { ok: false, error: "تعذر قراءة المجلد.", code: "FOLDER_QUERY_FAILED" };
     }
-    if (!folderQ.data) return { ok: true, indexed: false, reason: "NO_FOLDER" };
-    if (folderQ.data.uidvalidity == null)
+    const folderRows = (folderQ.data ?? []) as Array<{
+      id: string;
+      uidvalidity: number | string | null;
+      total: number;
+      unread: number;
+    }>;
+    if (folderRows.length === 0) return { ok: true, indexed: false, reason: "NO_FOLDER" };
+    if (folderRows.length > 1) {
+      return { ok: true, indexed: false, reason: "AMBIGUOUS_FOLDER" };
+    }
+    const folderRow = folderRows[0];
+    if (folderRow.uidvalidity == null)
       return { ok: true, indexed: false, reason: "NO_UIDVALIDITY" };
 
-    const folderId = folderQ.data.id;
-    const folderUidValidity = String(folderQ.data.uidvalidity);
+    const folderId = folderRow.id;
+    const folderUidValidity = String(folderRow.uidvalidity);
 
     // ---- 3) Keyset cursor page ----
     const cursor = data.cursor ? decodeIndexCursor(data.cursor) : null;
@@ -164,7 +179,7 @@ export const indexListMessages = createServerFn({ method: "POST" })
       nextCursor,
       hasMore,
       folderId,
-      total: folderQ.data.total ?? 0,
-      unread: folderQ.data.unread ?? 0,
+      total: folderRow.total ?? 0,
+      unread: folderRow.unread ?? 0,
     };
   });
