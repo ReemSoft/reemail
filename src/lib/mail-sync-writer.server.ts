@@ -35,6 +35,7 @@ export interface SyncMessagePayload {
   flagFlagged: boolean;
   flagAnswered: boolean;
   flagDraft: boolean;
+  flagDeleted?: boolean;
   keywords: string[];
 }
 
@@ -45,6 +46,7 @@ export interface SyncFlagStatePayload {
   flagFlagged: boolean;
   flagAnswered: boolean;
   flagDraft: boolean;
+  flagDeleted?: boolean;
   keywords: string[];
 }
 
@@ -355,6 +357,40 @@ export async function tombstoneMissingInRange(
       .in("uid", chunk);
     if (error) throw error;
     tombstoned += chunk.length;
+  }
+  return tombstoned;
+}
+
+/**
+ * Tombstone exact UIDs (batch). Used by Draft sync to remove rows that became
+ * soft-deleted (\Deleted) on the server. Returns the number of rows that
+ * actually transitioned to deleted.
+ */
+export async function tombstoneRowsByUid(
+  admin: Admin,
+  args: {
+    accountId: string;
+    folderId: string;
+    uidValidity: string;
+    uids: readonly number[];
+  },
+): Promise<number> {
+  if (args.uids.length === 0) return 0;
+  const uv = Number(args.uidValidity);
+  const nowIso = new Date().toISOString();
+  let tombstoned = 0;
+  for (let i = 0; i < args.uids.length; i += UPSERT_CHUNK) {
+    const chunk = args.uids.slice(i, i + UPSERT_CHUNK);
+    const { error, count } = await admin
+      .from("mail_messages")
+      .update({ deleted_at: nowIso }, { count: "exact" })
+      .eq("account_id", args.accountId)
+      .eq("folder_id", args.folderId)
+      .eq("uidvalidity", uv)
+      .is("deleted_at", null)
+      .in("uid", chunk);
+    if (error) throw error;
+    tombstoned += count ?? chunk.length;
   }
   return tombstoned;
 }

@@ -100,15 +100,17 @@ interface Recorder {
   appends: Array<{ path: string; raw: Buffer; flags: string[] }>;
   searches: Array<{ name: string; value: string }>;
   deletes: Array<number[]>;
+  softDeletes: Array<number[]>;
   moves: Array<{ uids: number[]; dest: string }>;
   logouts: number;
   hasUidPlusCalls: number;
   hasMoveCalls: number;
 }
 
-async function readStream(raw: NodeJS.ReadableStream): Promise<Buffer> {
+async function readStream(raw: NodeJS.ReadableStream | Buffer): Promise<Buffer> {
+  if (Buffer.isBuffer(raw)) return raw;
   const chunks: Buffer[] = [];
-  for await (const chunk of raw) {
+  for await (const chunk of raw as NodeJS.ReadableStream) {
     chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
   }
   return Buffer.concat(chunks);
@@ -123,6 +125,7 @@ function mkClient(opts: FakeOpts): { client: ImapDraftClient; rec: Recorder } {
     appends: [],
     searches: [],
     deletes: [],
+    softDeletes: [],
     moves: [],
     logouts: 0,
     hasUidPlusCalls: 0,
@@ -174,6 +177,10 @@ function mkClient(opts: FakeOpts): { client: ImapDraftClient; rec: Recorder } {
     async deleteByUid(uids) {
       rec.deletes.push([...uids]);
       if (opts.deleteFail) throw new Error("delete failed");
+      return true;
+    },
+    async softDeleteByUid(uids) {
+      rec.softDeletes.push([...uids]);
       return true;
     },
     async moveByUid(uids, dest) {
@@ -245,12 +252,12 @@ test("save: APPEND failure returns APPEND_FAILED and NEVER deletes old copies", 
   assert.equal(rec.logouts, 1);
 });
 
-test("draft APPEND immediate rejection closes its stream before removing the spool", async () => {
+test("draft APPEND receives a Buffer (never a stream) and cleans the spool on failure", async () => {
   const { client } = mkClient({ mailboxes: [box("Drafts")], searchResults: [[]] });
-  let raw: Readable | null = null;
+  let received: unknown = null;
   let spoolPath = "";
   client.append = async (_path, input) => {
-    raw = input;
+    received = input;
     throw new Error("immediate append failure");
   };
   const result = await executeDraftSave(
@@ -264,38 +271,7 @@ test("draft APPEND immediate rejection closes its stream before removing the spo
     },
   );
   assert.deepEqual(result, { ok: false, error: "APPEND_FAILED" });
-  assert.equal(raw?.destroyed, true);
-  await assert.rejects(access(spoolPath), /ENOENT/);
-  await new Promise<void>((resolve) => setImmediate(resolve));
-});
-
-test("draft APPEND partial-read rejection destroys its producer before spool cleanup", async () => {
-  const { client } = mkClient({ mailboxes: [box("Drafts")], searchResults: [[]] });
-  let raw: Readable | null = null;
-  let spoolPath = "";
-  client.append = async (_path, input) => {
-    raw = input;
-    await new Promise<void>((resolve, reject) => {
-      input.once("data", () => {
-        input.pause();
-        resolve();
-      });
-      input.once("error", reject);
-    });
-    throw new Error("partial append failure");
-  };
-  const result = await executeDraftSave(
-    client,
-    BASE_INPUT,
-    () => new Date(),
-    async (...args) => {
-      const spool = await createMimeSpool(...args);
-      spoolPath = spool.path;
-      return spool;
-    },
-  );
-  assert.deepEqual(result, { ok: false, error: "APPEND_FAILED" });
-  assert.equal(raw?.destroyed, true);
+  assert.equal(Buffer.isBuffer(received), true, "APPEND must receive a Buffer, never a stream");
   await assert.rejects(access(spoolPath), /ENOENT/);
   await new Promise<void>((resolve) => setImmediate(resolve));
 });
@@ -364,38 +340,42 @@ test("save: without UIDPLUS, first save (no prior copy) still succeeds", async (
   assert.equal(rec.deletes.length, 0);
 });
 
-test("save: replace mode without UIDPLUS is refused BEFORE any APPEND", async () => {
-  // Prior copy exists AND server lacks UIDPLUS → SAFE_DRAFT_REPLACE_UNSUPPORTED
-  // WITHOUT ever appending (closes the "append then can't delete" race).
+test("save: replace mode without UIDPLUS soft-deletes the stale copy (never global EXPUNGE)", async () => {
+  // Prior copy exists AND server lacks UIDPLUS + MOVE → APPEND proceeds and
+  // the stale copy is soft-deleted via UID STORE +\Deleted, never expunged.
   const { client, rec } = mkClient({
     mailboxes: [box("Drafts")],
     hasUidPlus: false,
-    searchResults: [[42]], // pre-APPEND probe finds an existing copy
+    hasMove: false,
+    appendUid: 100,
+    searchResults: [[42], [42, 100]],
   });
   const r = await executeDraftSave(client, BASE_INPUT);
-  assert.equal(r.ok, false);
-  if (r.ok) return;
-  assert.equal(r.error, "SAFE_DRAFT_REPLACE_UNSUPPORTED");
-  assert.equal(rec.appends.length, 0, "MUST NOT APPEND when replace is unsafe");
-  assert.equal(rec.deletes.length, 0);
+  assert.equal(r.ok, true);
+  if (!r.ok) return;
+  assert.equal(rec.appends.length, 1, "MUST APPEND on the soft-delete fallback");
+  assert.equal(rec.deletes.length, 0, "MUST NOT UID EXPUNGE without UIDPLUS");
+  assert.deepEqual(rec.softDeletes[0], [42], "MUST soft-delete exactly the stale UID");
 });
 
-test("save: explicit previousRef without UIDPLUS is refused BEFORE APPEND", async () => {
+test("save: explicit previousRef without UIDPLUS APPENDs then soft-deletes the legacy UID", async () => {
   // Caller signals a prior copy via previousRef even though the server search
-  // returned []. That STILL forces replace-mode and STILL requires UIDPLUS.
+  // returned []. The legacy UID is soft-deleted after a successful APPEND.
   const { client, rec } = mkClient({
     mailboxes: [box("Drafts")],
     hasUidPlus: false,
-    searchResults: [[]],
+    hasMove: false,
+    appendUid: 100,
+    searchResults: [[], [100]],
   });
   const r = await executeDraftSave(client, {
     ...BASE_INPUT,
     previousRef: { folderPath: "Drafts", uid: 42, uidValidity: "1000" },
   });
-  assert.equal(r.ok, false);
-  if (r.ok) return;
-  assert.equal(r.error, "SAFE_DRAFT_REPLACE_UNSUPPORTED");
-  assert.equal(rec.appends.length, 0);
+  assert.equal(r.ok, true);
+  assert.equal(rec.appends.length, 1);
+  assert.equal(rec.deletes.length, 0);
+  assert.deepEqual(rec.softDeletes[0], [42]);
 });
 
 test("save: search failure after APPEND does NOT roll back the save", async () => {
@@ -536,17 +516,18 @@ test("delete: no Drafts folder is idempotent success (not an error)", async () =
   assert.equal(rec.searches.length, 0);
 });
 
-test("delete: refuses when server lacks UIDPLUS (no unsafe global EXPUNGE)", async () => {
+test("delete: without UIDPLUS soft-deletes exact UIDs (no unsafe global EXPUNGE)", async () => {
   const { client, rec } = mkClient({
     mailboxes: [box("Drafts")],
     hasUidPlus: false,
     searchResults: [[42]],
   });
   const r = await executeDraftDelete(client, DELETE_INPUT);
-  assert.equal(r.ok, false);
-  if (r.ok) return;
-  assert.equal(r.error, "UIDPLUS_UNSUPPORTED");
+  assert.equal(r.ok, true);
+  if (!r.ok) return;
+  assert.equal(r.deleted, true);
   assert.equal(rec.deletes.length, 0);
+  assert.deepEqual(rec.softDeletes[0], [42]);
 });
 
 test("delete: UIDVALIDITY mismatch still safe (uses header-derived UIDs, not client UID)", async () => {
@@ -632,24 +613,20 @@ test("safety: IMAP failure surfaces coarse code and no PII in the result", async
 // same (account, draftId) into a serialized pipeline that always converges
 // to exactly one canonical copy — the highest UID.
 
-test("canonical: post-APPEND search picks HIGHEST UID as canonical and expunges the rest", async () => {
-  // A concurrent op appended UID 200 while we appended 100 and 150. Post
-  // search returns all three; canonical MUST be 200; stale MUST be
-  // [100, 150] (order does not matter).
+test("UIDPLUS: APPENDUID is canonical and the redundant post-APPEND search is skipped", async () => {
+  // UIDPLUS returns a real APPENDUID, which is authoritative. No redundant
+  // post-APPEND header SEARCH runs on the UIDPLUS path.
   const { client, rec } = mkClient({
     mailboxes: [box("Drafts")],
     appendUid: 100,
-    searchResults: [[], [100, 150, 200]],
+    searchResults: [[], [100, 150, 200]], // 2nd entry only used on non-UIDPLUS
   });
   const r = await executeDraftSave(client, BASE_INPUT);
   assert.equal(r.ok, true);
   if (!r.ok) return;
-  assert.equal(r.uid, 200, "canonical uid must be the highest observed UID");
-  assert.equal(rec.deletes.length, 1);
-  assert.deepEqual(
-    [...rec.deletes[0]].sort((a, b) => a - b),
-    [100, 150],
-  );
+  assert.equal(r.uid, 100, "canonical uid must be the APPENDUID");
+  assert.equal(rec.searches.length, 1, "UIDPLUS path performs only the pre-APPEND probe");
+  assert.equal(rec.deletes.length, 0, "no stale copies to expunge");
 });
 
 test("canonical: our own APPEND is canonical when it is the highest UID", async () => {
@@ -740,6 +717,11 @@ function mkSharedDeps(
         server.deleteCount++;
         return true;
       },
+      async softDeleteByUid(uids) {
+        for (const u of uids) server.messages.delete(u);
+        server.deleteCount++;
+        return true;
+      },
       hasMove() {
         return false;
       },
@@ -788,24 +770,17 @@ test("mutex: two concurrent UIDPLUS saves NEVER delete each other into an empty 
   assert.equal(draftMutexInflight(), 0);
 });
 
-test("mutex: without UIDPLUS, two concurrent saves produce ZERO duplicates (second refused safely)", async () => {
+test("mutex: without UIDPLUS or MOVE, concurrent saves converge to one canonical via soft-delete", async () => {
   const server = mkServer({ hasUidPlus: false });
   const deps = mkSharedDeps(server);
   const [r1, r2] = await Promise.all([
     saveDraft(ACCT, "pw", BASE_INPUT, deps),
     saveDraft(ACCT, "pw", BASE_INPUT, deps),
   ]);
-  // One MUST succeed, the other MUST be refused with SAFE_DRAFT_REPLACE_UNSUPPORTED.
-  const oks = [r1, r2].filter((r) => r.ok === true).length;
-  const refused = [r1, r2].filter(
-    (r) =>
-      r.ok === false &&
-      (r as { ok: false; error: string }).error === "SAFE_DRAFT_REPLACE_UNSUPPORTED",
-  ).length;
-  assert.equal(oks, 1, "exactly one save may succeed without UIDPLUS");
-  assert.equal(refused, 1, "the other MUST be refused before APPEND");
-  assert.equal(server.messages.size, 1, "no duplicates without UIDPLUS");
-  assert.equal(server.appendCount, 1, "second call MUST NOT APPEND");
+  assert.equal(r1.ok, true);
+  assert.equal(r2.ok, true);
+  assert.equal(server.messages.size, 1, "exactly one canonical draft remains");
+  assert.equal(server.appendCount, 2, "both saves APPEND on the soft-delete fallback");
   assert.equal(draftMutexInflight(), 0);
 });
 
@@ -1088,24 +1063,25 @@ test("M4-A: non-existent previousRef UID cannot delete an unrelated message (sam
   assert.deepEqual(rec.deletes[0], [9999], "delete must target exactly the previousRef UID");
 });
 
-test("M4-A: previousRef without UIDPLUS is refused BEFORE APPEND (no legacy leak)", async () => {
-  // Belt-and-braces on top of the existing SAFE_DRAFT_REPLACE_UNSUPPORTED
-  // test — this one specifically pins the legacy path invariant.
+test("M4-A: previousRef without UIDPLUS APPENDs then soft-deletes the legacy UID", async () => {
+  // Belt-and-braces on top of the soft-delete fallback: legacy drafts carry no
+  // header, so previousRef drives the stale candidate. No global EXPUNGE.
   const { client, rec } = mkClient({
     mailboxes: [box("Drafts")],
     hasUidPlus: false,
+    hasMove: false,
     uidValidity: "1000",
-    searchResults: [[]], // legacy: no header match
+    appendUid: 200,
+    searchResults: [[], [200]],
   });
   const r = await executeDraftSave(client, {
     ...BASE_INPUT,
     previousRef: { folderPath: "Drafts", uid: 42, uidValidity: "1000" },
   });
-  assert.equal(r.ok, false);
-  if (r.ok) return;
-  assert.equal(r.error, "SAFE_DRAFT_REPLACE_UNSUPPORTED");
-  assert.equal(rec.appends.length, 0, "MUST NOT APPEND when legacy replace is unsafe");
-  assert.equal(rec.deletes.length, 0);
+  assert.equal(r.ok, true);
+  assert.equal(rec.appends.length, 1, "MUST APPEND on the legacy soft-delete path");
+  assert.equal(rec.deletes.length, 0, "no UID EXPUNGE without UIDPLUS");
+  assert.deepEqual(rec.softDeletes[0], [42], "legacy UID soft-deleted exactly");
 });
 
 test("M4-A: legacy previousRef with mutex — retry after crash converges to one canonical", async () => {
@@ -1414,34 +1390,37 @@ test("MOVE fallback: retry after MOVE failure converges to a single canonical", 
   assert.equal(draftMutexInflight(), 0);
 });
 
-test("MOVE fallback: no UIDPLUS + no MOVE → refused BEFORE APPEND", async () => {
+test("neither UIDPLUS nor MOVE: APPEND then soft-delete stale (no global EXPUNGE)", async () => {
   const { client, rec } = mkClient({
     mailboxes: [box("Drafts"), box("Trash")],
     hasUidPlus: false,
     hasMove: false,
-    searchResults: [[42]],
+    appendUid: 100,
+    searchResults: [[42], [42, 100]],
   });
   const r = await executeDraftSave(client, BASE_INPUT);
-  assert.equal(r.ok, false);
-  if (r.ok) return;
-  assert.equal(r.error, "SAFE_DRAFT_REPLACE_UNSUPPORTED");
-  assert.equal(rec.appends.length, 0);
+  assert.equal(r.ok, true);
+  if (!r.ok) return;
+  assert.equal(rec.appends.length, 1);
   assert.equal(rec.moves.length, 0);
+  assert.equal(rec.deletes.length, 0);
+  assert.deepEqual(rec.softDeletes[0], [42]);
 });
 
-test("MOVE fallback: MOVE without a safe Trash target → refused BEFORE APPEND", async () => {
+test("MOVE without a safe Trash target falls back to soft-delete (never global EXPUNGE)", async () => {
   const { client, rec } = mkClient({
     mailboxes: [box("Drafts")], // no Trash-like folder
     hasUidPlus: false,
     hasMove: true,
-    searchResults: [[42]],
+    appendUid: 100,
+    searchResults: [[42], [42, 100]],
   });
   const r = await executeDraftSave(client, BASE_INPUT);
-  assert.equal(r.ok, false);
-  if (r.ok) return;
-  assert.equal(r.error, "SAFE_DRAFT_REPLACE_UNSUPPORTED");
-  assert.equal(rec.appends.length, 0);
+  assert.equal(r.ok, true);
+  if (!r.ok) return;
+  assert.equal(rec.appends.length, 1);
   assert.equal(rec.moves.length, 0);
+  assert.deepEqual(rec.softDeletes[0], [42]);
 });
 
 test("MOVE fallback path MUST NOT call deleteByUid at any point", async () => {

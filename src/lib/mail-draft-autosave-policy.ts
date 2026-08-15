@@ -1,6 +1,14 @@
-export const TEXT_DRAFT_REMOTE_IDLE_MS = 5_000;
-export const ATTACHMENT_DRAFT_REMOTE_IDLE_MS = 30_000;
-export const ATTACHMENT_DRAFT_REMOTE_MIN_INTERVAL_MS = 60_000;
+/**
+ * Draft remote-autosave policy — MAILMAESTRO_DRAFTS_V4.
+ *
+ * The idle debounce is now owned by the Composer's autosave scheduler
+ * (DRAFT_REMOTE_IDLE_MS) with an optional maximum dirty wait
+ * (DRAFT_MAX_DIRTY_MS). Once the scheduler fires, the remote flush is
+ * immediate (`delayMs: 0`), so there is no second hidden timer delaying
+ * persistence.
+ */
+export const DRAFT_REMOTE_IDLE_MS = 1_500;
+export const DRAFT_MAX_DIRTY_MS = 5_000;
 
 export interface RemoteDraftSavePlanInput {
   automatic: boolean;
@@ -14,17 +22,11 @@ export function planRemoteDraftSave(input: RemoteDraftSavePlanInput): {
   allowed: boolean;
   delayMs: number;
 } {
+  // Manual save bypasses the debounce and saves immediately.
   if (!input.automatic) return { allowed: true, delayMs: 0 };
+  // Never autosave while a send is in flight.
   if (input.sending) return { allowed: false, delayMs: 0 };
-  if (!input.hasAttachments) return { allowed: true, delayMs: TEXT_DRAFT_REMOTE_IDLE_MS };
-  const intervalDelay = input.lastSuccessfulAutomaticSaveAt
-    ? Math.max(
-        0,
-        input.lastSuccessfulAutomaticSaveAt + ATTACHMENT_DRAFT_REMOTE_MIN_INTERVAL_MS - input.now,
-      )
-    : 0;
-  return {
-    allowed: true,
-    delayMs: Math.max(ATTACHMENT_DRAFT_REMOTE_IDLE_MS, intervalDelay),
-  };
+  // The scheduler already applied DRAFT_REMOTE_IDLE_MS / DRAFT_MAX_DIRTY_MS;
+  // flush immediately.
+  return { allowed: true, delayMs: 0 };
 }

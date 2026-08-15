@@ -1,59 +1,20 @@
 import { describe, expect, it } from "vitest";
-import {
-  ATTACHMENT_DRAFT_REMOTE_IDLE_MS,
-  ATTACHMENT_DRAFT_REMOTE_MIN_INTERVAL_MS,
-  TEXT_DRAFT_REMOTE_IDLE_MS,
-  planRemoteDraftSave,
-} from "../mail-draft-autosave-policy";
+import { DRAFT_MAX_DIRTY_MS, DRAFT_REMOTE_IDLE_MS, planRemoteDraftSave } from "../mail-draft-autosave-policy";
 
-describe("attachment-aware remote draft autosave policy", () => {
-  it("keeps text-only automatic saves fast", () => {
-    expect(
-      planRemoteDraftSave({
-        automatic: true,
-        hasAttachments: false,
-        sending: false,
-        now: 100,
-        lastSuccessfulAutomaticSaveAt: null,
-      }).delayMs,
-    ).toBe(TEXT_DRAFT_REMOTE_IDLE_MS);
-  });
-
-  it("debounces attachment-bearing automatic saves for 30 seconds", () => {
-    expect(
-      planRemoteDraftSave({
-        automatic: true,
-        hasAttachments: true,
-        sending: false,
-        now: 100,
-        lastSuccessfulAutomaticSaveAt: null,
-      }).delayMs,
-    ).toBe(ATTACHMENT_DRAFT_REMOTE_IDLE_MS);
-  });
-
-  it("keeps 60 seconds between successful attachment automatic saves", () => {
-    const now = 40_000;
-    expect(
-      planRemoteDraftSave({
-        automatic: true,
-        hasAttachments: true,
-        sending: false,
-        now,
-        lastSuccessfulAutomaticSaveAt: 10_000,
-      }).delayMs,
-    ).toBe(ATTACHMENT_DRAFT_REMOTE_MIN_INTERVAL_MS - (now - 10_000));
-  });
-
-  it("manual saves are immediate and automatic saves are blocked during send", () => {
+describe("draft remote autosave policy (scheduler-owned debounce)", () => {
+  it("manual saves are immediate", () => {
     expect(
       planRemoteDraftSave({
         automatic: false,
         hasAttachments: true,
-        sending: true,
+        sending: false,
         now: 100,
         lastSuccessfulAutomaticSaveAt: 90,
       }),
     ).toEqual({ allowed: true, delayMs: 0 });
+  });
+
+  it("automatic saves are blocked during send", () => {
     expect(
       planRemoteDraftSave({
         automatic: true,
@@ -63,5 +24,32 @@ describe("attachment-aware remote draft autosave policy", () => {
         lastSuccessfulAutomaticSaveAt: null,
       }).allowed,
     ).toBe(false);
+  });
+
+  it("automatic saves flush immediately (debounce is scheduler-owned)", () => {
+    // Text and attachment drafts share the SAME policy — no 30s/60s delays.
+    expect(
+      planRemoteDraftSave({
+        automatic: true,
+        hasAttachments: false,
+        sending: false,
+        now: 100,
+        lastSuccessfulAutomaticSaveAt: null,
+      }),
+    ).toEqual({ allowed: true, delayMs: 0 });
+    expect(
+      planRemoteDraftSave({
+        automatic: true,
+        hasAttachments: true,
+        sending: false,
+        now: 40_000,
+        lastSuccessfulAutomaticSaveAt: 39_500,
+      }),
+    ).toEqual({ allowed: true, delayMs: 0 });
+  });
+
+  it("exposes the ~1.5s idle debounce and ~5s max dirty wait constants", () => {
+    expect(DRAFT_REMOTE_IDLE_MS).toBe(1500);
+    expect(DRAFT_MAX_DIRTY_MS).toBe(5000);
   });
 });

@@ -932,7 +932,11 @@ import {
   type DraftDocV3,
   type PendingDeleteQueue,
 } from "@/lib/mail-draft-lifecycle";
-import { planRemoteDraftSave } from "@/lib/mail-draft-autosave-policy";
+import {
+  planRemoteDraftSave,
+  DRAFT_REMOTE_IDLE_MS,
+  DRAFT_MAX_DIRTY_MS,
+} from "@/lib/mail-draft-autosave-policy";
 import {
   createAutosaveScheduler,
   attachInputListener,
@@ -943,10 +947,7 @@ import {
   createRequestBoundSignatureStore,
   type RequestBoundSignatureStore,
 } from "@/lib/mail-composer-autosave";
-import {
-  createDraftAutosaveRefreshTracker,
-  shouldRefreshDraftsOnFolderEntry,
-} from "@/lib/mail-autosave-refresh";
+import { createDraftAutosaveRefreshTracker } from "@/lib/mail-autosave-refresh";
 import {
   MessageMemoryCache,
   validUidValidity,
@@ -1827,7 +1828,6 @@ function useMailData(session: MailSession | null) {
               if (!c.hasUidvalidity) continue;
               // V4 count race guard: skip starred.total while a mutation is
               // hot; keep the optimistic value the toggle already applied.
-              if (c.folder === "drafts") continue;
               if (c.folder === "starred" && isStarCountHot() && prev.starred) {
                 const cur = next.starred ?? { total: 0, unread: 0, supported: true };
                 next.starred = {
@@ -1884,6 +1884,9 @@ function useMailData(session: MailSession | null) {
             );
           }
           archiveUidValidityRef.current = nextArchiveUV;
+          // Starred is a virtual view over INBOX and has no Local Index row,
+          // so it still needs the authoritative bridge count. Drafts no longer
+          // round-trip here — they come from the index above.
           try {
             const authoritative = await getCounts({
               data: {
@@ -1893,37 +1896,23 @@ function useMailData(session: MailSession | null) {
             });
             if (countsMutationGen.current !== gen) return;
             if (authoritative.ok) {
-              const draftsCount = authoritative.counts.find((c) => c.folder === "drafts");
               const starredCount = authoritative.counts.find((c) => c.folder === "starred");
-              if (draftsCount || starredCount) {
+              if (starredCount) {
                 setCounts((prev) => {
-                  const next = { ...prev };
-                  if (draftsCount) {
-                    next.drafts = {
-                      total: draftsCount.total,
-                      unread: draftsCount.unread,
-                      supported: draftsCount.supported !== false,
-                    };
-                  }
-                  if (starredCount) {
-                    const current = prev.starred ?? { total: 0, unread: 0, supported: true };
-                    next.starred = {
+                  const current = prev.starred ?? { total: 0, unread: 0, supported: true };
+                  return {
+                    ...prev,
+                    starred: {
                       total: isStarCountHot() ? current.total : starredCount.total,
                       unread: starredCount.unread,
                       supported: starredCount.supported !== false,
-                    };
-                  }
-                  return next;
+                    },
+                  };
                 });
-                if (draftsCount?.path) {
-                  setFolderPaths((prev) =>
-                    prev.drafts === draftsCount.path ? prev : { ...prev, drafts: draftsCount.path },
-                  );
-                }
               }
             }
           } catch {
-            /* keep previous Drafts count until bridge is reachable */
+            /* keep previous Starred count until bridge is reachable */
           }
           return;
         }
@@ -1951,11 +1940,7 @@ function useMailData(session: MailSession | null) {
       // Index has no distinct row for it, so serving it from the index
       // would either return zero rows or (worse) return every inbox row
       // regardless of the \Flagged flag. Always fall through to the Bridge.
-      f !== "starred" &&
-      // Drafts are mutated by high-frequency Bridge APPEND/delete cycles;
-      // serving them from the async Local Index can show expunged UIDs,
-      // duplicate rows, or stale counters. Bridge/IMAP remains authoritative.
-      f !== "drafts",
+      f !== "starred",
     [session],
   );
 
@@ -2309,17 +2294,14 @@ function useMailData(session: MailSession | null) {
     loadMessages();
   }, [loadMessages]);
 
-  // Drafts is Bridge-authoritative. Refresh its count once when the user
-  // enters the folder; the normal folder-change message load supplies the
-  // matching authoritative list. Autosaves themselves never reach here.
+  // Drafts now sync through the normal Local Index machinery, so entering
+  // Drafts must NOT trigger a mandatory full /api/folders STATUS sweep. The
+  // normal folder-change message load supplies the list; the Draft count comes
+  // from lifecycle deltas + index reconciliation.
   const previousFolderForDraftRefreshRef = useRef<MailFolder>(folder);
   useEffect(() => {
-    const previous = previousFolderForDraftRefreshRef.current;
     previousFolderForDraftRefreshRef.current = folder;
-    if (shouldRefreshDraftsOnFolderEntry(previous, folder)) {
-      void loadCounts();
-    }
-  }, [folder, loadCounts]);
+  }, [folder]);
 
   // Reset to default sort whenever the folder changes (no persistence between refreshes).
   useEffect(() => {
@@ -2344,9 +2326,7 @@ function useMailData(session: MailSession | null) {
       // uniqueness of mail_folders, so a starred sync round would just
       // overwrite the inbox folder row with duplicate work and never serve
       // starred correctly. Bridge listing owns starred; do not sync it here.
-      folder !== "starred" &&
-      // Drafts are Bridge-authoritative to avoid ghosts during APPEND+delete.
-      folder !== "drafts",
+      folder !== "starred",
     onSynced: () => {
       // Background rounds only: refresh the current folder from the index
       // when the sync actually changed something (the hook already gates on
@@ -6897,7 +6877,7 @@ function Composer({
     () => initial?.previousRef ?? initialDoc?.serverRef ?? null,
   );
   const [saveStatus, setSaveStatus] = useState<DraftSaveStatus>(() =>
-    isEditMode ? "saved" : initialDoc ? "saved-local" : "idle",
+    isEditMode ? "saved" : "idle",
   );
   const [hasLocalDraft, setHasLocalDraft] = useState(() => Boolean(initialDoc));
   const [hasRemoteDraft, setHasRemoteDraft] = useState(
@@ -7318,10 +7298,9 @@ function Composer({
           lastSuccessfulAutomaticSaveAtRef.current = Date.now();
         }
         // Advance the clean marker ONLY when a save actually persisted
-        // (remote success, or local-fallback on NETWORK). A hard failure
-        // (SESSION_REQUIRED, APPEND_FAILED, etc.) MUST leave the composer
-        // dirty so the user can retry or refuse to close.
-        if (status === "saved" || status === "saved-local") {
+        // remotely ("saved"). A hard failure (SESSION_REQUIRED, APPEND_FAILED,
+        // NETWORK, etc.) MUST leave the composer dirty so the user can retry.
+        if (status === "saved") {
           if (completedGeneration > savedGenerationRef.current) {
             savedGenerationRef.current = completedGeneration;
             recomputeDirty();
@@ -7329,17 +7308,15 @@ function Composer({
           lastSavedAtRef.current = Date.now();
           setSavedAt(lastSavedAtRef.current);
           lastFailCodeRef.current = null;
-          if (status === "saved") {
-            // A persisted remote save means the attachment set is not
-            // size-blocked anymore.
-            sizeBlockedAttachmentSignatureRef.current = null;
-            setHasRemoteDraft(true);
-            const tracked = autosaveRefreshTrackerRef.current!.noteRemoteSave();
-            if (tracked.incrementDraftCount) onDraftCreated();
-            if (serverRef && typeof window !== "undefined") {
-              serverRefRef.current = serverRef;
-              updateDraftDocServerRef(window.localStorage, accountEmail, draftId, serverRef);
-            }
+          // A persisted remote save means the attachment set is not
+          // size-blocked anymore.
+          sizeBlockedAttachmentSignatureRef.current = null;
+          setHasRemoteDraft(true);
+          const tracked = autosaveRefreshTrackerRef.current!.noteRemoteSave();
+          if (tracked.incrementDraftCount) onDraftCreated();
+          if (serverRef && typeof window !== "undefined") {
+            serverRefRef.current = serverRef;
+            updateDraftDocServerRef(window.localStorage, accountEmail, draftId, serverRef);
           }
         } else if (status === "failed") {
           // Diagnostic: capture the coarse code so the UI can surface it
@@ -7828,16 +7805,6 @@ function Composer({
         automaticSaveGenerationsRef.current.clear();
         return;
       }
-      if (pending.hasAttachments && lastSuccessfulAutomaticSaveAtRef.current) {
-        const remaining = Math.max(
-          0,
-          lastSuccessfulAutomaticSaveAtRef.current + 60_000 - Date.now(),
-        );
-        if (remaining > 0) {
-          remoteAutosaveTimerRef.current = window.setTimeout(flushPendingRemoteSave, remaining);
-          return;
-        }
-      }
       pendingRemoteSaveRef.current = null;
       automaticSaveGenerationsRef.current.clear();
       automaticSaveGenerationsRef.current.add(pending.generation);
@@ -7863,7 +7830,8 @@ function Composer({
       }
     };
     const scheduler = createAutosaveScheduler({
-      delayMs: 800,
+      delayMs: DRAFT_REMOTE_IDLE_MS,
+      maxDelayMs: DRAFT_MAX_DIRTY_MS,
       onFire: () => {
         const s = snapshotInputsRef.current;
         if (s.sending || sendInProgressRef.current) return;
@@ -8025,26 +7993,12 @@ function Composer({
       refreshDrafts: autosaveRefreshTrackerRef.current?.consumeCloseRefresh() ?? false,
     });
   };
-  /** Composer carries content worth keeping (reply/forward quotes included). */
-  function hasComposerContent(): boolean {
-    if (typeof window === "undefined") return false;
-    return !isDraftEmpty({
-      toCount: to.length,
-      ccCount: cc.length,
-      bccCount: bcc.length,
-      subject,
-      htmlTrimmed: (editorRef.current?.textContent ?? "").trim(),
-      existingKeptCount: existingKeptRef.current.length,
-      filesCount: filesRef.current.length + inlineImagesRef.current.length,
-    });
-  }
   async function requestClose(): Promise<boolean> {
     if (closeFlowRef.current) return closeFlowRef.current;
     const flow = (async (): Promise<boolean> => {
-      // Prompt whenever there is anything worth keeping — not only when the
-      // draft is "dirty" — so Cancel / outside navigation on a fresh
-      // reply/forward still asks before throwing the message away.
-      if (!isDirtyRef.current && !hasComposerContent()) {
+      // CLEAN composer closes immediately — whether or not it carries content.
+      // Only a DIRTY composer prompts (Save / Discard / Cancel).
+      if (!isDirtyRef.current) {
         closeComposer();
         return true;
       }
@@ -8058,10 +8012,9 @@ function Composer({
       }
       if (choice === "save") {
         const result = await saveDraftNow();
-        // saved_server + saved_local(NETWORK) → composer becomes clean and
-        // we may close. failed / empty (unexpected here since we were dirty)
-        // → keep composer open so nothing is silently lost.
-        if (result === "saved_server" || result === "saved_local") {
+        // Only a confirmed remote save may close. Failed / empty keeps the
+        // composer open so nothing is silently lost.
+        if (result === "saved_server") {
           closeComposer();
           return true;
         }
@@ -8842,8 +8795,6 @@ function Composer({
         return tr("جارٍ الحفظ…");
       case "saved":
         return t ? trf("تم الحفظ {{time}}", { time: t }) : tr("تم الحفظ");
-      case "saved-local":
-        return t ? trf("محفوظة محلياً {{time}}", { time: t }) : tr("محفوظة محلياً");
       case "failed":
         return tr("تعذّر الحفظ");
       default:
@@ -8853,7 +8804,7 @@ function Composer({
 
   // Prevents double-submit of manual saves (rapid Ctrl+S / button clicks).
   const savingNowRef = useRef(false);
-  type SaveNowResult = "saved_server" | "saved_local" | "failed" | "empty";
+  type SaveNowResult = "saved_server" | "failed" | "empty";
   async function saveDraftNow(): Promise<SaveNowResult> {
     if (typeof window === "undefined") return "failed";
     const exceeded = classifyAttachmentLimitExceeded({
@@ -8875,7 +8826,6 @@ function Composer({
       // Double-submit protection: reflect current effective state.
       const st = saverRef.current?.getStatus();
       if (st === "saved") return "saved_server";
-      if (st === "saved-local") return "saved_local";
       if (st === "failed") return "failed";
       return "saved_server";
     }
@@ -8943,10 +8893,6 @@ function Composer({
         toast.success(tr("تم حفظ المسودّة"));
         return "saved_server";
       }
-      if (st === "saved-local") {
-        toast.success(tr("تم حفظ المسودّة محلياً"));
-        return "saved_local";
-      }
       // Hard failure — do NOT show a "success" toast.
       const failCode = lastFailCodeRef.current ?? "UNKNOWN";
       toast.error(
@@ -8958,6 +8904,21 @@ function Composer({
     } finally {
       savingNowRef.current = false;
     }
+  }
+
+  // "Save as Draft" toolbar action: remote-save the latest generation and
+  // close the composer immediately on confirmation. On failure the composer
+  // stays open and dirty. If the user typed while the save was in flight, the
+  // loop re-captures and saves the newest generation before closing. After the
+  // bounded loop, the composer closes ONLY if the latest generation was
+  // remotely saved AND the composer is still clean — never while dirty.
+  async function handleSaveAsDraft() {
+    let result: SaveNowResult = "empty";
+    for (let attempt = 0; attempt < 5; attempt++) {
+      result = await saveDraftNow();
+      if (result !== "saved_server" || !isDirtyRef.current) break;
+    }
+    if (result === "saved_server" && !isDirtyRef.current) closeComposer();
   }
 
   async function handleDeleteDraft() {
@@ -9651,7 +9612,7 @@ function Composer({
           </button>
           <button
             type="button"
-            onClick={saveDraftNow}
+            onClick={() => void handleSaveAsDraft()}
             disabled={sending || deletingDraft}
             className="inline-flex items-center gap-1.5 rounded-lg border border-input bg-background px-2.5 py-2 text-xs text-muted-foreground transition hover:bg-muted hover:text-foreground disabled:opacity-40 sm:px-3"
             aria-label={tr("حفظ كمسودة")}

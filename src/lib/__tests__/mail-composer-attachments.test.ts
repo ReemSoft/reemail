@@ -151,7 +151,7 @@ describe("local source attachment fallback", () => {
     expect(raw).not.toMatch(/base64|data:|blob:/i);
   });
 
-  it("keeps source metadata restorable after a NETWORK saved-local result", async () => {
+  it("keeps source metadata restorable after a NETWORK failed result", async () => {
     const store = storage();
     const sourceAttachments = sourceState(normal);
     const snapshot = {
@@ -177,7 +177,7 @@ describe("local source attachment fallback", () => {
       saveRemote: async () => ({ ok: false, code: "NETWORK" }),
     });
     await saver.requestSave(snapshot, null, 1);
-    expect(saver.getStatus()).toBe("saved-local");
+    expect(saver.getStatus()).toBe("failed");
     expect(
       readDraftDoc(store, "sender@example.com")?.snapshot.sourceAttachments?.attachments.map(
         ({ id }) => id,

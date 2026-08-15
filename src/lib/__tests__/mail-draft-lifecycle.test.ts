@@ -321,7 +321,7 @@ describe("createDraftSaver", () => {
     expect(saver.isBusy()).toBe(false);
   });
 
-  it("emits saving → saved-local when remote fails (no serverRef change)", async () => {
+  it("emits saving → failed when remote fails (no serverRef change)", async () => {
     const events: DraftSaveStatus[] = [];
     const onRef = vi.fn();
     const saver = createDraftSaver("d1", {
@@ -330,7 +330,7 @@ describe("createDraftSaver", () => {
       onServerRef: onRef,
     });
     await saver.requestSave(snap(), null, 1);
-    expect(events).toEqual(["saving", "saved-local"]);
+    expect(events).toEqual(["saving", "failed"]);
     expect(onRef).not.toHaveBeenCalled();
   });
 
@@ -417,7 +417,7 @@ describe("createDraftSaver", () => {
     expect(saver.getStatus()).toBe("saved");
   });
 
-  it("treats a thrown saveRemote as a soft failure (saved-local)", async () => {
+  it("treats a thrown saveRemote as a hard failure (failed)", async () => {
     const events: DraftSaveStatus[] = [];
     const saver = createDraftSaver("d1", {
       saveRemote: async () => {
@@ -426,7 +426,7 @@ describe("createDraftSaver", () => {
       onStatus: (s) => events.push(s),
     });
     await saver.requestSave(snap(), null, 1);
-    expect(events).toEqual(["saving", "saved-local"]);
+    expect(events).toEqual(["saving", "failed"]);
   });
 });
 
@@ -567,11 +567,11 @@ describe("DraftSaver.onCompleted / completedGeneration", () => {
     expect(completions).toEqual([10, 12]);
   });
 
-  it("reports saved-local with generation on soft NETWORK failure", async () => {
+  it("reports failed with generation on NETWORK failure", async () => {
     const saver = createDraftSaver("d3", {
       saveRemote: async () => ({ ok: false, code: "NETWORK" }),
       onCompleted: (info) => {
-        expect(info.status).toBe("saved-local");
+        expect(info.status).toBe("failed");
         expect(info.completedGeneration).toBe(99);
         expect(info.code).toBe("NETWORK");
       },
@@ -601,12 +601,12 @@ describe("createDraftSaver — failure classification", () => {
     return { events, completions, onRef, saver };
   }
 
-  it("NETWORK → saved-local, echoes generation, no serverRef", async () => {
+  it("NETWORK → failed, echoes generation, no serverRef", async () => {
     const { events, completions, onRef, saver } = await runWithCode("NETWORK");
-    expect(events).toEqual(["saving", "saved-local"]);
-    expect(completions).toEqual([{ gen: 7, status: "saved-local", code: "NETWORK" }]);
+    expect(events).toEqual(["saving", "failed"]);
+    expect(completions).toEqual([{ gen: 7, status: "failed", code: "NETWORK" }]);
     expect(onRef).not.toHaveBeenCalled();
-    expect(saver.getStatus()).toBe("saved-local");
+    expect(saver.getStatus()).toBe("failed");
   });
 
   it.each([
@@ -634,7 +634,7 @@ describe("createDraftSaver — failure classification", () => {
     expect(completions[0].code).toBeUndefined();
   });
 
-  it("thrown saveRemote → NETWORK class → saved-local", async () => {
+  it("thrown saveRemote → NETWORK class → failed", async () => {
     const events: DraftSaveStatus[] = [];
     const completions: Array<{ status: DraftSaveStatus; code?: string }> = [];
     const saver = createDraftSaver("d-thr", {
@@ -645,7 +645,7 @@ describe("createDraftSaver — failure classification", () => {
       onCompleted: (info) => completions.push({ status: info.status, code: info.code }),
     });
     await saver.requestSave(snap({ subject: "x" }), null, 1);
-    expect(events).toEqual(["saving", "saved-local"]);
-    expect(completions).toEqual([{ status: "saved-local", code: "NETWORK" }]);
+    expect(events).toEqual(["saving", "failed"]);
+    expect(completions).toEqual([{ status: "failed", code: "NETWORK" }]);
   });
 });

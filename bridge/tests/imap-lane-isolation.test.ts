@@ -116,7 +116,7 @@ test("large CID single part uses the dedicated media lane (not interactive)", ()
 test("each lane owns a distinct serialized chain keyed by lane", () => {
   assert.match(
     connection,
-    /export type ImapLane = "interactive" \| "media" \| "background" \| "transfer";/,
+    /export type ImapLane = "interactive" \| "media" \| "background" \| "transfer" \| "draft";/,
   );
   // keyFor embeds the lane, so interactive and media get separate Entry.chain
   // promises on separate connections: media work can never queue a BODY open.
@@ -248,8 +248,8 @@ test("attachment functionality and its transfer isolation remain enabled", () =>
 // ---------------------------------------------------------------------------
 // 11 + 12 + 13. Bounded concurrency, unchanged limits, media cannot starve BODY
 // ---------------------------------------------------------------------------
-test("account concurrency stays bounded at four lanes", () => {
-  assert.match(connection, /maxConnectionsPerAccount: 4/);
+test("account concurrency stays bounded at five lanes (draft lane added)", () => {
+  assert.match(connection, /maxConnectionsPerAccount: 5/);
   assert.match(gatesSrc, /perAccountMax: num\("IMAP_PER_ACCOUNT_MAX", 2\)/);
   assert.match(gatesSrc, /mediaPerAccountMax: num\("IMAP_MEDIA_PER_ACCOUNT_MAX", 1\)/);
 });

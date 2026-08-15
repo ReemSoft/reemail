@@ -184,10 +184,18 @@ test("normalizeMessage: shape has no body/source/headers and modseq is decimal s
   assert.equal(out.flagFlagged, true);
   assert.deepEqual(out.keywords, ["kw1"]);
   assert.equal(out.hasAttachments, false);
+  assert.equal(out.flagDeleted, false, "\\Deleted must be surfaced for Draft sync filtering");
   // No body / html / preview / source / headers keys
   for (const k of ["body", "html", "text", "preview", "source", "headers", "raw"]) {
     assert.ok(!(k in out), `unexpected key ${k}`);
   }
+});
+
+test("normalizeMessage: surfaces \\Deleted flag for soft-deleted copies", () => {
+  const m = fakeFetchMessage({ flags: new Set(["\\Deleted", "\\Draft"]) });
+  const out = normalizeMessage(m);
+  assert.equal(out.flagDeleted, true);
+  assert.equal(out.flagDraft, true);
 });
 
 // ---------- Zod validation ----------
@@ -218,6 +226,29 @@ test("InitialSyncSchema: rejects unknown top-level fields", () => {
     account: validAccount, password: "x", folderPath: "INBOX", nefarious: true,
   });
   assert.equal(r.success, false);
+});
+
+test("sync schemas accept countExcludeDeleted (Draft authoritative live count)", () => {
+  assert.equal(
+    InitialSyncSchema.safeParse({
+      account: validAccount, password: "x", folderPath: "Drafts", countExcludeDeleted: true,
+    }).success,
+    true,
+  );
+  assert.equal(
+    IncrementalSyncSchema.safeParse({
+      account: validAccount, password: "x", folderPath: "Drafts",
+      sinceUid: 10, countExcludeDeleted: true,
+    }).success,
+    true,
+  );
+  assert.equal(
+    ReconcileSyncSchema.safeParse({
+      account: validAccount, password: "x", folderPath: "Drafts",
+      expectedUidValidity: "1", fromUid: 1, toUid: 5, countExcludeDeleted: true,
+    }).success,
+    true,
+  );
 });
 
 test("IncrementalSyncSchema: rejects non-decimal modseq", () => {

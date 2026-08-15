@@ -358,20 +358,32 @@ test("connection stats expose bounded config only (no host/account identifiers)"
     "maxConnectionsPerAccount",
     "openConnections",
   ]);
-  assert.deepEqual(Object.keys(s.lanes).sort(), ["background", "interactive", "media", "transfer"]);
+  assert.deepEqual(Object.keys(s.lanes).sort(), [
+    "background",
+    "draft",
+    "interactive",
+    "media",
+    "transfer",
+  ]);
 
   assert.equal(typeof s.openConnections, "number");
   assert.ok(s.idleCloseMs > 0);
   assert.ok(s.listCacheMs > 0);
 
   // 2. lane counters are non-negative numbers
-  for (const v of [s.lanes.interactive, s.lanes.media, s.lanes.background, s.lanes.transfer]) {
+  for (const v of [
+    s.lanes.interactive,
+    s.lanes.media,
+    s.lanes.background,
+    s.lanes.transfer,
+    s.lanes.draft,
+  ]) {
     assert.equal(typeof v, "number");
     assert.ok(Number.isFinite(v) && v >= 0);
   }
 
-  // 3. four connections per account max (interactive + media + background + transfer)
-  assert.equal(s.maxConnectionsPerAccount, 4);
+  // 3. five connections per account max (interactive + media + background + transfer + draft)
+  assert.equal(s.maxConnectionsPerAccount, 5);
 
   // 4. no PII / identifiers among the VALUES: every leaf value is a number,
   //    so no host, account, company, email or any personal identifier can leak.
@@ -384,6 +396,7 @@ test("connection stats expose bounded config only (no host/account identifiers)"
     s.lanes.media,
     s.lanes.background,
     s.lanes.transfer,
+    s.lanes.draft,
   ];
   for (const v of leaves) assert.equal(typeof v, "number");
   const values = JSON.stringify(s)

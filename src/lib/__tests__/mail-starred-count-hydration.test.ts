@@ -121,7 +121,7 @@ describe("wiring and unchanged behavior", () => {
   });
 
   it("keeps Starred listing on the existing Bridge fallback", () => {
-    expect(source).toContain('f !== "starred" &&');
+    expect(source).toContain('f !== "starred",');
     expect(indexSource).toContain('if (canonical === "starred")');
   });
 });

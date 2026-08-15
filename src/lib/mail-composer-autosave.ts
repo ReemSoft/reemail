@@ -27,6 +27,13 @@ export interface AutosaveScheduler {
 export interface CreateAutosaveSchedulerOptions {
   delayMs: number;
   onFire: () => void;
+  /**
+   * Optional maximum dirty delay: if continuous activity keeps re-arming the
+   * debounce, `onFire` is still forced after `maxDelayMs` from the FIRST
+   * schedule since the last fire. When absent, behavior is the plain debounce
+   * (identical to previous releases).
+   */
+  maxDelayMs?: number;
   /** Injectable for tests. Defaults to native setTimeout/clearTimeout. */
   setTimeoutFn?: (fn: () => void, ms: number) => unknown;
   clearTimeoutFn?: (handle: unknown) => void;
@@ -37,29 +44,54 @@ export function createAutosaveScheduler(opts: CreateAutosaveSchedulerOptions): A
   const clearT =
     opts.clearTimeoutFn ?? ((h: unknown) => clearTimeout(h as ReturnType<typeof setTimeout>));
   let handle: unknown = null;
+  let maxHandle: unknown = null;
   let disposed = false;
 
-  function cancel() {
+  function cancelDebounce() {
     if (handle !== null) {
       clearT(handle);
       handle = null;
     }
   }
 
+  function cancelMax() {
+    if (maxHandle !== null) {
+      clearT(maxHandle);
+      maxHandle = null;
+    }
+  }
+
+  function cancel() {
+    cancelDebounce();
+    cancelMax();
+  }
+
+  function fire() {
+    cancel();
+    if (disposed) return;
+    opts.onFire();
+  }
+
   return {
     schedule() {
       if (disposed) return;
-      cancel();
+      cancelDebounce();
       handle = setT(() => {
         handle = null;
         if (disposed) return;
-        opts.onFire();
+        fire();
       }, opts.delayMs);
+      if (opts.maxDelayMs != null && maxHandle === null) {
+        maxHandle = setT(() => {
+          maxHandle = null;
+          if (disposed) return;
+          fire();
+        }, opts.maxDelayMs);
+      }
     },
     flushNow() {
       if (disposed) return;
-      cancel();
-      opts.onFire();
+      fire();
     },
     cancel() {
       if (disposed) return;
@@ -71,7 +103,7 @@ export function createAutosaveScheduler(opts: CreateAutosaveSchedulerOptions): A
       cancel();
     },
     isPending() {
-      return handle !== null;
+      return handle !== null || maxHandle !== null;
     },
   };
 }

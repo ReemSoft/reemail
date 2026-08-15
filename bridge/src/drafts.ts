@@ -30,16 +30,20 @@
  *     server via logs or error payloads.
  */
 import { z } from "zod";
-import type { ListResponse } from "imapflow";
-import type { Readable } from "node:stream";
-import { makeImapClient, listMailboxes } from "./imap.js";
+import type { ImapFlow, ListResponse } from "imapflow";
+import { acquireAccountClient, getMailboxesCached } from "./imap-connection.js";
 import {
   resolveDraftsPath,
   resolveTrashPath,
   type SendMessagePayload,
   type SendAttachment,
 } from "./smtp.js";
-import { createMimeSpool, withMimeSpoolReadStream, type MimeSpool } from "./mime-spool.js";
+import {
+  createMimeSpool,
+  readMimeSpoolBuffer,
+  SENT_APPEND_MAX_BYTES,
+  type MimeSpool,
+} from "./mime-spool.js";
 import type { MailAccount } from "./types.js";
 import { InlineImageMetadataSchema } from "./inline-images.js";
 
@@ -219,7 +223,7 @@ export interface ImapDraftClient {
    */
   append(
     path: string,
-    raw: Readable,
+    raw: Buffer,
     flags: string[],
   ): Promise<{ uid: number | null; uidValidity: string | null }>;
   /**
@@ -228,6 +232,14 @@ export interface ImapDraftClient {
    * under an open lock on the target mailbox.
    */
   deleteByUid(uids: number[]): Promise<boolean>;
+  /**
+   * Soft-delete a set of exact UIDs via UID STORE +\Deleted. Used ONLY on
+   * servers that advertise neither UIDPLUS nor MOVE. This is a UID-targeted
+   * STORE — it NEVER runs a global EXPUNGE. The provider may retain the
+   * soft-deleted message until its own normal expunge behavior. MUST be
+   * called under an open lock on the target mailbox.
+   */
+  softDeleteByUid(uids: number[]): Promise<boolean>;
   /**
    * Whether the server advertised RFC 6851 MOVE. Used only by the drafts
    * MOVE fallback on servers that support MOVE but NOT UIDPLUS: stale draft
@@ -286,12 +298,12 @@ export function draftMimePayload(input: DraftSavePayload): SendMessagePayload {
  * Ordering guarantee (locked by drafts.test.ts):
  *   1. Resolve Drafts folder (server-side, SPECIAL-USE first).
  *   2. Open + search for existing copies of this draftId BEFORE any APPEND.
- *   3. If a prior copy exists (or caller passed `previousRef`) AND UIDPLUS
- *      is not supported → return SAFE_DRAFT_REPLACE_UNSUPPORTED WITHOUT
- *      appending. This closes the "APPEND then discover we can't delete
- *      the old copy" race that would leave duplicates on the server.
- *   4. Otherwise APPEND the new MIME.
- *   5. Reopen, re-search, and selectively EXPUNGE stale copies (UID EXPUNGE).
+ *   3. APPEND the new MIME (Buffer, never a stream).
+ *   4. Selectively clean stale copies:
+ *        * UIDPLUS   → APPENDUID is canonical; UID EXPUNGE stale UIDs only.
+ *        * MOVE-only → header-search for canonical; UID MOVE stale to Trash.
+ *        * neither   → header-search for canonical; UID STORE +\Deleted on
+ *                      exact stale UIDs only. NEVER a global EXPUNGE.
  */
 export async function executeDraftSave(
   client: ImapDraftClient,
@@ -321,10 +333,8 @@ export async function executeDraftSave(
     });
 
     // 1) Pre-APPEND probe: does a prior copy already exist for this draftId?
-    //    We MUST know this before appending to avoid the "append then can't
-    //    delete" race on servers without UIDPLUS.
+    //    Prior copies become stale candidates after a successful APPEND.
     let priorCopies: number[] = [];
-    let priorSearchFailed = false;
     let priorUidValidity = "";
     {
       const probe = await client.openWithLock(folderPath);
@@ -333,83 +343,80 @@ export async function executeDraftSave(
         try {
           priorCopies = await client.searchByHeader(DRAFT_ID_HEADER, input.draftId);
         } catch {
-          // Search failure = we can't prove idempotency; treat as no priors
-          // BUT record it so a downstream cleanup can catch up.
-          priorSearchFailed = true;
+          // Search failure = we can't prove idempotency; treat as no priors.
+          // The post-APPEND scan (MOVE/soft-delete path) will re-scan anyway.
         }
       } finally {
         probe.release();
       }
     }
 
-    // Replace mode = we WILL need to delete an old copy after appending.
-    // Trigger it either from an actual match OR an explicit caller hint.
-    const replaceMode = priorCopies.length > 0 || Boolean(input.previousRef);
     const uidPlus = client.hasUidPlus();
-    // MOVE fallback is only available when the server ACTUALLY advertises
-    // MOVE AND we found a safe Trash target distinct from Drafts.
-    const canMoveFallback = !uidPlus && client.hasMove() && Boolean(trashPath);
-    const canSafelyReplace = uidPlus || canMoveFallback;
-    if (replaceMode && !canSafelyReplace) {
-      // Refuse BEFORE APPEND. No side effects on the mailbox.
-      return { ok: false, error: "SAFE_DRAFT_REPLACE_UNSUPPORTED" };
-    }
+    const hasMove = client.hasMove();
+    const canMoveFallback = !uidPlus && hasMove && Boolean(trashPath);
 
-    // 2) APPEND (no external lock — imapflow takes its own).
+    // 2) APPEND (no external lock — imapflow takes its own). The MIME is read
+    //    back as a bounded Buffer because ImapFlow's APPEND contract is
+    //    `string | Buffer` — a Readable silently breaks on `content.length`.
     let appendUid: number | null;
     let appendUidValidity: string;
     try {
-      const appendRes = await withMimeSpoolReadStream(spool, (raw) =>
-        client.append(folderPath, raw, ["\\Draft", "\\Seen"]),
-      );
+      const raw = await readMimeSpoolBuffer(spool, SENT_APPEND_MAX_BYTES + DRAFT_MAX_TOTAL_BYTES);
+      const appendRes = await client.append(folderPath, raw, ["\\Draft", "\\Seen"]);
       appendUid = appendRes.uid ?? null;
       appendUidValidity = appendRes.uidValidity ?? "";
     } catch {
       return { ok: false, error: "APPEND_FAILED" };
     }
 
-    // 3) Reopen with lock to re-scan for all copies of this draftId.
-    //    Canonical = highest UID within the current UIDVALIDITY (newest
-    //    wins). Every other UID is stale and MUST be selectively cleaned up
-    //    — via UID EXPUNGE on UIDPLUS servers, or UID MOVE to Trash on the
-    //    MOVE-only fallback. A global EXPUNGE is NEVER used here.
+    // 3) Reopen with lock to resolve the canonical copy and clean stale UIDs.
+    //
+    //    UIDPLUS: APPENDUID is authoritative — no redundant post-APPEND
+    //    header SEARCH. Stale = prior copies (minus canonical) + legacy
+    //    previousRef. UID EXPUNGE those exact UIDs.
+    //
+    //    MOVE-only / neither: APPENDUID is unavailable, so a header SEARCH is
+    //    required to identify the canonical (highest UID) copy. Stale copies
+    //    are UID MOVE'd to Trash (MOVE-only) or soft-deleted via UID STORE
+    //    +\Deleted (neither). A global EXPUNGE is NEVER used here.
     //
     //    LEGACY (M4-A): drafts saved by older builds don't carry the
-    //    `X-MailMaestro-Draft-ID` header, so a header search can never find
-    //    them. When the caller supplies a trusted `previousRef` we treat
-    //    its UID as an additional stale candidate — but ONLY when every
-    //    safety invariant holds:
-    //      * previousRef.folderPath equals the server-resolved Drafts path
-    //        (never a caller-supplied path like INBOX).
-    //      * previousRef.uidValidity equals the CURRENT mailbox UIDVALIDITY
-    //        (a bump invalidates the UID entirely).
-    //      * UIDPLUS OR MOVE fallback is available (guaranteed here because
-    //        replace-mode already refused otherwise pre-APPEND).
+    //    `X-MailMaestro-Draft-ID` header. When the caller supplies a trusted
+    //    `previousRef` we treat its UID as an additional stale candidate —
+    //    but ONLY when every safety invariant holds:
+    //      * previousRef.folderPath equals the server-resolved Drafts path.
+    //      * previousRef.uidValidity equals the CURRENT mailbox UIDVALIDITY.
     //      * previousRef.uid is NOT the freshly-appended canonical UID.
-    //    Within a single UIDVALIDITY, IMAP guarantees UIDs are never
-    //    reused, so acting on a UID that no longer exists is a harmless
-    //    no-op — it can never target an unrelated message.
+    //    Within a single UIDVALIDITY, IMAP guarantees UIDs are never reused,
+    //    so acting on a UID that no longer exists is a harmless no-op.
     const opened = await client.openWithLock(folderPath);
     try {
       const uidValidity = appendUidValidity || opened.uidValidity || priorUidValidity;
 
-      let matched: number[] = [];
-      let postSearchOk = true;
-      try {
-        matched = await client.searchByHeader(DRAFT_ID_HEADER, input.draftId);
-      } catch {
-        // Search failure MUST NOT roll back the APPEND. Fall back to the
-        // append's own UID as the best-effort canonical reference — but
-        // continue so an explicit previousRef can still be cleaned up.
-        postSearchOk = false;
-      }
+      let canonical: number | null;
+      let stale: number[];
 
-      // Deterministic canonical selection: highest UID wins.
-      const canonical =
-        postSearchOk && matched.length > 0
-          ? matched.reduce((a, b) => (b > a ? b : a), matched[0])
-          : appendUid;
-      const stale = postSearchOk ? matched.filter((u) => u !== canonical) : [];
+      if (uidPlus && typeof appendUid === "number") {
+        canonical = appendUid;
+        stale = priorCopies.filter((u) => u !== canonical);
+      } else {
+        let matched: number[] = [];
+        try {
+          matched = await client.searchByHeader(DRAFT_ID_HEADER, input.draftId);
+        } catch {
+          // Search failure MUST NOT roll back the APPEND. Fall back to the
+          // append's own UID (if any) as best-effort canonical.
+          matched = [];
+        }
+        if (matched.length > 0) {
+          const highest = matched.reduce((a, b) => (b > a ? b : a), matched[0]);
+          canonical = highest;
+          stale = matched.filter((u) => u !== highest);
+        } else {
+          canonical = appendUid;
+          stale = [];
+        }
+      }
 
       // Legacy previousRef cleanup — union with header-matched stale UIDs.
       const toCleanup = new Set<number>(stale);
@@ -418,7 +425,6 @@ export async function executeDraftSave(
         !!prev &&
         prev.folderPath === folderPath &&
         String(prev.uidValidity) === uidValidity &&
-        canSafelyReplace &&
         typeof canonical === "number" &&
         prev.uid !== canonical;
       if (canCleanupPrevious && prev) toCleanup.add(prev.uid);
@@ -440,14 +446,17 @@ export async function executeDraftSave(
             try {
               await client.moveByUid(cleanupList, trashPath);
             } catch {
-              // MOVE failure is non-fatal: the freshly-APPENDed canonical
-              // remains; a subsequent save re-scans and retries convergence.
-              // We DO NOT fall back to a global EXPUNGE under any condition.
+              // MOVE failure is non-fatal. Never falls back to global EXPUNGE.
+            }
+          } else {
+            try {
+              await client.softDeleteByUid(cleanupList);
+            } catch {
+              // Soft-delete failure is non-fatal; provider expunges later.
             }
           }
         }
       }
-      void priorSearchFailed;
 
       return {
         ok: true,
@@ -499,10 +508,15 @@ export async function executeDraftDelete(
       if (matched.length === 0) {
         return { ok: true, draftId: input.draftId, folderPath, deleted: false };
       }
+      // UIDPLUS → selective UID EXPUNGE. Otherwise → UID STORE +\Deleted on
+      // the exact header-derived UIDs. A global EXPUNGE is NEVER used.
       if (!client.hasUidPlus()) {
-        // Refuse global EXPUNGE. Non-fatal: caller can retry once the server
-        // upgrades / a maintenance job cleans up.
-        return { ok: false, error: "UIDPLUS_UNSUPPORTED" };
+        try {
+          await client.softDeleteByUid(matched);
+        } catch {
+          return { ok: false, error: "IMAP_ERROR" };
+        }
+        return { ok: true, draftId: input.draftId, folderPath, deleted: true };
       }
       // If uidValidity is stale, we still expunge by header-derived UIDs
       // (safe because the search returned them from the CURRENT mailbox).
@@ -521,27 +535,39 @@ export async function executeDraftDelete(
   }
 }
 
-// --- Production deps (real imapflow) ----------------------------------------
+// --- Production deps (real imapflow, "draft" lane) --------------------------
 
 function defaultDeps(): DraftDeps {
   return {
     createImapDraftClient(account, password) {
-      const client = makeImapClient(account, password);
-      // ImapFlow exposes `capabilities` as `Map<string, boolean | number>`
-      // after connect. Read via `hasImapCapability` — iterating the Map
-      // directly yields `[key, value]` tuples and would misread as strings
-      // like "UIDPLUS,true", which was the SAFE_DRAFT_REPLACE_UNSUPPORTED
-      // root cause on UIDPLUS-capable servers.
-      const getCaps = () =>
-        (client as unknown as { capabilities?: Map<string, boolean | number> }).capabilities;
+      // Reuse the dedicated "draft" lane: ONE reusable, serialized connection
+      // per account + the shared 5-minute LIST cache. No fresh TCP/TLS/LOGIN
+      // and no full LIST on every autosave.
+      //
+      // `connect()` ACQUIRES the lane (serializing the WHOLE pipeline) and
+      // `logout()` RELEASES it, so two Draft saves for the SAME account can
+      // never interleave — the second waits for the first to fully settle.
+      // The lane's idle timer owns the actual 5-minute close.
+      let client: ImapFlow | null = null;
+      let release: (() => void) | null = null;
+      const ensure = (): ImapFlow => {
+        if (!client) throw new Error("DRAFT_CLIENT_NOT_CONNECTED");
+        return client;
+      };
+      const getCaps = () => client?.capabilities;
       return {
-        connect: () => client.connect(),
-        list: () => listMailboxes(client),
+        async connect() {
+          const held = await acquireAccountClient(account, password, "draft");
+          client = held.client;
+          release = held.release;
+        },
+        list: () => getMailboxesCached(account, password, "draft"),
         hasUidPlus: () => hasImapCapability(getCaps(), "UIDPLUS"),
         hasMove: () => hasImapCapability(getCaps(), "MOVE"),
         async openWithLock(path) {
-          const lock = await client.getMailboxLock(path);
-          const mb = (client as unknown as { mailbox?: { uidValidity?: unknown } }).mailbox;
+          const c = ensure();
+          const lock = await c.getMailboxLock(path);
+          const mb = (c as unknown as { mailbox?: { uidValidity?: unknown } }).mailbox;
           const uidValidity = mb?.uidValidity != null ? String(mb.uidValidity) : "";
           return {
             uidValidity,
@@ -549,13 +575,15 @@ function defaultDeps(): DraftDeps {
           };
         },
         async searchByHeader(name, value) {
-          const res = (await client.search({ header: { [name.toLowerCase()]: value } } as never, {
+          const c = ensure();
+          const res = (await c.search({ header: { [name.toLowerCase()]: value } } as never, {
             uid: true,
           })) as number[] | false;
           return Array.isArray(res) ? res : [];
         },
         async append(path, raw, flags) {
-          const res = (await client.append(path, raw as never, flags)) as unknown as {
+          const c = ensure();
+          const res = (await c.append(path, raw, flags)) as unknown as {
             uid?: number;
             uidValidity?: string | number | bigint;
           } | null;
@@ -566,22 +594,37 @@ function defaultDeps(): DraftDeps {
         },
         async deleteByUid(uids) {
           if (uids.length === 0) return true;
-          const ok = await client.messageDelete(uids, { uid: true });
+          const c = ensure();
+          const ok = await c.messageDelete(uids, { uid: true });
+          return Boolean(ok);
+        },
+        async softDeleteByUid(uids) {
+          if (uids.length === 0) return true;
+          const c = ensure();
+          // UID STORE +FLAGS.SILENT (\Deleted) — exact UIDs only, never EXPUNGE.
+          const ok = await c.messageFlagsAdd(uids, ["\\Deleted"], { uid: true });
           return Boolean(ok);
         },
         async moveByUid(uids, destinationPath) {
           if (uids.length === 0) return true;
+          const c = ensure();
           // Guard-rail: never call messageMove without the MOVE capability;
           // some IMAP client libs emulate MOVE via COPY+STORE+EXPUNGE, which
           // would evict unrelated \Deleted messages. `executeDraftSave`
           // already checks `hasMove()`, but we double-check here.
           if (!hasImapCapability(getCaps(), "MOVE")) return false;
-          const res = (await client.messageMove(uids.join(","), destinationPath, {
+          const res = (await c.messageMove(uids.join(","), destinationPath, {
             uid: true,
           })) as unknown;
           return Boolean(res);
         },
-        logout: () => client.logout().catch(() => {}) as unknown as Promise<void>,
+        logout: async () => {
+          if (release) {
+            release();
+            release = null;
+            client = null;
+          }
+        },
       };
     },
     now: () => new Date(),

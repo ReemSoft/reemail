@@ -372,13 +372,10 @@ test("20. media / transfer cleanup stays wired through lane loops (no leak)", ()
   const conn = readFileSync(new URL("../src/imap-connection.ts", import.meta.url), "utf8");
   assert.match(
     conn,
-    /export type ImapLane = "interactive" \| "media" \| "background" \| "transfer";/,
+    /export type ImapLane = "interactive" \| "media" \| "background" \| "transfer" \| "draft";/,
   );
-  assert.match(conn, /for \(const lane of \["interactive", "media", "background", "transfer"\]/);
-  assert.match(
-    conn,
-    /const lanes: ImapLane\[\] = lane \? \[lane\] : \["interactive", "media", "background", "transfer"\]/,
-  );
+  assert.match(conn, /const ALL_LANES: ImapLane\[\] = \["interactive", "media", "background", "transfer", "draft"\]/);
+  assert.match(conn, /const lanes: ImapLane\[\] = lane \? \[lane\] : ALL_LANES/);
   assert.match(conn, /closeAllImapConnections/);
-  assert.match(conn, /maxConnectionsPerAccount: 4/);
+  assert.match(conn, /maxConnectionsPerAccount: 5/);
 });

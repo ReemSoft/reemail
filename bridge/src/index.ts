@@ -1342,87 +1342,8 @@ app.post("/api/staged-release", requireKey, async (req, res) => {
 // APPEND-then-delete-old against the resolved Drafts folder. Idempotent via
 // the X-MailMaestro-Draft-ID header (IMAP is the source of truth — no
 // process-local memory). Never returns subject/body/recipients in errors.
-// Multipart shape mirrors /api/send-multipart: a JSON `payload` field plus
-// `attachments` files streamed to disk. Attachment limits are the shared
-// SEND_MAX_TOTAL_BYTES / SEND_MAX_FILES so drafts can never overrun send.
-app.post(
-  "/api/draft-save",
-  requireKey,
-  imapGate("interactive"),
-  sendUpload.array("attachments", SEND_MAX_FILES),
-  async (req, res) => {
-    const files = (req.files as Express.Multer.File[] | undefined) ?? [];
-    const abortHandler = () => {
-      if (!res.writableEnded) cleanupFiles(files).catch(() => {});
-    };
-    req.on("aborted", abortHandler);
-    res.on("close", abortHandler);
-    try {
-      // Multipart: JSON body arrives in a `payload` string field. Fallback to
-      // req.body for legacy JSON callers so the endpoint stays compatible.
-      let source: unknown;
-      const raw = req.body?.payload;
-      if (typeof raw === "string") {
-        try {
-          source = JSON.parse(raw);
-        } catch {
-          return res.status(400).json({ ok: false, error: "INVALID_PAYLOAD" });
-        }
-      } else {
-        source = req.body;
-      }
-      const payload = DraftSavePayloadSchema.parse(source);
-
-      const totalBytes = files.reduce((acc, f) => acc + f.size, 0);
-      if (totalBytes > SEND_MAX_TOTAL_BYTES) {
-        return res.status(413).json({ ok: false, error: "ATTACHMENTS_TOO_LARGE" });
-      }
-
-      // Stream from disk — never load attachment bytes into heap.
-      const attachments = await mapUploadedAttachments(files, payload.inlineImages);
-
-      const result = await saveDraft(payload.account as any, payload.password, {
-        ...payload,
-        attachments,
-      });
-      if (result.ok === false) {
-        const err = result.error;
-        const status =
-          err === "NO_DRAFTS_FOLDER" ? 422 : err === "SAFE_DRAFT_REPLACE_UNSUPPORTED" ? 409 : 500;
-        return res.status(status).json({ ok: false, error: err });
-      }
-
-      return res.json({
-        ok: true,
-        draftId: result.draftId,
-        folderPath: result.folderPath,
-        uid: result.uid,
-        uidValidity: result.uidValidity,
-        messageId: result.messageId,
-        savedAt: result.savedAt,
-      });
-    } catch (err: any) {
-      if (err instanceof z.ZodError) {
-        // Do NOT surface issue paths — they can echo user-controlled fields.
-        return res.status(400).json({ ok: false, error: "INVALID_PAYLOAD" });
-      }
-      if (err?.code === "LIMIT_FILE_SIZE") {
-        return res.status(413).json({ ok: false, error: "ATTACHMENT_TOO_LARGE" });
-      }
-      if (err?.code === "LIMIT_FILE_COUNT") {
-        return res.status(413).json({ ok: false, error: "TOO_MANY_ATTACHMENTS" });
-      }
-      // Log ONLY coarse code — never filename / content / body / recipients.
-      console.error("[bridge] /api/draft-save error:", err?.code || "unknown");
-      return res.status(500).json({ ok: false, error: "IMAP_ERROR" });
-    } finally {
-      req.off("aborted", abortHandler);
-      res.off("close", abortHandler);
-      await cleanupFiles(files).catch(() => {});
-    }
-  },
-);
-
+// Draft saves flow through /api/draft-save-v2 (staged handles); the legacy
+// multipart /api/draft-save route is removed.
 app.post("/api/draft-delete", requireKey, imapGate("interactive"), async (req, res) => {
   try {
     const payload = DraftDeletePayloadSchema.parse(req.body);
@@ -1774,6 +1695,7 @@ app.post("/api/sync/initial", requireKey, imapGate("background"), async (req, re
     const result = await runInitialSync(p.account as MailAccount, p.password, {
       folderPath: p.folderPath,
       limit: p.limit,
+      countExcludeDeleted: p.countExcludeDeleted,
     });
     return res.json(result);
   } catch (err: unknown) {
@@ -1797,6 +1719,7 @@ app.post("/api/sync/incremental", requireKey, imapGate("background"), async (req
       flagsFromUid: p.flagsFromUid,
       flagsToUid: p.flagsToUid,
       limit: p.limit,
+      countExcludeDeleted: p.countExcludeDeleted,
     });
     return res.json(result);
   } catch (err: unknown) {
@@ -1817,6 +1740,7 @@ app.post("/api/sync/reconcile", requireKey, imapGate("background"), async (req, 
       expectedUidValidity: p.expectedUidValidity,
       fromUid: p.fromUid,
       toUid: p.toUid,
+      countExcludeDeleted: p.countExcludeDeleted,
     });
     return res.json(result);
   } catch (err: unknown) {

@@ -61,6 +61,7 @@ export interface SyncMessage {
   flagFlagged: boolean;
   flagAnswered: boolean;
   flagDraft: boolean;
+  flagDeleted: boolean;
   keywords: string[];
 }
 
@@ -71,6 +72,7 @@ export interface SyncFlagState {
   flagFlagged: boolean;
   flagAnswered: boolean;
   flagDraft: boolean;
+  flagDeleted: boolean;
   keywords: string[];
 }
 
@@ -80,6 +82,8 @@ export interface SyncMailboxState {
   uidValidity: string;
   uidNext: number | null;
   highestModseq: string | null;
+  /** Authoritative count of live (non-\Deleted) messages; null when not requested. */
+  liveTotal: number | null;
 }
 
 // --------------------------------------------------------------------
@@ -124,6 +128,7 @@ export const InitialSyncSchema = z
     password: z.string().min(1).max(1024),
     folderPath: FolderPathSchema,
     limit: z.number().int().positive().max(V1_MAX_MESSAGES).finite().default(V1_MAX_MESSAGES),
+    countExcludeDeleted: z.boolean().optional(),
   })
   .strict();
 
@@ -138,6 +143,7 @@ export const IncrementalSyncSchema = z
     flagsFromUid: PosUidSchema.optional(),
     flagsToUid: PosUidSchema.optional(),
     limit: z.number().int().positive().max(V1_MAX_MESSAGES).finite().default(V1_MAX_MESSAGES),
+    countExcludeDeleted: z.boolean().optional(),
   })
   .strict()
   .refine(
@@ -161,6 +167,7 @@ export const ReconcileSyncSchema = z
     expectedUidValidity: DecimalStringSchema,
     fromUid: PosUidSchema,
     toUid: PosUidSchema,
+    countExcludeDeleted: z.boolean().optional(),
   })
   .strict()
   .refine((v) => v.toUid >= v.fromUid, { message: "toUid must be >= fromUid" })
@@ -266,6 +273,7 @@ export function normalizeMessage(m: FetchMessageObject): SyncMessage {
     flagFlagged: flagsSet.has("\\Flagged"),
     flagAnswered: flagsSet.has("\\Answered"),
     flagDraft: flagsSet.has("\\Draft"),
+    flagDeleted: flagsSet.has("\\Deleted"),
     keywords: extractKeywords(flagsSet),
   };
 }
@@ -279,6 +287,7 @@ export function toFlagState(m: FetchMessageObject): SyncFlagState {
     flagFlagged: flagsSet.has("\\Flagged"),
     flagAnswered: flagsSet.has("\\Answered"),
     flagDraft: flagsSet.has("\\Draft"),
+    flagDeleted: flagsSet.has("\\Deleted"),
     keywords: extractKeywords(flagsSet),
   };
 }
@@ -290,6 +299,7 @@ function mailboxState(mailbox: { path: string; exists: number; uidValidity: bigi
     uidValidity: bigIntToDecimalString(mailbox.uidValidity) ?? "0",
     uidNext: typeof mailbox.uidNext === "number" ? mailbox.uidNext : null,
     highestModseq: bigIntToDecimalString(mailbox.highestModseq),
+    liveTotal: null,
   };
 }
 
@@ -563,11 +573,15 @@ async function withConnection<T>(
 export async function runInitialSync(
   account: MailAccount,
   password: string,
-  params: { folderPath: string; limit: number },
+  params: { folderPath: string; limit: number; countExcludeDeleted?: boolean },
 ): Promise<InitialSyncResult> {
-  return withConnection(account, password, (client) =>
-    syncInitial(client as unknown as SyncClient, params),
-  );
+  return withConnection(account, password, async (client) => {
+    const result = await syncInitial(client as unknown as SyncClient, params);
+    if (params.countExcludeDeleted) {
+      result.mailbox.liveTotal = await countLiveNonDeleted(client);
+    }
+    return result;
+  });
 }
 
 export async function runIncrementalSync(
@@ -581,21 +595,44 @@ export async function runIncrementalSync(
     flagsFromUid?: number;
     flagsToUid?: number;
     limit: number;
+    countExcludeDeleted?: boolean;
   },
 ) {
-  return withConnection(account, password, (client) =>
-    syncIncremental(client as unknown as SyncClient, params),
-  );
+  return withConnection(account, password, async (client) => {
+    const result = await syncIncremental(client as unknown as SyncClient, params);
+    if (params.countExcludeDeleted && "mailbox" in result) {
+      result.mailbox.liveTotal = await countLiveNonDeleted(client);
+    }
+    return result;
+  });
 }
 
 export async function runReconcileSync(
   account: MailAccount,
   password: string,
-  params: { folderPath: string; expectedUidValidity: string; fromUid: number; toUid: number },
+  params: {
+    folderPath: string;
+    expectedUidValidity: string;
+    fromUid: number;
+    toUid: number;
+    countExcludeDeleted?: boolean;
+  },
 ) {
-  return withConnection(account, password, (client) =>
-    syncReconcile(client as unknown as SyncClient, params),
-  );
+  return withConnection(account, password, async (client) => {
+    const result = await syncReconcile(client as unknown as SyncClient, params);
+    if (params.countExcludeDeleted && "mailbox" in result) {
+      result.mailbox.liveTotal = await countLiveNonDeleted(client);
+    }
+    return result;
+  });
+}
+
+/** Count live (non-\Deleted) messages via SEARCH UNDELETED. */
+async function countLiveNonDeleted(client: ImapFlow): Promise<number | null> {
+  const uids = (await client.search({ deleted: false } as never, { uid: true })) as
+    | number[]
+    | false;
+  return Array.isArray(uids) ? uids.length : null;
 }
 
 export { safeError, V1_MAX_MESSAGES, V1_MAX_RECONCILE_RANGE };

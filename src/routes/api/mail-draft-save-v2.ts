@@ -57,6 +57,39 @@ export const Route = createFileRoute("/api/mail-draft-save-v2")({
             // transport-class, not protocol-class.
             return json({ ok: false, error: "NETWORK", code: "NETWORK" }, 200);
           }
+          // Best-effort Local Index write-through on success. IMAP is the
+          // source of truth — a projection failure NEVER fails a real save.
+          try {
+            const parsed = JSON.parse(result) as Record<string, unknown>;
+            if (parsed?.ok === true) {
+              const { writeDraftProjection } = await import("@/lib/mail-draft-writer.server");
+              const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+              await writeDraftProjection(supabaseAdmin, {
+                accountId: auth.accountId,
+                companyId: auth.companyId,
+                folderPath: typeof parsed.folderPath === "string" ? parsed.folderPath : "",
+                uid: typeof parsed.uid === "number" ? parsed.uid : null,
+                uidValidity: String(parsed.uidValidity ?? ""),
+                messageId: typeof parsed.messageId === "string" ? parsed.messageId : null,
+                subject: typeof body?.subject === "string" ? body.subject : "",
+                from: {
+                  name: auth.bridgeAccount.display_name,
+                  email: auth.bridgeAccount.email_address,
+                },
+                to: Array.isArray(body?.to) ? body.to : [],
+                cc: Array.isArray(body?.cc) ? body.cc : [],
+                internalDate:
+                  typeof parsed.savedAt === "string" ? parsed.savedAt : new Date().toISOString(),
+                hasAttachments:
+                  (Array.isArray(body?.attachmentHandles) ? body.attachmentHandles.length : 0) +
+                    (Array.isArray(body?.sourceAttachments) ? body.sourceAttachments.length : 0) >
+                  0,
+                previousRef: body?.previousRef,
+              });
+            }
+          } catch {
+            /* projection failure is non-fatal; sync reconciles later */
+          }
           return new Response(result, {
             status: upstream.status,
             headers: {

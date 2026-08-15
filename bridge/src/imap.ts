@@ -240,6 +240,34 @@ export async function getFolderCounts(
         counts.push({ folder, total: 0, unread: 0, supported: false });
         continue;
       }
+      // Drafts: STATUS MESSAGES counts \Deleted-flagged (soft-deleted) copies
+      // on servers that retain them until expunge. Count non-\Deleted only.
+      if (folder === "drafts") {
+        try {
+          const lock = await client.getMailboxLock(path);
+          try {
+            const uids =
+              ((await client.search({ deleted: false } as SearchObject, { uid: true })) as number[]) ||
+              [];
+            const unseen =
+              ((await client.search({ deleted: false, seen: false } as SearchObject, {
+                uid: true,
+              })) as number[]) || [];
+            counts.push({
+              folder,
+              total: uids.length,
+              unread: unseen.length,
+              supported: true,
+              path,
+            });
+          } finally {
+            lock.release();
+          }
+        } catch {
+          counts.push({ folder, total: 0, unread: 0, supported: true, path });
+        }
+        continue;
+      }
       try {
         const status = await client.status(path, { messages: true, unseen: true });
         counts.push({
@@ -293,6 +321,34 @@ export async function getMessages(
       // using cheap server-side SEARCH calls, then paginate + fetch envelopes
       // only for the slice. This keeps the cost O(page) regardless of sort.
       let orderedUids: number[] = [];
+
+      // Drafts: soft-deleted (\Deleted) copies must never surface as duplicate
+      // rows. The generic sequence-number fast path would include them, so the
+      // canonical Drafts folder uses SEARCH UNDELETED instead. Non-Draft folders
+      // are untouched.
+      if (folder === "drafts") {
+        const uids =
+          ((await client.search({ deleted: false } as SearchObject, { uid: true })) as number[]) ||
+          [];
+        uids.sort((a, b) => (sort === "date-asc" ? a - b : b - a));
+        const slice = uids.slice(offset, offset + limit);
+        if (slice.length === 0) return [];
+        const messages: MailMessage[] = [];
+        for await (const msg of client.fetch(
+          slice as any,
+          {
+            uid: true,
+            envelope: true,
+            internalDate: true,
+            flags: true,
+            bodyStructure: true,
+          },
+          { uid: true },
+        )) {
+          messages.push(await messageFromFetch(msg, folder, client));
+        }
+        return messages;
+      }
 
       const fastPath = !baseCriteria && (sort === "date-desc" || sort === "date-asc");
 

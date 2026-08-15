@@ -87,6 +87,48 @@ describe("createAutosaveScheduler", () => {
     expect(onFire).not.toHaveBeenCalled();
     vi.useRealTimers();
   });
+
+  it("maxDelayMs forces a fire even under continuous schedule() activity", () => {
+    vi.useFakeTimers();
+    const onFire = vi.fn();
+    const s = createAutosaveScheduler({ delayMs: 1500, maxDelayMs: 5000, onFire });
+    // Continuous typing: re-schedule every 100ms, which keeps resetting the
+    // idle debounce — but the max-wait must still fire once at ~5s.
+    for (let i = 0; i < 50; i++) {
+      s.schedule();
+      vi.advanceTimersByTime(100);
+    }
+    // ~5000ms elapsed → max-wait fired once.
+    expect(onFire).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
+  });
+
+  it("maxDelayMs resets after each fire (new activity starts a fresh window)", () => {
+    vi.useFakeTimers();
+    const onFire = vi.fn();
+    const s = createAutosaveScheduler({ delayMs: 1500, maxDelayMs: 5000, onFire });
+    s.schedule();
+    vi.advanceTimersByTime(1500);
+    expect(onFire).toHaveBeenCalledTimes(1);
+    // New activity after the fire re-arms both timers.
+    s.schedule();
+    vi.advanceTimersByTime(1500);
+    expect(onFire).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
+  });
+
+  it("without maxDelayMs, continuous schedule() does NOT force-fire (old behavior)", () => {
+    vi.useFakeTimers();
+    const onFire = vi.fn();
+    const s = createAutosaveScheduler({ delayMs: 1500, onFire });
+    for (let i = 0; i < 50; i++) {
+      s.schedule();
+      vi.advanceTimersByTime(100);
+    }
+    // Debounce keeps resetting; nothing fires while activity continues.
+    expect(onFire).toHaveBeenCalledTimes(0);
+    vi.useRealTimers();
+  });
 });
 
 function fakeTarget() {
@@ -481,11 +523,10 @@ describe("close flow — single-flight semantics", () => {
     expect(await p2).toBe("closed");
   });
 
-  it("save→close semantics: only saved_server/saved_local produce onClose", () => {
-    type SaveResult = "saved_server" | "saved_local" | "failed" | "empty";
-    const shouldClose = (r: SaveResult) => r === "saved_server" || r === "saved_local";
+  it("save→close semantics: only saved_server produces onClose", () => {
+    type SaveResult = "saved_server" | "failed" | "empty";
+    const shouldClose = (r: SaveResult) => r === "saved_server";
     expect(shouldClose("saved_server")).toBe(true);
-    expect(shouldClose("saved_local")).toBe(true);
     expect(shouldClose("failed")).toBe(false);
     expect(shouldClose("empty")).toBe(false);
   });

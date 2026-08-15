@@ -19,6 +19,7 @@ import {
   upsertMessagesInBatches,
   applyFlagStates,
   tombstoneMissingInRange,
+  tombstoneRowsByUid,
   refreshFolderCounts,
   writeFolderMailboxState,
   updateSyncCursor,
@@ -145,6 +146,11 @@ export async function runMailSyncCore(
     canonical: input.canonical ?? null,
   });
 
+  // Drafts must never import soft-deleted (\Deleted) copies; exclude them from
+  // upsert/flag application and tombstone any already-indexed draft that
+  // became \Deleted during reconcile. Non-Draft folders are untouched.
+  const isDrafts = input.canonical === "drafts";
+
   const lockedBy = `sync:${crypto.randomUUID()}`;
   const claimed = await claimSyncLock(admin, {
     accountId: input.accountId,
@@ -174,6 +180,7 @@ export async function runMailSyncCore(
     let mailboxUidNext: number | null = null;
     let mailboxHighestModseq: string | null = null;
     let mailboxExists = 0;
+    let mailboxLiveTotal: number | null = null;
     let singleUidPresence: { uid: number; present: boolean } | undefined;
 
 
@@ -183,6 +190,7 @@ export async function runMailSyncCore(
         password: input.password,
         folderPath: input.folderPath,
         limit: input.limit ?? 300,
+        countExcludeDeleted: isDrafts,
       })) as {
         mailbox: {
           path: string;
@@ -190,6 +198,7 @@ export async function runMailSyncCore(
           uidValidity: string;
           uidNext: number | null;
           highestModseq: string | null;
+          liveTotal: number | null;
         };
         messages: Array<Parameters<typeof upsertMessagesInBatches>[2][number]>;
         oldestReturnedUid: number | null;
@@ -199,6 +208,7 @@ export async function runMailSyncCore(
       mailboxUidNext = result.mailbox.uidNext;
       mailboxHighestModseq = result.mailbox.highestModseq;
       mailboxExists = result.mailbox.exists;
+      mailboxLiveTotal = result.mailbox.liveTotal ?? null;
 
       if (shouldWipeForUidValidity(storedUidValidity, mailboxUidValidity)) {
         await wipeFolderForUidValidityReset(admin, {
@@ -210,6 +220,9 @@ export async function runMailSyncCore(
         wipedForUidValidity = true;
       }
 
+      const initialMessages = isDrafts
+        ? result.messages.filter((m) => !m.flagDeleted)
+        : result.messages;
       wroteMessages = await upsertMessagesInBatches(
         admin,
         {
@@ -218,7 +231,7 @@ export async function runMailSyncCore(
           folderId,
           uidValidity: mailboxUidValidity,
         },
-        result.messages,
+        initialMessages,
       );
 
       await updateSyncCursor(admin, {
@@ -249,6 +262,7 @@ export async function runMailSyncCore(
         flagsFromUid: flagsFrom,
         flagsToUid: flagsTo,
         limit: input.limit ?? 300,
+        countExcludeDeleted: isDrafts,
       })) as {
         mailbox: {
           path: string;
@@ -256,6 +270,7 @@ export async function runMailSyncCore(
           uidValidity: string;
           uidNext: number | null;
           highestModseq: string | null;
+          liveTotal: number | null;
         };
         resetRequired: boolean;
         reason?: string;
@@ -269,6 +284,7 @@ export async function runMailSyncCore(
       mailboxUidNext = result.mailbox.uidNext;
       mailboxHighestModseq = result.mailbox.highestModseq;
       mailboxExists = result.mailbox.exists;
+      mailboxLiveTotal = result.mailbox.liveTotal ?? null;
 
       if (result.resetRequired) {
         await wipeFolderForUidValidityReset(admin, {
@@ -289,7 +305,8 @@ export async function runMailSyncCore(
           flagsNeedReconcile: false,
         });
       } else {
-        const messages = result.newMessages ?? [];
+        const rawMessages = result.newMessages ?? [];
+        const messages = isDrafts ? rawMessages.filter((m) => !m.flagDeleted) : rawMessages;
         wroteMessages = await upsertMessagesInBatches(
           admin,
           {
@@ -300,15 +317,31 @@ export async function runMailSyncCore(
           },
           messages,
         );
-        appliedFlagChanges = await applyFlagStates(
-          admin,
-          {
-            accountId: input.accountId,
-            folderId,
-            uidValidity: mailboxUidValidity,
-          },
-          result.flagChanges ?? [],
-        );
+        const rawFlagChanges = result.flagChanges ?? [];
+        if (isDrafts) {
+          // \Deleted flag states must tombstone, not apply as live flag changes.
+          const deletedUids = rawFlagChanges.filter((f) => f.flagDeleted).map((f) => f.uid);
+          const liveChanges = rawFlagChanges.filter((f) => !f.flagDeleted);
+          appliedFlagChanges = await applyFlagStates(
+            admin,
+            { accountId: input.accountId, folderId, uidValidity: mailboxUidValidity },
+            liveChanges,
+          );
+          if (deletedUids.length) {
+            await tombstoneRowsByUid(admin, {
+              accountId: input.accountId,
+              folderId,
+              uidValidity: mailboxUidValidity,
+              uids: deletedUids,
+            });
+          }
+        } else {
+          appliedFlagChanges = await applyFlagStates(
+            admin,
+            { accountId: input.accountId, folderId, uidValidity: mailboxUidValidity },
+            rawFlagChanges,
+          );
+        }
         hasMore = !!result.hasMore;
         flagsSync = result.flagsSync ?? "not-requested";
 
@@ -354,6 +387,7 @@ export async function runMailSyncCore(
         expectedUidValidity: cursor.uidvalidity,
         fromUid,
         toUid,
+        countExcludeDeleted: isDrafts,
       })) as {
         mailbox: {
           path: string;
@@ -361,6 +395,7 @@ export async function runMailSyncCore(
           uidValidity: string;
           uidNext: number | null;
           highestModseq: string | null;
+          liveTotal: number | null;
         };
         resetRequired: boolean;
         states?: Array<Parameters<typeof applyFlagStates>[2][number]>;
@@ -369,6 +404,7 @@ export async function runMailSyncCore(
       mailboxUidNext = result.mailbox.uidNext;
       mailboxHighestModseq = result.mailbox.highestModseq;
       mailboxExists = result.mailbox.exists;
+      mailboxLiveTotal = result.mailbox.liveTotal ?? null;
 
       if (result.resetRequired) {
         await wipeFolderForUidValidityReset(admin, {
@@ -389,28 +425,54 @@ export async function runMailSyncCore(
           flagsNeedReconcile: false,
         });
       } else {
-        const states = result.states ?? [];
-        appliedFlagChanges = await applyFlagStates(
-          admin,
-          {
+        const rawStates = result.states ?? [];
+        if (isDrafts) {
+          // \Deleted drafts are "absent" for reconcile: tombstone them, then
+          // reconcile the live remainder normally.
+          const deletedUids = rawStates.filter((s) => s.flagDeleted).map((s) => s.uid);
+          const liveStates = rawStates.filter((s) => !s.flagDeleted);
+          if (deletedUids.length) {
+            await tombstoneRowsByUid(admin, {
+              accountId: input.accountId,
+              folderId,
+              uidValidity: mailboxUidValidity,
+              uids: deletedUids,
+            });
+          }
+          appliedFlagChanges = await applyFlagStates(
+            admin,
+            { accountId: input.accountId, folderId, uidValidity: mailboxUidValidity },
+            liveStates,
+          );
+          tombstoned = await tombstoneMissingInRange(admin, {
             accountId: input.accountId,
             folderId,
             uidValidity: mailboxUidValidity,
-          },
-          states,
-        );
-        tombstoned = await tombstoneMissingInRange(admin, {
-          accountId: input.accountId,
-          folderId,
-          uidValidity: mailboxUidValidity,
-          fromUid,
-          toUid,
-          presentUids: states.map((s) => s.uid),
-        });
-        // 1-UID reconcile: derive presence from the Bridge/IMAP response
-        // directly. This is the ONLY authoritative signal for the Move
-        // source-confirmation contract (Local Index is already Tombstoned).
-        singleUidPresence = derivePresenceForSingleUidReconcile(fromUid, toUid, states);
+            fromUid,
+            toUid,
+            presentUids: liveStates.map((s) => s.uid),
+          });
+          singleUidPresence = derivePresenceForSingleUidReconcile(fromUid, toUid, liveStates);
+        } else {
+          const states = rawStates;
+          appliedFlagChanges = await applyFlagStates(
+            admin,
+            { accountId: input.accountId, folderId, uidValidity: mailboxUidValidity },
+            states,
+          );
+          tombstoned = await tombstoneMissingInRange(admin, {
+            accountId: input.accountId,
+            folderId,
+            uidValidity: mailboxUidValidity,
+            fromUid,
+            toUid,
+            presentUids: states.map((s) => s.uid),
+          });
+          // 1-UID reconcile: derive presence from the Bridge/IMAP response
+          // directly. This is the ONLY authoritative signal for the Move
+          // source-confirmation contract (Local Index is already Tombstoned).
+          singleUidPresence = derivePresenceForSingleUidReconcile(fromUid, toUid, states);
+        }
 
         await updateSyncCursor(admin, {
           accountId: input.accountId,
@@ -439,9 +501,11 @@ export async function runMailSyncCore(
       folderId,
       uidValidity: mailboxUidValidity,
       // Blocker 2 — pass the IMAP-authoritative EXISTS captured from the
-      // sync's mailbox status so the folder total reflects the real
-      // mailbox size, not just the locally-indexed page (max 300).
-      authoritativeTotal: mailboxExists,
+      // sync's mailbox status so the folder total reflects the real mailbox
+      // size, not just the locally-indexed page (max 300). Drafts are the
+      // exception: EXISTS counts \Deleted (soft-deleted) copies, so Drafts use
+      // the sync-provided authoritative UNDELETED live count instead.
+      authoritativeTotal: isDrafts ? mailboxLiveTotal : mailboxExists,
     });
 
 

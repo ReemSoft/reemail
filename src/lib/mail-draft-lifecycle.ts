@@ -1,11 +1,11 @@
 /**
  * Draft lifecycle module — MAILMAESTRO_DRAFT_APPEND_R1 (M4-B).
  *
- * Client-side orchestration around the M3 bridge server functions
- * (`bridgeSaveDraft` / `bridgeDeleteDraft`). This module is UI-agnostic and
- * fully unit-testable: it never touches React, `window`, or the network
- * directly. Callers inject a `Storage` (localStorage-shaped), a remote
- * `saveRemote` / `deleteRemote` pair, and observe state via callbacks.
+ * Client-side orchestration around the draft save/delete server paths.
+ * This module is UI-agnostic and fully unit-testable: it never touches
+ * React, `window`, or the network directly. Callers inject a `Storage`
+ * (localStorage-shaped), a remote `saveRemote` / `deleteRemote` pair, and
+ * observe state via callbacks.
  *
  * Contract (locked by src/lib/__tests__/mail-draft-lifecycle.test.ts):
  *
@@ -23,9 +23,9 @@
  *   * Generation guards: every save carries a monotonically increasing
  *     sequence number. Only the LATEST issued sequence may mutate the
  *     `serverRef` / status. Stale responses are dropped silently.
- *   * Server ref is updated ONLY on ok=true. On error the local snapshot
- *     is still persisted (status → "saved-local"). Only true persistence
- *     failure (storage quota, etc.) transitions to "failed".
+ *   * Server ref is updated ONLY on ok=true. On error the composer stays
+ *     dirty (status → "failed") — a local snapshot is never presented as a
+ *     successful draft. Only the remote IMAP APPEND makes a draft "saved".
  *   * Pending-cleanup queue: when a post-send delete fails, the entry is
  *     persisted per-account and retried on the next composer open / next
  *     save flush. Successful entries are removed atomically.
@@ -33,18 +33,7 @@
 
 // ---------------------------------------------------------------- Types
 
-export type DraftSaveStatus = "idle" | "saving" | "saved" | "saved-local" | "failed";
-
-/**
- * Bridge error codes that MUST be treated as recoverable "local-only" saves.
- * Only true network / transport failures qualify — any protocol-level or
- * permission-level error is a HARD failure and leaves the composer dirty so
- * the user can retry (or lose nothing on close).
- *
- * Locked by tests: adding a code here relaxes the failure contract, so the
- * list is intentionally narrow and reviewed.
- */
-export const NETWORK_SOFT_FAIL_CODES: ReadonlySet<string> = new Set(["NETWORK"]);
+export type DraftSaveStatus = "idle" | "saving" | "saved" | "failed";
 
 export interface DraftRecipient {
   email: string;
@@ -416,24 +405,10 @@ export function createDraftSaver(draftId: string, opts: CreateDraftSaverOptions)
       });
       return;
     }
-    // Failure branch — classify by code.
+    // Failure branch — "saved" may occur ONLY after a successful remote save.
+    // Any NETWORK / APPEND / protocol error is a hard failure: the composer
+    // stays dirty and the local snapshot is never presented as a saved draft.
     const code = result.code;
-    const isSoftNetwork = code != null && NETWORK_SOFT_FAIL_CODES.has(code);
-    if (isSoftNetwork) {
-      // Local persistence is the caller's responsibility (writeDraftDoc)
-      // and happens synchronously before requestSave. A NETWORK failure
-      // therefore leaves the composer in "saved-local" — the local write
-      // succeeded, only the transport dropped.
-      setStatus("saved-local");
-      opts.onCompleted?.({
-        completedGeneration: generation,
-        status: "saved-local",
-        code,
-      });
-      return;
-    }
-    // Hard failure: protocol / auth / quota / unknown. Do NOT pretend the
-    // draft was saved anywhere the user can rely on — leave composer dirty.
     setStatus("failed");
     opts.onCompleted?.({
       completedGeneration: generation,

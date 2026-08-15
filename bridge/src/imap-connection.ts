@@ -61,10 +61,16 @@ const pending = new Map<string, Promise<Entry>>();
  *                   body open behind them.
  *   * background  — sync + body-cache warming
  *   * transfer    — long attachment streams, isolated from message-open
- * Each lane serializes its own commands, so CID/media, background and transfer
- * work can never delay a click.
+ *   * draft       — Draft APPEND / delete / capability probes. A dedicated
+ *                   reusable, serialized connection so a slow Draft APPEND can
+ *                   never queue a body open behind it.
+ * Each lane serializes its own commands, so CID/media, background, transfer
+ * and draft work can never delay a click.
  */
-export type ImapLane = "interactive" | "media" | "background" | "transfer";
+export type ImapLane = "interactive" | "media" | "background" | "transfer" | "draft";
+
+/** Every lane, in declaration order. Used to keep lane-wide helpers in sync. */
+const ALL_LANES: ImapLane[] = ["interactive", "media", "background", "transfer", "draft"];
 
 export class MessageOpenSupersededError extends Error {
   readonly code = "MESSAGE_OPEN_SUPERSEDED";
@@ -181,8 +187,68 @@ export async function getMailboxesCached(
   return value;
 }
 
+/**
+ * Pure serialization primitive over a mutable chain reference. Exported so the
+ * "second acquire waits for the first release" invariant can be unit-tested
+ * deterministically without a live IMAP connection.
+ */
+export function claimLaneHold(chainRef: { current: Promise<unknown> }): Promise<() => void> {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = () => resolve();
+  });
+  const prev = chainRef.current;
+  chainRef.current = prev.then(() => gate);
+  return prev.then(() => release);
+}
+
+/**
+ * Serialize an ENTIRE pipeline on a lane's `Entry.chain` without acquiring a
+ * mailbox lock. Additive primitive for the Draft lane.
+ *
+ * `acquireAccountClient` returns the raw client plus a `release` function. The
+ * lane is held from the moment this resolves until `release()` is called, so
+ * two concurrent Draft saves for the SAME account can never interleave their
+ * multi-command pipelines: the second `acquire` waits for the first `release`.
+ *
+ * Semantics:
+ *   * resolves only after every previous operation on the lane has settled.
+ *   * while held, no other operation can enter the lane (the chain stays busy
+ *     until `release()`).
+ *   * the raw client is valid only between acquire and release.
+ *   * credential fingerprinting, idle timer, and dead-socket reconnect are
+ *     preserved via `getEntry`.
+ *   * NO mailbox lock is acquired here — the holder may acquire/release locks
+ *     itself (e.g. via `client.getMailboxLock`).
+ */
+export async function acquireAccountClient(
+  account: MailAccount,
+  password: string,
+  lane: ImapLane = "interactive",
+): Promise<{ client: ImapFlow; release: () => void }> {
+  const key = keyFor(account, lane);
+  const entry = await getEntry(account, password, lane);
+  const chainRef = {
+    get current() {
+      return entry.chain;
+    },
+    set current(value: Promise<unknown>) {
+      entry.chain = value;
+    },
+  };
+  const release = await claimLaneHold(chainRef);
+  const arm = () => armIdleTimer(key, entry);
+  return {
+    client: entry.client,
+    release: () => {
+      release();
+      arm();
+    },
+  };
+}
+
 export function invalidateMailboxCache(account: MailAccount) {
-  for (const lane of ["interactive", "media", "background", "transfer"] as ImapLane[]) {
+  for (const lane of ALL_LANES) {
     const e = entries.get(keyFor(account, lane));
     if (e) e.mailboxes = undefined;
   }
@@ -193,7 +259,7 @@ export function invalidateMailboxCache(account: MailAccount) {
  * errored or was destroyed mid-literal). The next request reconnects cleanly.
  */
 export function dropAccountConnection(account: MailAccount, lane?: ImapLane): void {
-  const lanes: ImapLane[] = lane ? [lane] : ["interactive", "media", "background", "transfer"];
+  const lanes: ImapLane[] = lane ? [lane] : ALL_LANES;
   for (const l of lanes) {
     const key = keyFor(account, l);
     const e = entries.get(key);
@@ -296,17 +362,18 @@ export async function closeAllImapConnections(): Promise<void> {
 
 /** Bounded, PII-free stats for /api/health style surfaces. */
 export function imapConnectionStats() {
-  const lanes = { interactive: 0, media: 0, background: 0, transfer: 0 };
+  const lanes = { interactive: 0, media: 0, background: 0, transfer: 0, draft: 0 };
   for (const k of entries.keys()) {
     if (k.startsWith("background|")) lanes.background++;
     else if (k.startsWith("transfer|")) lanes.transfer++;
     else if (k.startsWith("media|")) lanes.media++;
+    else if (k.startsWith("draft|")) lanes.draft++;
     else lanes.interactive++;
   }
   return {
     openConnections: entries.size,
     lanes,
-    maxConnectionsPerAccount: 4,
+    maxConnectionsPerAccount: 5,
     idleCloseMs: IDLE_CLOSE_MS,
     listCacheMs: LIST_CACHE_MS,
   };
