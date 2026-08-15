@@ -536,6 +536,27 @@ export type Database = {
           },
         ]
       }
+      mail_signatures: {
+        Row: {
+          created_at: string
+          html: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          html?: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          html?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       mail_sync_dedupe: {
         Row: {
           account_id: string
