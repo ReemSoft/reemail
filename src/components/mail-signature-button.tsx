@@ -39,9 +39,11 @@ import { Button } from "@/components/ui/button";
 
 export function MailSignatureButton({
   disabled,
+  mailSessionToken,
   onInsert,
 }: {
   disabled?: boolean;
+  mailSessionToken: string;
   onInsert: (html: string) => void;
 }) {
   const [busy, setBusy] = useState(false);
@@ -53,7 +55,7 @@ export function MailSignatureButton({
     if (busy) return;
     setBusy(true);
     try {
-      const html = await loadSignature();
+      const html = await loadSignature(mailSessionToken);
       if (isSignatureEmpty(html)) {
         setDraft(html);
         setEditorOpen(true);
@@ -70,7 +72,7 @@ export function MailSignatureButton({
   async function handleEdit() {
     setBusy(true);
     try {
-      setDraft(await loadSignature());
+      setDraft(await loadSignature(mailSessionToken));
       setEditorOpen(true);
     } catch {
       toast.error(tr("تعذّر تحميل التوقيع"));
@@ -82,7 +84,7 @@ export function MailSignatureButton({
   async function handleSave(html: string) {
     setSaving(true);
     try {
-      const clean = await saveSignature(html);
+      const clean = await saveSignature(mailSessionToken, html);
       setEditorOpen(false);
       toast.success(tr("تم حفظ التوقيع"));
       if (!isSignatureEmpty(clean)) onInsert(clean);
@@ -128,6 +130,7 @@ export function MailSignatureButton({
       <SignatureEditorDialog
         open={editorOpen}
         initialHtml={draft}
+        mailSessionToken={mailSessionToken}
         saving={saving}
         onCancel={() => setEditorOpen(false)}
         onSave={(html) => void handleSave(html)}
@@ -139,18 +142,22 @@ export function MailSignatureButton({
 function SignatureEditorDialog({
   open,
   initialHtml,
+  mailSessionToken,
   saving,
   onCancel,
   onSave,
 }: {
   open: boolean;
   initialHtml: string;
+  mailSessionToken: string;
   saving: boolean;
   onCancel: () => void;
   onSave: (html: string) => void;
 }) {
   const editorRef = useRef<HTMLDivElement | null>(null);
   const selectionRef = useRef<Range | null>(null);
+  const imageInputRef = useRef<HTMLInputElement | null>(null);
+  const [uploadingImage, setUploadingImage] = useState(false);
 
   useEffect(() => {
     if (!open || !editorRef.current) return;
@@ -217,13 +224,36 @@ function SignatureEditorDialog({
     rememberSelection();
   }
 
-  function insertImage() {
+  function chooseImage() {
     rememberSelection();
-    const value = window.prompt(tr("رابط الصورة (https://):"), "https://");
-    if (!value) return;
-    const url = safeHttpsUrl(value);
-    if (!url) {
-      toast.error(tr("رابط صورة غير مدعوم"));
+    imageInputRef.current?.click();
+  }
+
+  async function insertImage(file: File | undefined) {
+    if (imageInputRef.current) imageInputRef.current.value = "";
+    if (!file) return;
+    if (!["image/png", "image/jpeg", "image/gif", "image/webp"].includes(file.type)) {
+      toast.error(tr("نوع الصورة غير مدعوم"));
+      return;
+    }
+    if (file.size > 2 * 1024 * 1024) {
+      toast.error(tr("حجم الصورة كبير جداً (الحد 2MB)"));
+      return;
+    }
+    setUploadingImage(true);
+    let url: string;
+    try {
+      const response = await fetch("/api/mail-signature-image", {
+        method: "POST",
+        headers: { "Content-Type": file.type, "x-mail-session-token": mailSessionToken },
+        body: file,
+      });
+      const result = (await response.json()) as { ok?: boolean; url?: string };
+      if (!response.ok || !result.ok || !result.url) throw new Error("UPLOAD_FAILED");
+      url = result.url;
+    } catch {
+      toast.error(tr("تعذّر إدراج صورة التوقيع"));
+      setUploadingImage(false);
       return;
     }
     restoreSelection();
@@ -236,6 +266,7 @@ function SignatureEditorDialog({
     wrapper.appendChild(image);
     document.execCommand("insertHTML", false, wrapper.outerHTML);
     rememberSelection();
+    setUploadingImage(false);
   }
 
   const tools = [
@@ -273,12 +304,19 @@ function SignatureEditorDialog({
           ))}
           <span className="mx-1 h-5 w-px bg-border" aria-hidden="true" />
           <Button type="button" variant="ghost" size="icon" className="h-8 w-8" onMouseDown={(e) => { e.preventDefault(); insertLink(); }} title={tr("إدراج رابط")} aria-label={tr("إدراج رابط")}><Link /></Button>
-          <Button type="button" variant="ghost" size="icon" className="h-8 w-8" onMouseDown={(e) => { e.preventDefault(); insertImage(); }} title={tr("إدراج صورة")} aria-label={tr("إدراج صورة")}><Image /></Button>
+          <Button type="button" variant="ghost" size="icon" className="h-8 w-8" disabled={uploadingImage} onMouseDown={(e) => { e.preventDefault(); chooseImage(); }} title={tr("إدراج صورة")} aria-label={tr("إدراج صورة")}>{uploadingImage ? <Loader2 className="animate-spin" /> : <Image />}</Button>
           <span className="mx-1 h-5 w-px bg-border" aria-hidden="true" />
           <Button type="button" variant="ghost" size="icon" className="h-8 w-8" onMouseDown={(e) => { e.preventDefault(); exec("justifyLeft"); }} title={tr("محاذاة لليسار")} aria-label={tr("محاذاة لليسار")}><AlignLeft /></Button>
           <Button type="button" variant="ghost" size="icon" className="h-8 w-8" onMouseDown={(e) => { e.preventDefault(); exec("justifyCenter"); }} title={tr("توسيط")} aria-label={tr("توسيط")}><AlignCenter /></Button>
           <Button type="button" variant="ghost" size="icon" className="h-8 w-8" onMouseDown={(e) => { e.preventDefault(); exec("justifyRight"); }} title={tr("محاذاة لليمين")} aria-label={tr("محاذاة لليمين")}><AlignRight /></Button>
         </div>
+        <input
+          ref={imageInputRef}
+          type="file"
+          accept="image/png,image/jpeg,image/gif,image/webp"
+          className="hidden"
+          onChange={(event) => void insertImage(event.target.files?.[0])}
+        />
         <div
           ref={(el) => {
             editorRef.current = el;

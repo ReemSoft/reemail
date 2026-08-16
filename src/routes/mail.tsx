@@ -884,7 +884,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { MailSignatureButton } from "@/components/mail-signature-button";
-import { insertSignatureIntoEditor } from "@/lib/mail-signature";
+import { insertSignatureIntoEditor, SIGNATURE_CLASS } from "@/lib/mail-signature";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useServerFn } from "@tanstack/react-start";
 import { toast } from "sonner";
@@ -9681,10 +9681,32 @@ function Composer({
           </button>
           <MailSignatureButton
             disabled={sending}
+            mailSessionToken={session.mailSessionToken}
             onInsert={(html) => {
               const editor = editorRef.current;
               if (!editor) return;
               insertSignatureIntoEditor(editor, html);
+              for (const img of editor.querySelectorAll<HTMLImageElement>(`.${SIGNATURE_CLASS} img`)) {
+                if (img.dataset.mmInlineId || !/^https:\/\//i.test(img.src)) continue;
+                void fetch(img.src)
+                  .then(async (response) => {
+                    if (!response.ok) throw new Error("SIGNATURE_IMAGE_FETCH_FAILED");
+                    const blob = await response.blob();
+                    const extension = blob.type === "image/png" ? "png" : blob.type === "image/gif" ? "gif" : blob.type === "image/webp" ? "webp" : "jpg";
+                    const file = new File([blob], `signature-${crypto.randomUUID()}.${extension}`, { type: blob.type });
+                    if (!validateInlineImageFile(file).ok) throw new Error("SIGNATURE_IMAGE_INVALID");
+                    const image = createInlineComposeImage(file);
+                    await persistInlineImage(inlineScope, toInlineImageMetadata(image), image.file);
+                    img.src = image.objectUrl;
+                    img.dataset.mmInlineId = image.id;
+                    img.draggable = false;
+                    img.style.maxWidth = "100%";
+                    img.style.height = "auto";
+                    setInlineImages((current) => [...current, image]);
+                    notifyEditorChange();
+                  })
+                  .catch(() => toast.error(tr("تعذّر إدراج صورة التوقيع")));
+              }
               notifyEditorChange();
             }}
           />
