@@ -43,6 +43,9 @@ export const Route = createFileRoute("/api/mail-draft-save-v2")({
                 sourceAttachments: Array.isArray(body?.sourceAttachments)
                   ? body.sourceAttachments
                   : [],
+                sourceInlineImages: Array.isArray(body?.sourceInlineImages)
+                  ? body.sourceInlineImages
+                  : [],
               }),
             });
           } catch {

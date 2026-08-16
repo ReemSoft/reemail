@@ -98,7 +98,7 @@ describe("clean-close wiring (mail.tsx)", () => {
 
   it("finalizes a confirmed save close and save-as-draft close", () => {
     const src = route();
-    expect(src.split("finalizeCleanClose({ confirmedSavedServer: true })").length - 1).toBe(2);
+    expect(src.split("finalizeCleanClose({ confirmedSavedServer: true })").length - 1).toBe(3);
   });
 
   it("cancel close never finalizes", () => {

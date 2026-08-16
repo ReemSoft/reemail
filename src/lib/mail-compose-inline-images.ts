@@ -59,6 +59,20 @@ export interface InlineComposeImage {
   mimeType: InlineImageMime;
   filename: string;
   uploadFilename: string;
+  stagedHandle?: string;
+  sourceDescriptor?: InlineImageSourceDescriptor;
+}
+
+export interface InlineImageSourceDescriptor {
+  folderPath: string;
+  uid: number;
+  uidValidity: string;
+  part: string;
+  cid: string;
+  mimeType: InlineImageMime;
+  filename: string;
+  size: number;
+  uploadFilename: string;
 }
 
 export interface InlineImageMetadata {

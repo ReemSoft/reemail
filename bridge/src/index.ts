@@ -16,7 +16,10 @@ import {
 } from "./staged-attachments.js";
 import { configuredAppOrigins, isAllowedAppOrigin, publicBridgeBase } from "./public-bridge-url.js";
 import { TransferConcurrency } from "./transfer-concurrency.js";
-import { stageServerAttachmentSources } from "./server-attachment-sources.js";
+import {
+  stageServerAttachmentSources,
+  stageServerInlineSources,
+} from "./server-attachment-sources.js";
 import { pipeline } from "node:stream/promises";
 import { attachmentContentDisposition, sanitizeAttachmentFilename } from "./attachment-transfer.js";
 import { DownloadByteCounter, parseDownloadChunkBytes } from "./download-performance.js";
@@ -283,6 +286,11 @@ const ServerAttachmentSourceSchema = z.object({
   mimeType: z.string().min(1).max(255),
 });
 
+const ServerInlineSourceSchema = ServerAttachmentSourceSchema.extend({
+  uploadFilename: z.string().min(1).max(255),
+  cid: z.string().min(1).max(255),
+});
+
 const SendV2PayloadSchema = SendPayloadSchema.extend({
   attachmentHandles: z
     .array(
@@ -309,6 +317,7 @@ const DraftV2AttachmentSchema = z.object({
     .default([]),
   stagedInlineImages: z.array(StagedInlineSchema).max(20).default([]),
   sourceAttachments: z.array(ServerAttachmentSourceSchema).max(10).default([]),
+  sourceInlineImages: z.array(ServerInlineSourceSchema).max(20).default([]),
 });
 
 const DownloadTicketPayloadSchema = MessagePayloadSchema.extend({
@@ -1237,6 +1246,23 @@ app.post("/api/draft-save-v2", requireKey, imapGate("interactive"), async (req, 
         staged: await resolveStagedAttachment(BRIDGE_API_KEY, item.handle, account),
       })),
     );
+    const preservedInlineSources = await stageServerInlineSources({
+      secret: BRIDGE_API_KEY,
+      account: payload.account as MailAccount,
+      password: payload.password,
+      sources: contract.sourceInlineImages.map((source) => ({
+        folderPath: source.folderPath,
+        uid: source.uid,
+        uidValidity: source.uidValidity,
+        part: source.part,
+        filename: source.filename,
+        size: source.size,
+        mimeType: source.mimeType,
+        uploadFilename: source.uploadFilename,
+        cid: source.cid,
+      })),
+      maxBytes: SEND_MAX_TOTAL_BYTES,
+    });
     const preserved = await stageServerAttachmentSources({
       secret: BRIDGE_API_KEY,
       account: payload.account as MailAccount,
@@ -1257,12 +1283,13 @@ app.post("/api/draft-save-v2", requireKey, imapGate("interactive"), async (req, 
       ...resolvedNormal,
       ...preserved.map(({ resolved }) => resolved),
       ...resolvedInline.map(({ staged }) => staged),
+      ...preservedInlineSources.map(({ resolved }) => resolved),
     ];
     // Same authoritative semantic counts as send-v2: normal 10-cap covers
     // staged client handles + server-source attachments combined, inline/CID
     // images cap at 20, absolute file parts cap at 30, shared bytes unchanged.
     const normalParts = resolvedNormal.length + preserved.length;
-    const inlineParts = resolvedInline.length;
+    const inlineParts = resolvedInline.length + preservedInlineSources.length;
     if (
       normalParts > MAX_NORMAL_ATTACHMENTS ||
       inlineParts > MAX_INLINE_IMAGES ||
@@ -1278,11 +1305,18 @@ app.post("/api/draft-save-v2", requireKey, imapGate("interactive"), async (req, 
         mimetype: item.mimeType,
         size: item.size,
       })),
-      contract.stagedInlineImages.map(({ uploadFilename, cid, contentType }) => ({
-        uploadFilename,
-        cid,
-        contentType,
-      })),
+      [
+        ...contract.stagedInlineImages.map(({ uploadFilename, cid, contentType }) => ({
+          uploadFilename,
+          cid,
+          contentType,
+        })),
+        ...contract.sourceInlineImages.map(({ uploadFilename, cid, mimeType }) => ({
+          uploadFilename,
+          cid,
+          contentType: mimeType,
+        })),
+      ],
     );
     const result = await saveDraft(payload.account as MailAccount, payload.password, {
       ...payload,
@@ -1301,6 +1335,7 @@ app.post("/api/draft-save-v2", requireKey, imapGate("interactive"), async (req, 
     return res.json({
       ...result,
       sourceAttachmentHandles: preserved.map(({ staged }) => staged.handle),
+      inlineSourceHandles: preservedInlineSources.map(({ staged }) => staged.handle),
     });
   } catch (error) {
     const code =

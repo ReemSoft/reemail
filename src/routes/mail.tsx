@@ -1003,6 +1003,7 @@ import {
   decidePreNetworkDraftOpen,
   decideSettledDraftFetch,
 } from "@/lib/mail-stale-draft-open";
+import { DraftEngine } from "@/lib/mail-draft-engine";
 import { indexUpdateFlag } from "@/lib/mail-flags.functions";
 import { indexMoveMessage } from "@/lib/mail-move.functions";
 import { indexDeleteMessage } from "@/lib/mail-delete.functions";
@@ -7308,6 +7309,7 @@ function Composer({
   // DELETE INTENT fence: once set, no NEW autosave may start and no duplicate
   // Delete may begin. It is cleared only on confirm-cancel or delete failure.
   const deleteIntentRef = useRef(false);
+  const closeIntentAfterUploadRef = useRef(false);
   const serverRefRef = useRef<DraftServerRef | null>(serverRef);
   useEffect(() => {
     serverRefRef.current = serverRef;
@@ -7369,6 +7371,8 @@ function Composer({
   // or structural field change). `savedGeneration` only advances when the
   // saver reports a completion for THAT generation via `onCompleted`. A
   // stale response never marks newer content clean.
+  const draftEngineRef = useRef<DraftEngine | null>(null);
+  if (!draftEngineRef.current) draftEngineRef.current = new DraftEngine();
   const generationRef = useRef<number>(0);
   const savedGenerationRef = useRef<number>(0);
   const isDirtyRef = useRef<boolean>(false);
@@ -7393,11 +7397,18 @@ function Composer({
   }
   const lastDiagnosticAttachmentSignatureRef = useRef<string | null>(null);
 
+  const syncDraftEngineRefs = () => {
+    const engine = draftEngineRef.current;
+    if (!engine) return;
+    generationRef.current = engine.userGeneration;
+    savedGenerationRef.current = engine.savedGeneration;
+    isDirtyRef.current = engine.isDirty;
+  };
   const recomputeDirty = () => {
-    isDirtyRef.current = generationRef.current > savedGenerationRef.current;
+    syncDraftEngineRefs();
   };
   const markEdited = () => {
-    generationRef.current += 1;
+    draftEngineRef.current?.markUserEdit();
     recomputeDirty();
   };
   // bodyRev mirrors generation for the autosave effect dependency (React
@@ -7444,6 +7455,10 @@ function Composer({
   // always reads the latest attachment state without a re-instantiation.
   const filesRef = useRef<File[]>([]);
   const inlineImagesRef = useRef<InlineComposeImage[]>([]);
+  const hydratedInlineImageIdsRef = useRef<Set<string>>(new Set());
+  const fileDependencyByFileRef = useRef<
+    Map<File, { generation: number; key: string }>
+  >(new Map());
   const stagedUploadsRef = useRef<StagedUploadCache>(new WeakMap());
   const stagedReadyRef = useRef<StagedReadyCache>(new WeakMap());
   const restoredInlineHandlesRef = useRef(
@@ -7585,11 +7600,33 @@ function Composer({
           setUploadState((current) =>
             new Map(current).set(file, { status: "ready", progress: 100 }),
           );
-          autosaveScheduleReasonRef.current = "attachment-ready";
-          autosaveRef.current?.schedule();
+          const dep = fileDependencyByFileRef.current.get(file);
+          if (dep) {
+            draftEngineRef.current?.resolveAttachmentDependency(dep.generation, dep.key);
+            syncDraftEngineRefs();
+          }
+          if (draftEngineRef.current?.canCommitLatest()) {
+            autosaveScheduleReasonRef.current = "attachment-ready";
+            autosaveRef.current?.schedule();
+          }
+          if (closeIntentAfterUploadRef.current && draftEngineRef.current?.canCommitLatest()) {
+            closeIntentAfterUploadRef.current = false;
+            void (async () => {
+              const result = await saveDraftNow("close");
+              if (result === "saved_server") {
+                finalizeCleanClose({ confirmedSavedServer: true });
+                closeComposer();
+              }
+            })();
+          }
           return result;
         })
         .catch((error) => {
+          const dep = fileDependencyByFileRef.current.get(file);
+          if (dep) {
+            draftEngineRef.current?.failAttachmentDependency(dep.generation, dep.key);
+            syncDraftEngineRefs();
+          }
           setUploadState((current) =>
             new Map(current).set(file, { status: "failed", progress: 0 }),
           );
@@ -7657,12 +7694,26 @@ function Composer({
           const stagedFiles = await Promise.all(
             currentFiles.map((file) => ensureStaged(file, "attachment")),
           );
+          const uploadInline = transportImages.filter((image) => !image.sourceDescriptor);
+          const restoredInlineSources = transportImages
+            .filter((image) => image.sourceDescriptor)
+            .map((image) => image.sourceDescriptor!);
           const stagedInline = await Promise.all(
-            transportImages.map((image) =>
-              ensureStaged(image.file, "inline-image", image.uploadFilename),
-            ),
+            uploadInline.map((image) => {
+              if (image.stagedHandle) {
+                return Promise.resolve({
+                  kind: "inline-image" as const,
+                  handle: image.stagedHandle,
+                  filename: image.uploadFilename,
+                  size: image.file.size,
+                  mimeType: image.mimeType,
+                  expiresAt: Number.MAX_SAFE_INTEGER,
+                });
+              }
+              return ensureStaged(image.file, "inline-image", image.uploadFilename);
+            }),
           );
-          const inlineMetadata = metadataToTransport(transportImages);
+          const inlineMetadata = metadataToTransport(uploadInline);
           const attachmentTransport = buildStagedAttachmentTransport({
             plan: attachmentPlan,
             normal: stagedFiles,
@@ -7692,6 +7743,7 @@ function Composer({
               bodyText: stripHtml(transportHtml),
               previousRef: previousRef ?? undefined,
               diagnostics: trigger,
+              sourceInlineImages: restoredInlineSources,
               ...attachmentTransport,
             }),
           });
@@ -7709,6 +7761,26 @@ function Composer({
                 const handle = res.sourceAttachmentHandles[index];
                 if (typeof handle === "string") {
                   preservedSourceHandlesRef.current.set(attachmentId, handle);
+                }
+              });
+            }
+            if (
+              restoredInlineSources.length &&
+              (!Array.isArray(res.inlineSourceHandles) ||
+                res.inlineSourceHandles.length !== restoredInlineSources.length)
+            ) {
+              return { ok: false, code: "SOURCE_INLINE_HANDLE_MISMATCH" };
+            }
+            if (restoredInlineSources.length && Array.isArray(res.inlineSourceHandles)) {
+              restoredInlineSources.forEach((source, index) => {
+                const handle = res.inlineSourceHandles[index];
+                if (typeof handle !== "string") return;
+                const image = inlineImagesRef.current.find(
+                  (candidate) => candidate.uploadFilename === source.uploadFilename,
+                );
+                if (image) {
+                  image.stagedHandle = handle;
+                  image.sourceDescriptor = undefined;
                 }
               });
             }
@@ -7761,7 +7833,7 @@ function Composer({
         // NETWORK, etc.) MUST leave the composer dirty so the user can retry.
         if (status === "saved") {
           if (completedGeneration > savedGenerationRef.current) {
-            savedGenerationRef.current = completedGeneration;
+            draftEngineRef.current?.markSaved(completedGeneration);
             recomputeDirty();
           }
           lastSavedAtRef.current = Date.now();
@@ -7789,6 +7861,8 @@ function Composer({
             }, previousRef);
           }
         } else if (status === "failed") {
+          draftEngineRef.current?.markSaveFailed();
+          syncDraftEngineRefs();
           // Diagnostic: capture the coarse code so the UI can surface it
           // (helps distinguish APPEND_FAILED / SAFE_DRAFT_REPLACE_UNSUPPORTED
           // / SESSION_REQUIRED / IMAP_ERROR / UNKNOWN without leaking PII).
@@ -7856,6 +7930,8 @@ function Composer({
     }
     let cancelled = false;
     const streamController = new AbortController();
+    const hydrationKey = "composer-mount-hydration";
+    draftEngineRef.current?.registerHydrationDependency(hydrationKey);
     const hydrate = async () => {
       const editor = editorRef.current;
       if (!editor) return;
@@ -7887,12 +7963,36 @@ function Composer({
       try {
         for (const row of await readInlineImages(inlineScope)) {
           const file = new File([row.blob], row.filename, { type: row.mimeType });
-          hydrated.push(hydrateInlineComposeImage(file, row));
+          const image = hydrateInlineComposeImage(file, row);
+          image.stagedHandle = restoredInlineHandlesRef.current.get(image.uploadFilename);
+          hydrated.push(image);
         }
       } catch {
         /* IndexedDB may be unavailable in private mode; remote save remains available. */
       }
       let remote = initial?.inlineImages ?? [];
+      const sourcePartByCid = new Map<
+        string,
+        { part: string; mimeType: string; size: number; filename: string }
+      >();
+      for (const source of remote) {
+        sourcePartByCid.set(source.cid.toLowerCase(), {
+          part: source.part,
+          mimeType: source.mimeType,
+          size: source.size,
+          filename: source.part,
+        });
+      }
+      for (const source of initial?.inlineParts ?? []) {
+        if (!sourcePartByCid.has(source.cid.toLowerCase())) {
+          sourcePartByCid.set(source.cid.toLowerCase(), {
+            part: source.part,
+            mimeType: source.mimeType,
+            size: source.size,
+            filename: source.part,
+          });
+        }
+      }
       const present = new Set(remote.map((item) => item.cid.toLowerCase()));
       const missing = (initial?.inlineParts ?? []).filter(
         (item) => !present.has(item.cid.toLowerCase()),
@@ -7924,6 +8024,20 @@ function Composer({
       const attachRemoteFile = async (sourceCid: string, file: File) => {
         if (!validateInlineImageFile(file).ok) return;
         const image = createInlineComposeImage(file);
+        const sourcePart = sourcePartByCid.get(sourceCid.toLowerCase());
+        if (sourcePart && initial?.previousRef) {
+          image.sourceDescriptor = {
+            folderPath: initial.previousRef.folderPath,
+            uid: initial.previousRef.uid,
+            uidValidity: initial.previousRef.uidValidity,
+            part: sourcePart.part,
+            cid: image.cid,
+            mimeType: image.mimeType,
+            filename: sourcePart.filename,
+            size: sourcePart.size,
+            uploadFilename: image.uploadFilename,
+          };
+        }
         if (applyInlineImageToCidNodes(editor, sourceCid, image) === 0) {
           URL.revokeObjectURL(image.objectUrl);
           return;
@@ -7993,10 +8107,15 @@ function Composer({
       ))
         unresolved.remove();
       setInlineImages(hydrated);
+      hydratedInlineImageIdsRef.current = new Set(hydrated.map((image) => image.id));
       inlineHydratedRef.current = true;
       if (isDirtyRef.current) autosaveRef.current?.schedule();
     };
-    inlineReadinessRef.current = hydrate();
+    inlineReadinessRef.current = hydrate().finally(() => {
+      draftEngineRef.current?.settleHydrationDependency(hydrationKey);
+      draftEngineRef.current?.completeHydrationWhenReady();
+      syncDraftEngineRefs();
+    });
     void inlineReadinessRef.current;
     return () => {
       cancelled = true;
@@ -8203,6 +8322,7 @@ function Composer({
   }, [files]);
   useEffect(() => {
     for (const image of inlineImages) {
+      if (hydratedInlineImageIdsRef.current.has(image.id)) continue;
       void ensureStaged(image.file, "inline-image", image.uploadFilename).catch(() => undefined);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -8288,6 +8408,11 @@ function Composer({
         automaticSaveGenerationsRef.current.clear();
         return;
       }
+      if (!draftEngineRef.current?.beginSave()) {
+        pendingRemoteSaveRef.current = null;
+        automaticSaveGenerationsRef.current.clear();
+        return;
+      }
       pendingRemoteSaveRef.current = null;
       automaticSaveGenerationsRef.current.clear();
       automaticSaveGenerationsRef.current.add(pending.generation);
@@ -8346,7 +8471,7 @@ function Composer({
           setSavedAt(null);
           setSaveStatus("idle");
           // Empty draft = nothing to persist; treat current gen as saved.
-          savedGenerationRef.current = generationRef.current;
+          draftEngineRef.current?.markSaved(generationRef.current);
           recomputeDirty();
           return;
         }
@@ -8468,7 +8593,7 @@ function Composer({
     }
     markEdited();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [to, cc, bcc, subject, showCc, showBcc, existingKept, files]);
+  }, [to, cc, bcc, subject, showCc, showBcc, existingKept]);
 
   // ----- Guarded close: intercept close attempts when there are unsaved changes -----
   const closePromptRef = useRef(closePrompt);
@@ -8533,6 +8658,11 @@ function Composer({
         return false;
       }
       if (choice === "save") {
+        if (draftEngineRef.current?.hasPendingDependencies()) {
+          closeIntentAfterUploadRef.current = true;
+          toast.info(tr("الملف لا يزال قيد الرفع. سيتم الحفظ والإغلاق بعد اكتماله."));
+          return false;
+        }
         const result = await saveDraftNow("close");
         // Only a confirmed remote save may close. Failed / empty keeps the
         // composer open so nothing is silently lost.
@@ -8584,7 +8714,7 @@ function Composer({
       // A discarded draft must no longer be protected from ghost cleanup.
       onDraftDeleted(draftId);
       // Force clean so beforeunload/guard don't re-trap on the way out.
-      savedGenerationRef.current = generationRef.current;
+      draftEngineRef.current?.resetForDiscard();
       lastSavedAtRef.current = Date.now();
       recomputeDirty();
       closeComposer();
@@ -8627,6 +8757,7 @@ function Composer({
     const incoming = Array.from(list);
     if (incoming.length === 0) return;
     const merged: File[] = [...files];
+    const added: File[] = [];
     let runningTotal = totalBytes;
     let runningNormal = normalAttachmentCount;
     for (const f of incoming) {
@@ -8639,10 +8770,18 @@ function Composer({
         break;
       }
       merged.push(f);
+      added.push(f);
       runningTotal += f.size;
       runningNormal += 1;
     }
     setFiles(merged);
+    markEdited();
+    const generation = draftEngineRef.current?.userGeneration ?? 0;
+    for (const file of added) {
+      const key = `new-file:${file.name}:${file.size}:${file.lastModified}`;
+      draftEngineRef.current?.registerAttachmentDependency(generation, key);
+      fileDependencyByFileRef.current.set(file, { generation, key });
+    }
     if (fileInputRef.current) fileInputRef.current.value = "";
   }
 
@@ -8669,7 +8808,13 @@ function Composer({
   function removeFile(index: number) {
     const file = files[index];
     setFiles((prev) => prev.filter((_, i) => i !== index));
+    markEdited();
     if (!file) return;
+    const dep = fileDependencyByFileRef.current.get(file);
+    if (dep) {
+      draftEngineRef.current?.cancelAttachmentDependency(dep.generation, dep.key);
+      fileDependencyByFileRef.current.delete(file);
+    }
     const staged = getStagedReady(stagedReadyRef.current, file, "attachment", file.name);
     if (!staged?.handle) return;
     releaseStagedHandle(staged.handle, () => {
@@ -9418,6 +9563,9 @@ function Composer({
         remoteAutosaveTimerRef.current = null;
       }
       pendingRemoteSaveRef.current = null;
+      if (!draftEngineRef.current?.beginSave()) {
+        return "failed";
+      }
       await saverRef.current?.requestSave(
         snapshot,
         serverRefRef.current,
@@ -9480,6 +9628,7 @@ function Composer({
     }
 
     setDeletingDraft(true);
+    draftEngineRef.current?.beginDelete();
     autosaveRef.current?.cancel();
     // Wait for any in-flight remote save (running AND coalesced) to settle so
     // the delete never races a still-running APPEND from this composer. The
@@ -9510,6 +9659,8 @@ function Composer({
     });
 
     if (!deleted.ok) {
+      draftEngineRef.current?.completeDeleteFailure();
+      syncDraftEngineRefs();
       setDeletingDraft(false);
       deleteIntentRef.current = false;
       // Keep the coarse, PII-safe failure code for diagnostics (never PII).
