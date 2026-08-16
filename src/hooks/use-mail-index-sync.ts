@@ -21,6 +21,10 @@ import { useMailServerFn } from "@/hooks/use-mail-session-renewal";
 
 const DEFAULT_INCREMENTAL_MS = 45_000;
 const DEFAULT_RECONCILE_MS = 5 * 60_000;
+// Delay for the FIRST reconcile after bootstrap when `promptReconcile` is set
+// (Drafts/Trash stale-row convergence). Bounded (1000-UID reconcile range) and
+// runs in the background AFTER the visible indexed list has settled.
+const PROMPT_RECONCILE_MS = 2_000;
 
 type SuccessResult = Extract<RunMailSyncResult, { ok: true; busy: false }>;
 
@@ -39,6 +43,14 @@ export interface UseMailIndexSyncArgs {
    * authoritative path may authorize a canonical self-heal reassignment.
    */
   pathTrusted?: boolean;
+  /**
+   * When true, schedule the FIRST reconcile promptly (a short background
+   * delay) after bootstrap instead of the full `reconcileMs`. Used only for
+   * Drafts/Trash so stale Local Index rows converge without waiting 5 minutes.
+   * Subsequent reconciles revert to the normal cadence, and the reconcile is
+   * still bounded (1000-UID range) and one-shot per bootstrap.
+   */
+  promptReconcile?: boolean;
 }
 
 export interface RunOpts {
@@ -75,6 +87,7 @@ export function useMailIndexSync(args: UseMailIndexSyncArgs): UseMailIndexSyncHa
     reconcileMs = DEFAULT_RECONCILE_MS,
     enabled = true,
     pathTrusted = false,
+    promptReconcile = false,
   } = args;
 
   const sync = useMailServerFn(runMailSync);
@@ -86,7 +99,12 @@ export function useMailIndexSync(args: UseMailIndexSyncArgs): UseMailIndexSyncHa
   const paramsRef = useRef({ session, folderPath, canonical, enabled, pathTrusted });
   const onSyncedRef = useRef(onSynced);
   const indexedRef = useRef(indexed);
-  const bootstrappedKeyRef = useRef<string>("");
+  // Tracks EVERY (account + physical folder + canonical) key that has already
+  // bootstrapped this browser/session, so a prompt Drafts/Trash reconcile runs
+  // at most ONCE per key. A single string would forget the key the moment the
+  // user navigates to another folder, re-triggering the prompt reconcile on
+  // every return (Trash → Inbox → Trash).
+  const bootstrappedKeyRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     paramsRef.current = { session, folderPath, canonical, enabled, pathTrusted };
@@ -162,10 +180,15 @@ export function useMailIndexSync(args: UseMailIndexSyncArgs): UseMailIndexSyncHa
 
     const isVisible = () => typeof document === "undefined" || !document.hidden;
 
-    const bootstrapKey = `${token}|${folderPath}|${canonical}`;
-    const isFirstBootstrap = bootstrappedKeyRef.current !== bootstrapKey;
+    // Keyed by the STABLE account id (not the rotating session token) + the
+    // physical folder path + canonical, so an account switch can never reuse
+    // another account's key, token renewal does not reset the bootstrap, and a
+    // canonical self-heal that corrects the physical path yields a genuinely
+    // new key for the corrected path.
+    const bootstrapKey = `${session?.account.id ?? token}|${folderPath}|${canonical}`;
+    const isFirstBootstrap = !bootstrappedKeyRef.current.has(bootstrapKey);
     if (isFirstBootstrap) {
-      bootstrappedKeyRef.current = bootstrapKey;
+      bootstrappedKeyRef.current.add(bootstrapKey);
       didInitialRef.current = indexedRef.current;
       flagsNeedReconcileRef.current = false;
       lastReconcileAtRef.current = 0;
@@ -183,29 +206,32 @@ export function useMailIndexSync(args: UseMailIndexSyncArgs): UseMailIndexSyncHa
       }, intervalMs);
     }
 
-    function scheduleReconcile() {
+    function scheduleReconcile(delayMs = reconcileMs) {
       if (cancelled) return;
       reconcileTimer = setTimeout(async () => {
         if (!isVisible() || !didInitialRef.current) {
-          scheduleReconcile();
+          scheduleReconcile(delayMs);
           return;
         }
         await runOnce("reconcile");
-        scheduleReconcile();
-      }, reconcileMs);
+        scheduleReconcile(reconcileMs);
+      }, delayMs);
     }
 
     if (isFirstBootstrap) {
-      // First mount on this key — bootstrap with an immediate round.
+      // First mount on this key — bootstrap with an immediate round. When a
+      // prompt reconcile is requested (Drafts/Trash), the FIRST reconcile runs
+      // shortly after bootstrap instead of the full 5-minute cadence; every
+      // subsequent reconcile reverts to `reconcileMs`.
       void runOnce(didInitialRef.current ? "incremental" : "initial").then(() => {
         scheduleIncremental();
-        scheduleReconcile();
+        scheduleReconcile(promptReconcile ? PROMPT_RECONCILE_MS : reconcileMs);
       });
     } else {
       // Rerun caused only by the loop-key ping (session/folder/etc unchanged).
       // Do NOT fire an immediate incremental — just re-arm timers.
       scheduleIncremental();
-      scheduleReconcile();
+      scheduleReconcile(reconcileMs);
     }
 
     return () => {

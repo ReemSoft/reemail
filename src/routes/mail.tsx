@@ -923,6 +923,7 @@ import {
   writeDraftDoc,
   updateDraftDocServerRef,
   clearDraftDoc,
+  shouldFinalizeCleanClose,
   createDraftSaver,
   createPendingDeleteQueue,
   deleteDraftAfterSend,
@@ -983,7 +984,11 @@ import {
 } from "@/lib/mail-sender-folders.functions";
 import { SenderFolderDialog } from "@/components/sender-folder-dialog";
 import { senderFolderColor } from "@/lib/mail-sender-folder-colors";
-import { indexListFolderCounts } from "@/lib/mail-index-counts.functions";
+import {
+  indexListFolderCounts,
+  type IndexFolderCount,
+} from "@/lib/mail-index-counts.functions";
+import { resolveSyncPath } from "@/lib/mail-sync-path";
 import { indexUpdateFlag } from "@/lib/mail-flags.functions";
 import { indexMoveMessage } from "@/lib/mail-move.functions";
 import { indexDeleteMessage } from "@/lib/mail-delete.functions";
@@ -1635,6 +1640,10 @@ function useMailData(session: MailSession | null) {
   const [authoritativeFolderPaths, setAuthoritativeFolderPaths] = useState<
     Partial<Record<MailFolder, string>>
   >({});
+  // Latest Local Index per-folder counts/paths, captured from `loadCountsFast`.
+  // Only these (with a unique, non-ambiguous canonical) may feed an UNTRUSTED
+  // sync path. Ambiguous/missing canonicals never yield an index path here.
+  const [indexFolderCounts, setIndexFolderCounts] = useState<IndexFolderCount[]>([]);
   const [messages, setMessages] = useState<MailMessage[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadingMoreScope, setLoadingMoreScope] = useState<string | null>(null);
@@ -1819,11 +1828,12 @@ function useMailData(session: MailSession | null) {
   }, [session, getCounts, isStarCountHot]);
 
   /**
-   * Manual-Refresh counts path: prefer Local Mail Index (single Supabase
-   * SELECT, no IMAP round-trip). Falls back to the bridge only when the
-   * index has not yet resolved for this account/session. Also refreshes
-   * `folderPaths` from any bridge fallback path — the index never invents
-   * new paths.
+   * Fast counts path: prefer the Local Mail Index (single Supabase SELECT, no
+   * IMAP round-trip). When the index is healthy and non-empty this RETURNS
+   * immediately — it does NOT trigger a global /api/folders (getCounts) sweep,
+   * so a warm indexed session never opens an IMAP connection just to refresh
+   * Starred/path metadata. Falls back to the bridge (`loadCounts`) only when
+   * the index has nothing for this account/session yet (first-ever bootstrap).
    */
   const loadCountsFast = useCallback(async () => {
     if (!session) return;
@@ -1840,6 +1850,10 @@ function useMailData(session: MailSession | null) {
         if (countsMutationGen.current !== gen) return;
 
         if (res.ok && res.counts.length > 0) {
+          // Capture the raw Local Index counts so the sync path resolver can
+          // derive a unique, non-ambiguous index path per canonical. Ambiguous
+          // or missing canonicals simply yield no index sync path.
+          setIndexFolderCounts(res.counts);
           // Deterministic duplicate-canonical handling: a canonical that maps
           // to MORE than one Local Index row is ambiguous (corruption). Its
           // physical path must never be promoted (array order must not decide
@@ -1914,57 +1928,12 @@ function useMailData(session: MailSession | null) {
             );
           }
           archiveUidValidityRef.current = nextArchiveUV;
-          // Starred is a virtual view over INBOX and has no Local Index row,
-          // so it still needs the authoritative bridge count. Drafts no longer
-          // round-trip here — they come from the index above.
-          try {
-            const authoritative = await getCounts({
-              data: {
-                mailSessionToken: session.mailSessionToken ?? "",
-                password: session.password,
-              },
-            });
-            if (countsMutationGen.current !== gen) return;
-            if (authoritative.ok) {
-              // MAILMAESTRO_CANONICAL_SELFHEAL bootstrap: the bridge resolves
-              // physical paths authoritatively (SPECIAL-USE/well-known). Record
-              // them separately as trusted path provenance, and also fill/correct
-              // folderPaths so ordinary reads stay consistent. A path that came
-              // only from Local Index metadata is never fed into the trusted map.
-              const authPaths: Partial<Record<MailFolder, string>> = {};
-              for (const c of authoritative.counts) {
-                if (c.path) authPaths[c.folder] = c.path;
-              }
-              setAuthoritativeFolderPaths(authPaths);
-              setFolderPaths((prev) => {
-                let changed = false;
-                const next = { ...prev };
-                for (const c of authoritative.counts) {
-                  if (c.path && next[c.folder] !== c.path) {
-                    next[c.folder] = c.path;
-                    changed = true;
-                  }
-                }
-                return changed ? next : prev;
-              });
-              const starredCount = authoritative.counts.find((c) => c.folder === "starred");
-              if (starredCount) {
-                setCounts((prev) => {
-                  const current = prev.starred ?? { total: 0, unread: 0, supported: true };
-                  return {
-                    ...prev,
-                    starred: {
-                      total: isStarCountHot() ? current.total : starredCount.total,
-                      unread: starredCount.unread,
-                      supported: starredCount.supported !== false,
-                    },
-                  };
-                });
-              }
-            }
-          } catch {
-            /* keep previous Starred count until bridge is reachable */
-          }
+          // Healthy Local Index → RETURN. No automatic getCounts / /api/folders
+          // sweep here: counts + paths already came from the index, and a warm
+          // indexed session must not open a global IMAP connection just to
+          // refresh Starred/path metadata. Authoritative path resolution (and a
+          // Starred count refresh) is driven separately, only when actually
+          // needed (see the targeted resolution below / explicit interactions).
           return;
         }
       } catch {
@@ -2368,17 +2337,30 @@ function useMailData(session: MailSession | null) {
   // afterwards, plus a 5-minute reconcile once the folder is indexed.
   // Pauses when the tab is hidden and never overlaps itself.
   const isFolderIndexed = indexReady[folder] === true;
-  // The sync must only ever run on an authoritative (Bridge-resolved) path.
-  // `folderPaths` may contain index-derived (potentially corrupted) paths, so
-  // it is NOT used here; only the authoritative map authorizes a sync round
-  // and, in turn, a canonical self-heal reassignment.
+  // The sync may only authorize a canonical self-heal on an authoritative
+  // (Bridge-resolved) path. `folderPaths` may contain index-derived
+  // (potentially corrupted) paths, so it is NOT used here. The sync path is:
+  //   authoritativeFolderPath  (trusted)
+  //   ?? unique non-ambiguous index path  (untrusted)
+  //   ?? null (sync disabled until authoritative resolution)
+  // An untrusted index path can run ordinary incremental/reconcile rounds but
+  // NEVER rewrites/repairs canonical (pathTrusted stays false).
   const authoritativeFolderPath = authoritativeFolderPaths[folder] ?? null;
+  const { syncPath, pathTrusted } = resolveSyncPath(
+    authoritativeFolderPath,
+    indexFolderCounts,
+    folder,
+  );
   const { reconcileNow, incrementalNow, shouldReconcile } = useMailIndexSync({
     session,
-    folderPath: authoritativeFolderPath,
+    folderPath: syncPath,
     canonical: folder,
-    pathTrusted: authoritativeFolderPath != null,
+    pathTrusted,
     indexed: isFolderIndexed,
+    // Drafts/Trash: run the first bounded reconcile promptly (after the
+    // visible list settles) so stale Local Index rows converge without the
+    // normal 5-minute delay. Inbox/Sent keep the standard cadence.
+    promptReconcile: folder === "drafts" || folder === "trash",
     enabled:
       MAIL_INDEX_ENABLED &&
       !!session?.mailSessionToken &&
@@ -2401,6 +2383,33 @@ function useMailData(session: MailSession | null) {
       loadCountsFast();
     },
   });
+
+  // Exceptional authoritative path resolution — ONLY when the current folder's
+  // sync would be enabled but it has neither an authoritative path nor a unique
+  // Local Index path (first-ever bootstrap for that folder, or an ambiguous /
+  // missing / corrupted canonical). This never fires on a healthy warm indexed
+  // session and never runs a global /api/folders sweep on every mount. It is
+  // one-shot per (account + folder) via the ref guard.
+  const authoritativeResolutionAttemptedRef = useRef<string>("");
+  const syncEnabled =
+    MAIL_INDEX_ENABLED &&
+    !!session?.mailSessionToken &&
+    sort === "date-desc" &&
+    folder !== "starred" &&
+    (folder !== "drafts" || draftListSettled);
+  useEffect(() => {
+    if (!syncEnabled) return;
+    if (syncPath != null) return;
+    // Only attempt authoritative resolution once we KNOW the Local Index is
+    // healthy and non-empty but this folder has no usable row (missing or
+    // ambiguous canonical). An empty index means loadCountsFast already fell
+    // back to the authoritative bridge sweep — do not double-sweep here.
+    if (indexFolderCounts.length === 0) return;
+    const key = `${session?.account.id ?? ""}|${folder}`;
+    if (authoritativeResolutionAttemptedRef.current === key) return;
+    authoritativeResolutionAttemptedRef.current = key;
+    void loadCounts();
+  }, [syncEnabled, syncPath, indexFolderCounts.length, folder, session?.account.id, loadCounts]);
 
   const postSendRuntimeRef = useRef({
     session,
@@ -8058,6 +8067,28 @@ function Composer({
   // the existing resolver. Cleared on Cancel / after onClose so a later
   // attempt can start fresh.
   const closeFlowRef = useRef<Promise<boolean> | null>(null);
+  // Single reusable clean-close finalization. Clears the crash-recovery local
+  // Draft document + inline-image cache ONLY when safe: either an explicitly
+  // confirmed remote save, or a genuinely clean composer whose content is
+  // already safely represented remotely. A dirty composer, a failed save, or a
+  // local-only unsaved draft never reaches this — crash recovery is preserved.
+  const finalizeCleanClose = (opts?: { confirmedSavedServer?: boolean }) => {
+    if (typeof window === "undefined") return;
+    const safelyRemote = shouldFinalizeCleanClose({
+      isDirty: isDirtyRef.current,
+      serverRef: serverRefRef.current,
+      saveStatus: saverRef.current?.getStatus() ?? "idle",
+      confirmedSavedServer: opts?.confirmedSavedServer,
+    });
+    if (!safelyRemote) return;
+    try {
+      clearDraftDoc(window.localStorage, accountEmail);
+      void clearInlineImages(inlineScope).catch(() => undefined);
+    } catch {
+      /* noop */
+    }
+    setHasLocalDraft(false);
+  };
   const closeComposer = () => {
     onClose({
       refreshDrafts: autosaveRefreshTrackerRef.current?.consumeCloseRefresh() ?? false,
@@ -8067,8 +8098,11 @@ function Composer({
     if (closeFlowRef.current) return closeFlowRef.current;
     const flow = (async (): Promise<boolean> => {
       // CLEAN composer closes immediately — whether or not it carries content.
-      // Only a DIRTY composer prompts (Save / Discard / Cancel).
+      // Only a DIRTY composer prompts (Save / Discard / Cancel). A confirmed-
+      // saved (or otherwise safely-remote) clean composer finalizes the local
+      // recovery doc so a later New Message never resurrects it.
       if (!isDirtyRef.current) {
+        finalizeCleanClose();
         closeComposer();
         return true;
       }
@@ -8085,6 +8119,7 @@ function Composer({
         // Only a confirmed remote save may close. Failed / empty keeps the
         // composer open so nothing is silently lost.
         if (result === "saved_server") {
+          finalizeCleanClose({ confirmedSavedServer: true });
           closeComposer();
           return true;
         }
@@ -8988,7 +9023,10 @@ function Composer({
       result = await saveDraftNow();
       if (result !== "saved_server" || !isDirtyRef.current) break;
     }
-    if (result === "saved_server" && !isDirtyRef.current) closeComposer();
+    if (result === "saved_server" && !isDirtyRef.current) {
+      finalizeCleanClose({ confirmedSavedServer: true });
+      closeComposer();
+    }
   }
 
   async function handleDeleteDraft() {

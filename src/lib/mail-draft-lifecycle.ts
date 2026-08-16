@@ -272,6 +272,28 @@ export function updateDraftDocServerRef(
   }
 }
 
+/**
+ * Pure predicate for the reusable clean-close finalization path.
+ *
+ * Safe to clear the crash-recovery local Draft document ONLY when:
+ *   * an explicitly confirmed remote save just happened, OR
+ *   * the composer is clean (not dirty) AND its content is already safely
+ *     represented remotely (a serverRef exists / saveStatus is "saved").
+ *
+ * A dirty composer, a failed save, a local-only unsaved draft, or a cancelled
+ * close must return false so crash recovery is never lost.
+ */
+export function shouldFinalizeCleanClose(input: {
+  isDirty: boolean;
+  serverRef: DraftServerRef | null;
+  saveStatus: DraftSaveStatus;
+  confirmedSavedServer?: boolean;
+}): boolean {
+  if (input.confirmedSavedServer === true) return true;
+  if (input.isDirty) return false;
+  return input.serverRef != null || input.saveStatus === "saved";
+}
+
 export function clearDraftDoc(storage: DraftStorageLike, accountEmail: string): void {
   try {
     storage.removeItem(draftKeyV3(accountEmail));

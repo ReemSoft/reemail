@@ -89,6 +89,8 @@ describe("FIX 3 — Save-as-Draft never closes dirty", () => {
     const src = readFileSync(new URL("../../routes/mail.tsx", import.meta.url), "utf8");
     const idx = src.indexOf("async function handleSaveAsDraft");
     const fn = src.slice(idx, idx + 600);
-    expect(fn).toContain('if (result === "saved_server" && !isDirtyRef.current) closeComposer();');
+    expect(fn).toContain('if (result === "saved_server" && !isDirtyRef.current)');
+    expect(fn).toContain("finalizeCleanClose({ confirmedSavedServer: true })");
+    expect(fn).toContain("closeComposer();");
   });
 });

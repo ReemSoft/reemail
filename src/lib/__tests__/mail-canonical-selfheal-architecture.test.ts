@@ -39,21 +39,27 @@ describe("canonical self-heal architecture", () => {
     expect(src).toContain("trustedCanonical: p.pathTrusted === true");
   });
 
-  it("mail.tsx syncs on an authoritative path only (index-derived paths never reach the sync)", () => {
+  it("mail.tsx resolves the sync path via resolveSyncPath (authoritative → trusted, index → untrusted)", () => {
     const src = mailRoute();
     expect(src).toContain("authoritativeFolderPaths");
-    expect(src).toContain("folderPath: authoritativeFolderPath");
-    expect(src).toContain("pathTrusted: authoritativeFolderPath != null");
+    expect(src).toContain("resolveSyncPath(");
+    expect(src).toContain("folderPath: syncPath");
+    expect(src).toContain("pathTrusted,");
   });
 
   it("draft projection writes are trusted (repair a mislabelled Drafts row)", () => {
     expect(draftWriter()).toContain("trustedCanonical: true");
   });
 
-  it("loadCountsFast bootstraps folderPaths from authoritative bridge counts", () => {
+  it("loadCountsFast returns on a healthy Local Index without a getCounts /api/folders sweep", () => {
     const src = mailRoute();
-    const idx = src.indexOf("MAILMAESTRO_CANONICAL_SELFHEAL bootstrap");
+    const idx = src.indexOf("const loadCountsFast = useCallback");
+    const end = src.indexOf("// Decide whether this (folder, sort, session) call");
     expect(idx).toBeGreaterThan(-1);
-    expect(src.slice(idx, idx + 800)).toContain("setFolderPaths");
+    expect(end).toBeGreaterThan(idx);
+    const fn = src.slice(idx, end);
+    expect(fn).toContain("await listIndexCounts({");
+    expect(fn).not.toContain("await getCounts({");
+    expect(fn).toContain("await loadCounts();");
   });
 });

@@ -105,13 +105,10 @@ describe("wiring and unchanged behavior", () => {
     source.indexOf("async function toggleRead("),
   );
 
-  it("reuses exactly one getCounts and one listIndexCounts call", () => {
-    expect(fastCounts.match(/await getCounts\(\{/g)).toHaveLength(1);
+  it("loadCountsFast reads Local Index once and never sweeps /api/folders on a healthy index", () => {
     expect(fastCounts.match(/await listIndexCounts\(\{/g)).toHaveLength(1);
-    expect(fastCounts).toContain(
-      'const starredCount = authoritative.counts.find((c) => c.folder === "starred")',
-    );
-    expect(fastCounts).toContain("total: isStarCountHot() ? current.total : starredCount.total");
+    expect(fastCounts.match(/await getCounts\(\{/g)).toBeNull();
+    expect(fastCounts).toContain("await loadCounts();");
   });
 
   it("keeps optimistic star and unstar deltas unchanged", () => {
