@@ -372,6 +372,14 @@ export interface DraftSaver {
   ): Promise<void>;
   isBusy(): boolean;
   getStatus(): DraftSaveStatus;
+  /**
+   * Resolve once the saver is idle: every in-flight save (running AND any
+   * coalesced pending follow-up) has settled. Deterministic drain over the
+   * existing single-flight promise — no timers, no busy-polling. Used by
+   * explicit Delete Draft so a remote delete never races a still-running
+   * APPEND from this composer.
+   */
+  awaitIdle(): Promise<void>;
 }
 
 export function createDraftSaver(draftId: string, opts: CreateDraftSaverOptions): DraftSaver {
@@ -478,10 +486,22 @@ export function createDraftSaver(draftId: string, opts: CreateDraftSaverOptions)
     });
   }
 
+  // Drain the in-flight pipeline (running save + any coalesced pending). After
+  // each await we re-check because a requestSave that lands while we awaited
+  // either coalesces into the running loop or starts a fresh one.
+  async function awaitIdle(): Promise<void> {
+    for (;;) {
+      const current = inFlight;
+      if (!current) return;
+      await current.catch(() => undefined);
+    }
+  }
+
   return {
     requestSave,
     isBusy: () => running || pending !== null,
     getStatus: () => status,
+    awaitIdle,
   };
 }
 

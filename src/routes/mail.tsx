@@ -7108,6 +7108,9 @@ function Composer({
     () => isEditMode || Boolean(initial?.previousRef) || Boolean(initialDoc?.serverRef),
   );
   const [deletingDraft, setDeletingDraft] = useState(false);
+  // DELETE INTENT fence: once set, no NEW autosave may start and no duplicate
+  // Delete may begin. It is cleared only on confirm-cancel or delete failure.
+  const deleteIntentRef = useRef(false);
   const serverRefRef = useRef<DraftServerRef | null>(serverRef);
   useEffect(() => {
     serverRefRef.current = serverRef;
@@ -8023,6 +8026,8 @@ function Composer({
       remoteAutosaveTimerRef.current = null;
       const pending = pendingRemoteSaveRef.current;
       if (!pending || sendInProgressRef.current) return;
+      // DELETE INTENT fence: never start a remote save while deleting.
+      if (deleteIntentRef.current) return;
       // Attachment-size block: after an authoritative size failure the same
       // attachment set must not be re-downloaded every autosave tick. The
       // local draft was already written by the scheduler before this ran.
@@ -8071,6 +8076,8 @@ function Composer({
       onFire: () => {
         const s = snapshotInputsRef.current;
         if (s.sending || sendInProgressRef.current) return;
+        // DELETE INTENT fence: block any new autosave (local write + remote).
+        if (deleteIntentRef.current) return;
         if (!inlineHydratedRef.current) return;
         const serialized = serializeInlineImages(
           editorRef.current?.innerHTML ?? "",
@@ -9191,7 +9198,10 @@ function Composer({
   }
 
   async function handleDeleteDraft() {
-    if (deletingDraft) return;
+    // DELETE INTENT fence: guards duplicate clicks (before the await) AND
+    // blocks every new autosave for the whole delete lifecycle.
+    if (deletingDraft || deleteIntentRef.current) return;
+    deleteIntentRef.current = true;
     const confirmed = await confirm({
       title: tr("حذف المسودة؟"),
       description: tr("سيتم حذف النسخة المحفوظة نهائياً. لا يمكن التراجع عن هذا الإجراء."),
@@ -9199,17 +9209,24 @@ function Composer({
       cancelLabel: tr("إلغاء"),
       variant: "destructive",
     });
-    if (!confirmed) return;
+    if (!confirmed) {
+      deleteIntentRef.current = false;
+      return;
+    }
 
     setDeletingDraft(true);
     autosaveRef.current?.cancel();
+    // Wait for any in-flight remote save (running AND coalesced) to settle so
+    // the delete never races a still-running APPEND from this composer. The
+    // latest serverRef is guaranteed to be settled before the delete starts.
+    await saverRef.current?.awaitIdle();
     const deleted = await deleteSavedDraft({
       // A local-only status can mean the APPEND succeeded but its response
       // was lost. Probe by draftId so explicit deletion never leaves a ghost.
       mayHaveRemoteCopy: hasLocalDraft || hasRemoteDraft,
       deleteRemote: async () => {
         const token = session.mailSessionToken;
-        if (!token) return { ok: false };
+        if (!token) return { ok: false, code: "SESSION_REQUIRED" };
         const result = await bridgeDeleteDraftFn({
           data: {
             mailSessionToken: token,
@@ -9217,7 +9234,8 @@ function Composer({
             previousRef: serverRefRef.current ?? undefined,
           },
         });
-        return { ok: Boolean(result?.ok) };
+        if (!result?.ok) return { ok: false, code: result?.code ?? "UNKNOWN" };
+        return { ok: true };
       },
       clearLocal: () => {
         clearDraftDoc(window.localStorage, accountEmail);
@@ -9226,9 +9244,17 @@ function Composer({
       closeWithRefresh: () => onClose({ refreshDrafts: true }),
     });
 
-    if (!deleted) {
+    if (!deleted.ok) {
       setDeletingDraft(false);
-      if (isDirtyRef.current) autosaveRef.current?.schedule();
+      deleteIntentRef.current = false;
+      // Keep the coarse, PII-safe failure code for diagnostics (never PII).
+      try {
+        console.error("[draft-delete] failed code=", deleted.code);
+      } catch {
+        /* noop */
+      }
+      // DO NOT re-arm autosave here: it resumes only on a NEW user edit, so a
+      // failed Delete can never immediately trigger another remote save.
       toast.error(tr("تعذّر حذف المسودة. احتفظنا بنسختك؛ حاول مرة أخرى."));
     } else {
       // Explicit draft delete abandons every staged handle owned by this
@@ -9236,6 +9262,7 @@ function Composer({
       releaseAllOwnedStagedHandles();
       // A deleted draft must no longer be protected from ghost cleanup.
       onDraftDeleted(draftId);
+      // deleteIntentRef stays true; the composer unmounts via closeWithRefresh.
     }
   }
 

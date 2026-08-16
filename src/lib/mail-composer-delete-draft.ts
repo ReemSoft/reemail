@@ -7,10 +7,17 @@
  */
 export interface DeleteSavedDraftOptions {
   mayHaveRemoteCopy: boolean;
-  deleteRemote: () => Promise<{ ok: boolean }>;
+  /**
+   * Returns `{ ok: true }` on success, or `{ ok: false, code }` where `code`
+   * is a coarse, PII-safe DraftErrorCode (never provider text, subject,
+   * recipient, draftId or UID).
+   */
+  deleteRemote: () => Promise<{ ok: boolean; code?: string }>;
   clearLocal: () => void;
   closeWithRefresh: () => void;
 }
+
+export type DeleteSavedDraftResult = { ok: true } | { ok: false; code: string };
 
 export function shouldShowDeleteDraft(hasLocalCopy: boolean, hasRemoteCopy: boolean): boolean {
   return hasLocalCopy || hasRemoteCopy;
@@ -21,17 +28,18 @@ export async function deleteSavedDraft({
   deleteRemote,
   clearLocal,
   closeWithRefresh,
-}: DeleteSavedDraftOptions): Promise<boolean> {
+}: DeleteSavedDraftOptions): Promise<DeleteSavedDraftResult> {
   if (mayHaveRemoteCopy) {
+    let result: { ok: boolean; code?: string };
     try {
-      const result = await deleteRemote();
-      if (!result.ok) return false;
+      result = await deleteRemote();
     } catch {
-      return false;
+      result = { ok: false, code: "NETWORK" };
     }
+    if (!result.ok) return { ok: false, code: result.code ?? "UNKNOWN" };
   }
 
   clearLocal();
   closeWithRefresh();
-  return true;
+  return { ok: true };
 }

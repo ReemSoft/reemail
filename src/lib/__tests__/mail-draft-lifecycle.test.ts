@@ -243,6 +243,60 @@ describe("createDraftSaver — serverRef freshness", () => {
   });
 });
 
+describe("createDraftSaver — awaitIdle", () => {
+  it("resolves immediately when no save is in flight", async () => {
+    const saver = createDraftSaver("d-idle", { saveRemote: vi.fn(async () => ({ ok: true })) });
+    await expect(saver.awaitIdle()).resolves.toBeUndefined();
+  });
+
+  it("waits for an in-flight save to settle before resolving", async () => {
+    const gates: Array<{ resolve: (v: SaveRemoteResult) => void }> = [];
+    const saver = createDraftSaver("d-wait", {
+      saveRemote: async () => {
+        const d = deferred<SaveRemoteResult>();
+        gates.push({ resolve: d.resolve });
+        return d.promise;
+      },
+    });
+    const p = saver.requestSave(snap({ subject: "x" }), null, 1);
+    await Promise.resolve();
+    let idle = false;
+    const idlePromise = saver.awaitIdle().then(() => {
+      idle = true;
+    });
+    await Promise.resolve();
+    expect(idle).toBe(false);
+    gates[0].resolve({ ok: true, serverRef: { folderPath: "Drafts", uid: 5, uidValidity: "v" } });
+    await Promise.all([p, idlePromise]);
+    expect(idle).toBe(true);
+  });
+
+  it("also drains a coalesced follow-up save before resolving", async () => {
+    const gates: Array<{ resolve: (v: SaveRemoteResult) => void }> = [];
+    const saver = createDraftSaver("d-drain", {
+      saveRemote: async () => {
+        const d = deferred<SaveRemoteResult>();
+        gates.push({ resolve: d.resolve });
+        return d.promise;
+      },
+    });
+    const p1 = saver.requestSave(snap({ subject: "one" }), null, 1);
+    await Promise.resolve();
+    const p2 = saver.requestSave(snap({ subject: "two" }), null, 2);
+    let idle = false;
+    const idlePromise = saver.awaitIdle().then(() => {
+      idle = true;
+    });
+    gates[0].resolve({ ok: true, serverRef: { folderPath: "Drafts", uid: 1, uidValidity: "v" } });
+    await p1;
+    await Promise.resolve();
+    expect(idle).toBe(false);
+    gates[1].resolve({ ok: true, serverRef: { folderPath: "Drafts", uid: 2, uidValidity: "v" } });
+    await Promise.all([p2, idlePromise]);
+    expect(idle).toBe(true);
+  });
+});
+
 describe("createDraftSaver — generation threading", () => {
   it("passes each run's exact generation to saveRemote and echoes it back in onCompleted", async () => {
     const seenGenerations: number[] = [];

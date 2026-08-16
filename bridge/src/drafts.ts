@@ -31,7 +31,11 @@
  */
 import { z } from "zod";
 import type { ImapFlow, ListResponse } from "imapflow";
-import { acquireAccountClient, getMailboxesCached } from "./imap-connection.js";
+import {
+  acquireAccountClient,
+  getMailboxesCached,
+  TIMING_ENABLED,
+} from "./imap-connection.js";
 import {
   resolveDraftsPath,
   resolveTrashPath,
@@ -48,6 +52,35 @@ import type { MailAccount } from "./types.js";
 import { InlineImageMetadataSchema } from "./inline-images.js";
 
 export const DRAFT_ID_HEADER = "X-MailMaestro-Draft-ID";
+
+// PII-safe phase timing for Draft Save/Delete. Logs ONLY when TIMING_ENABLED
+// is on, and only coarse `op` / `phase` / `status` / `code` / `ms` — never
+// email, draftId, UID, UIDVALIDITY, subject, recipient, filename or message-id.
+interface DraftPhaseTimer {
+  mark(phase: string): void;
+  finish(status: "ok" | "error", extra?: string): void;
+}
+
+function createDraftPhaseTimer(op: "save" | "delete"): DraftPhaseTimer {
+  const started = performance.now();
+  let last = started;
+  return {
+    mark(phase: string) {
+      const now = performance.now();
+      if (TIMING_ENABLED) {
+        console.log(`[draft-timing] op=${op} phase=${phase} ms=${Math.round(now - last)}`);
+      }
+      last = now;
+    },
+    finish(status, extra = "") {
+      if (!TIMING_ENABLED) return;
+      const now = performance.now();
+      console.log(
+        `[draft-timing] op=${op} status=${status}${extra ? ` ${extra}` : ""} total=${Math.round(now - started)}`,
+      );
+    },
+  };
+}
 
 // --- IMAP capability detection ---------------------------------------------
 //
@@ -310,13 +343,20 @@ export async function executeDraftSave(
   input: DraftSavePayload,
   now: () => Date = () => new Date(),
   createSpool: typeof createMimeSpool = createMimeSpool,
+  timer?: DraftPhaseTimer,
 ): Promise<DraftSaveOk | DraftErr> {
+  const t = timer ?? createDraftPhaseTimer("save");
   await client.connect();
+  t.mark("connect");
   let spool: MimeSpool | null = null;
   try {
     const mailboxes = await client.list();
+    t.mark("list");
     const folderPath = resolveDraftsPath(mailboxes);
-    if (!folderPath) return { ok: false, error: "NO_DRAFTS_FOLDER" };
+    if (!folderPath) {
+      t.finish("error", "code=NO_DRAFTS_FOLDER");
+      return { ok: false, error: "NO_DRAFTS_FOLDER" };
+    }
 
     // Resolve a SAFE Trash path for the MOVE fallback used on non-UIDPLUS
     // servers that DO advertise RFC 6851 MOVE. Server-side resolution only:
@@ -331,6 +371,7 @@ export async function executeDraftSave(
     spool = await createSpool(draftMimePayload(input), {
       [DRAFT_ID_HEADER]: input.draftId,
     });
+    t.mark("spool");
 
     // 1) Pre-APPEND probe: does a prior copy already exist for this draftId?
     //    Prior copies become stale candidates after a successful APPEND.
@@ -350,6 +391,7 @@ export async function executeDraftSave(
         probe.release();
       }
     }
+    t.mark("pre-search");
 
     const uidPlus = client.hasUidPlus();
     const hasMove = client.hasMove();
@@ -362,10 +404,13 @@ export async function executeDraftSave(
     let appendUidValidity: string;
     try {
       const raw = await readMimeSpoolBuffer(spool, SENT_APPEND_MAX_BYTES + DRAFT_MAX_TOTAL_BYTES);
+      t.mark("buffer-read");
       const appendRes = await client.append(folderPath, raw, ["\\Draft", "\\Seen"]);
+      t.mark("append");
       appendUid = appendRes.uid ?? null;
       appendUidValidity = appendRes.uidValidity ?? "";
     } catch {
+      t.finish("error", "code=APPEND_FAILED");
       return { ok: false, error: "APPEND_FAILED" };
     }
 
@@ -457,7 +502,9 @@ export async function executeDraftSave(
           }
         }
       }
+      t.mark("cleanup");
 
+      t.finish("ok");
       return {
         ok: true,
         draftId: input.draftId,
@@ -479,17 +526,23 @@ export async function executeDraftSave(
 export async function executeDraftDelete(
   client: ImapDraftClient,
   input: DraftDeletePayload,
+  timer?: DraftPhaseTimer,
 ): Promise<DraftDeleteOk | DraftErr> {
+  const t = timer ?? createDraftPhaseTimer("delete");
   await client.connect();
+  t.mark("connect");
   try {
     const mailboxes = await client.list();
+    t.mark("list");
     const folderPath = resolveDraftsPath(mailboxes);
     if (!folderPath) {
       // No Drafts folder means there's nothing to delete: idempotent success.
+      t.finish("ok");
       return { ok: true, draftId: input.draftId, folderPath: null, deleted: false };
     }
 
     const opened = await client.openWithLock(folderPath);
+    t.mark("mailbox-lock");
     try {
       // If the caller passed a previousRef, verify UIDVALIDITY BEFORE trusting
       // any UID. On mismatch we DO NOT expunge by that UID — we still try
@@ -500,12 +553,15 @@ export async function executeDraftDelete(
       let matched: number[] = [];
       try {
         matched = await client.searchByHeader(DRAFT_ID_HEADER, input.draftId);
+        t.mark("header-search");
       } catch {
         // Coarse error — leave the copy in place, do NOT expunge blindly.
+        t.finish("error", "code=IMAP_ERROR");
         return { ok: false, error: "IMAP_ERROR" };
       }
 
       if (matched.length === 0) {
+        t.finish("ok");
         return { ok: true, draftId: input.draftId, folderPath, deleted: false };
       }
       // UIDPLUS → selective UID EXPUNGE. Otherwise → UID STORE +\Deleted on
@@ -513,9 +569,12 @@ export async function executeDraftDelete(
       if (!client.hasUidPlus()) {
         try {
           await client.softDeleteByUid(matched);
+          t.mark("delete");
         } catch {
+          t.finish("error", "code=IMAP_ERROR");
           return { ok: false, error: "IMAP_ERROR" };
         }
+        t.finish("ok");
         return { ok: true, draftId: input.draftId, folderPath, deleted: true };
       }
       // If uidValidity is stale, we still expunge by header-derived UIDs
@@ -523,9 +582,12 @@ export async function executeDraftDelete(
       void uidValidityOk;
       try {
         await client.deleteByUid(matched);
+        t.mark("delete");
       } catch {
+        t.finish("error", "code=IMAP_ERROR");
         return { ok: false, error: "IMAP_ERROR" };
       }
+      t.finish("ok");
       return { ok: true, draftId: input.draftId, folderPath, deleted: true };
     } finally {
       opened.release();
@@ -682,11 +744,14 @@ export async function saveDraft(
   deps: DraftDeps = defaultDeps(),
 ): Promise<DraftSaveOk | DraftErr> {
   const key = draftMutexKey(account.email_address, payload.draftId);
+  const t = createDraftPhaseTimer("save");
   return withDraftMutex(key, async () => {
+    t.mark("mutex-wait");
     const client = deps.createImapDraftClient(account, password);
     try {
-      return await executeDraftSave(client, payload, deps.now, deps.createMimeSpool);
+      return await executeDraftSave(client, payload, deps.now, deps.createMimeSpool, t);
     } catch {
+      t.finish("error", "code=IMAP_ERROR");
       return { ok: false, error: "IMAP_ERROR" };
     }
   });
@@ -699,11 +764,14 @@ export async function deleteDraft(
   deps: DraftDeps = defaultDeps(),
 ): Promise<DraftDeleteOk | DraftErr> {
   const key = draftMutexKey(account.email_address, payload.draftId);
+  const t = createDraftPhaseTimer("delete");
   return withDraftMutex(key, async () => {
+    t.mark("mutex-wait");
     const client = deps.createImapDraftClient(account, password);
     try {
-      return await executeDraftDelete(client, payload);
+      return await executeDraftDelete(client, payload, t);
     } catch {
+      t.finish("error", "code=IMAP_ERROR");
       return { ok: false, error: "IMAP_ERROR" };
     }
   });

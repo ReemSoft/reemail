@@ -97,7 +97,7 @@ describe("Composer staged-handle release lifecycle (mail.tsx)", () => {
       route.indexOf("async function handleDeleteDraft"),
       route.indexOf("return (\n    <div"),
     );
-    expect(del).toContain("if (!deleted)");
+    expect(del).toContain("if (!deleted.ok)");
     expect(del).toContain("releaseAllOwnedStagedHandles();");
   });
 

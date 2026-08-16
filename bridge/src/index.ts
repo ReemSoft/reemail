@@ -1350,6 +1350,11 @@ app.post("/api/draft-delete", requireKey, imapGate("interactive"), async (req, r
     const result = await deleteDraft(payload.account as any, payload.password, payload);
     if (result.ok === false) {
       const err = result.error;
+      // Surface the coarse (PII-safe) code when timing is enabled — this path
+      // was previously silent, which hid the exact delete failure.
+      if (TIMING_ENABLED) {
+        console.log(`[draft-timing] op=delete status=error code=${err}`);
+      }
       const status = err === "UIDPLUS_UNSUPPORTED" ? 409 : 500;
       return res.status(status).json({ ok: false, error: err });
     }
