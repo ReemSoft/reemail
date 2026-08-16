@@ -1039,6 +1039,10 @@ export type Database = {
         }
         Returns: boolean
       }
+      save_mail_signature: {
+        Args: { p_account_id: string; p_html: string }
+        Returns: undefined
+      }
       verify_mail_sync_tick_token: {
         Args: { p_token: string }
         Returns: boolean
