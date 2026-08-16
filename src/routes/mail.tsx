@@ -9681,7 +9681,7 @@ function Composer({
           </button>
           <MailSignatureButton
             disabled={sending}
-            mailSessionToken={session.mailSessionToken}
+            mailSessionToken={session.mailSessionToken ?? ""}
             onInsert={(html) => {
               const editor = editorRef.current;
               if (!editor) return;
