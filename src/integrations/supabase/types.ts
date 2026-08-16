@@ -538,24 +538,32 @@ export type Database = {
       }
       mail_signatures: {
         Row: {
+          account_id: string
           created_at: string
           html: string
           updated_at: string
-          user_id: string
         }
         Insert: {
+          account_id: string
           created_at?: string
           html?: string
           updated_at?: string
-          user_id: string
         }
         Update: {
+          account_id?: string
           created_at?: string
           html?: string
           updated_at?: string
-          user_id?: string
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "mail_signatures_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: true
+            referencedRelation: "mail_accounts"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       mail_sync_dedupe: {
         Row: {
