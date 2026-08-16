@@ -396,6 +396,95 @@ describe("createDraftSaver — save-trigger diagnostics", () => {
   });
 });
 
+describe("createDraftSaver — same-generation dedupe", () => {
+  it("Close generation N while N is in flight waits for the existing save and does not APPEND again", async () => {
+    const gate = deferred<SaveRemoteResult>();
+    const saveRemote = vi.fn(async () => gate.promise);
+    const saver = createDraftSaver("d-dedupe", { saveRemote });
+    const p1 = saver.requestSave(snap({ subject: "same" }), null, 32);
+    await Promise.resolve();
+    const p2 = saver.requestSave(snap({ subject: "same" }), null, 32);
+    expect(saveRemote).toHaveBeenCalledTimes(1);
+    gate.resolve({
+      ok: true,
+      serverRef: { folderPath: "Drafts", uid: 10, uidValidity: "v" },
+    });
+    await Promise.all([p1, p2]);
+    expect(saveRemote).toHaveBeenCalledTimes(1);
+  });
+
+  it("Close generation N after N was successfully saved performs ZERO additional saves", async () => {
+    const saveRemote = vi.fn(async (): Promise<SaveRemoteResult> => ({
+      ok: true,
+      serverRef: { folderPath: "Drafts", uid: 10, uidValidity: "v" },
+    }));
+    const saver = createDraftSaver("d-saved", { saveRemote });
+    await saver.requestSave(snap({ subject: "same" }), null, 32);
+    await saver.requestSave(snap({ subject: "same" }), null, 32);
+    expect(saveRemote).toHaveBeenCalledTimes(1);
+  });
+
+  it("a newer generation while N is running produces exactly one follow-up", async () => {
+    const gates: Array<{ resolve: (v: SaveRemoteResult) => void }> = [];
+    const calls: number[] = [];
+    const saver = createDraftSaver("d-next", {
+      saveRemote: async ({ generation }) => {
+        calls.push(generation);
+        const gate = deferred<SaveRemoteResult>();
+        gates.push({ resolve: gate.resolve });
+        return gate.promise;
+      },
+    });
+    const p1 = saver.requestSave(snap({ subject: "a" }), null, 32);
+    await Promise.resolve();
+    const p2 = saver.requestSave(snap({ subject: "b" }), null, 33);
+    gates[0].resolve({
+      ok: true,
+      serverRef: { folderPath: "Drafts", uid: 10, uidValidity: "v" },
+    });
+    await p1;
+    expect(calls).toEqual([32, 33]);
+    gates[1].resolve({
+      ok: true,
+      serverRef: { folderPath: "Drafts", uid: 11, uidValidity: "v" },
+    });
+    await p2;
+    expect(calls).toEqual([32, 33]);
+  });
+});
+
+describe("createDraftSaver — delete-specific drain", () => {
+  it("drops a queued follow-up and waits only for the running save", async () => {
+    const gates: Array<{ resolve: (v: SaveRemoteResult) => void }> = [];
+    const calls: number[] = [];
+    const saver = createDraftSaver("d-delete", {
+      saveRemote: async ({ generation }) => {
+        calls.push(generation);
+        const gate = deferred<SaveRemoteResult>();
+        gates.push({ resolve: gate.resolve });
+        return gate.promise;
+      },
+    });
+    const running = saver.requestSave(snap({ subject: "running" }), null, 32);
+    await Promise.resolve();
+    const pending = saver.requestSave(snap({ subject: "pending" }), null, 33);
+    expect(calls).toEqual([32]);
+    let drained = false;
+    const drain = saver.cancelPendingAndAwaitRunning().then(() => {
+      drained = true;
+    });
+    await Promise.resolve();
+    expect(drained).toBe(false);
+    gates[0].resolve({
+      ok: true,
+      serverRef: { folderPath: "Drafts", uid: 10, uidValidity: "v" },
+    });
+    await Promise.all([running, pending, drain]);
+    expect(calls).toEqual([32]);
+    expect(drained).toBe(true);
+  });
+});
+
 describe("createDraftSaver", () => {
   it("emits saving → saved on successful remote save and updates serverRef", async () => {
     const events: DraftSaveStatus[] = [];

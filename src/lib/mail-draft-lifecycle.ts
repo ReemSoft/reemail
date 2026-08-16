@@ -387,6 +387,12 @@ export interface DraftSaver {
    * APPEND from this composer.
    */
   awaitIdle(): Promise<void>;
+  /**
+   * Delete-specific drain: discard any queued follow-up save and wait only for
+   * the physically running save, if one exists. New queued work must not be
+   * started after this is called.
+   */
+  cancelPendingAndAwaitRunning(): Promise<void>;
 }
 
 export function createDraftSaver(draftId: string, opts: CreateDraftSaverOptions): DraftSaver {
@@ -395,6 +401,9 @@ export function createDraftSaver(draftId: string, opts: CreateDraftSaverOptions)
   let latestIssuedSeq = 0;
   let inFlight: Promise<void> | null = null;
   let latestKnownServerRef: DraftServerRef | null = null;
+  let runningGeneration: number | null = null;
+  let completedGeneration: number | null = null;
+  let completedStatus: DraftSaveStatus | null = null;
   // Snapshot queued while a save is in flight ("keep last edit").
   let pending: {
     snapshot: DraftSnapshot;
@@ -438,6 +447,8 @@ export function createDraftSaver(draftId: string, opts: CreateDraftSaverOptions)
     // Stale responses never fire `onCompleted`, never touch `serverRef`,
     // and therefore never mark newer content clean.
     if (mySeq !== latestIssuedSeq) return;
+    completedGeneration = generation;
+    completedStatus = result.ok ? "saved" : "failed";
     if (result.ok) {
       if (result.serverRef) {
         latestKnownServerRef = result.serverRef;
@@ -470,10 +481,12 @@ export function createDraftSaver(draftId: string, opts: CreateDraftSaverOptions)
       const p = pending;
       pending = null;
       running = true;
+      runningGeneration = p.generation;
       try {
         await run(p.snapshot, p.previousRef, p.generation, p.trigger);
       } finally {
         running = false;
+        runningGeneration = null;
       }
       // Resolve AFTER `running` is cleared so `isBusy()` reads false the
       // instant a waiter observes its own completion.
@@ -488,7 +501,21 @@ export function createDraftSaver(draftId: string, opts: CreateDraftSaverOptions)
     trigger?: DraftSaveTriggerDiagnostics,
   ): Promise<void> {
     return new Promise<void>((resolve) => {
+      if (runningGeneration === generation) {
+        if (inFlight) {
+          inFlight.then(resolve, resolve);
+          return;
+        }
+      }
+      if (completedGeneration === generation && completedStatus === "saved") {
+        resolve();
+        return;
+      }
       if (pending) {
+        if (pending.generation === generation) {
+          pending.resolvers.push(resolve);
+          return;
+        }
         // Merge: newest snapshot + newest generation win, waiters accumulate.
         pending.snapshot = snapshot;
         pending.previousRef = previousRef;
@@ -516,11 +543,22 @@ export function createDraftSaver(draftId: string, opts: CreateDraftSaverOptions)
     }
   }
 
+  async function cancelPendingAndAwaitRunning(): Promise<void> {
+    if (pending) {
+      const dropped = pending;
+      pending = null;
+      for (const resolve of dropped.resolvers) resolve();
+    }
+    const current = inFlight;
+    if (current) await current.catch(() => undefined);
+  }
+
   return {
     requestSave,
     isBusy: () => running || pending !== null,
     getStatus: () => status,
     awaitIdle,
+    cancelPendingAndAwaitRunning,
   };
 }
 

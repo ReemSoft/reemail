@@ -108,6 +108,19 @@ export function createAutosaveScheduler(opts: CreateAutosaveSchedulerOptions): A
   };
 }
 
+/**
+ * Deterministic guard for the remote-autosave scheduling boundary. A remote
+ * save may start only when the composer is dirty, not sending, and not
+ * deleting. This is deliberately independent of debounce cancellation.
+ */
+export function canStartRemoteAutosave(input: {
+  sending: boolean;
+  dirty: boolean;
+  deleteIntent: boolean;
+}): boolean {
+  return !input.sending && input.dirty && !input.deleteIntent;
+}
+
 // -------------------------------------------------------------- listeners
 
 export interface Disposable {

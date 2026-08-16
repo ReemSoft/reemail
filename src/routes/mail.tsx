@@ -948,6 +948,7 @@ import {
   attachmentSetSignature,
   decideAttachmentSizeBlock,
   createRequestBoundSignatureStore,
+  canStartRemoteAutosave,
   type RequestBoundSignatureStore,
 } from "@/lib/mail-composer-autosave";
 import { createDraftAutosaveRefreshTracker } from "@/lib/mail-autosave-refresh";
@@ -8257,9 +8258,18 @@ function Composer({
     const flushPendingRemoteSave = () => {
       remoteAutosaveTimerRef.current = null;
       const pending = pendingRemoteSaveRef.current;
-      if (!pending || sendInProgressRef.current) return;
-      // DELETE INTENT fence: never start a remote save while deleting.
-      if (deleteIntentRef.current) return;
+      if (!pending) return;
+      if (
+        !canStartRemoteAutosave({
+          sending: sendInProgressRef.current,
+          dirty: isDirtyRef.current,
+          deleteIntent: deleteIntentRef.current,
+        })
+      ) {
+        pendingRemoteSaveRef.current = null;
+        automaticSaveGenerationsRef.current.clear();
+        return;
+      }
       // Attachment-size block: after an authoritative size failure the same
       // attachment set must not be re-downloaded every autosave tick. The
       // local draft was already written by the scheduler before this ran.
@@ -8311,6 +8321,7 @@ function Composer({
         if (s.sending || sendInProgressRef.current) return;
         // DELETE INTENT fence: block any new autosave (local write + remote).
         if (deleteIntentRef.current) return;
+        if (!isDirtyRef.current) return;
         if (!inlineHydratedRef.current) return;
         const serialized = serializeInlineImages(
           editorRef.current?.innerHTML ?? "",
@@ -8499,8 +8510,10 @@ function Composer({
     });
   };
   async function requestClose(): Promise<boolean> {
+    if (deleteIntentRef.current) return false;
     if (closeFlowRef.current) return closeFlowRef.current;
     const flow = (async (): Promise<boolean> => {
+      if (deleteIntentRef.current) return false;
       // CLEAN composer closes immediately — whether or not it carries content.
       // Only a DIRTY composer prompts (Save / Discard / Cancel). A confirmed-
       // saved (or otherwise safely-remote) clean composer finalizes the local
@@ -8514,6 +8527,7 @@ function Composer({
       const choice = await new Promise<"save" | "discard" | "cancel">((resolve) => {
         setClosePrompt({ resolve });
       });
+      if (deleteIntentRef.current) return false;
       if (choice === "cancel") {
         // Release the single-flight so the user can try again.
         return false;
@@ -9322,6 +9336,7 @@ function Composer({
     reason: DraftSaveTriggerReason = "explicit",
   ): Promise<SaveNowResult> {
     if (typeof window === "undefined") return "failed";
+    if (deleteIntentRef.current) return "failed";
     const exceeded = classifyAttachmentLimitExceeded({
       normalAttachmentCount,
       inlineImageCount,
@@ -9338,6 +9353,7 @@ function Composer({
       return "failed";
     }
     if (savingNowRef.current) {
+      if (deleteIntentRef.current) return "failed";
       // Double-submit protection: reflect current effective state.
       const st = saverRef.current?.getStatus();
       if (st === "saved") return "saved_server";
@@ -9408,6 +9424,7 @@ function Composer({
         genAtRequest,
         makeDraftSaveTriggerDiagnostics(reason, genAtRequest),
       );
+      if (deleteIntentRef.current) return "failed";
       const st = saverRef.current?.getStatus();
       if (st === "saved") {
         toast.success(tr("تم حفظ المسودّة"));
@@ -9433,6 +9450,7 @@ function Composer({
   // bounded loop, the composer closes ONLY if the latest generation was
   // remotely saved AND the composer is still clean — never while dirty.
   async function handleSaveAsDraft() {
+    if (deleteIntentRef.current) return;
     let result: SaveNowResult = "empty";
     for (let attempt = 0; attempt < 5; attempt++) {
       result = await saveDraftNow("explicit");
@@ -9466,7 +9484,7 @@ function Composer({
     // Wait for any in-flight remote save (running AND coalesced) to settle so
     // the delete never races a still-running APPEND from this composer. The
     // latest serverRef is guaranteed to be settled before the delete starts.
-    await saverRef.current?.awaitIdle();
+    await saverRef.current?.cancelPendingAndAwaitRunning();
     const deleted = await deleteSavedDraft({
       // A local-only status can mean the APPEND succeeded but its response
       // was lost. Probe by draftId so explicit deletion never leaves a ghost.

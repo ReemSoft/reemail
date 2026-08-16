@@ -7,6 +7,7 @@ import {
   attachmentSetSignature,
   decideAttachmentSizeBlock,
   createRequestBoundSignatureStore,
+  canStartRemoteAutosave,
 } from "../mail-composer-autosave";
 import { createSingleFlight } from "../single-flight";
 
@@ -128,6 +129,15 @@ describe("createAutosaveScheduler", () => {
     // Debounce keeps resetting; nothing fires while activity continues.
     expect(onFire).toHaveBeenCalledTimes(0);
     vi.useRealTimers();
+  });
+});
+
+describe("canStartRemoteAutosave", () => {
+  it("requires dirty and rejects sending/delete intent", () => {
+    expect(canStartRemoteAutosave({ sending: false, dirty: true, deleteIntent: false })).toBe(true);
+    expect(canStartRemoteAutosave({ sending: false, dirty: false, deleteIntent: false })).toBe(false);
+    expect(canStartRemoteAutosave({ sending: true, dirty: true, deleteIntent: false })).toBe(false);
+    expect(canStartRemoteAutosave({ sending: false, dirty: true, deleteIntent: true })).toBe(false);
   });
 });
 

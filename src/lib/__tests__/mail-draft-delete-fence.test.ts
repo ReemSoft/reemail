@@ -13,15 +13,42 @@ describe("delete-intent fence (mail.tsx)", () => {
 
   it("blocks NEW autosaves while delete intent is active", () => {
     const src = route();
-    // The automatic remote-save flush and the scheduler fire both fence.
-    expect(src).toContain("// DELETE INTENT fence: never start a remote save while deleting.");
-    expect(src).toContain("// DELETE INTENT fence: block any new autosave (local write + remote).");
-    expect(src).toContain("if (deleteIntentRef.current) return;");
+    expect(src).toContain("canStartRemoteAutosave(");
+    expect(src).toContain("if (!isDirtyRef.current) return;");
+    expect(src).toContain("deleteIntent: deleteIntentRef.current");
+  });
+
+  it("fences Close from saving or closing while delete intent is active", () => {
+    const src = route();
+    const requestClose = src.slice(
+      src.indexOf("async function requestClose()"),
+      src.indexOf("const requestCloseRef = useRef"),
+    );
+    expect(requestClose).toContain("if (deleteIntentRef.current) return false;");
+  });
+
+  it("fences Save-as-Draft from saving after delete intent", () => {
+    const src = route();
+    const saveAs = src.slice(
+      src.indexOf("async function handleSaveAsDraft()"),
+      src.indexOf("async function handleDeleteDraft()"),
+    );
+    expect(saveAs).toContain("if (deleteIntentRef.current) return;");
+  });
+
+  it("fences saveDraftNow before and after the save await", () => {
+    const src = route();
+    const saveNow = src.slice(
+      src.indexOf("async function saveDraftNow("),
+      src.indexOf("async function handleSaveAsDraft()"),
+    );
+    expect(saveNow).toContain('if (deleteIntentRef.current) return "failed";');
+    expect(saveNow).toContain("if (deleteIntentRef.current) return \"failed\";");
   });
 
   it("waits for the in-flight save before the remote delete", () => {
     const src = route();
-    expect(src).toContain("await saverRef.current?.awaitIdle();");
+    expect(src).toContain("await saverRef.current?.cancelPendingAndAwaitRunning();");
   });
 
   it("does NOT re-arm autosave after a failed delete", () => {
