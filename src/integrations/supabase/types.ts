@@ -538,24 +538,32 @@ export type Database = {
       }
       mail_signatures: {
         Row: {
+          account_id: string
           created_at: string
           html: string
           updated_at: string
-          user_id: string
         }
         Insert: {
+          account_id: string
           created_at?: string
           html?: string
           updated_at?: string
-          user_id: string
         }
         Update: {
+          account_id?: string
           created_at?: string
           html?: string
           updated_at?: string
-          user_id?: string
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "mail_signatures_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: true
+            referencedRelation: "mail_accounts"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       mail_sync_dedupe: {
         Row: {
@@ -1030,6 +1038,10 @@ export type Database = {
           p_status: string
         }
         Returns: boolean
+      }
+      save_mail_signature: {
+        Args: { p_account_id: string; p_html: string }
+        Returns: undefined
       }
       verify_mail_sync_tick_token: {
         Args: { p_token: string }
