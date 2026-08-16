@@ -989,6 +989,11 @@ import {
   type IndexFolderCount,
 } from "@/lib/mail-index-counts.functions";
 import { resolveSyncPath } from "@/lib/mail-sync-path";
+import {
+  createSavedDraftGuard,
+  type SavedDraftGuard,
+  type SavedDraftIdentity,
+} from "@/lib/mail-saved-draft-guard";
 import { indexUpdateFlag } from "@/lib/mail-flags.functions";
 import { indexMoveMessage } from "@/lib/mail-move.functions";
 import { indexDeleteMessage } from "@/lib/mail-delete.functions";
@@ -2569,6 +2574,9 @@ function useMailData(session: MailSession | null) {
         loadMessages,
         loadCounts: loadCountsFast,
       }),
+    // Non-destructive Draft recovery: the just-saved readability guard triggers
+    // one incremental (no /api/folders) before a single message-open retry.
+    incrementalNow,
     onAfterSend,
     onDraftCreated: () => {
       bumpCountsGen();
@@ -2739,6 +2747,7 @@ function MailApp() {
     useMock,
     loadCounts,
     refresh: rawRefresh,
+    incrementalNow,
     onAfterSend,
     onDraftCreated,
     refreshAfterComposerClose,
@@ -2791,6 +2800,31 @@ function MailApp() {
 
   // BLOCKER_6 — account identity for origin-tracker calls in this scope.
   const currentAccountId = session?.account.id ?? null;
+
+  // Just-saved Draft readability guard (in-memory, per browser session).
+  // A first NOT_FOUND for a Draft we just saved is NOT proof of a ghost.
+  const savedDraftGuardRef = useRef<SavedDraftGuard | null>(null);
+  if (!savedDraftGuardRef.current) savedDraftGuardRef.current = createSavedDraftGuard();
+
+  // Clear a stale just-saved Draft marker when the account/session changes.
+  const lastDraftGuardAccountRef = useRef<string | null>(null);
+  useEffect(() => {
+    const prev = lastDraftGuardAccountRef.current;
+    lastDraftGuardAccountRef.current = currentAccountId;
+    if (prev && prev !== currentAccountId) savedDraftGuardRef.current?.clearAll();
+  }, [currentAccountId]);
+
+  // Plumbed from the Composer: a confirmed remote save records the draft's
+  // exact remote identity; delete/discard/send clears it.
+  const handleDraftSaved = useCallback((identity: SavedDraftIdentity) => {
+    savedDraftGuardRef.current?.record(identity);
+  }, []);
+  const handleDraftDeleted = useCallback(
+    (draftId: string) => {
+      if (currentAccountId) savedDraftGuardRef.current?.clearDraft(currentAccountId, draftId);
+    },
+    [currentAccountId],
+  );
 
   // Serialize Refresh with a single-flight guard (ref, not React state) so a
   // double-click that fires before the next render can't spawn a second
@@ -2970,7 +3004,7 @@ function MailApp() {
     [],
   );
 
-  type ClientMessageSource = "memory" | "server-cache" | "imap" | "error";
+  type ClientMessageSource = "memory" | "server-cache" | "imap" | "error" | "draft-syncing";
   type ClientMessageResult = { message: MailMessage | null; source: ClientMessageSource };
   type MessageOpenContext =
     | { kind: "current-list"; intent?: MessageOpenIntent }
@@ -3020,6 +3054,82 @@ function MailApp() {
   };
   const inflight = useRef<Map<string, InflightMessage>>(new Map());
   const activeScopeGenerationRef = useRef(0);
+
+  // Non-destructive recovery for a just-saved Draft whose first interactive
+  // open returned NOT_FOUND (the provider may not yet expose the freshly
+  // APPENDed UID to the interactive connection). Runs at most ONE incremental
+  // (no /api/folders) + ONE message-open retry per exact identity; never
+  // tombstones, never hides the row, never decrements the Draft count.
+  const recoverJustSavedDraft = useCallback(
+    async (
+      identity: SavedDraftIdentity,
+      uid: number,
+      uidValidity: string,
+      scope: { companyId: string; accountId: string },
+      base: MailMessage | null,
+    ): Promise<ClientMessageResult> => {
+      const guard = savedDraftGuardRef.current;
+      if (!guard || !session) return { message: null, source: "error" };
+
+      if (!guard.hasRecoveryAttempted(identity)) {
+        guard.markRecoveryAttempted(identity);
+        // ONE non-destructive Draft incremental. If it is busy/fails, the
+        // retry still runs; never a repeated loop.
+        try {
+          await incrementalNow({ suppressOnSynced: true });
+        } catch {
+          /* retry the open regardless */
+        }
+        // ONE message-open retry for the SAME uid.
+        try {
+          const retry = await openMsg({
+            data: {
+              mailSessionToken: session.mailSessionToken ?? "",
+              password: session.password,
+              folder: "drafts",
+              uid,
+              lane: "interactive",
+              allowCache: base != null,
+            },
+          });
+          let recovered: MailMessage | null = null;
+          let recoveredSource: ClientMessageSource = "imap";
+          if (retry.ok && retry.source === "imap" && retry.message) {
+            recovered = retry.message;
+          } else if (retry.ok && retry.source === "cache" && base) {
+            recovered = {
+              ...base,
+              body: retry.body.bodyHtml,
+              preview: retry.body.preview || base.preview,
+              inlineParts: retry.body.inlineParts,
+              inlineImages: retry.body.inlineImages,
+              attachments: retry.body.attachments,
+              mailedBy: retry.body.mailedBy ?? base.mailedBy,
+              signedBy: retry.body.signedBy ?? base.signedBy,
+              security: retry.body.security ?? base.security,
+              replyTo: retry.body.replyTo ?? base.replyTo,
+              hasAttachments: retry.body.attachments.length > 0,
+              uidValidity: base.uidValidity ?? retry.body.uidValidity,
+            };
+            recoveredSource = "server-cache";
+          }
+          if (recovered) {
+            const patched = applyPendingOne(recovered);
+            messageMemoryRef.current?.set(scope, patched);
+            guard.clearDraft(identity.accountId, identity.draftId);
+            return { message: patched, source: recoveredSource };
+          }
+        } catch {
+          /* fall through to the transient syncing state */
+        }
+      }
+
+      // Still not openable (or recovery already attempted): leave the row
+      // visible and surface a non-destructive transient state — never a ghost.
+      return { message: null, source: "draft-syncing" };
+    },
+    [session, openMsg, incrementalNow, applyPendingOne],
+  );
 
   const fetchMessage = useCallback(
     async (
@@ -3159,6 +3269,17 @@ function MailApp() {
             // overwrite an in-flight optimistic star/read the user just set.
             const patched = applyPendingOne(merged);
             messageMemoryRef.current?.set(scope, patched);
+            // A successful open of a just-saved Draft clears its readability
+            // marker (section 6A) so a later real ghost for the SAME identity
+            // can never be suppressed.
+            if (parsed.folder === "drafts" && currentAccountId && uidValidity) {
+              const matched = savedDraftGuardRef.current?.find(
+                currentAccountId,
+                uidValidity,
+                parsed.uid,
+              );
+              if (matched) savedDraftGuardRef.current?.clearDraft(matched.accountId, matched.draftId);
+            }
             return {
               message: patched,
               source: result.ok && result.source === "cache" ? "server-cache" : "imap",
@@ -3170,6 +3291,19 @@ function MailApp() {
           if (!result.ok && result.code === "NOT_FOUND") {
             if (lane === "background" || context.kind === "historical") {
               return { message: null, source: "error" } as ClientMessageResult;
+            }
+
+            // Just-saved Draft readability guard: a first NOT_FOUND for a
+            // Draft we successfully saved THIS session is NOT proof of a ghost
+            // (the provider may not yet expose the fresh APPEND UID to the
+            // interactive connection). Intercept only the exact identity.
+            const protectedDraft =
+              parsed.folder === "drafts" && currentAccountId && uidValidity
+                ? savedDraftGuardRef.current?.find(currentAccountId, uidValidity, parsed.uid) ??
+                  null
+                : null;
+            if (protectedDraft && uidValidity) {
+              return recoverJustSavedDraft(protectedDraft, parsed.uid, uidValidity, scope, base);
             }
 
             if (parsed.folder !== "all") {
@@ -3201,7 +3335,7 @@ function MailApp() {
       inflight.current.set(requestKey, { promise: p, controller, lane });
       return p;
     },
-    [session, openMsg, applyPendingOne, currentAccountId, cleanupGhost],
+    [session, openMsg, applyPendingOne, currentAccountId, cleanupGhost, recoverJustSavedDraft],
   );
 
   const openHistoricalMessage = useCallback(
@@ -3746,6 +3880,12 @@ function MailApp() {
             elapsedMs: Math.round(performance.now() - startedAt),
           });
         }
+      } else if (result.source === "draft-syncing") {
+        // Non-destructive transient state: the just-saved Draft is not yet
+        // openable. Keep the row visible and never surface a generic failure.
+        setReading(false);
+        toast.info(tr("المسودة لا تزال قيد المزامنة، حاول فتحها بعد لحظات."));
+        return;
       } else if (!cached) throw new Error(tr("فشل فتح الرسالة"));
 
       // M4-C: Drafts folder → open the message directly inside the composer
@@ -5344,6 +5484,8 @@ function MailApp() {
               }}
               onSent={onAfterSend}
               onDraftCreated={onDraftCreated}
+              onDraftSaved={handleDraftSaved}
+              onDraftDeleted={handleDraftDeleted}
             />
           ) : selectedMessage ? (
             <MessageView
@@ -6867,12 +7009,16 @@ function Composer({
   onClose,
   onSent,
   onDraftCreated,
+  onDraftSaved,
+  onDraftDeleted,
 }: {
   session: MailSession;
   initial?: ComposeInitial | null;
   onClose: (options: { refreshDrafts: boolean }) => void;
   onSent: (info: PostSendInfo) => void;
   onDraftCreated: () => void;
+  onDraftSaved: (identity: SavedDraftIdentity) => void;
+  onDraftDeleted: (draftId: string) => void;
 }) {
   // Draft storage keying is owned by mail-draft-lifecycle (v3 + auto-migration).
   const { confirm } = useConfirm();
@@ -7396,6 +7542,17 @@ function Composer({
           if (serverRef && typeof window !== "undefined") {
             serverRefRef.current = serverRef;
             updateDraftDocServerRef(window.localStorage, accountEmail, draftId, serverRef);
+          }
+          if (serverRef) {
+            // Record the exact remote identity so a first NOT_FOUND right after
+            // this save is protected from destructive ghost cleanup.
+            onDraftSaved({
+              accountId,
+              draftId,
+              folderPath: serverRef.folderPath,
+              uidValidity: serverRef.uidValidity,
+              uid: serverRef.uid,
+            });
           }
         } else if (status === "failed") {
           // Diagnostic: capture the coarse code so the UI can surface it
@@ -8163,6 +8320,8 @@ function Composer({
       }
       // Discard abandons every staged handle owned by this composer session.
       releaseAllOwnedStagedHandles();
+      // A discarded draft must no longer be protected from ghost cleanup.
+      onDraftDeleted(draftId);
       // Force clean so beforeunload/guard don't re-trap on the way out.
       savedGenerationRef.current = generationRef.current;
       lastSavedAtRef.current = Date.now();
@@ -8782,6 +8941,8 @@ function Composer({
         });
       }
       toast.success(tr("تم إرسال الرسالة"));
+      // A sent draft is gone — clear any just-saved readability marker.
+      onDraftDeleted(draftId);
       onClose({ refreshDrafts: false });
       onSent({
         messageId: result.messageId,
@@ -9073,6 +9234,8 @@ function Composer({
       // Explicit draft delete abandons every staged handle owned by this
       // composer session (the draft will no longer reference them).
       releaseAllOwnedStagedHandles();
+      // A deleted draft must no longer be protected from ghost cleanup.
+      onDraftDeleted(draftId);
     }
   }
 

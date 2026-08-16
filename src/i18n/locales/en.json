@@ -395,6 +395,7 @@
   "فشل حذف {{failed}} من {{total}} رسالة": "Failed to delete {{failed}} of {{total}} messages",
   "فشل حذف الرسالة": "Failed to delete message",
   "فشل فتح الرسالة": "Failed to open message",
+  "المسودة لا تزال قيد المزامنة، حاول فتحها بعد لحظات.": "This draft is still syncing — try opening it again in a moment.",
   "فشل نقل ${failedIds.length} من ${ids.length} رسالة": "Failed to move ${failedIds.length} of ${ids.length} messages",
   "فشل نقل ${failedIds.length} من ${ids.length} رسالة إلى المهملات": "Failed to move ${failedIds.length} of ${ids.length} messages to Trash",
   "فشل نقل {{failed}} من {{total}} رسالة": "Failed to move {{failed}} of {{total}} messages",
