@@ -17,6 +17,7 @@ import { Route as CompanyRouteImport } from './routes/company'
 import { Route as AuthenticatedRouteRouteImport } from './routes/_authenticated/route'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as ApiMailStagedReleaseRouteImport } from './routes/api/mail-staged-release'
+import { Route as ApiMailSignatureImageRouteImport } from './routes/api/mail-signature-image'
 import { Route as ApiMailSentCopyStatusRouteImport } from './routes/api/mail-sent-copy-status'
 import { Route as ApiMailSendV2RouteImport } from './routes/api/mail-send-v2'
 import { Route as ApiMailSendRouteImport } from './routes/api/mail-send'
@@ -65,6 +66,11 @@ const IndexRoute = IndexRouteImport.update({
 const ApiMailStagedReleaseRoute = ApiMailStagedReleaseRouteImport.update({
   id: '/api/mail-staged-release',
   path: '/api/mail-staged-release',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiMailSignatureImageRoute = ApiMailSignatureImageRouteImport.update({
+  id: '/api/mail-signature-image',
+  path: '/api/mail-signature-image',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiMailSentCopyStatusRoute = ApiMailSentCopyStatusRouteImport.update({
@@ -136,6 +142,7 @@ export interface FileRoutesByFullPath {
   '/api/mail-send': typeof ApiMailSendRoute
   '/api/mail-send-v2': typeof ApiMailSendV2Route
   '/api/mail-sent-copy-status': typeof ApiMailSentCopyStatusRoute
+  '/api/mail-signature-image': typeof ApiMailSignatureImageRoute
   '/api/mail-staged-release': typeof ApiMailStagedReleaseRoute
   '/api/public/hooks/mail-sync-tick': typeof ApiPublicHooksMailSyncTickRoute
 }
@@ -155,6 +162,7 @@ export interface FileRoutesByTo {
   '/api/mail-send': typeof ApiMailSendRoute
   '/api/mail-send-v2': typeof ApiMailSendV2Route
   '/api/mail-sent-copy-status': typeof ApiMailSentCopyStatusRoute
+  '/api/mail-signature-image': typeof ApiMailSignatureImageRoute
   '/api/mail-staged-release': typeof ApiMailStagedReleaseRoute
   '/api/public/hooks/mail-sync-tick': typeof ApiPublicHooksMailSyncTickRoute
 }
@@ -176,6 +184,7 @@ export interface FileRoutesById {
   '/api/mail-send': typeof ApiMailSendRoute
   '/api/mail-send-v2': typeof ApiMailSendV2Route
   '/api/mail-sent-copy-status': typeof ApiMailSentCopyStatusRoute
+  '/api/mail-signature-image': typeof ApiMailSignatureImageRoute
   '/api/mail-staged-release': typeof ApiMailStagedReleaseRoute
   '/api/public/hooks/mail-sync-tick': typeof ApiPublicHooksMailSyncTickRoute
 }
@@ -197,6 +206,7 @@ export interface FileRouteTypes {
     | '/api/mail-send'
     | '/api/mail-send-v2'
     | '/api/mail-sent-copy-status'
+    | '/api/mail-signature-image'
     | '/api/mail-staged-release'
     | '/api/public/hooks/mail-sync-tick'
   fileRoutesByTo: FileRoutesByTo
@@ -216,6 +226,7 @@ export interface FileRouteTypes {
     | '/api/mail-send'
     | '/api/mail-send-v2'
     | '/api/mail-sent-copy-status'
+    | '/api/mail-signature-image'
     | '/api/mail-staged-release'
     | '/api/public/hooks/mail-sync-tick'
   id:
@@ -236,6 +247,7 @@ export interface FileRouteTypes {
     | '/api/mail-send'
     | '/api/mail-send-v2'
     | '/api/mail-sent-copy-status'
+    | '/api/mail-signature-image'
     | '/api/mail-staged-release'
     | '/api/public/hooks/mail-sync-tick'
   fileRoutesById: FileRoutesById
@@ -256,6 +268,7 @@ export interface RootRouteChildren {
   ApiMailSendRoute: typeof ApiMailSendRoute
   ApiMailSendV2Route: typeof ApiMailSendV2Route
   ApiMailSentCopyStatusRoute: typeof ApiMailSentCopyStatusRoute
+  ApiMailSignatureImageRoute: typeof ApiMailSignatureImageRoute
   ApiMailStagedReleaseRoute: typeof ApiMailStagedReleaseRoute
   ApiPublicHooksMailSyncTickRoute: typeof ApiPublicHooksMailSyncTickRoute
 }
@@ -316,6 +329,13 @@ declare module '@tanstack/react-router' {
       path: '/api/mail-staged-release'
       fullPath: '/api/mail-staged-release'
       preLoaderRoute: typeof ApiMailStagedReleaseRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/mail-signature-image': {
+      id: '/api/mail-signature-image'
+      path: '/api/mail-signature-image'
+      fullPath: '/api/mail-signature-image'
+      preLoaderRoute: typeof ApiMailSignatureImageRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/mail-sent-copy-status': {
@@ -418,6 +438,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiMailSendRoute: ApiMailSendRoute,
   ApiMailSendV2Route: ApiMailSendV2Route,
   ApiMailSentCopyStatusRoute: ApiMailSentCopyStatusRoute,
+  ApiMailSignatureImageRoute: ApiMailSignatureImageRoute,
   ApiMailStagedReleaseRoute: ApiMailStagedReleaseRoute,
   ApiPublicHooksMailSyncTickRoute: ApiPublicHooksMailSyncTickRoute,
 }
