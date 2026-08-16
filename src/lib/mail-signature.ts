@@ -1,7 +1,7 @@
 /**
  * Email signature block helpers.
  *
- * The signature is stored once per user (table `mail_signatures`) and inserted
+ * The signature is stored once per mail account (table `mail_signatures`) and inserted
  * into the composer on demand. The block is marked with a CLASS (not a data
  * attribute) because the outgoing sanitizer runs with `ALLOW_DATA_ATTR: false`,
  * so only classes survive a draft round-trip — which is what lets a second

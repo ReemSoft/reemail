@@ -1,53 +1,43 @@
 /**
  * Signature storage (browser only).
  *
- * One row per authenticated user in `mail_signatures`, guarded by RLS. The
+ * One row per verified mail account in `mail_signatures`. The
  * value is fetched LAZILY (first time the composer needs it) and then kept in
  * a module-level cache for the rest of the tab session, so opening the app,
  * opening a message, or opening the composer again costs zero extra requests.
  */
-import { supabase } from "@/integrations/supabase/client";
 import { sanitizeSignatureHtml } from "./mail-signature";
+import { loadMailSignature, saveMailSignature } from "./mail-signature.functions";
 
-let cache: string | null = null;
-let inflight: Promise<string> | null = null;
+const cache = new Map<string, string>();
+const inflight = new Map<string, Promise<string>>();
 
 /** Cached signature HTML, or null when it has not been loaded yet. */
-export function peekSignature(): string | null {
-  return cache;
+export function peekSignature(mailSessionToken: string): string | null {
+  return cache.get(mailSessionToken) ?? null;
 }
 
-export async function loadSignature(): Promise<string> {
-  if (cache !== null) return cache;
-  if (inflight) return inflight;
-  inflight = (async () => {
-    const { data, error } = await supabase
-      .from("mail_signatures")
-      .select("html")
-      .maybeSingle();
-    if (error) throw error;
-    cache = sanitizeSignatureHtml(data?.html ?? "");
-    return cache;
-  })().finally(() => {
-    inflight = null;
-  });
-  return inflight;
+export async function loadSignature(mailSessionToken: string): Promise<string> {
+  const cached = cache.get(mailSessionToken);
+  if (cached !== undefined) return cached;
+  const pending = inflight.get(mailSessionToken);
+  if (pending) return pending;
+  const request = loadMailSignature({ data: { mailSessionToken } })
+    .then((result) => {
+      if (!result.ok) throw new Error(result.code);
+      const clean = sanitizeSignatureHtml(result.html);
+      cache.set(mailSessionToken, clean);
+      return clean;
+    })
+    .finally(() => inflight.delete(mailSessionToken));
+  inflight.set(mailSessionToken, request);
+  return request;
 }
 
-export async function saveSignature(html: string): Promise<string> {
+export async function saveSignature(mailSessionToken: string, html: string): Promise<string> {
   const clean = sanitizeSignatureHtml(html);
-  // The browser client already carries the authenticated session used by RLS.
-  // Avoid a second Auth API round-trip here: it can fail independently while
-  // the valid Data API session is still active, preventing an otherwise valid
-  // save. The database policy remains the authoritative ownership check.
-  const { data: auth, error: sessionError } = await supabase.auth.getSession();
-  if (sessionError) throw sessionError;
-  const userId = auth.session?.user.id;
-  if (!userId) throw new Error("NOT_AUTHENTICATED");
-  const { error } = await supabase
-    .from("mail_signatures")
-    .upsert({ user_id: userId, html: clean }, { onConflict: "user_id" });
-  if (error) throw error;
-  cache = clean;
+  const result = await saveMailSignature({ data: { mailSessionToken, html: clean } });
+  if (!result.ok) throw new Error(result.code);
+  cache.set(mailSessionToken, clean);
   return clean;
 }
