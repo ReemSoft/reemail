@@ -42,9 +42,10 @@ export const saveMailSignature = createServerFn({ method: "POST" })
     } catch {
       return { ok: false, code: "INVALID_TOKEN" };
     }
-    const result = await supabaseAdmin
-      .from("mail_signatures")
-      .upsert({ account_id: accountId, html: data.html }, { onConflict: "account_id" });
+    const result = await supabaseAdmin.rpc("save_mail_signature", {
+      p_account_id: accountId,
+      p_html: data.html,
+    });
     if (result.error) return { ok: false, code: "SAVE_FAILED" };
     return { ok: true, html: data.html };
   });

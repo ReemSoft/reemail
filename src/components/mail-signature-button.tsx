@@ -99,10 +99,12 @@ export function MailSignatureButton({
     <>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <button
+          <Button
             type="button"
-            disabled={disabled || busy}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-input bg-background px-2.5 py-2 text-xs text-muted-foreground transition hover:bg-muted hover:text-foreground disabled:opacity-40 sm:px-3"
+            disabled={disabled || busy || !mailSessionToken}
+            variant="outline"
+            size="sm"
+            className="gap-1.5 px-2.5 text-xs text-muted-foreground sm:px-3"
             aria-label={tr("إدخال التوقيع")}
             title={tr("إدخال التوقيع")}
           >
@@ -112,7 +114,7 @@ export function MailSignatureButton({
               <PenLine className="h-4 w-4" />
             )}
             <span className="hidden sm:inline">{tr("إدخال التوقيع")}</span>
-          </button>
+          </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" className="min-w-[190px]">
           <DropdownMenuItem onSelect={() => void handleInsert()} className="gap-2 text-xs">

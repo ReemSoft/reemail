@@ -6999,6 +6999,7 @@ function Composer({
   );
   const [files, setFiles] = useState<File[]>([]);
   const [inlineImages, setInlineImages] = useState<InlineComposeImage[]>([]);
+  const [signatureImagesLoading, setSignatureImagesLoading] = useState(0);
   const [uploadState, setUploadState] = useState<
     Map<File, { status: "uploading" | "ready" | "failed"; progress: number }>
   >(new Map());
@@ -9680,7 +9681,7 @@ function Composer({
             <span className="hidden sm:inline">{tr("إرفاق")}</span>
           </button>
           <MailSignatureButton
-            disabled={sending}
+            disabled={sending || signatureImagesLoading > 0}
             mailSessionToken={session.mailSessionToken ?? ""}
             onInsert={(html) => {
               const editor = editorRef.current;
@@ -9688,6 +9689,7 @@ function Composer({
               insertSignatureIntoEditor(editor, html);
               for (const img of editor.querySelectorAll<HTMLImageElement>(`.${SIGNATURE_CLASS} img`)) {
                 if (img.dataset.mmInlineId || !/^https:\/\//i.test(img.src)) continue;
+                setSignatureImagesLoading((count) => count + 1);
                 void fetch(img.src)
                   .then(async (response) => {
                     if (!response.ok) throw new Error("SIGNATURE_IMAGE_FETCH_FAILED");
@@ -9705,7 +9707,12 @@ function Composer({
                     setInlineImages((current) => [...current, image]);
                     notifyEditorChange();
                   })
-                  .catch(() => toast.error(tr("تعذّر إدراج صورة التوقيع")));
+                  .catch(() => {
+                    img.remove();
+                    notifyEditorChange();
+                    toast.error(tr("تعذّر إدراج صورة التوقيع"));
+                  })
+                  .finally(() => setSignatureImagesLoading((count) => Math.max(0, count - 1)));
               }
               notifyEditorChange();
             }}
