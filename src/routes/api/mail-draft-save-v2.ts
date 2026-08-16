@@ -33,6 +33,7 @@ export const Route = createFileRoute("/api/mail-draft-save-v2")({
                 bodyHtml: typeof body?.bodyHtml === "string" ? body.bodyHtml : undefined,
                 bodyText: typeof body?.bodyText === "string" ? body.bodyText : undefined,
                 previousRef: body?.previousRef,
+                diagnostics: body?.diagnostics,
                 attachmentHandles: Array.isArray(body?.attachmentHandles)
                   ? body.attachmentHandles
                   : [],

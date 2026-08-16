@@ -994,6 +994,14 @@ import {
   type SavedDraftGuard,
   type SavedDraftIdentity,
 } from "@/lib/mail-saved-draft-guard";
+import type {
+  DraftSaveTriggerDiagnostics,
+  DraftSaveTriggerReason,
+} from "@/lib/mail-draft-save-diagnostics";
+import {
+  decidePreNetworkDraftOpen,
+  decideSettledDraftFetch,
+} from "@/lib/mail-stale-draft-open";
 import { indexUpdateFlag } from "@/lib/mail-flags.functions";
 import { indexMoveMessage } from "@/lib/mail-move.functions";
 import { indexDeleteMessage } from "@/lib/mail-delete.functions";
@@ -2816,9 +2824,36 @@ function MailApp() {
 
   // Plumbed from the Composer: a confirmed remote save records the draft's
   // exact remote identity; delete/discard/send clears it.
-  const handleDraftSaved = useCallback((identity: SavedDraftIdentity) => {
-    savedDraftGuardRef.current?.record(identity);
-  }, []);
+  const handleDraftSaved = useCallback(
+    (
+      identity: SavedDraftIdentity,
+      previousRef?: { folderPath: string; uid: number; uidValidity: string } | null,
+    ) => {
+      if (!currentAccountId) {
+        savedDraftGuardRef.current?.record(identity);
+        return;
+      }
+      if (
+        previousRef &&
+        previousRef.uid !== identity.uid &&
+        previousRef.folderPath === identity.folderPath
+      ) {
+        savedDraftGuardRef.current?.recordReplacement(
+          {
+            accountId: currentAccountId,
+            draftId: identity.draftId,
+            folderPath: previousRef.folderPath,
+            uidValidity: previousRef.uidValidity,
+            uid: previousRef.uid,
+          },
+          identity,
+        );
+        return;
+      }
+      savedDraftGuardRef.current?.record(identity);
+    },
+    [currentAccountId],
+  );
   const handleDraftDeleted = useCallback(
     (draftId: string) => {
       if (currentAccountId) savedDraftGuardRef.current?.clearDraft(currentAccountId, draftId);
@@ -3067,6 +3102,7 @@ function MailApp() {
       uidValidity: string,
       scope: { companyId: string; accountId: string },
       base: MailMessage | null,
+      preserveAlias = false,
     ): Promise<ClientMessageResult> => {
       const guard = savedDraftGuardRef.current;
       if (!guard || !session) return { message: null, source: "error" };
@@ -3116,7 +3152,7 @@ function MailApp() {
           if (recovered) {
             const patched = applyPendingOne(recovered);
             messageMemoryRef.current?.set(scope, patched);
-            guard.clearDraft(identity.accountId, identity.draftId);
+            if (!preserveAlias) guard.clearDraft(identity.accountId, identity.draftId);
             return { message: patched, source: recoveredSource };
           }
         } catch {
@@ -3129,6 +3165,61 @@ function MailApp() {
       return { message: null, source: "draft-syncing" };
     },
     [session, openMsg, incrementalNow, applyPendingOne],
+  );
+
+  // Draft-only stale-revision redirect. It performs ONE current-UID fetch and
+  // never touches Inbox/Sent or the normal successful open path.
+  const openDraftByIdentity = useCallback(
+    async (
+      identity: SavedDraftIdentity,
+      signal?: AbortSignal,
+    ): Promise<ClientMessageResult> => {
+      if (!session) return { message: null, source: "error" };
+      const scope = {
+        companyId: session.company?.id ?? session.account.company_id,
+        accountId: session.account.id,
+      };
+      if (currentAccountId) {
+        savedDraftGuardRef.current?.markInFlight(
+          identity.accountId,
+          identity.uidValidity,
+          identity.uid,
+        );
+      }
+      try {
+        const opened = await openMsg({
+          data: {
+            mailSessionToken: session.mailSessionToken ?? "",
+            password: session.password,
+            folder: "drafts",
+            uid: identity.uid,
+            lane: "interactive",
+            allowCache: false,
+          },
+          signal,
+        });
+        if (opened.ok && opened.source === "imap" && opened.message) {
+          const patched = applyPendingOne(opened.message);
+          messageMemoryRef.current?.set(scope, patched);
+          return { message: patched, source: "imap" };
+        }
+        if (!opened.ok && opened.code === "NOT_FOUND") {
+          return recoverJustSavedDraft(identity, identity.uid, identity.uidValidity, scope, null, true);
+        }
+        return { message: null, source: "error" };
+      } catch {
+        return { message: null, source: "error" };
+      } finally {
+        if (currentAccountId) {
+          savedDraftGuardRef.current?.releaseInFlight(
+            identity.accountId,
+            identity.uidValidity,
+            identity.uid,
+          );
+        }
+      }
+    },
+    [session, openMsg, applyPendingOne, recoverJustSavedDraft],
   );
 
   const fetchMessage = useCallback(
@@ -3153,10 +3244,6 @@ function MailApp() {
         accountId: session.account.id,
       };
       const suppliedBase = context.kind === "historical" ? context.base : null;
-      const cached = suppliedBase
-        ? (messageMemoryRef.current?.get(scope, suppliedBase) ?? undefined)
-        : messageCache.current.get(id);
-      if (cached) return Promise.resolve({ message: cached, source: "memory" });
       const parsed = parseMessageId(id);
       if (!parsed) return Promise.resolve({ message: null, source: "error" });
       // Envelope row from the list: a cache HIT only ships the body, so the
@@ -3176,9 +3263,36 @@ function MailApp() {
       if (lane === "background" && !uidValidity) {
         return Promise.resolve({ message: null, source: "error" });
       }
+      // PART B: Draft stale-revision fence. If this exact Draft UID was already
+      // replaced by a newer UID in this browser session, never FETCH the old
+      // UID. Interactive opens redirect to the current UID; background/prefetch
+      // work is discarded silently.
+      const staleDraftIdentity =
+        parsed.folder === "drafts" && currentAccountId && uidValidity
+          ? savedDraftGuardRef.current?.findStale(currentAccountId, uidValidity, parsed.uid) ??
+            null
+          : null;
+      const preNetworkDecision = decidePreNetworkDraftOpen({
+        isDraft: parsed.folder === "drafts",
+        lane,
+        contextKind: context.kind,
+        staleIdentity: staleDraftIdentity,
+      });
+      if (preNetworkDecision.type === "discard") {
+        return Promise.resolve({ message: null, source: "error" });
+      }
+      if (preNetworkDecision.type === "redirect") {
+        return openDraftByIdentity(preNetworkDecision.identity, signal);
+      }
+      const cached = suppliedBase
+        ? (messageMemoryRef.current?.get(scope, suppliedBase) ?? undefined)
+        : messageCache.current.get(id);
+      if (cached) return Promise.resolve({ message: cached, source: "memory" });
+      const fetchUid = parsed.uid;
+      const fetchBase = base;
       const intent = context.kind === "current-list" ? context.intent : undefined;
       const intentKey = intent ? `|intent:${intent.scope}:${intent.generation}` : "";
-      const requestKey = `${scope.companyId}|${scope.accountId}|${parsed.folder}|${parsed.uid}|${uidValidity ?? "interactive"}${intentKey}`;
+      const requestKey = `${scope.companyId}|${scope.accountId}|${parsed.folder}|${fetchUid}|${uidValidity ?? "interactive"}${intentKey}`;
       const existing = inflight.current.get(requestKey);
       if (existing) {
         if (existing.lane === "background" && lane === "interactive") {
@@ -3187,9 +3301,12 @@ function MailApp() {
           // the background request keeps running and fills the same memory
           // cache, so its network work is not discarded.
           inflight.current.delete(requestKey);
-        } else {
+      } else {
           return existing.promise;
         }
+      }
+      if (parsed.folder === "drafts" && currentAccountId && uidValidity) {
+        savedDraftGuardRef.current?.markInFlight(currentAccountId, uidValidity, fetchUid);
       }
       const scopeGeneration = activeScopeGenerationRef.current;
       const controller = new AbortController();
@@ -3201,9 +3318,9 @@ function MailApp() {
           mailSessionToken: session.mailSessionToken ?? "",
           password: session.password,
           folder: parsed.folder,
-          uid: parsed.uid,
+          uid: fetchUid,
           lane,
-          allowCache: base != null,
+          allowCache: fetchBase != null,
           ...(context.kind === "current-list" && context.intent
             ? {
                 openIntentScope: context.intent.scope,
@@ -3218,6 +3335,28 @@ function MailApp() {
             mailPerf("stale-response-dropped", { phase: "scope" });
             return { message: null, source: "error" } as ClientMessageResult;
           }
+          // PART C: a Draft fetch that started before save completion may now be
+          // obsolete. Its result/error must not be applied, cached, cleaned up,
+          // or surfaced. Interactive opens retry the current UID exactly once;
+          // background/prefetch work is discarded silently.
+          const staleAtSettlement =
+            parsed.folder === "drafts" && currentAccountId && uidValidity
+              ? savedDraftGuardRef.current?.findStale(currentAccountId, uidValidity, fetchUid) ??
+                null
+              : null;
+          const settlementDecision = decideSettledDraftFetch({
+            isDraft: parsed.folder === "drafts",
+            fetchedUid: fetchUid,
+            lane,
+            contextKind: context.kind,
+            staleIdentity: staleAtSettlement,
+          });
+          if (settlementDecision.type === "discard") {
+            return { message: null, source: "error" } as ClientMessageResult;
+          }
+          if (settlementDecision.type === "redirect") {
+            return openDraftByIdentity(settlementDecision.identity, signal);
+          }
           if (context.kind === "historical") {
             const returnedUidValidity = validUidValidity(
               result.ok && result.source === "cache"
@@ -3231,29 +3370,29 @@ function MailApp() {
             }
           }
           const merged: MailMessage | null =
-            result.ok && result.source === "cache" && base
+            result.ok && result.source === "cache" && fetchBase
               ? {
-                  ...base,
+                  ...fetchBase,
                   body: result.body.bodyHtml,
-                  preview: result.body.preview || base.preview,
+                  preview: result.body.preview || fetchBase.preview,
                   inlineParts: result.body.inlineParts,
                   inlineImages: result.body.inlineImages,
                   attachments: result.body.attachments,
-                  mailedBy: result.body.mailedBy ?? base.mailedBy,
-                  signedBy: result.body.signedBy ?? base.signedBy,
-                  security: result.body.security ?? base.security,
-                  replyTo: result.body.replyTo ?? base.replyTo,
+                  mailedBy: result.body.mailedBy ?? fetchBase.mailedBy,
+                  signedBy: result.body.signedBy ?? fetchBase.signedBy,
+                  security: result.body.security ?? fetchBase.security,
+                  replyTo: result.body.replyTo ?? fetchBase.replyTo,
                   hasAttachments: result.body.attachments.length > 0,
-                  uidValidity: base.uidValidity ?? result.body.uidValidity,
+                  uidValidity: fetchBase.uidValidity ?? result.body.uidValidity,
                 }
               : result.ok && result.source === "imap"
                 ? context.kind === "historical" && result.message
                   ? {
-                      ...base,
+                      ...fetchBase,
                       ...result.message,
-                      id: base!.id,
-                      folder: base!.folder,
-                      uidValidity: result.message.uidValidity ?? base!.uidValidity,
+                      id: fetchBase!.id,
+                      folder: fetchBase!.folder,
+                      uidValidity: result.message.uidValidity ?? fetchBase!.uidValidity,
                     }
                   : result.message
                 : null;
@@ -3276,7 +3415,7 @@ function MailApp() {
               const matched = savedDraftGuardRef.current?.find(
                 currentAccountId,
                 uidValidity,
-                parsed.uid,
+                fetchUid,
               );
               if (matched) savedDraftGuardRef.current?.clearDraft(matched.accountId, matched.draftId);
             }
@@ -3299,11 +3438,17 @@ function MailApp() {
             // interactive connection). Intercept only the exact identity.
             const protectedDraft =
               parsed.folder === "drafts" && currentAccountId && uidValidity
-                ? savedDraftGuardRef.current?.find(currentAccountId, uidValidity, parsed.uid) ??
+                ? savedDraftGuardRef.current?.find(currentAccountId, uidValidity, fetchUid) ??
                   null
                 : null;
             if (protectedDraft && uidValidity) {
-              return recoverJustSavedDraft(protectedDraft, parsed.uid, uidValidity, scope, base);
+              return recoverJustSavedDraft(
+                protectedDraft,
+                fetchUid,
+                uidValidity,
+                scope,
+                fetchBase,
+              );
             }
 
             if (parsed.folder !== "all") {
@@ -3311,7 +3456,7 @@ function MailApp() {
                 data: {
                   mailSessionToken: session.mailSessionToken ?? "",
                   canonical: parsed.folder,
-                  uid: parsed.uid,
+                  uid: fetchUid,
                   uidvalidity: uidValidity ? Number(uidValidity) : undefined,
                 },
               }).catch(() => {});
@@ -3330,12 +3475,23 @@ function MailApp() {
         .catch(() => ({ message: null, source: "error" }) as ClientMessageResult)
         .finally(() => {
           signal?.removeEventListener("abort", abortFromCaller);
+          if (parsed.folder === "drafts" && currentAccountId && uidValidity) {
+            savedDraftGuardRef.current?.releaseInFlight(currentAccountId, uidValidity, fetchUid);
+          }
           if (inflight.current.get(requestKey)?.promise === p) inflight.current.delete(requestKey);
         });
       inflight.current.set(requestKey, { promise: p, controller, lane });
       return p;
     },
-    [session, openMsg, applyPendingOne, currentAccountId, cleanupGhost, recoverJustSavedDraft],
+    [
+      session,
+      openMsg,
+      applyPendingOne,
+      currentAccountId,
+      cleanupGhost,
+      recoverJustSavedDraft,
+      openDraftByIdentity,
+    ],
   );
 
   const openHistoricalMessage = useCallback(
@@ -3746,6 +3902,28 @@ function MailApp() {
     }
   }, [filteredMessages, folder, resetAsyncScope]);
 
+  // Lifecycle-based stale Draft alias pruning. Run only after the visible
+  // Draft list has settled, using the authoritative UIDs currently exposed.
+  useEffect(() => {
+    if (folder !== "drafts" || loading || !currentAccountId) return;
+    const authoritative = filteredMessages.find((message) =>
+      Boolean(validUidValidity(message.uidValidity)),
+    );
+    const uidValidity = validUidValidity(authoritative?.uidValidity);
+    if (!uidValidity) return;
+    const uids = new Set<number>();
+    for (const message of filteredMessages) {
+      if (message.folder !== "drafts") continue;
+      const parsed = parseMessageId(message.id);
+      if (parsed && parsed.uid > 0) uids.add(parsed.uid);
+    }
+    savedDraftGuardRef.current?.pruneAfterAuthoritativeRefresh(
+      currentAccountId,
+      uidValidity,
+      uids,
+    );
+  }, [folder, loading, filteredMessages, currentAccountId]);
+
   const connection = (
     navigator as Navigator & {
       connection?: { saveData?: boolean; effectiveType?: string };
@@ -3849,7 +4027,20 @@ function MailApp() {
       return;
     }
     const base = filteredMessages.find((message) => message.id === id) ?? null;
-    const cached = messageCache.current.get(id);
+    const baseUidValidity = validUidValidity(base?.uidValidity);
+    const staleDraftIdentity =
+      parsed.folder === "drafts" && currentAccountId && baseUidValidity
+        ? savedDraftGuardRef.current?.findStale(currentAccountId, baseUidValidity, parsed.uid) ??
+          null
+        : null;
+    const preNetworkDecision = decidePreNetworkDraftOpen({
+      isDraft: parsed.folder === "drafts",
+      lane: "interactive",
+      contextKind: "current-list",
+      staleIdentity: staleDraftIdentity,
+    });
+    const cached =
+      preNetworkDecision.type === "normal" ? messageCache.current.get(id) : undefined;
     mailPerf("message-click-to-shell", { elapsedMs: Math.round(performance.now() - startedAt) });
     if (cached) {
       setSelectedMessage(cached);
@@ -3865,7 +4056,9 @@ function MailApp() {
     try {
       const result = cached
         ? ({ message: cached, source: "memory" } as ClientMessageResult)
-        : await fetchMessage(id, "interactive", undefined, { kind: "current-list", intent });
+        : preNetworkDecision.type === "redirect"
+          ? await openDraftByIdentity(preNetworkDecision.identity)
+          : await fetchMessage(id, "interactive", undefined, { kind: "current-list", intent });
       if (!navigationGenerationRef.current!.isCurrent(generation)) {
         mailPerf("stale-response-dropped", { phase: "navigation" });
         return;
@@ -7017,7 +7210,10 @@ function Composer({
   onClose: (options: { refreshDrafts: boolean }) => void;
   onSent: (info: PostSendInfo) => void;
   onDraftCreated: () => void;
-  onDraftSaved: (identity: SavedDraftIdentity) => void;
+  onDraftSaved: (
+    identity: SavedDraftIdentity,
+    previousRef?: { folderPath: string; uid: number; uidValidity: string } | null,
+  ) => void;
   onDraftDeleted: (draftId: string) => void;
 }) {
   // Draft storage keying is owned by mail-draft-lifecycle (v3 + auto-migration).
@@ -7194,6 +7390,8 @@ function Composer({
   if (requestSignatureByGenerationRef.current === null) {
     requestSignatureByGenerationRef.current = createRequestBoundSignatureStore();
   }
+  const lastDiagnosticAttachmentSignatureRef = useRef<string | null>(null);
+
   const recomputeDirty = () => {
     isDirtyRef.current = generationRef.current > savedGenerationRef.current;
   };
@@ -7261,6 +7459,31 @@ function Composer({
   const autosaveRef = useRef<ReturnType<typeof createAutosaveScheduler> | null>(null);
 
   const saverRef = useRef<DraftSaver | null>(null);
+
+  const currentDiagnosticAttachmentSignature = () =>
+    attachmentSetSignature({
+      existingKept: existingKeptRef.current,
+      files: filesRef.current,
+      inlineImages: inlineImagesRef.current,
+    });
+
+  const makeDraftSaveTriggerDiagnostics = (
+    reason: DraftSaveTriggerReason,
+    generation: number,
+  ): DraftSaveTriggerDiagnostics => {
+    const currentSignature = currentDiagnosticAttachmentSignature();
+    const inFlight = saverRef.current?.isBusy() ?? false;
+    return {
+      reason,
+      generation,
+      inFlight,
+      coalesced: inFlight,
+      dirty: isDirtyRef.current,
+      attachmentsChanged:
+        lastDiagnosticAttachmentSignatureRef.current !== null &&
+        lastDiagnosticAttachmentSignatureRef.current !== currentSignature,
+    };
+  };
 
   // Stable, always-current token ref so the release helpers (including the
   // one-shot editor input listener) never capture a stale session token.
@@ -7361,6 +7584,7 @@ function Composer({
           setUploadState((current) =>
             new Map(current).set(file, { status: "ready", progress: 100 }),
           );
+          autosaveScheduleReasonRef.current = "attachment-ready";
           autosaveRef.current?.schedule();
           return result;
         })
@@ -7375,7 +7599,7 @@ function Composer({
 
   if (!saverRef.current) {
     saverRef.current = createDraftSaver(draftId, {
-      saveRemote: async ({ snapshot, previousRef, generation }) => {
+      saveRemote: async ({ snapshot, previousRef, generation, trigger }) => {
         const token = session.mailSessionToken;
         if (!token) return { ok: false, code: "SESSION_REQUIRED" };
         const currentFiles = filesRef.current;
@@ -7401,6 +7625,11 @@ function Composer({
             inlineImages: currentInlineImages,
           }),
         );
+        lastDiagnosticAttachmentSignatureRef.current = attachmentSetSignature({
+          existingKept: existingKeptRef.current,
+          files: currentFiles,
+          inlineImages: currentInlineImages,
+        });
         try {
           const attachmentPlan = buildAttachmentTransportPlan({
             attachments: existingKeptRef.current,
@@ -7461,6 +7690,7 @@ function Composer({
               bodyHtml: transportHtml,
               bodyText: stripHtml(transportHtml),
               previousRef: previousRef ?? undefined,
+              diagnostics: trigger,
               ...attachmentTransport,
             }),
           });
@@ -7513,7 +7743,7 @@ function Composer({
       },
       onStatus: setSaveStatus,
       onServerRef: (r) => setServerRef(r),
-      onCompleted: ({ completedGeneration, status, serverRef, code }) => {
+      onCompleted: ({ completedGeneration, status, serverRef, previousRef, code }) => {
         const wasAutomatic = automaticSaveGenerationsRef.current.delete(completedGeneration);
         // Consume this request's bound attachment signature before any early
         // return so the store cannot grow. Only a size-limit failure may use
@@ -7555,7 +7785,7 @@ function Composer({
               folderPath: serverRef.folderPath,
               uidValidity: serverRef.uidValidity,
               uid: serverRef.uid,
-            });
+            }, previousRef);
           }
         } else if (status === "failed") {
           // Diagnostic: capture the coarse code so the UI can surface it
@@ -7986,10 +8216,12 @@ function Composer({
   const automaticRemoteSaveInFlightRef = useRef<Promise<void> | null>(null);
   const lastSuccessfulAutomaticSaveAtRef = useRef<number | null>(null);
   const automaticSaveGenerationsRef = useRef(new Set<number>());
+  const autosaveScheduleReasonRef = useRef<DraftSaveTriggerReason>("automatic");
   const pendingRemoteSaveRef = useRef<{
     snapshot: DraftSnapshot;
     generation: number;
     hasAttachments: boolean;
+    reason: DraftSaveTriggerReason;
   } | null>(null);
   // Latest snapshot fields captured for the scheduler's callback (avoids
   // stale-closure reads without re-instantiating the scheduler each render).
@@ -8053,6 +8285,7 @@ function Composer({
         pending.snapshot,
         serverRefRef.current,
         pending.generation,
+        makeDraftSaveTriggerDiagnostics(pending.reason, pending.generation),
       );
       if (savePromise) {
         automaticRemoteSaveInFlightRef.current = savePromise;
@@ -8135,7 +8368,14 @@ function Composer({
         // can never mark newer content clean.
         const genAtFire = generationRef.current;
         const hasAttachments = s.existingKeptLen + s.filesLen + s.inlineLen > 0;
-        pendingRemoteSaveRef.current = { snapshot, generation: genAtFire, hasAttachments };
+        const reason = autosaveScheduleReasonRef.current;
+        autosaveScheduleReasonRef.current = "automatic";
+        pendingRemoteSaveRef.current = {
+          snapshot,
+          generation: genAtFire,
+          hasAttachments,
+          reason,
+        };
         if (remoteAutosaveTimerRef.current !== null) {
           window.clearTimeout(remoteAutosaveTimerRef.current);
         }
@@ -8279,7 +8519,7 @@ function Composer({
         return false;
       }
       if (choice === "save") {
-        const result = await saveDraftNow();
+        const result = await saveDraftNow("close");
         // Only a confirmed remote save may close. Failed / empty keeps the
         // composer open so nothing is silently lost.
         if (result === "saved_server") {
@@ -9078,7 +9318,9 @@ function Composer({
   // Prevents double-submit of manual saves (rapid Ctrl+S / button clicks).
   const savingNowRef = useRef(false);
   type SaveNowResult = "saved_server" | "failed" | "empty";
-  async function saveDraftNow(): Promise<SaveNowResult> {
+  async function saveDraftNow(
+    reason: DraftSaveTriggerReason = "explicit",
+  ): Promise<SaveNowResult> {
     if (typeof window === "undefined") return "failed";
     const exceeded = classifyAttachmentLimitExceeded({
       normalAttachmentCount,
@@ -9160,7 +9402,12 @@ function Composer({
         remoteAutosaveTimerRef.current = null;
       }
       pendingRemoteSaveRef.current = null;
-      await saverRef.current?.requestSave(snapshot, serverRefRef.current, genAtRequest);
+      await saverRef.current?.requestSave(
+        snapshot,
+        serverRefRef.current,
+        genAtRequest,
+        makeDraftSaveTriggerDiagnostics(reason, genAtRequest),
+      );
       const st = saverRef.current?.getStatus();
       if (st === "saved") {
         toast.success(tr("تم حفظ المسودّة"));
@@ -9188,7 +9435,7 @@ function Composer({
   async function handleSaveAsDraft() {
     let result: SaveNowResult = "empty";
     for (let attempt = 0; attempt < 5; attempt++) {
-      result = await saveDraftNow();
+      result = await saveDraftNow("explicit");
       if (result !== "saved_server" || !isDirtyRef.current) break;
     }
     if (result === "saved_server" && !isDirtyRef.current) {

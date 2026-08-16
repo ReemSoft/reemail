@@ -92,6 +92,98 @@ describe("createSavedDraftGuard.clear*", () => {
   });
 });
 
+describe("createSavedDraftGuard stale Draft aliases", () => {
+  it("records X -> Y and resolves old X to current Y", () => {
+    const g = createSavedDraftGuard();
+    const x = identity({ uid: 100 });
+    const y = identity({ uid: 101 });
+    g.recordReplacement(x, y);
+    expect(g.findStale("acc-1", "42", 100)).toEqual(y);
+    expect(g.findStale("acc-1", "42", 101)).toBeNull();
+  });
+
+  it("resolves X -> Y -> Z directly to Z without a chain", () => {
+    const g = createSavedDraftGuard();
+    const x = identity({ uid: 100 });
+    const y = identity({ uid: 101 });
+    const z = identity({ uid: 102 });
+    g.recordReplacement(x, y);
+    g.recordReplacement(y, z);
+    expect(g.findStale("acc-1", "42", 100)).toEqual(z);
+    expect(g.findStale("acc-1", "42", 101)).toEqual(z);
+    expect(g.findStale("acc-1", "42", 102)).toBeNull();
+  });
+
+  it("normal current identity has no redirect", () => {
+    const g = createSavedDraftGuard();
+    g.record(identity({ uid: 100 }));
+    expect(g.findStale("acc-1", "42", 100)).toBeNull();
+  });
+
+  it("different account or uidValidity never resolves a stale alias", () => {
+    const g = createSavedDraftGuard();
+    g.recordReplacement(identity({ uid: 100 }), identity({ uid: 101 }));
+    expect(g.findStale("acc-2", "42", 100)).toBeNull();
+    expect(g.findStale("acc-1", "43", 100)).toBeNull();
+  });
+
+  it("clearDraft removes stale aliases for that draft only", () => {
+    const g = createSavedDraftGuard();
+    g.recordReplacement(identity({ draftId: "draft-1", uid: 100 }), identity({ draftId: "draft-1", uid: 101 }));
+    g.recordReplacement(identity({ draftId: "draft-2", uid: 200 }), identity({ draftId: "draft-2", uid: 201 }));
+    g.clearDraft("acc-1", "draft-1");
+    expect(g.findStale("acc-1", "42", 100)).toBeNull();
+    expect(g.findStale("acc-1", "42", 200)).toEqual(identity({ draftId: "draft-2", uid: 201 }));
+  });
+
+  it("clearAccount and clearAll remove aliases", () => {
+    const g = createSavedDraftGuard();
+    g.recordReplacement(identity({ accountId: "acc-1", uid: 100 }), identity({ accountId: "acc-1", uid: 101 }));
+    g.recordReplacement(identity({ accountId: "acc-2", uid: 200 }), identity({ accountId: "acc-2", uid: 201 }));
+    g.clearAccount("acc-1");
+    expect(g.findStale("acc-1", "42", 100)).toBeNull();
+    expect(g.findStale("acc-2", "42", 200)).not.toBeNull();
+    g.clearAll();
+    expect(g.findStale("acc-2", "42", 200)).toBeNull();
+  });
+
+  it("keeps a stale alias while its exact operation is in flight", () => {
+    const g = createSavedDraftGuard();
+    g.recordReplacement(identity({ uid: 100 }), identity({ uid: 101 }));
+    g.markInFlight("acc-1", "42", 100);
+    g.pruneAfterAuthoritativeRefresh("acc-1", "42", new Set([101]));
+    expect(g.findStale("acc-1", "42", 100)).toEqual(identity({ uid: 101 }));
+  });
+
+  it("prunes a settled stale alias after an authoritative refresh", () => {
+    const g = createSavedDraftGuard();
+    g.recordReplacement(identity({ uid: 100 }), identity({ uid: 101 }));
+    g.markInFlight("acc-1", "42", 100);
+    g.pruneAfterAuthoritativeRefresh("acc-1", "42", new Set([101]));
+    g.releaseInFlight("acc-1", "42", 100);
+    expect(g.findStale("acc-1", "42", 100)).toBeNull();
+  });
+
+  it("prunes immediately when no operation is in flight", () => {
+    const g = createSavedDraftGuard();
+    g.recordReplacement(identity({ uid: 100 }), identity({ uid: 101 }));
+    g.pruneAfterAuthoritativeRefresh("acc-1", "42", new Set([101]));
+    expect(g.findStale("acc-1", "42", 100)).toBeNull();
+  });
+
+  it("repeated saves do not grow after authoritative refresh and settled requests", () => {
+    const g = createSavedDraftGuard();
+    for (let uid = 100; uid < 120; uid += 1) {
+      g.recordReplacement(identity({ uid }), identity({ uid: uid + 1 }));
+      g.markInFlight("acc-1", "42", uid);
+      g.pruneAfterAuthoritativeRefresh("acc-1", "42", new Set([uid + 1]));
+      g.releaseInFlight("acc-1", "42", uid);
+    }
+    expect(g.findStale("acc-1", "42", 119)).toBeNull();
+    expect(g.findStale("acc-1", "42", 100)).toBeNull();
+  });
+});
+
 describe("createSavedDraftGuard recovery attempts", () => {
   it("tracks at most one recovery attempt per exact identity", () => {
     const g = createSavedDraftGuard();

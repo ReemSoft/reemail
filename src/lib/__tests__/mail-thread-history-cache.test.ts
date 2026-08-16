@@ -78,7 +78,7 @@ describe("MAILMAESTRO historical thread body cache", () => {
     expect(fetchBlock).toContain(
       "const base = suppliedBase ?? messagesRef.current.find((m) => m.id === id) ?? null",
     );
-    expect(fetchBlock).toContain("allowCache: base != null");
+    expect(fetchBlock).toContain("allowCache: fetchBase != null");
   });
 
   it("uses the historical physical folder identity across folders", () => {

@@ -53,6 +53,28 @@ import { InlineImageMetadataSchema } from "./inline-images.js";
 
 export const DRAFT_ID_HEADER = "X-MailMaestro-Draft-ID";
 
+// PII-safe save-trigger diagnostics. These fields are the ONLY values allowed
+// in the existing Draft save request's `diagnostics` metadata.
+export const DraftTriggerDiagnosticsSchema = z
+  .object({
+    reason: z.enum([
+      "automatic",
+      "explicit",
+      "close",
+      "send",
+      "attachment-ready",
+      "other-internal",
+    ]),
+    generation: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+    inFlight: z.boolean(),
+    coalesced: z.boolean(),
+    dirty: z.boolean(),
+    attachmentsChanged: z.boolean(),
+  })
+  .strict();
+
+export type DraftTriggerDiagnostics = z.infer<typeof DraftTriggerDiagnosticsSchema>;
+
 // PII-safe phase timing for Draft Save/Delete. Logs ONLY when TIMING_ENABLED
 // is on, and only coarse `op` / `phase` / `status` / `code` / `ms` — never
 // email, draftId, UID, UIDVALIDITY, subject, recipient, filename or message-id.

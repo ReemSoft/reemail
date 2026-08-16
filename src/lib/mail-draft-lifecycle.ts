@@ -31,6 +31,8 @@
  *     save flush. Successful entries are removed atomically.
  */
 
+import type { DraftSaveTriggerDiagnostics } from "@/lib/mail-draft-save-diagnostics";
+
 // ---------------------------------------------------------------- Types
 
 export type DraftSaveStatus = "idle" | "saving" | "saved" | "failed";
@@ -326,6 +328,8 @@ export interface DraftSaveCompletion {
   status: DraftSaveStatus;
   /** Populated only when `status === "saved"` and the bridge returned a UID. */
   serverRef?: DraftServerRef;
+  /** The prior identity this successful save replaced, when one was known. */
+  previousRef?: DraftServerRef | null;
   /** Coarse error code from the bridge — present when the remote failed. */
   code?: string;
 }
@@ -335,6 +339,8 @@ export interface CreateDraftSaverOptions {
     draftId: string;
     snapshot: DraftSnapshot;
     previousRef: DraftServerRef | null;
+    /** Optional PII-safe trigger diagnostics passed through to the Bridge. */
+    trigger?: DraftSaveTriggerDiagnostics;
     /**
      * The revision this exact remote run is persisting. Callers may use it
      * to bind request-scoped bookkeeping (e.g. an attachment signature
@@ -369,6 +375,7 @@ export interface DraftSaver {
     snapshot: DraftSnapshot,
     previousRef: DraftServerRef | null,
     generation: number,
+    trigger?: DraftSaveTriggerDiagnostics,
   ): Promise<void>;
   isBusy(): boolean;
   getStatus(): DraftSaveStatus;
@@ -393,6 +400,7 @@ export function createDraftSaver(draftId: string, opts: CreateDraftSaverOptions)
     snapshot: DraftSnapshot;
     previousRef: DraftServerRef | null;
     generation: number;
+    trigger?: DraftSaveTriggerDiagnostics;
     resolvers: Array<() => void>;
   } | null = null;
 
@@ -406,14 +414,22 @@ export function createDraftSaver(draftId: string, opts: CreateDraftSaverOptions)
     snapshot: DraftSnapshot,
     previousRef: DraftServerRef | null,
     generation: number,
+    trigger?: DraftSaveTriggerDiagnostics,
   ): Promise<void> {
     const mySeq = ++seq;
     latestIssuedSeq = mySeq;
     setStatus("saving");
     let result: SaveRemoteResult;
+    let effectivePreviousRef: DraftServerRef | null = null;
     try {
-      const effectivePreviousRef = latestKnownServerRef ?? previousRef;
-      result = await opts.saveRemote({ draftId, snapshot, previousRef: effectivePreviousRef, generation });
+      effectivePreviousRef = latestKnownServerRef ?? previousRef;
+      result = await opts.saveRemote({
+        draftId,
+        snapshot,
+        previousRef: effectivePreviousRef,
+        generation,
+        trigger,
+      });
     } catch {
       // Thrown remote is a transport failure → NETWORK class.
       result = { ok: false, code: "NETWORK" };
@@ -432,6 +448,7 @@ export function createDraftSaver(draftId: string, opts: CreateDraftSaverOptions)
         completedGeneration: generation,
         status: "saved",
         serverRef: result.serverRef,
+        previousRef: effectivePreviousRef,
       });
       return;
     }
@@ -454,7 +471,7 @@ export function createDraftSaver(draftId: string, opts: CreateDraftSaverOptions)
       pending = null;
       running = true;
       try {
-        await run(p.snapshot, p.previousRef, p.generation);
+        await run(p.snapshot, p.previousRef, p.generation, p.trigger);
       } finally {
         running = false;
       }
@@ -468,6 +485,7 @@ export function createDraftSaver(draftId: string, opts: CreateDraftSaverOptions)
     snapshot: DraftSnapshot,
     previousRef: DraftServerRef | null,
     generation: number,
+    trigger?: DraftSaveTriggerDiagnostics,
   ): Promise<void> {
     return new Promise<void>((resolve) => {
       if (pending) {
@@ -475,9 +493,10 @@ export function createDraftSaver(draftId: string, opts: CreateDraftSaverOptions)
         pending.snapshot = snapshot;
         pending.previousRef = previousRef;
         pending.generation = generation;
+        pending.trigger = trigger;
         pending.resolvers.push(resolve);
       } else {
-        pending = { snapshot, previousRef, generation, resolvers: [resolve] };
+        pending = { snapshot, previousRef, generation, trigger, resolvers: [resolve] };
       }
       if (inFlight) return;
       inFlight = loop().finally(() => {

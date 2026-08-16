@@ -352,6 +352,50 @@ describe("createDraftSaver — generation threading", () => {
   });
 });
 
+describe("createDraftSaver — save-trigger diagnostics", () => {
+  it("passes the optional trigger to saveRemote and preserves it in completion", async () => {
+    const seen: Array<{
+      generation: number;
+      trigger?: {
+        reason: string;
+        inFlight: boolean;
+        coalesced: boolean;
+      };
+    }> = [];
+    const completions: Array<unknown> = [];
+    const saver = createDraftSaver("d-trigger", {
+      saveRemote: async ({ generation, trigger }) => {
+        seen.push({ generation, trigger });
+        return {
+          ok: true,
+          serverRef: { folderPath: "Drafts", uid: 1, uidValidity: "v" },
+        };
+      },
+      onCompleted: (info) => completions.push(info),
+    });
+    await saver.requestSave(snap(), null, 7, {
+      reason: "automatic",
+      generation: 7,
+      inFlight: false,
+      coalesced: false,
+      dirty: true,
+      attachmentsChanged: false,
+    });
+    expect(seen[0]).toEqual({
+      generation: 7,
+      trigger: {
+        reason: "automatic",
+        generation: 7,
+        inFlight: false,
+        coalesced: false,
+        dirty: true,
+        attachmentsChanged: false,
+      },
+    });
+    expect(completions[0]).toMatchObject({ completedGeneration: 7, status: "saved" });
+  });
+});
+
 describe("createDraftSaver", () => {
   it("emits saving → saved on successful remote save and updates serverRef", async () => {
     const events: DraftSaveStatus[] = [];

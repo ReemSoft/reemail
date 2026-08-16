@@ -71,6 +71,7 @@ import { mapUploadedAttachments } from "./inline-images.js";
 import {
   DraftSavePayloadSchema,
   DraftDeletePayloadSchema,
+  DraftTriggerDiagnosticsSchema,
   saveDraft,
   deleteDraft,
 } from "./drafts.js";
@@ -1201,6 +1202,15 @@ app.post("/api/draft-save-v2", requireKey, imapGate("interactive"), async (req, 
   let preservedSourceHandles: string[] = [];
   let saveSucceeded = false;
   try {
+    const diagnostics = (req.body as { diagnostics?: unknown } | undefined)?.diagnostics;
+    if (diagnostics != null) {
+      const trigger = DraftTriggerDiagnosticsSchema.parse(diagnostics);
+      if (TIMING_ENABLED) {
+        console.log(
+          `[draft-trigger] reason=${trigger.reason} generation=${trigger.generation} inFlight=${trigger.inFlight} coalesced=${trigger.coalesced} dirty=${trigger.dirty} attachmentsChanged=${trigger.attachmentsChanged}`,
+        );
+      }
+    }
     const payload = DraftSavePayloadSchema.parse(req.body);
     const contract = DraftV2AttachmentSchema.parse(req.body);
     // Raw-payload fail-fast: reject an impossible combined normal count before
