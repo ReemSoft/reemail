@@ -309,6 +309,20 @@ const SendV2PayloadSchema = SendPayloadSchema.extend({
   sourceAttachments: z.array(ServerAttachmentSourceSchema).max(10).default([]),
 });
 
+// Draft-only: a kept server source may carry a staged handle as a reuse hint.
+// Send keeps the strict handle-or-source contract untouched.
+const DraftServerAttachmentSourceSchema = ServerAttachmentSourceSchema.extend({
+  handle: z
+    .string()
+    .min(20)
+    .max(32 * 1024)
+    .optional(),
+});
+const DraftServerInlineSourceSchema = DraftServerAttachmentSourceSchema.extend({
+  uploadFilename: z.string().min(1).max(255),
+  cid: z.string().min(1).max(255),
+});
+
 const DraftV2AttachmentSchema = z.object({
   attachmentHandles: z
     .array(
@@ -320,9 +334,10 @@ const DraftV2AttachmentSchema = z.object({
     .max(10)
     .default([]),
   stagedInlineImages: z.array(StagedInlineSchema).max(20).default([]),
-  sourceAttachments: z.array(ServerAttachmentSourceSchema).max(10).default([]),
-  sourceInlineImages: z.array(ServerInlineSourceSchema).max(20).default([]),
+  sourceAttachments: z.array(DraftServerAttachmentSourceSchema).max(10).default([]),
+  sourceInlineImages: z.array(DraftServerInlineSourceSchema).max(20).default([]),
 });
+
 
 const DownloadTicketPayloadSchema = MessagePayloadSchema.extend({
   part: z.string().regex(/^\d+(?:\.\d+)*$/),
