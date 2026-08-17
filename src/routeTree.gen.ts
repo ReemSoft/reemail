@@ -16,6 +16,11 @@ import { Route as DemoRouteImport } from './routes/demo'
 import { Route as CompanyRouteImport } from './routes/company'
 import { Route as AuthenticatedRouteRouteImport } from './routes/_authenticated/route'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as ApiMailWorkingDraftSendRouteImport } from './routes/api/mail-working-draft-send'
+import { Route as ApiMailWorkingDraftCheckpointRouteImport } from './routes/api/mail-working-draft-checkpoint'
+import { Route as ApiMailWorkingDraftAttachmentContentRouteImport } from './routes/api/mail-working-draft-attachment-content'
+import { Route as ApiMailWorkingDraftAttachmentRouteImport } from './routes/api/mail-working-draft-attachment'
+import { Route as ApiMailWorkingDraftRouteImport } from './routes/api/mail-working-draft'
 import { Route as ApiMailStagedReleaseRouteImport } from './routes/api/mail-staged-release'
 import { Route as ApiMailSignatureImageRouteImport } from './routes/api/mail-signature-image'
 import { Route as ApiMailSentCopyStatusRouteImport } from './routes/api/mail-sent-copy-status'
@@ -61,6 +66,34 @@ const AuthenticatedRouteRoute = AuthenticatedRouteRouteImport.update({
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiMailWorkingDraftSendRoute = ApiMailWorkingDraftSendRouteImport.update({
+  id: '/api/mail-working-draft-send',
+  path: '/api/mail-working-draft-send',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiMailWorkingDraftCheckpointRoute =
+  ApiMailWorkingDraftCheckpointRouteImport.update({
+    id: '/api/mail-working-draft-checkpoint',
+    path: '/api/mail-working-draft-checkpoint',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ApiMailWorkingDraftAttachmentContentRoute =
+  ApiMailWorkingDraftAttachmentContentRouteImport.update({
+    id: '/api/mail-working-draft-attachment-content',
+    path: '/api/mail-working-draft-attachment-content',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ApiMailWorkingDraftAttachmentRoute =
+  ApiMailWorkingDraftAttachmentRouteImport.update({
+    id: '/api/mail-working-draft-attachment',
+    path: '/api/mail-working-draft-attachment',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ApiMailWorkingDraftRoute = ApiMailWorkingDraftRouteImport.update({
+  id: '/api/mail-working-draft',
+  path: '/api/mail-working-draft',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiMailStagedReleaseRoute = ApiMailStagedReleaseRouteImport.update({
@@ -144,6 +177,11 @@ export interface FileRoutesByFullPath {
   '/api/mail-sent-copy-status': typeof ApiMailSentCopyStatusRoute
   '/api/mail-signature-image': typeof ApiMailSignatureImageRoute
   '/api/mail-staged-release': typeof ApiMailStagedReleaseRoute
+  '/api/mail-working-draft': typeof ApiMailWorkingDraftRoute
+  '/api/mail-working-draft-attachment': typeof ApiMailWorkingDraftAttachmentRoute
+  '/api/mail-working-draft-attachment-content': typeof ApiMailWorkingDraftAttachmentContentRoute
+  '/api/mail-working-draft-checkpoint': typeof ApiMailWorkingDraftCheckpointRoute
+  '/api/mail-working-draft-send': typeof ApiMailWorkingDraftSendRoute
   '/api/public/hooks/mail-sync-tick': typeof ApiPublicHooksMailSyncTickRoute
 }
 export interface FileRoutesByTo {
@@ -164,6 +202,11 @@ export interface FileRoutesByTo {
   '/api/mail-sent-copy-status': typeof ApiMailSentCopyStatusRoute
   '/api/mail-signature-image': typeof ApiMailSignatureImageRoute
   '/api/mail-staged-release': typeof ApiMailStagedReleaseRoute
+  '/api/mail-working-draft': typeof ApiMailWorkingDraftRoute
+  '/api/mail-working-draft-attachment': typeof ApiMailWorkingDraftAttachmentRoute
+  '/api/mail-working-draft-attachment-content': typeof ApiMailWorkingDraftAttachmentContentRoute
+  '/api/mail-working-draft-checkpoint': typeof ApiMailWorkingDraftCheckpointRoute
+  '/api/mail-working-draft-send': typeof ApiMailWorkingDraftSendRoute
   '/api/public/hooks/mail-sync-tick': typeof ApiPublicHooksMailSyncTickRoute
 }
 export interface FileRoutesById {
@@ -186,6 +229,11 @@ export interface FileRoutesById {
   '/api/mail-sent-copy-status': typeof ApiMailSentCopyStatusRoute
   '/api/mail-signature-image': typeof ApiMailSignatureImageRoute
   '/api/mail-staged-release': typeof ApiMailStagedReleaseRoute
+  '/api/mail-working-draft': typeof ApiMailWorkingDraftRoute
+  '/api/mail-working-draft-attachment': typeof ApiMailWorkingDraftAttachmentRoute
+  '/api/mail-working-draft-attachment-content': typeof ApiMailWorkingDraftAttachmentContentRoute
+  '/api/mail-working-draft-checkpoint': typeof ApiMailWorkingDraftCheckpointRoute
+  '/api/mail-working-draft-send': typeof ApiMailWorkingDraftSendRoute
   '/api/public/hooks/mail-sync-tick': typeof ApiPublicHooksMailSyncTickRoute
 }
 export interface FileRouteTypes {
@@ -208,6 +256,11 @@ export interface FileRouteTypes {
     | '/api/mail-sent-copy-status'
     | '/api/mail-signature-image'
     | '/api/mail-staged-release'
+    | '/api/mail-working-draft'
+    | '/api/mail-working-draft-attachment'
+    | '/api/mail-working-draft-attachment-content'
+    | '/api/mail-working-draft-checkpoint'
+    | '/api/mail-working-draft-send'
     | '/api/public/hooks/mail-sync-tick'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -228,6 +281,11 @@ export interface FileRouteTypes {
     | '/api/mail-sent-copy-status'
     | '/api/mail-signature-image'
     | '/api/mail-staged-release'
+    | '/api/mail-working-draft'
+    | '/api/mail-working-draft-attachment'
+    | '/api/mail-working-draft-attachment-content'
+    | '/api/mail-working-draft-checkpoint'
+    | '/api/mail-working-draft-send'
     | '/api/public/hooks/mail-sync-tick'
   id:
     | '__root__'
@@ -249,6 +307,11 @@ export interface FileRouteTypes {
     | '/api/mail-sent-copy-status'
     | '/api/mail-signature-image'
     | '/api/mail-staged-release'
+    | '/api/mail-working-draft'
+    | '/api/mail-working-draft-attachment'
+    | '/api/mail-working-draft-attachment-content'
+    | '/api/mail-working-draft-checkpoint'
+    | '/api/mail-working-draft-send'
     | '/api/public/hooks/mail-sync-tick'
   fileRoutesById: FileRoutesById
 }
@@ -270,6 +333,11 @@ export interface RootRouteChildren {
   ApiMailSentCopyStatusRoute: typeof ApiMailSentCopyStatusRoute
   ApiMailSignatureImageRoute: typeof ApiMailSignatureImageRoute
   ApiMailStagedReleaseRoute: typeof ApiMailStagedReleaseRoute
+  ApiMailWorkingDraftRoute: typeof ApiMailWorkingDraftRoute
+  ApiMailWorkingDraftAttachmentRoute: typeof ApiMailWorkingDraftAttachmentRoute
+  ApiMailWorkingDraftAttachmentContentRoute: typeof ApiMailWorkingDraftAttachmentContentRoute
+  ApiMailWorkingDraftCheckpointRoute: typeof ApiMailWorkingDraftCheckpointRoute
+  ApiMailWorkingDraftSendRoute: typeof ApiMailWorkingDraftSendRoute
   ApiPublicHooksMailSyncTickRoute: typeof ApiPublicHooksMailSyncTickRoute
 }
 
@@ -322,6 +390,41 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/mail-working-draft-send': {
+      id: '/api/mail-working-draft-send'
+      path: '/api/mail-working-draft-send'
+      fullPath: '/api/mail-working-draft-send'
+      preLoaderRoute: typeof ApiMailWorkingDraftSendRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/mail-working-draft-checkpoint': {
+      id: '/api/mail-working-draft-checkpoint'
+      path: '/api/mail-working-draft-checkpoint'
+      fullPath: '/api/mail-working-draft-checkpoint'
+      preLoaderRoute: typeof ApiMailWorkingDraftCheckpointRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/mail-working-draft-attachment-content': {
+      id: '/api/mail-working-draft-attachment-content'
+      path: '/api/mail-working-draft-attachment-content'
+      fullPath: '/api/mail-working-draft-attachment-content'
+      preLoaderRoute: typeof ApiMailWorkingDraftAttachmentContentRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/mail-working-draft-attachment': {
+      id: '/api/mail-working-draft-attachment'
+      path: '/api/mail-working-draft-attachment'
+      fullPath: '/api/mail-working-draft-attachment'
+      preLoaderRoute: typeof ApiMailWorkingDraftAttachmentRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/mail-working-draft': {
+      id: '/api/mail-working-draft'
+      path: '/api/mail-working-draft'
+      fullPath: '/api/mail-working-draft'
+      preLoaderRoute: typeof ApiMailWorkingDraftRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/mail-staged-release': {
@@ -440,6 +543,12 @@ const rootRouteChildren: RootRouteChildren = {
   ApiMailSentCopyStatusRoute: ApiMailSentCopyStatusRoute,
   ApiMailSignatureImageRoute: ApiMailSignatureImageRoute,
   ApiMailStagedReleaseRoute: ApiMailStagedReleaseRoute,
+  ApiMailWorkingDraftRoute: ApiMailWorkingDraftRoute,
+  ApiMailWorkingDraftAttachmentRoute: ApiMailWorkingDraftAttachmentRoute,
+  ApiMailWorkingDraftAttachmentContentRoute:
+    ApiMailWorkingDraftAttachmentContentRoute,
+  ApiMailWorkingDraftCheckpointRoute: ApiMailWorkingDraftCheckpointRoute,
+  ApiMailWorkingDraftSendRoute: ApiMailWorkingDraftSendRoute,
   ApiPublicHooksMailSyncTickRoute: ApiPublicHooksMailSyncTickRoute,
 }
 export const routeTree = rootRouteImport

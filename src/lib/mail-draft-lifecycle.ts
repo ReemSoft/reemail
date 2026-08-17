@@ -77,6 +77,7 @@ export interface DraftSnapshot {
     mimeType: "image/png" | "image/jpeg" | "image/gif" | "image/webp";
     filename: string;
     uploadFilename: string;
+    workingAttachmentId?: string;
     stagedHandle?: string;
     stagedExpiresAt?: number;
   }>;

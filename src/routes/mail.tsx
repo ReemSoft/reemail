@@ -937,6 +937,7 @@ import {
   type DraftSaveStatus,
   type DraftServerRef,
   type DraftSnapshot,
+  type DraftRecipient,
   type DraftDocV3,
   type PendingDeleteQueue,
 } from "@/lib/mail-draft-lifecycle";
@@ -945,6 +946,11 @@ import {
   DRAFT_REMOTE_IDLE_MS,
   DRAFT_MAX_DIRTY_MS,
 } from "@/lib/mail-draft-autosave-policy";
+import type {
+  WorkingDraftAttachmentReference,
+  WorkingDraftPayload,
+  WorkingDraftRecord,
+} from "@/lib/mail-working-draft";
 import {
   createAutosaveScheduler,
   attachInputListener,
@@ -1400,6 +1406,25 @@ type ComposeInitial = {
   inReplyTo?: string;
   references?: string[];
 };
+
+/** Opens an authoritative server Working Draft without waiting for IMAP list/index visibility. */
+function buildWorkingDraftInitial(record: WorkingDraftRecord): ComposeInitial {
+  const snapshot = record.payload.snapshot;
+  const addressText = (items: readonly DraftRecipient[] | undefined) =>
+    (items ?? [])
+      .filter((item) => item.valid !== false)
+      .map((item) => (item.name ? `${item.name} <${item.email}>` : item.email))
+      .join(", ");
+  return {
+    to: addressText(snapshot.to),
+    cc: addressText(snapshot.cc),
+    body: snapshot.html,
+    bodyIsHtml: true,
+    editDraftId: record.draftId,
+    inReplyTo: snapshot.inReplyTo,
+    references: snapshot.references,
+  };
+}
 
 function stripHtml(html: string): string {
   if (!html) return "";
@@ -2787,6 +2812,38 @@ function MailApp() {
     bumpCountsGen,
   } = useMailData(session || null);
 
+  // Draft-folder-only server projection. This is intentionally outside the
+  // shared list loader so Inbox/Sent/startup make no Working Draft request.
+  const [workingDraftRecords, setWorkingDraftRecords] = useState<WorkingDraftRecord[]>([]);
+  useEffect(() => {
+    if (folder !== "drafts" || !session?.mailSessionToken) {
+      setWorkingDraftRecords([]);
+      return;
+    }
+    let cancelled = false;
+    void fetch("/api/mail-working-draft", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mailSessionToken: session.mailSessionToken, action: "list" }),
+    })
+      .then(async (response) => {
+        const result = (await response.json().catch(() => null)) as {
+          ok?: boolean;
+          records?: WorkingDraftRecord[];
+        } | null;
+        if (!cancelled && response.ok && result?.ok && Array.isArray(result.records)) {
+          setWorkingDraftRecords(result.records);
+        }
+      })
+      .catch(() => {
+        // Provider Drafts remain usable while this optional projection retries
+        // on the next Draft-folder visit.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [folder, session?.account.id, session?.mailSessionToken]);
+
   // Sender Folders — O(1) lookup for the per-row folder icon.
   const senderFolderMap = useMemo(
     () => new Map(senderFolders.map((f) => [f.email.toLowerCase(), f])),
@@ -3872,21 +3929,67 @@ function MailApp() {
     };
   }, [query, searchMode, deepIncludeBody, folder, session, searchFn]);
 
+  const workingDraftByRowId = useMemo(
+    () => new Map(workingDraftRecords.map((record) => [`working-draft:${record.draftId}`, record])),
+    [workingDraftRecords],
+  );
+  const visibleMessages = useMemo(() => {
+    if (folder !== "drafts") return messages;
+    const providerDraftIds = new Set(
+      messages.map((message) => message.draftIdHeader).filter((value): value is string => Boolean(value)),
+    );
+    const ownAddress = session?.account.email_address ?? "";
+    const serverOnly = workingDraftRecords
+      .filter((record) => !providerDraftIds.has(record.draftId))
+      .map<MailMessage>((record) => {
+        const snapshot = record.payload.snapshot;
+        const normalAttachments = record.payload.attachments.filter((item) => item.kind === "attachment");
+        return {
+          id: `working-draft:${record.draftId}`,
+          threadId: `working-draft:${record.draftId}`,
+          folder: "drafts",
+          from: { name: session?.account.display_name ?? ownAddress, email: ownAddress },
+          to: (snapshot.to ?? [])
+            .filter((item) => item.valid !== false)
+            .map((item) => ({ name: item.name ?? "", email: item.email })),
+          cc: (snapshot.cc ?? [])
+            .filter((item) => item.valid !== false)
+            .map((item) => ({ name: item.name ?? "", email: item.email })),
+          subject: snapshot.subject || tr("(بدون موضوع)"),
+          preview: stripHtml(snapshot.html).slice(0, 240),
+          body: snapshot.html,
+          date: record.updatedAt,
+          read: true,
+          starred: false,
+          hasAttachments: record.payload.attachments.length > 0,
+          attachments: normalAttachments.map((item) => ({
+            id: item.clientKey,
+            filename: item.filename,
+            size: item.size,
+            mimeType: item.mimeType,
+            disposition: item.disposition,
+          })),
+          draftIdHeader: record.draftId,
+        };
+      });
+    return [...serverOnly, ...messages].sort((a, b) => Date.parse(b.date) - Date.parse(a.date));
+  }, [folder, messages, session, workingDraftRecords]);
+
   const filteredMessages = useMemo(() => {
     // Deep server-side search: always show server results (even empty).
     if (searchMode === "deep" && query.trim().length >= 2) {
       return deepResults ?? [];
     }
-    if (!query.trim()) return messages;
+    if (!query.trim()) return visibleMessages;
     const q = query.toLowerCase();
-    return messages.filter(
+    return visibleMessages.filter(
       (m) =>
         m.subject.toLowerCase().includes(q) ||
         m.from.name.toLowerCase().includes(q) ||
         m.from.email.toLowerCase().includes(q) ||
         m.preview.toLowerCase().includes(q),
     );
-  }, [messages, query, searchMode, deepResults]);
+  }, [visibleMessages, query, searchMode, deepResults]);
   const inDeepSearch = searchMode === "deep" && query.trim().length >= 2;
   useEffect(() => {
     messagesRef.current = filteredMessages;
@@ -4017,6 +4120,16 @@ function MailApp() {
 
   async function openMessage(id: string) {
     if (!(await guardComposerNav())) return;
+    const serverWorking = workingDraftByRowId.get(id);
+    if (serverWorking) {
+      // Draft-only fast path: no provider/message-open request is issued for
+      // a server Working Draft that has not yet checkpointed to IMAP.
+      setCompose(buildWorkingDraftInitial(serverWorking));
+      setSelectedId(null);
+      setSelectedMessage(null);
+      setReading(false);
+      return;
+    }
     const intent = messageOpenIntentRef.current!.next(id);
     // Drop speculative work queued for the previous intent. An already
     // running single-flight may still be reused by this foreground open.
@@ -7479,6 +7592,24 @@ function Composer({
   // always reads the latest attachment state without a re-instantiation.
   const filesRef = useRef<File[]>([]);
   const inlineImagesRef = useRef<InlineComposeImage[]>([]);
+  // Server Working Draft revision is the cross-session authority. The local
+  // DraftEngine still governs rendering, dirty state, and close fencing.
+  const workingRevisionRef = useRef(0);
+  const workingAttachmentByFileRef = useRef<WeakMap<File, WorkingDraftAttachmentReference>>(
+    new WeakMap(),
+  );
+  const workingAttachmentUploadRef = useRef<
+    WeakMap<File, Promise<WorkingDraftAttachmentReference>>
+  >(new WeakMap());
+  const workingAttachmentClientKeyRef = useRef<WeakMap<File, string>>(new WeakMap());
+  const workingAttachmentByExistingIdRef = useRef<
+    Map<string, WorkingDraftAttachmentReference>
+  >(new Map());
+  const workingAttachmentByInlineIdRef = useRef<
+    Map<string, WorkingDraftAttachmentReference>
+  >(new Map());
+  const workingDraftRecordRef = useRef<WorkingDraftRecord | null>(null);
+  const workingDraftLoadPromiseRef = useRef<Promise<WorkingDraftRecord | null> | null>(null);
   const hydratedInlineImageIdsRef = useRef<Set<string>>(new Set());
   const fileDependencyByFileRef = useRef<Map<File, { key: string }>>(new Map());
   const unresolvedInlineDependenciesRef = useRef<Map<string, string>>(new Map());
@@ -7520,6 +7651,73 @@ function Composer({
   );
   const autosaveRef = useRef<ReturnType<typeof createAutosaveScheduler> | null>(null);
 
+  // Prefer an existing server Working Draft when the Composer is opened on a
+  // second device/tab. This is metadata-only: attachment cards are rebuilt
+  // from durable references and no provider attachment bytes are fetched.
+  useEffect(() => {
+    let cancelled = false;
+    const token = session.mailSessionToken;
+    if (!token) return;
+    const load = (async (): Promise<WorkingDraftRecord | null> => {
+      try {
+        const response = await fetch("/api/mail-working-draft", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ mailSessionToken: token, action: "load", draftId }),
+        });
+        const result = (await response.json().catch(() => null)) as {
+          ok?: boolean;
+          record?: WorkingDraftRecord | null;
+        } | null;
+        const record = result?.ok ? result.record : null;
+        if (!record || !Number.isSafeInteger(record.revision)) return null;
+        workingDraftRecordRef.current = record;
+        workingRevisionRef.current = record.revision;
+        if (cancelled || isDirtyRef.current) return record;
+        const snapshot = record.payload.snapshot;
+        setTo(snapshot.to ?? []);
+        setCc(snapshot.cc ?? []);
+        setBcc(snapshot.bcc ?? []);
+        setSubject(snapshot.subject ?? "");
+        setShowCc(Boolean(snapshot.showCc));
+        setShowBcc(Boolean(snapshot.showBcc));
+        if (editorRef.current) editorRef.current.innerHTML = snapshot.html ?? "";
+        const normal = record.payload.attachments.filter((attachment) => attachment.kind === "attachment");
+        const cards = normal.map((attachment) => ({
+          id: attachment.clientKey,
+          filename: attachment.filename,
+          size: attachment.size,
+          mimeType: attachment.mimeType,
+          disposition: attachment.disposition,
+        }));
+        for (const attachment of normal) {
+          workingAttachmentByExistingIdRef.current.set(attachment.clientKey, attachment);
+        }
+        setExistingKept(cards);
+        if (record.checkpoint?.serverRef) {
+          serverRefRef.current = record.checkpoint.serverRef;
+          setServerRef(record.checkpoint.serverRef);
+        }
+        setHasRemoteDraft(true);
+        setSavedAt(Date.now());
+        draftEngineRef.current?.markSaved(generationRef.current);
+        syncDraftEngineRefs();
+        return record;
+      } catch {
+        // Local crash recovery remains usable when the Working Draft service
+        // is temporarily unavailable.
+        return null;
+      }
+    })();
+    workingDraftLoadPromiseRef.current = load;
+    void load;
+    return () => {
+      cancelled = true;
+    };
+    // Composer is keyed by draft identity; a new token only affects future saves.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draftId]);
+
   const saverRef = useRef<DraftSaver | null>(null);
 
   const currentDiagnosticAttachmentSignature = () =>
@@ -7551,6 +7749,26 @@ function Composer({
   // one-shot editor input listener) never capture a stale session token.
   const mailSessionTokenRef = useRef<string>(session.mailSessionToken ?? "");
   mailSessionTokenRef.current = session.mailSessionToken ?? "";
+
+  async function deleteServerWorkingDraft(): Promise<{ ok: boolean; code?: string }> {
+    const token = mailSessionTokenRef.current;
+    if (!token) return { ok: false, code: "SESSION_REQUIRED" };
+    try {
+      const response = await fetch("/api/mail-working-draft", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mailSessionToken: token, action: "delete", draftId }),
+      });
+      const result = (await response.json().catch(() => null)) as {
+        ok?: boolean;
+        code?: string;
+      } | null;
+      if (response.ok && result?.ok === true) return { ok: true };
+      return { ok: false, code: result?.code ?? "UNKNOWN" };
+    } catch {
+      return { ok: false, code: "NETWORK" };
+    }
+  }
 
   // ----- Explicit staged-handle release (best-effort, never blocks the UI) -----
   // Handles are released only when genuinely abandoned: an attachment or inline
@@ -7752,6 +7970,137 @@ function Composer({
     });
   }
 
+  /** Upload a genuinely new Draft resource once to private Working Draft storage. */
+  function ensureWorkingAttachment(
+    file: File,
+    kind: "attachment" | "inline-image",
+    options: { filename: string; mimeType: string; cid?: string; disposition?: string },
+  ): Promise<WorkingDraftAttachmentReference> {
+    const existing = workingAttachmentUploadRef.current.get(file);
+    if (existing) return existing;
+    let clientKey = workingAttachmentClientKeyRef.current.get(file);
+    if (!clientKey) {
+      clientKey = crypto.randomUUID();
+      workingAttachmentClientKeyRef.current.set(file, clientKey);
+    }
+    setUploadState((current) => new Map(current).set(file, { status: "uploading", progress: 0 }));
+    const promise = (async () => {
+      const form = new FormData();
+      form.set("mailSessionToken", session.mailSessionToken ?? "");
+      form.set("draftId", draftId);
+      form.set("clientKey", clientKey);
+      form.set("kind", kind);
+      form.set("filename", options.filename);
+      form.set("mimeType", options.mimeType || "application/octet-stream");
+      if (options.cid) form.set("cid", options.cid);
+      if (options.disposition) form.set("disposition", options.disposition);
+      form.set("file", file, options.filename);
+      const response = await fetch("/api/mail-working-draft-attachment", {
+        method: "POST",
+        body: form,
+      });
+      const result = (await response.json().catch(() => null)) as {
+        ok?: boolean;
+        attachment?: WorkingDraftAttachmentReference;
+        error?: string;
+      } | null;
+      if (!response.ok || !result?.ok || !result.attachment) {
+        throw new Error(result?.error || "ATTACHMENT_UPLOAD_FAILED");
+      }
+      const reference = result.attachment;
+      workingAttachmentByFileRef.current.set(file, reference);
+      setUploadState((current) => new Map(current).set(file, { status: "ready", progress: 100 }));
+      const dependency = fileDependencyByFileRef.current.get(file);
+      if (dependency) {
+        draftEngineRef.current?.resolveResourceDependency(dependency.key);
+        syncDraftEngineRefs();
+      }
+      if (draftEngineRef.current?.canCommitLatest()) {
+        autosaveScheduleReasonRef.current = "attachment-ready";
+        autosaveRef.current?.schedule();
+      }
+      return reference;
+    })().catch((error) => {
+      const dependency = fileDependencyByFileRef.current.get(file);
+      if (dependency && !abandonedUploadsRef.current.has(file) && !deleteIntentRef.current) {
+        draftEngineRef.current?.failResourceDependency(dependency.key);
+        syncDraftEngineRefs();
+      }
+      setUploadState((current) => new Map(current).set(file, { status: "failed", progress: 0 }));
+      workingAttachmentUploadRef.current.delete(file);
+      throw error;
+    });
+    workingAttachmentUploadRef.current.set(file, promise);
+    return promise;
+  }
+
+  function buildWorkingDraftPayload(snapshot: DraftSnapshot): WorkingDraftPayload {
+    const normal = existingKeptRef.current.map((attachment) => {
+      const retained = workingAttachmentByExistingIdRef.current.get(attachment.id);
+      if (retained) {
+        return {
+          ...retained,
+          filename: attachment.filename,
+          mimeType: attachment.mimeType || retained.mimeType,
+          size: attachment.size,
+          disposition: attachment.disposition ?? retained.disposition,
+        };
+      }
+      const source = attachmentSourceRef.current;
+      if (!source || !attachment.part) throw new Error("SOURCE_ATTACHMENT_UNRESOLVED");
+      const reference: WorkingDraftAttachmentReference = {
+        clientKey: `provider-normal:${source.folderPath}:${source.uidValidity}:${source.uid}:${attachment.part}`,
+        kind: "attachment",
+        filename: attachment.filename,
+        mimeType: attachment.mimeType || "application/octet-stream",
+        size: attachment.size,
+        disposition: attachment.disposition,
+        source: { ...source, part: attachment.part },
+      };
+      workingAttachmentByExistingIdRef.current.set(attachment.id, reference);
+      return reference;
+    });
+    const added = filesRef.current.map((file) => {
+      const reference = workingAttachmentByFileRef.current.get(file);
+      if (!reference) throw new Error("ATTACHMENT_UPLOAD_PENDING");
+      return reference;
+    });
+    const inlineByUpload = new Map(
+      inlineImagesRef.current.map((image) => [image.uploadFilename, image]),
+    );
+    const inline = (snapshot.inlineImages ?? []).map((metadata) => {
+      const image = inlineByUpload.get(metadata.uploadFilename);
+      if (!image) throw new Error("INLINE_ATTACHMENT_UNRESOLVED");
+      const retained = workingAttachmentByInlineIdRef.current.get(image.id);
+      if (retained) return { ...retained, cid: image.cid, filename: image.uploadFilename };
+      const owned = workingAttachmentByFileRef.current.get(image.file);
+      if (owned) {
+        workingAttachmentByInlineIdRef.current.set(image.id, owned);
+        return owned;
+      }
+      if (!image.sourceDescriptor) throw new Error("INLINE_ATTACHMENT_UNRESOLVED");
+      const source = image.sourceDescriptor;
+      const reference: WorkingDraftAttachmentReference = {
+        clientKey: `provider-inline:${source.folderPath}:${source.uidValidity}:${source.uid}:${source.part}:${source.cid}`,
+        kind: "inline-image",
+        filename: image.uploadFilename,
+        mimeType: image.mimeType,
+        size: source.size,
+        disposition: "inline",
+        cid: image.cid,
+        source: {
+          folderPath: source.folderPath,
+          uid: source.uid,
+          uidValidity: source.uidValidity,
+          part: source.part,
+        },
+      };
+      workingAttachmentByInlineIdRef.current.set(image.id, reference);
+      return reference;
+    });
+    return { version: 1, snapshot, attachments: [...normal, ...added, ...inline] };
+  }
+
   if (!saverRef.current) {
     saverRef.current = createDraftSaver(draftId, {
       saveRemote: async ({ snapshot, previousRef, generation, trigger, revisionId }) => {
@@ -7759,6 +8108,58 @@ function Composer({
         if (!token) return { ok: false, code: "SESSION_REQUIRED" };
         const logicalRevisionId = revisionId ?? currentRevisionIdRef.current;
         remoteSaveStartedAtByGenerationRef.current.set(generation, performance.now());
+        // The interactive save is now the lightweight authoritative Working
+        // Draft mutation. It contains body/metadata/reference ids only; the
+        // provider checkpoint is scheduled separately and is never awaited by
+        // typing, Explicit Save, or Close.
+        try {
+          const payload = buildWorkingDraftPayload(snapshot);
+          const response = await fetch("/api/mail-working-draft", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              mailSessionToken: token,
+              action: "save",
+              draftId,
+              expectedRevision: workingRevisionRef.current,
+              payload,
+            }),
+          });
+          const result = (await response.json().catch(() => null)) as {
+            ok?: boolean;
+            conflict?: boolean;
+            revision?: number;
+            serverRef?: DraftServerRef | null;
+            error?: string;
+          } | null;
+          if (result?.ok && Number.isSafeInteger(result.revision)) {
+            workingRevisionRef.current = result.revision!;
+            const hasAttachments = payload.attachments.length > 0;
+            if (trigger?.reason === "explicit" || trigger?.reason === "close") {
+              // Fire-and-forget only: the authoritative Working Draft save
+              // above has already completed, so Save and Close never wait for
+              // an IMAP APPEND. Starting it now lets a close survive unmount.
+              startWorkingDraftCheckpoint(hasAttachments);
+            } else {
+              scheduleWorkingDraftCheckpoint(hasAttachments);
+            }
+            return { ok: true, serverRef: result.serverRef ?? undefined };
+          }
+          if (result?.conflict && Number.isSafeInteger(result.revision)) {
+            // Never overwrite a newer tab/device. Keep local recovery dirty
+            // and require an explicit user retry/reload rather than guessing
+            // how to merge mail content.
+            workingRevisionRef.current = result.revision!;
+            return { ok: false, code: "WORKING_DRAFT_CONFLICT" };
+          }
+          return { ok: false, code: result?.error || "WORKING_DRAFT_SAVE_FAILED" };
+        } catch (error) {
+          return { ok: false, code: error instanceof Error ? error.message : "NETWORK" };
+        }
+
+        /* Legacy temporary Bridge-stage path intentionally unreachable. It is
+         * retained only for the non-Draft normal-send helpers until their
+         * separate paths are deleted in a later compatibility cleanup. */
         const currentFiles = filesRef.current;
         const currentInlineImages = inlineImagesRef.current;
         const transport = serializeInlineImages(snapshot.html, currentInlineImages);
@@ -7884,7 +8285,7 @@ function Composer({
             return { response, parsed };
           };
           let response: Response;
-          let res: Record<string, unknown> | null;
+          let res: any = null;
           try {
             ({ response, parsed: res } = await attempt());
           } catch {
@@ -7940,7 +8341,7 @@ function Composer({
 
               });
             }
-            const nextServerRef =
+            const nextServerRef: DraftServerRef | null =
               typeof res.uid === "number" &&
               res.uid > 0 &&
               typeof res.uidValidity === "string" &&
@@ -7950,12 +8351,15 @@ function Composer({
                     uid: res.uid,
                     uidValidity: res.uidValidity,
                   }
-                : undefined;
+                : null;
             if (res.reconciled === true && nextServerRef) {
               if (attachmentSourceRef.current) attachmentSourceRef.current = nextServerRef;
               for (const image of inlineImagesRef.current) {
                 if (!image.sourceDescriptor) continue;
-                image.sourceDescriptor = { ...image.sourceDescriptor, ...nextServerRef };
+                image.sourceDescriptor = {
+                  ...image.sourceDescriptor,
+                  ...nextServerRef,
+                } as NonNullable<typeof image.sourceDescriptor>;
               }
             }
             const confirmedSnapshot = addStagedMetadata(snapshot);
@@ -7971,7 +8375,7 @@ function Composer({
             if (nextServerRef) {
               return {
                 ok: true,
-                serverRef: nextServerRef,
+                serverRef: nextServerRef ?? undefined,
                 reconciled: res.reconciled === true,
               };
             }
@@ -7993,7 +8397,7 @@ function Composer({
       },
       onStatus: setSaveStatus,
       onServerRef: (r) => setServerRef(r),
-      onCompleted: ({ completedGeneration, status, serverRef, previousRef, code, trigger }) => {
+      onCompleted: ({ completedGeneration, revisionId, status, serverRef, previousRef, code, trigger }) => {
         automaticSaveGenerationsRef.current.delete(completedGeneration);
         const wasAutomatic =
           trigger?.reason === "automatic" || trigger?.reason === "attachment-ready";
@@ -8023,6 +8427,16 @@ function Composer({
           lastSavedAtRef.current = Date.now();
           setSavedAt(lastSavedAtRef.current);
           lastFailCodeRef.current = null;
+          if (typeof window !== "undefined" && revisionId) {
+            // "Committed" now means the Working Draft revision, not an IMAP
+            // APPEND. This keeps crash recovery clean only for the exact
+            // acknowledged generation and retains a later local edit as DIRTY.
+            confirmDraftDocRemoteCommit(window.localStorage, accountEmail, draftId, {
+              localRevision: completedGeneration,
+              revisionId,
+              serverRef: serverRef ?? null,
+            });
+          }
           // A persisted remote save means the attachment set is not
           // size-blocked anymore.
           sizeBlockedAttachmentSignatureRef.current = null;
@@ -8126,6 +8540,127 @@ function Composer({
       const editor = editorRef.current;
       if (!editor) return;
       const hydrated: InlineComposeImage[] = [];
+      const finishHydration = () => {
+        if (cancelled) {
+          for (const image of hydrated) URL.revokeObjectURL(image.objectUrl);
+          return;
+        }
+        // Local rows already have durable cid/src. Rebind those nodes to fresh object URLs.
+        for (const image of hydrated) {
+          applyInlineImageToCidNodes(editor, image.cid, image);
+        }
+        // Any external provider inline resource that has not yet been safely
+        // imported remains visible as cid: and blocks a save. It is never
+        // silently removed or rebound by filename/MIME.
+        for (const unresolved of editor.querySelectorAll<HTMLImageElement>(
+          'img[src^="cid:" i],img[data-mm-source-cid]',
+        )) {
+          const cid = (
+            unresolved.dataset.mmSourceCid ??
+            unresolved.getAttribute("src")?.slice(4) ??
+            ""
+          )
+            .trim()
+            .replace(/^<|>$/g, "")
+            .toLowerCase();
+          if (!cid) continue;
+          unresolved.dataset.mmSourceCid = cid;
+          const key = `unresolved-restored-inline:${cid}`;
+          unresolvedInlineDependenciesRef.current.set(cid, key);
+          draftEngineRef.current?.registerResourceDependency(key);
+          draftEngineRef.current?.failResourceDependency(key);
+        }
+        setInlineImages((current) => mergeHydratedInlineImages(current, hydrated));
+        hydratedInlineImageIdsRef.current = new Set([
+          ...hydratedInlineImageIdsRef.current,
+          ...hydrated.map((image) => image.id),
+        ]);
+        inlineHydratedRef.current = true;
+        if (isDirtyRef.current) autosaveRef.current?.schedule();
+      };
+
+      // Wait for the Draft-only Working Draft lookup before deciding whether
+      // provider CID hydration is needed. This is what prevents a second-tab
+      // open from eagerly FETCHing a provider attachment that MailMaestro
+      // already owns durably.
+      const workingRecord = await (workingDraftLoadPromiseRef.current ?? Promise.resolve(null));
+      if (cancelled) return;
+      if (workingRecord) {
+        const workingSnapshot = workingRecord.payload.snapshot;
+        if (!isDirtyRef.current) editor.innerHTML = workingSnapshot.html ?? "";
+        const refsByCid = new Map(
+          workingRecord.payload.attachments
+            .filter(
+              (attachment) =>
+                attachment.kind === "inline-image" &&
+                Boolean(attachment.attachmentId) &&
+                Boolean(attachment.cid),
+            )
+            .map((attachment) => [attachment.cid!.trim().replace(/^<|>$/g, "").toLowerCase(), attachment]),
+        );
+        const loadedCids = new Set<string>();
+        // IndexedDB blobs are accepted only when they are pinned to the same
+        // immutable durable attachment id. A reused CID can never surface a
+        // previous image from this Draft's local cache.
+        try {
+          for (const row of await readInlineImages(inlineScope)) {
+            const cid = row.cid.trim().replace(/^<|>$/g, "").toLowerCase();
+            const reference = refsByCid.get(cid);
+            if (!reference || row.workingAttachmentId !== reference.attachmentId) continue;
+            const file = new File([row.blob], row.filename, { type: row.mimeType });
+            if (!validateInlineImageFile(file).ok) continue;
+            const image = hydrateInlineComposeImage(file, row);
+            image.workingAttachmentId = reference.attachmentId;
+            workingAttachmentByInlineIdRef.current.set(image.id, reference);
+            hydrated.push(image);
+            loadedCids.add(cid);
+          }
+        } catch {
+          /* Cache is optional; the authenticated private object remains authoritative. */
+        }
+        for (const [cid, reference] of refsByCid) {
+          if (loadedCids.has(cid) || !reference.attachmentId || !reference.cid) continue;
+          try {
+            const response = await fetch("/api/mail-working-draft-attachment-content", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              signal: streamController.signal,
+              body: JSON.stringify({
+                mailSessionToken: session.mailSessionToken ?? "",
+                draftId,
+                attachmentId: reference.attachmentId,
+              }),
+            });
+            if (!response.ok) continue;
+            const bytes = await response.blob();
+            if (bytes.size !== reference.size) continue;
+            const file = new File([bytes], reference.filename, { type: reference.mimeType });
+            const valid = validateInlineImageFile(file);
+            if (!valid.ok) continue;
+            const snapshotMetadata = (workingSnapshot.inlineImages ?? []).find(
+              (item) => item.cid.trim().replace(/^<|>$/g, "").toLowerCase() === cid,
+            );
+            const image = hydrateInlineComposeImage(file, {
+              id: snapshotMetadata?.id ?? reference.clientKey,
+              cid: reference.cid,
+              mimeType: valid.mimeType,
+              filename: reference.filename,
+              uploadFilename: snapshotMetadata?.uploadFilename ?? reference.filename,
+              workingAttachmentId: reference.attachmentId,
+            });
+            workingAttachmentByInlineIdRef.current.set(image.id, reference);
+            hydrated.push(image);
+            await persistInlineImage(inlineScope, toInlineImageMetadata(image), image.file).catch(
+              () => undefined,
+            );
+          } catch {
+            // An owned object that cannot be read remains a visible unresolved
+            // cid node and therefore fails closed instead of disappearing.
+          }
+        }
+        finishHydration();
+        return;
+      }
       if (initial?.quoteSourceHtml) {
         await new Promise<void>((resolve) => {
           let settled = false;
@@ -8288,39 +8823,7 @@ function Composer({
         });
         await Promise.all(attachmentTasks);
       }
-      if (cancelled) {
-        for (const image of hydrated) URL.revokeObjectURL(image.objectUrl);
-        return;
-      }
-      // Local rows already have durable cid/src. Rebind those nodes to fresh object URLs.
-      for (const image of hydrated) {
-        applyInlineImageToCidNodes(editor, image.cid, image);
-      }
-      for (const unresolved of editor.querySelectorAll<HTMLImageElement>(
-        'img[src^="cid:" i],img[data-mm-source-cid]',
-      )) {
-        const cid = (
-          unresolved.dataset.mmSourceCid ??
-          unresolved.getAttribute("src")?.slice(4) ??
-          ""
-        )
-          .trim()
-          .replace(/^<|>$/g, "")
-          .toLowerCase();
-        if (!cid) continue;
-        unresolved.dataset.mmSourceCid = cid;
-        const key = `unresolved-restored-inline:${cid}`;
-        unresolvedInlineDependenciesRef.current.set(cid, key);
-        draftEngineRef.current?.registerResourceDependency(key);
-        draftEngineRef.current?.failResourceDependency(key);
-      }
-      setInlineImages((current) => mergeHydratedInlineImages(current, hydrated));
-      hydratedInlineImageIdsRef.current = new Set([
-        ...hydratedInlineImageIdsRef.current,
-        ...hydrated.map((image) => image.id),
-      ]);
-      inlineHydratedRef.current = true;
-      if (isDirtyRef.current) autosaveRef.current?.schedule();
+      finishHydration();
     };
     inlineReadinessRef.current = hydrate().finally(() => {
       draftEngineRef.current?.settleHydrationDependency(hydrationKey);
@@ -8561,14 +9064,32 @@ function Composer({
   filesRef.current = files;
   inlineImagesRef.current = inlineImages;
   useEffect(() => {
-    for (const file of files) void ensureStaged(file, "attachment").catch(() => undefined);
-    // ensureStaged is intentionally stable through stagedUploadsRef identity.
+    for (const file of files) {
+      void ensureWorkingAttachment(file, "attachment", {
+        filename: file.name,
+        mimeType: file.type || "application/octet-stream",
+        disposition: "attachment",
+      }).catch(() => undefined);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [files]);
   useEffect(() => {
     for (const image of inlineImages) {
       if (hydratedInlineImageIdsRef.current.has(image.id)) continue;
-      void ensureStaged(image.file, "inline-image", image.uploadFilename).catch(() => undefined);
+      void ensureWorkingAttachment(image.file, "inline-image", {
+        filename: image.uploadFilename,
+        mimeType: image.mimeType,
+        disposition: "inline",
+        cid: image.cid,
+      })
+        .then((reference) => {
+          workingAttachmentByInlineIdRef.current.set(image.id, reference);
+          image.workingAttachmentId = reference.attachmentId;
+          void persistInlineImage(inlineScope, toInlineImageMetadata(image), image.file).catch(
+            () => undefined,
+          );
+        })
+        .catch(() => undefined);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [inlineImages]);
@@ -8577,6 +9098,11 @@ function Composer({
   // helpers expose idempotent .dispose() and are torn down inside useEffect
   // cleanup so no callback runs after unmount.
   const remoteAutosaveTimerRef = useRef<number | null>(null);
+  const workingCheckpointTimerRef = useRef<number | null>(null);
+  const workingCheckpointInFlightRef = useRef(false);
+  const workingCheckpointPendingRef = useRef(false);
+  const lastProviderCheckpointAtRef = useRef<number | null>(null);
+  const lastProviderCheckpointDurationMsRef = useRef<number | null>(null);
   const sendInProgressRef = useRef(false);
   const sendCompletedRef = useRef(false);
   const automaticRemoteSaveInFlightRef = useRef<Promise<unknown> | null>(null);
@@ -8584,6 +9110,69 @@ function Composer({
   const lastAutomaticSaveDurationMsRef = useRef<number | null>(null);
   const automaticSaveGenerationsRef = useRef(new Set<number>());
   const autosaveScheduleReasonRef = useRef<DraftSaveTriggerReason>("automatic");
+
+  function startWorkingDraftCheckpoint(hasAttachments: boolean) {
+    if (
+      typeof window === "undefined" ||
+      deleteIntentRef.current ||
+      sendInProgressRef.current ||
+      workingCheckpointInFlightRef.current
+    ) {
+      if (!deleteIntentRef.current && !sendInProgressRef.current) {
+        workingCheckpointPendingRef.current = true;
+      }
+      return;
+    }
+    if (workingCheckpointTimerRef.current !== null) {
+      window.clearTimeout(workingCheckpointTimerRef.current);
+      workingCheckpointTimerRef.current = null;
+    }
+    workingCheckpointPendingRef.current = false;
+    workingCheckpointInFlightRef.current = true;
+    const startedAt = performance.now();
+    void fetch("/api/mail-working-draft-checkpoint", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mailSessionToken: mailSessionTokenRef.current, draftId }),
+    })
+      .then((response) => {
+        if (response.ok) {
+          lastProviderCheckpointAtRef.current = Date.now();
+          lastProviderCheckpointDurationMsRef.current = Math.max(0, performance.now() - startedAt);
+        }
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        workingCheckpointInFlightRef.current = false;
+        if (workingCheckpointPendingRef.current) scheduleWorkingDraftCheckpoint(hasAttachments);
+      });
+  }
+
+  function scheduleWorkingDraftCheckpoint(hasAttachments: boolean, immediate = false) {
+    if (typeof window === "undefined" || deleteIntentRef.current || sendInProgressRef.current) return;
+    workingCheckpointPendingRef.current = true;
+    if (workingCheckpointInFlightRef.current || workingCheckpointTimerRef.current !== null) return;
+    // This is deliberately independent from the 1.5s/5s Working Draft save
+    // cadence. Its dynamic cooldown is min(max, max(min, round(duration ×
+    // multiplier))) where attachment drafts use 15s..120s ×1.5 and small
+    // drafts use 2s..15s ×0.5. Explicit Save and Close never await it.
+    const plan = planRemoteDraftSave({
+      automatic: true,
+      hasAttachments,
+      sending: false,
+      now: Date.now(),
+      lastSuccessfulAutomaticSaveAt: lastProviderCheckpointAtRef.current,
+      lastAutomaticSaveDurationMs: lastProviderCheckpointDurationMsRef.current,
+    });
+    if (!plan.allowed) return;
+    const delay = immediate ? 0 : plan.delayMs;
+    workingCheckpointTimerRef.current = window.setTimeout(() => {
+      workingCheckpointTimerRef.current = null;
+      if (!workingCheckpointPendingRef.current || deleteIntentRef.current || sendInProgressRef.current)
+        return;
+      startWorkingDraftCheckpoint(hasAttachments);
+    }, delay);
+  }
   const pendingRemoteSaveRef = useRef<{
     snapshot: DraftSnapshot;
     generation: number;
@@ -8757,16 +9346,11 @@ function Composer({
         if (remoteAutosaveTimerRef.current !== null) {
           window.clearTimeout(remoteAutosaveTimerRef.current);
         }
-        const plan = planRemoteDraftSave({
-          automatic: true,
-          hasAttachments,
-          sending: sendInProgressRef.current,
-          now: Date.now(),
-          lastSuccessfulAutomaticSaveAt: lastSuccessfulAutomaticSaveAtRef.current,
-          lastAutomaticSaveDurationMs: lastAutomaticSaveDurationMsRef.current,
-        });
-        if (!plan.allowed) return;
-        remoteAutosaveTimerRef.current = window.setTimeout(flushPendingRemoteSave, plan.delayMs);
+        // Working Draft saves are small JSON/reference mutations. They must
+        // not inherit the expensive IMAP APPEND cooldown: the scheduler above
+        // already provides the 1.5s idle / 5s max-dirty cadence.
+        void hasAttachments;
+        remoteAutosaveTimerRef.current = window.setTimeout(flushPendingRemoteSave, 0);
       },
     });
     autosaveRef.current = scheduler;
@@ -8776,6 +9360,10 @@ function Composer({
       if (remoteAutosaveTimerRef.current !== null) {
         window.clearTimeout(remoteAutosaveTimerRef.current);
         remoteAutosaveTimerRef.current = null;
+      }
+      if (workingCheckpointTimerRef.current !== null) {
+        window.clearTimeout(workingCheckpointTimerRef.current);
+        workingCheckpointTimerRef.current = null;
       }
     };
   }, [draftId, threadingHeaders]);
@@ -8964,14 +9552,7 @@ function Composer({
       }
       let discarded = false;
       try {
-        const result = await bridgeDeleteDraftFn({
-          data: {
-            mailSessionToken: token,
-            draftId,
-            previousRef: serverRefRef.current ?? undefined,
-          },
-        });
-        discarded = result?.ok === true;
+        discarded = (await deleteServerWorkingDraft()).ok;
       } catch {
         discarded = false;
       }
@@ -9531,6 +10112,11 @@ function Composer({
       window.clearTimeout(remoteAutosaveTimerRef.current);
       remoteAutosaveTimerRef.current = null;
     }
+    if (workingCheckpointTimerRef.current !== null) {
+      window.clearTimeout(workingCheckpointTimerRef.current);
+      workingCheckpointTimerRef.current = null;
+    }
+    workingCheckpointPendingRef.current = false;
     pendingRemoteSaveRef.current = null;
     let sendAccepted = false;
     setSending(true);
@@ -9554,54 +10140,70 @@ function Composer({
       const bodyHtml = buildEmailHtmlDocument(fragment, { dir: editorDir });
       const bodyText = htmlToPlainText(fragment);
 
-      const attachmentPlan = buildAttachmentTransportPlan({
-        attachments: existingKeptRef.current,
-        restoredHandles: restoredHandleByAttachmentIdRef.current,
-        preservedHandles: preservedSourceHandlesRef.current,
-        sourceRef: attachmentSourceRef.current,
-      });
-      if (attachmentPlan.unresolvedAttachmentIds.length > 0) {
-        toast.error(tr("تعذّر تجهيز مرفقات الرسالة"));
-        return;
+      // A normal, never-saved Compose continues through the existing SMTP
+      // path unchanged. An actual Draft (server Working Draft or provider
+      // Draft being edited) sends from the durable Working Draft objects.
+      const draftOrigin = isEditMode || workingRevisionRef.current > 0;
+      let response: Response;
+      if (draftOrigin) {
+        const saved = await saveDraftNow("explicit");
+        if (saved !== "saved_server") return;
+        response = await fetch("/api/mail-working-draft-send", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            mailSessionToken: session.mailSessionToken ?? "",
+            draftId,
+          }),
+        });
+      } else {
+        const attachmentPlan = buildAttachmentTransportPlan({
+          attachments: existingKeptRef.current,
+          restoredHandles: restoredHandleByAttachmentIdRef.current,
+          preservedHandles: preservedSourceHandlesRef.current,
+          sourceRef: attachmentSourceRef.current,
+        });
+        if (attachmentPlan.unresolvedAttachmentIds.length > 0) {
+          toast.error(tr("تعذّر تجهيز مرفقات الرسالة"));
+          return;
+        }
+        let stagedNormal: StagedAttachmentResult[];
+        let stagedInline: StagedAttachmentResult[];
+        try {
+          stagedNormal = await Promise.all(files.map((file) => ensureStaged(file, "attachment")));
+          stagedInline = await Promise.all(
+            transportImages.map((image) =>
+              ensureStaged(image.file, "inline-image", image.uploadFilename),
+            ),
+          );
+        } catch {
+          toast.error(tr("تعذّر رفع أحد المرفقات"));
+          return;
+        }
+        const attachmentTransport = buildStagedAttachmentTransport({
+          plan: attachmentPlan,
+          normal: stagedNormal,
+          inline: stagedInline,
+          inlineMetadata: metadataToTransport(transportImages),
+        });
+        response = await fetch("/api/mail-send-v2", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            mailSessionToken: session.mailSessionToken ?? "",
+            password: session.password,
+            to: to.filter((r) => r.valid).map((r) => ({ name: r.name ?? "", email: r.email })),
+            cc: cc.filter((r) => r.valid).map((r) => ({ name: r.name ?? "", email: r.email })),
+            bcc: bcc.filter((r) => r.valid).map((r) => ({ name: r.name ?? "", email: r.email })),
+            subject,
+            inReplyTo: threadingHeaders.inReplyTo,
+            references: threadingHeaders.references,
+            bodyHtml,
+            bodyText,
+            ...attachmentTransport,
+          }),
+        });
       }
-
-      let stagedNormal: StagedAttachmentResult[];
-      let stagedInline: StagedAttachmentResult[];
-      try {
-        stagedNormal = await Promise.all(files.map((file) => ensureStaged(file, "attachment")));
-        stagedInline = await Promise.all(
-          transportImages.map((image) =>
-            ensureStaged(image.file, "inline-image", image.uploadFilename),
-          ),
-        );
-      } catch {
-        toast.error(tr("تعذّر رفع أحد المرفقات"));
-        return;
-      }
-      const inlineMetadata = metadataToTransport(transportImages);
-      const attachmentTransport = buildStagedAttachmentTransport({
-        plan: attachmentPlan,
-        normal: stagedNormal,
-        inline: stagedInline,
-        inlineMetadata,
-      });
-      const response = await fetch("/api/mail-send-v2", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          mailSessionToken: session.mailSessionToken ?? "",
-          password: session.password,
-          to: to.filter((r) => r.valid).map((r) => ({ name: r.name ?? "", email: r.email })),
-          cc: cc.filter((r) => r.valid).map((r) => ({ name: r.name ?? "", email: r.email })),
-          bcc: bcc.filter((r) => r.valid).map((r) => ({ name: r.name ?? "", email: r.email })),
-          subject,
-          inReplyTo: threadingHeaders.inReplyTo,
-          references: threadingHeaders.references,
-          bodyHtml,
-          bodyText,
-          ...attachmentTransport,
-        }),
-      });
       const result = (await response.json().catch(() => ({
         ok: false,
         error: `HTTP ${response.status}`,
@@ -9636,35 +10238,48 @@ function Composer({
       } catch {
         /* noop */
       }
-      const refAtSend = serverRefRef.current;
-      const hadServerCopy = !!refAtSend || saveStatus !== "idle";
-      if (hadServerCopy) {
-        const token = session.mailSessionToken ?? "";
-        const automaticSaveAtSend = automaticRemoteSaveInFlightRef.current;
-        deleteDraftAfterSend({
-          deleteRemote: async () => {
-            await automaticSaveAtSend?.catch(() => undefined);
-            try {
-              clearDraftDoc(window.localStorage, accountEmail, draftId);
-            } catch {
-              /* remote cleanup must still run if local storage is unavailable */
-            }
-            const deleted = await bridgeDeleteDraftFn({
-              data: {
-                mailSessionToken: token,
+      if (!draftOrigin) {
+        // Preserve the existing normal-send Draft cleanup behaviour. The
+        // durable Working Draft endpoint owns its cleanup after its send path.
+        const refAtSend = serverRefRef.current;
+        const hadServerCopy = !!refAtSend || saveStatus !== "idle";
+        if (hadServerCopy) {
+          const token = session.mailSessionToken ?? "";
+          const automaticSaveAtSend = automaticRemoteSaveInFlightRef.current;
+          deleteDraftAfterSend({
+            deleteRemote: async () => {
+              await automaticSaveAtSend?.catch(() => undefined);
+              try {
+                clearDraftDoc(window.localStorage, accountEmail, draftId);
+              } catch {
+                /* remote cleanup must still run if local storage is unavailable */
+              }
+              const deleted = await bridgeDeleteDraftFn({
+                data: {
+                  mailSessionToken: token,
+                  draftId,
+                  previousRef: refAtSend ?? undefined,
+                },
+              });
+              return !!deleted?.ok;
+            },
+            onFailure: () => {
+              pendingQueueRef.current?.enqueue(accountEmail, {
                 draftId,
-                previousRef: refAtSend ?? undefined,
-              },
-            });
-            return !!deleted?.ok;
-          },
-          onFailure: () => {
-            pendingQueueRef.current?.enqueue(accountEmail, {
-              draftId,
-              previousRef: refAtSend,
-            });
-          },
-        });
+                previousRef: refAtSend,
+              });
+            },
+          });
+        }
+        // An attachment-bearing Compose may have begun its upload-once Draft
+        // lifecycle just before its first Working Draft JSON save. It still
+        // sent through the unchanged normal SMTP path above, so dispose that
+        // private shell afterwards. This is deliberately fire-and-forget:
+        // normal Send never waits for Draft cleanup, and the server's FK plus
+        // failed-insert cleanup also covers an upload that wins this race.
+        if (filesRef.current.length > 0 || inlineImagesRef.current.length > 0) {
+          void deleteServerWorkingDraft();
+        }
       }
       toast.success(tr("تم إرسال الرسالة"));
       // A sent draft is gone — clear any just-saved readability marker.
@@ -9987,21 +10602,10 @@ function Composer({
     await saverRef.current?.cancelPendingAndAwaitRunning();
     const deleted = await deleteSavedDraft({
       // A local-only status can mean the APPEND succeeded but its response
-      // was lost. Probe by draftId so explicit deletion never leaves a ghost.
+      // was lost. The Working Draft delete is authoritative; its downstream
+      // provider cleanup is explicitly best-effort and never blocks discard.
       mayHaveRemoteCopy: hasLocalDraft || hasRemoteDraft,
-      deleteRemote: async () => {
-        const token = session.mailSessionToken;
-        if (!token) return { ok: false, code: "SESSION_REQUIRED" };
-        const result = await bridgeDeleteDraftFn({
-          data: {
-            mailSessionToken: token,
-            draftId,
-            previousRef: serverRefRef.current ?? undefined,
-          },
-        });
-        if (!result?.ok) return { ok: false, code: result?.code ?? "UNKNOWN" };
-        return { ok: true };
-      },
+      deleteRemote: deleteServerWorkingDraft,
       clearLocal: () => {
         clearDraftDoc(window.localStorage, accountEmail, draftId);
         clearDraftTransportCache(window.localStorage, accountEmail, draftId);

@@ -60,6 +60,8 @@ export interface InlineComposeImage {
   filename: string;
   uploadFilename: string;
   stagedHandle?: string;
+  /** Immutable Working Draft object identity used to validate the local blob cache. */
+  workingAttachmentId?: string;
   sourceDescriptor?: InlineImageSourceDescriptor;
 }
 
@@ -81,6 +83,8 @@ export interface InlineImageMetadata {
   mimeType: InlineImageMime;
   filename: string;
   uploadFilename: string;
+  /** Present only after this inline resource has been durably uploaded once. */
+  workingAttachmentId?: string;
 }
 
 export type InlineImageValidation =
@@ -180,8 +184,8 @@ export function sniffInlineImageMime(bytes: Uint8Array): InlineImageMime | null 
 }
 
 export function toInlineImageMetadata(image: InlineComposeImage): InlineImageMetadata {
-  const { id, cid, mimeType, filename, uploadFilename } = image;
-  return { id, cid, mimeType, filename, uploadFilename };
+  const { id, cid, mimeType, filename, uploadFilename, workingAttachmentId } = image;
+  return { id, cid, mimeType, filename, uploadFilename, workingAttachmentId };
 }
 
 export function restoreRangeOrEnd(editor: HTMLElement, range: Range | null): Range {

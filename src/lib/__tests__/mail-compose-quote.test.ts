@@ -584,14 +584,16 @@ describe("reply/forward source hydration wiring", () => {
     expect(replyForward.match(/inlineMessageId: message\.id/g)).toHaveLength(2);
 
     const hydration = route.slice(
-      route.indexOf("const attachRemoteFile"),
-      route.indexOf("setInlineImages((current) => mergeHydratedInlineImages(current, hydrated))"),
+      route.indexOf("const hydrate = async () =>"),
+      route.indexOf("inlineReadinessRef.current = hydrate()"),
     );
+    // Working Drafts hydrate only their owned inline objects, while the
+    // provider-Draft compatibility path retains protected CID-part streaming.
+    expect(hydration).toContain('fetch("/api/mail-working-draft-attachment-content"');
     expect(hydration).toContain("streamInlineCidPartsSequential");
     expect(hydration).toContain('fetch("/api/mail-inline-part"');
     expect(hydration).toContain("signal,");
     expect(hydration).not.toContain("/api/mail-attachment");
-    expect(hydration).not.toMatch(/base64|response\.blob\(/i);
 
     const formatter = readFileSync("src/lib/mail-compose-quote.ts", "utf8");
     expect(formatter).toContain("\"img-src 'none'\"");

@@ -340,6 +340,10 @@ const DraftV2AttachmentSchema = z.object({
   sourceInlineImages: z.array(DraftServerInlineSourceSchema).max(20).default([]),
 });
 
+const DraftRevisionReconcilePayloadSchema = AuthPayloadSchema.extend({
+  draftId: z.string().uuid(),
+  revisionId: z.string().uuid(),
+});
 
 const DownloadTicketPayloadSchema = MessagePayloadSchema.extend({
   part: z.string().regex(/^\d+(?:\.\d+)*$/),
@@ -1227,6 +1231,33 @@ app.post("/api/send-status", requireKey, (req, res) => {
   }
 });
 
+app.post("/api/draft-revision-reconcile", requireKey, imapGate("interactive"), async (req, res) => {
+  try {
+    const payload = DraftRevisionReconcilePayloadSchema.parse(req.body);
+    const result = await reconcileDraftRevision(
+      payload.account as MailAccount,
+      payload.password,
+      { draftId: payload.draftId, revisionId: payload.revisionId },
+    );
+    if ("error" in result) {
+      const status =
+        result.error === "RETRYABLE_DRAFT_IDENTITY_SEARCH"
+          ? 503
+          : result.error === "NO_DRAFTS_FOLDER"
+            ? 422
+            : 500;
+      return res.status(status).json({ ok: false, error: result.error });
+    }
+    if (result.found) return res.json({ ok: true, ...result });
+    return res.json({ ok: true, found: false });
+  } catch (error) {
+    return res.status(error instanceof z.ZodError ? 400 : 500).json({
+      ok: false,
+      error: error instanceof z.ZodError ? "INVALID_PAYLOAD" : "DRAFT_RECONCILIATION_FAILED",
+    });
+  }
+});
+
 app.post("/api/draft-save-v2", requireKey, imapGate("interactive"), async (req, res) => {
   let stagedAccount: string | null = null;
   let preservedSourceHandles: string[] = [];
@@ -1698,6 +1729,21 @@ const AttachmentPayloadSchema = MessagePayloadSchema.extend({
   part: z.string().min(1).max(50),
 });
 
+// Draft-only import capability. It deliberately accepts the physical mailbox
+// identity captured when the provider Draft was opened: folderPath +
+// UIDVALIDITY + UID + MIME part. No filename/MIME rebinding is performed here;
+// a stale descriptor fails closed rather than selecting a same-named sibling.
+const DraftSourceAttachmentPayloadSchema = AuthPayloadSchema.extend({
+  folderPath: z.string().min(1).max(500),
+  uid: z.number().int().positive(),
+  uidValidity: z.string().min(1).max(64),
+  part: z.string().regex(/^\d+(?:\.\d+)*$/),
+  filename: z.string().min(1).max(255),
+  mimeType: z.string().min(1).max(255),
+  size: z.number().int().min(0).max(25 * 1024 * 1024),
+  kind: z.enum(["attachment", "inline-image"]),
+});
+
 const downloadGates = createSendGates({
   globalMax: Number(process.env.MAIL_DOWNLOAD_GLOBAL_MAX || 16),
   perKeyMax: Number(process.env.MAIL_DOWNLOAD_ACCOUNT_MAX || 1),
@@ -1911,6 +1957,89 @@ app.post("/api/attachment", requireKey, imapGate("transfer"), async (req, res) =
         .json({ ok: false, error: err?.message || "Failed to download attachment" });
     }
     res.end();
+  }
+});
+
+/**
+ * Import bytes for a metadata-only external provider Draft attachment.
+ * This endpoint is used only by the server-side Working Draft importer. The
+ * descriptor is an exact physical source identity, so it cannot fall back to
+ * filename or MIME matching when another attachment happens to look alike.
+ */
+app.post("/api/draft-source-attachment", requireKey, imapGate("transfer"), async (req, res) => {
+  let account: MailAccount | null = null;
+  try {
+    const payload = DraftSourceAttachmentPayloadSchema.parse(req.body);
+    account = payload.account as MailAccount;
+    const mailboxes = await getMailboxesCached(account, payload.password, "transfer");
+    if (!mailboxes.some((mailbox) => mailbox.path === payload.folderPath)) {
+      return res.status(404).json({ ok: false, error: "SOURCE_MAILBOX_MISMATCH" });
+    }
+    await withAccountMailbox(
+      account,
+      payload.password,
+      payload.folderPath,
+      async (client) => {
+        const currentUidValidity = String(
+          client.mailbox && typeof client.mailbox === "object" ? client.mailbox.uidValidity : "",
+        );
+        if (!currentUidValidity || currentUidValidity !== payload.uidValidity) {
+          return res.status(409).json({ ok: false, error: "SOURCE_UIDVALIDITY_MISMATCH" });
+        }
+        const download = await client.download(payload.uid.toString(), payload.part, {
+          uid: true,
+          // Observe one byte beyond the durable Draft limit so the stream is
+          // rejected rather than silently truncated at exactly the boundary.
+          maxBytes: 25 * 1024 * 1024 + 1,
+        });
+        if (!download?.content) return res.status(404).json({ ok: false, error: "SOURCE_ATTACHMENT_MISSING" });
+        const meta = download.meta as {
+          contentType?: string;
+          filename?: string;
+          expectedSize?: number;
+        };
+        const expectedSize = Number(meta.expectedSize);
+        if (Number.isFinite(expectedSize) && (expectedSize < 0 || expectedSize > 25 * 1024 * 1024)) {
+          download.content.destroy();
+          return res.status(413).json({ ok: false, error: "SOURCE_ATTACHMENT_TOO_LARGE" });
+        }
+        const mimeType = String(meta.contentType || payload.mimeType || "application/octet-stream")
+          .split(";", 1)[0]
+          .trim()
+          .toLowerCase();
+        res.setHeader("Content-Type", mimeType);
+        res.setHeader("Content-Disposition", attachmentContentDisposition(sanitizeAttachmentFilename(meta.filename || payload.filename), mimeType));
+        if (Number.isFinite(expectedSize) && expectedSize > 0) {
+          res.setHeader("Content-Length", String(expectedSize));
+        }
+        res.setHeader("X-Content-Type-Options", "nosniff");
+        res.setHeader("Cache-Control", "private, no-store");
+        let completed = false;
+        const abort = () => {
+          if (!completed && !res.writableEnded) {
+            download.content.destroy();
+            dropAccountConnection(account!, "transfer");
+          }
+        };
+        res.once("close", abort);
+        try {
+          await pipeline(download.content, res);
+          completed = true;
+        } finally {
+          res.off("close", abort);
+        }
+      },
+      "transfer",
+    );
+  } catch (error) {
+    if (account) dropAccountConnection(account, "transfer");
+    if (!res.headersSent) {
+      return res.status(error instanceof z.ZodError ? 400 : 500).json({
+        ok: false,
+        error: error instanceof z.ZodError ? "INVALID_PAYLOAD" : "SOURCE_ATTACHMENT_IMPORT_FAILED",
+      });
+    }
+    if (!res.writableEnded) res.end();
   }
 });
 

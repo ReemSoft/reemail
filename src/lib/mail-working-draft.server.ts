@@ -1,0 +1,858 @@
+import { randomUUID } from "node:crypto";
+import { supabaseAdmin } from "@/integrations/supabase/client.server";
+import {
+  WORKING_DRAFT_ATTACHMENT_BUCKET,
+  WORKING_DRAFT_MAX_ATTACHMENT_BYTES,
+  emptyWorkingDraftPayload,
+  isWorkingDraftAttachmentReference,
+  isWorkingDraftPayload,
+  type WorkingDraftAttachmentReference,
+  type WorkingDraftPayload,
+  type WorkingDraftRecord,
+  type WorkingDraftAttachmentContent,
+  type WorkingDraftSourceDescriptor,
+} from "@/lib/mail-working-draft";
+import type { DraftServerRef } from "@/lib/mail-draft-lifecycle";
+
+type UntypedDb = {
+  from(table: string): any;
+  rpc(name: string, args?: Record<string, unknown>): any;
+  storage: { from(bucket: string): any };
+};
+
+type WorkingDraftRow = {
+  id: string;
+  company_id: string;
+  account_id: string;
+  payload: unknown;
+  revision: number;
+  remote_checkpoint_revision: number;
+  remote_checkpoint_state: "pending" | "running" | "checkpointed" | "failed";
+  remote_checkpoint_error: string | null;
+  remote_server_ref: unknown;
+  updated_at: string;
+};
+
+type AttachmentRow = {
+  id: string;
+  draft_id: string;
+  company_id: string;
+  account_id: string;
+  client_key: string;
+  kind: "attachment" | "inline-image";
+  filename: string;
+  mime_type: string;
+  size_bytes: number;
+  disposition: string | null;
+  cid: string | null;
+  storage_path: string | null;
+  source_descriptor: unknown;
+};
+
+export type WorkingDraftAuth = {
+  ok: true;
+  accountId: string;
+  companyId: string;
+};
+
+export type WorkingDraftError = {
+  ok: false;
+  status: number;
+  code: string;
+  error: string;
+};
+
+export type WorkingDraftAuthResult = WorkingDraftAuth | WorkingDraftError;
+
+function db(): UntypedDb {
+  return supabaseAdmin as unknown as UntypedDb;
+}
+
+function authError(status: number, code: string, error: string): WorkingDraftError {
+  return { ok: false, status, code, error };
+}
+
+function isAuthError(value: WorkingDraftAuthResult): value is WorkingDraftError {
+  return value.ok === false;
+}
+
+function isUuid(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
+  );
+}
+
+function asServerRef(value: unknown): DraftServerRef | null {
+  if (!value || typeof value !== "object") return null;
+  const ref = value as Record<string, unknown>;
+  return typeof ref.folderPath === "string" &&
+    Number.isSafeInteger(ref.uid) &&
+    Number(ref.uid) > 0 &&
+    typeof ref.uidValidity === "string"
+    ? { folderPath: ref.folderPath, uid: Number(ref.uid), uidValidity: ref.uidValidity }
+    : null;
+}
+
+function attachmentStoragePath(auth: WorkingDraftAuth, draftId: string, attachmentId: string): string {
+  return `${auth.companyId}/${auth.accountId}/${draftId}/${attachmentId}`;
+}
+
+function safeAttachmentRows(data: unknown): AttachmentRow[] {
+  return Array.isArray(data) ? (data as AttachmentRow[]) : [];
+}
+
+function recordFromRow(row: WorkingDraftRow): WorkingDraftRecord | null {
+  if (!isWorkingDraftPayload(row.payload)) return null;
+  return {
+    draftId: row.id,
+    revision: Number(row.revision),
+    payload: row.payload,
+    checkpoint: {
+      revision: Number(row.remote_checkpoint_revision),
+      committedRevision: Number(row.remote_checkpoint_revision),
+      state: row.remote_checkpoint_state,
+      serverRef: asServerRef(row.remote_server_ref),
+      error: row.remote_checkpoint_error,
+    },
+    updatedAt: row.updated_at,
+  };
+}
+
+/** Authenticate only the claimed tenant/account; no Bridge round trip is needed for working saves. */
+export async function resolveWorkingDraftAuth(
+  mailSessionToken: string,
+): Promise<WorkingDraftAuthResult> {
+  const { verifyBridgeAuthClaims } = await import("@/lib/mail-bridge-auth.server");
+  const claims = await verifyBridgeAuthClaims(mailSessionToken);
+  if (!("sub" in claims) || !("cid" in claims)) {
+    return authError(claims.status, claims.code, claims.error);
+  }
+  const { data, error } = await db()
+    .from("mail_accounts")
+    .select("id, company_id")
+    .eq("id", claims.sub)
+    .eq("company_id", claims.cid)
+    .maybeSingle();
+  if (error) return authError(500, "ACCOUNT_LOOKUP_FAILED", "تعذر التحقق من حساب البريد.");
+  if (!data) return authError(403, "ACCOUNT_FORBIDDEN", "لا تملك صلاحية الوصول إلى هذا الحساب.");
+  return { ok: true, accountId: claims.sub, companyId: claims.cid };
+}
+
+async function ensureDraftShell(auth: WorkingDraftAuth, draftId: string): Promise<WorkingDraftRow> {
+  if (!isUuid(draftId)) throw new Error("INVALID_DRAFT_ID");
+  const client = db();
+  const inserted = await client
+    .from("mail_working_drafts")
+    .insert({
+      id: draftId,
+      company_id: auth.companyId,
+      account_id: auth.accountId,
+      payload: emptyWorkingDraftPayload(),
+      revision: 0,
+    })
+    .select("*")
+    .maybeSingle();
+  if (inserted.data) return inserted.data as WorkingDraftRow;
+  const { data, error } = await client
+    .from("mail_working_drafts")
+    .select("*")
+    .eq("id", draftId)
+    .eq("company_id", auth.companyId)
+    .eq("account_id", auth.accountId)
+    .maybeSingle();
+  if (error || !data) throw new Error("WORKING_DRAFT_CREATE_FAILED");
+  return data as WorkingDraftRow;
+}
+
+export async function loadWorkingDraft(
+  auth: WorkingDraftAuth,
+  draftId: string,
+): Promise<WorkingDraftRecord | null> {
+  if (!isUuid(draftId)) throw new Error("INVALID_DRAFT_ID");
+  const { data, error } = await db()
+    .from("mail_working_drafts")
+    .select("*")
+    .eq("id", draftId)
+    .eq("company_id", auth.companyId)
+    .eq("account_id", auth.accountId)
+    .maybeSingle();
+  if (error) throw new Error("WORKING_DRAFT_LOAD_FAILED");
+  return data ? recordFromRow(data as WorkingDraftRow) : null;
+}
+
+/** Draft-folder-only projection for cross-device access before IMAP catches up. */
+export async function listWorkingDrafts(auth: WorkingDraftAuth): Promise<WorkingDraftRecord[]> {
+  const { data, error } = await db()
+    .from("mail_working_drafts")
+    .select("*")
+    .eq("company_id", auth.companyId)
+    .eq("account_id", auth.accountId)
+    .order("updated_at", { ascending: false })
+    .limit(100);
+  if (error) throw new Error("WORKING_DRAFT_LIST_FAILED");
+  return (Array.isArray(data) ? data : [])
+    .map((row) => recordFromRow(row as WorkingDraftRow))
+    .filter((record): record is WorkingDraftRecord => record !== null);
+}
+
+async function attachmentRows(auth: WorkingDraftAuth, draftId: string): Promise<AttachmentRow[]> {
+  const { data, error } = await db()
+    .from("mail_working_draft_attachments")
+    .select("*")
+    .eq("draft_id", draftId)
+    .eq("company_id", auth.companyId)
+    .eq("account_id", auth.accountId);
+  if (error) throw new Error("WORKING_DRAFT_ATTACHMENT_LOAD_FAILED");
+  return safeAttachmentRows(data);
+}
+
+/**
+ * Reads one MailMaestro-owned object after tenant/account and draft ownership
+ * have been checked. This is used only to display an owned inline image;
+ * normal attachment cards intentionally never call it.
+ */
+export async function readWorkingDraftAttachment(input: {
+  auth: WorkingDraftAuth;
+  draftId: string;
+  attachmentId: string;
+}): Promise<WorkingDraftAttachmentContent> {
+  if (!isUuid(input.draftId) || !isUuid(input.attachmentId)) {
+    throw new Error("INVALID_ATTACHMENT_READ");
+  }
+  const { data, error } = await db()
+    .from("mail_working_draft_attachments")
+    .select("*")
+    .eq("id", input.attachmentId)
+    .eq("draft_id", input.draftId)
+    .eq("company_id", input.auth.companyId)
+    .eq("account_id", input.auth.accountId)
+    .maybeSingle();
+  if (error) throw new Error("ATTACHMENT_LOOKUP_FAILED");
+  const row = data as AttachmentRow | null;
+  if (!row?.storage_path) throw new Error("ATTACHMENT_BYTES_UNAVAILABLE");
+  const downloaded = await db().storage.from(WORKING_DRAFT_ATTACHMENT_BUCKET).download(row.storage_path);
+  if (downloaded.error || !downloaded.data) throw new Error("ATTACHMENT_STORAGE_READ_FAILED");
+  const bytes = downloaded.data as Blob;
+  if (bytes.size !== Number(row.size_bytes) || bytes.size > WORKING_DRAFT_MAX_ATTACHMENT_BYTES) {
+    throw new Error("ATTACHMENT_STORAGE_SIZE_MISMATCH");
+  }
+  return {
+    attachmentId: row.id,
+    filename: row.filename,
+    mimeType: row.mime_type,
+    size: Number(row.size_bytes),
+    cid: row.cid ?? undefined,
+    bytes,
+  };
+}
+
+/**
+ * Synchronizes metadata only after the optimistic document write succeeded.
+ * The payload remains authoritative and carries enough metadata to repair an
+ * interrupted secondary-row update on the next load/save.
+ */
+async function syncAttachmentReferences(
+  auth: WorkingDraftAuth,
+  draftId: string,
+  references: readonly WorkingDraftAttachmentReference[],
+): Promise<void> {
+  const client = db();
+  const existing = await attachmentRows(auth, draftId);
+  const byId = new Map(existing.map((row) => [row.id, row]));
+  const byClientKey = new Map(existing.map((row) => [row.client_key, row]));
+  const retainedIds = new Set<string>();
+
+  for (const reference of references) {
+    if (!isWorkingDraftAttachmentReference(reference)) throw new Error("INVALID_ATTACHMENT_REFERENCE");
+    if (reference.attachmentId) {
+      const owned = byId.get(reference.attachmentId);
+      if (!owned || owned.client_key !== reference.clientKey || !owned.storage_path) {
+        throw new Error("ATTACHMENT_OWNERSHIP_MISMATCH");
+      }
+      if (owned.kind !== reference.kind) throw new Error("ATTACHMENT_KIND_MISMATCH");
+      const { error } = await client
+        .from("mail_working_draft_attachments")
+        .update({
+          filename: reference.filename,
+          mime_type: reference.mimeType,
+          size_bytes: reference.size,
+          disposition: reference.disposition ?? null,
+          cid: reference.cid ?? null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", owned.id)
+        .eq("draft_id", draftId)
+        .eq("company_id", auth.companyId)
+        .eq("account_id", auth.accountId);
+      if (error) throw new Error("ATTACHMENT_METADATA_UPDATE_FAILED");
+      retainedIds.add(owned.id);
+      continue;
+    }
+
+    const current = byClientKey.get(reference.clientKey);
+    if (current?.storage_path) throw new Error("ATTACHMENT_ID_REQUIRED");
+    if (!reference.source) throw new Error("ATTACHMENT_SOURCE_REQUIRED");
+    const row = {
+      id: current?.id ?? randomUUID(),
+      draft_id: draftId,
+      company_id: auth.companyId,
+      account_id: auth.accountId,
+      client_key: reference.clientKey,
+      kind: reference.kind,
+      filename: reference.filename,
+      mime_type: reference.mimeType,
+      size_bytes: reference.size,
+      disposition: reference.disposition ?? null,
+      cid: reference.cid ?? null,
+      storage_path: null,
+      source_descriptor: reference.source,
+    };
+    const { error } = await client
+      .from("mail_working_draft_attachments")
+      .upsert(row, { onConflict: "draft_id,client_key" });
+    if (error) throw new Error("ATTACHMENT_SOURCE_UPSERT_FAILED");
+    retainedIds.add(row.id);
+  }
+
+  const stale = existing.filter((row) => !retainedIds.has(row.id));
+  if (stale.length === 0) return;
+  const { error } = await client
+    .from("mail_working_draft_attachments")
+    .delete()
+    .in("id", stale.map((row) => row.id))
+    .eq("draft_id", draftId)
+    .eq("company_id", auth.companyId)
+    .eq("account_id", auth.accountId);
+  if (error) throw new Error("ATTACHMENT_PRUNE_FAILED");
+  const paths = stale.flatMap((row) => (row.storage_path ? [row.storage_path] : []));
+  if (paths.length > 0) {
+    await client.storage.from(WORKING_DRAFT_ATTACHMENT_BUCKET).remove(paths);
+  }
+}
+
+export async function saveWorkingDraft(input: {
+  auth: WorkingDraftAuth;
+  draftId: string;
+  expectedRevision: number;
+  payload: WorkingDraftPayload;
+}): Promise<{ ok: true; revision: number; serverRef: DraftServerRef | null } | { ok: false; conflict: true; revision: number }> {
+  if (!isUuid(input.draftId) || !Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 0) {
+    throw new Error("INVALID_WORKING_DRAFT_MUTATION");
+  }
+  if (!isWorkingDraftPayload(input.payload)) throw new Error("INVALID_WORKING_DRAFT_PAYLOAD");
+  const result = await db().rpc("save_mail_working_draft", {
+    p_draft_id: input.draftId,
+    p_company_id: input.auth.companyId,
+    p_account_id: input.auth.accountId,
+    p_expected_revision: input.expectedRevision,
+    p_payload: input.payload,
+  });
+  if (result.error) throw new Error("WORKING_DRAFT_SAVE_FAILED");
+  const reply = Array.isArray(result.data) ? result.data[0] : null;
+  if (!reply || !Number.isSafeInteger(Number(reply.revision))) throw new Error("WORKING_DRAFT_SAVE_INVALID_REPLY");
+  if (reply.conflict === true) return { ok: false, conflict: true, revision: Number(reply.revision) };
+  await syncAttachmentReferences(input.auth, input.draftId, input.payload.attachments);
+  const current = await loadWorkingDraft(input.auth, input.draftId);
+  return { ok: true, revision: Number(reply.revision), serverRef: current?.checkpoint.serverRef ?? null };
+}
+
+/** A browser file crosses this boundary once and becomes a private stable object. */
+export async function uploadWorkingDraftAttachment(input: {
+  auth: WorkingDraftAuth;
+  draftId: string;
+  clientKey: string;
+  kind: "attachment" | "inline-image";
+  filename: string;
+  mimeType: string;
+  disposition?: string;
+  cid?: string;
+  bytes: Blob;
+}): Promise<WorkingDraftAttachmentReference> {
+  if (!isUuid(input.draftId) || !input.clientKey || input.clientKey.length > 255) {
+    throw new Error("INVALID_ATTACHMENT_UPLOAD");
+  }
+  const size = input.bytes.size;
+  if (!Number.isSafeInteger(size) || size <= 0 || size > WORKING_DRAFT_MAX_ATTACHMENT_BYTES) {
+    throw new Error("ATTACHMENT_LIMIT_EXCEEDED");
+  }
+  await ensureDraftShell(input.auth, input.draftId);
+  const client = db();
+  const { data: previous, error: previousError } = await client
+    .from("mail_working_draft_attachments")
+    .select("*")
+    .eq("draft_id", input.draftId)
+    .eq("company_id", input.auth.companyId)
+    .eq("account_id", input.auth.accountId)
+    .eq("client_key", input.clientKey)
+    .maybeSingle();
+  if (previousError) throw new Error("ATTACHMENT_LOOKUP_FAILED");
+  if (previous?.storage_path) {
+    const row = previous as AttachmentRow;
+    return {
+      attachmentId: row.id,
+      clientKey: row.client_key,
+      kind: row.kind,
+      filename: row.filename,
+      mimeType: row.mime_type,
+      size: Number(row.size_bytes),
+      disposition: row.disposition ?? undefined,
+      cid: row.cid ?? undefined,
+    };
+  }
+  if (previous) throw new Error("ATTACHMENT_CLIENT_KEY_CONFLICT");
+
+  const attachmentId = randomUUID();
+  const storagePath = attachmentStoragePath(input.auth, input.draftId, attachmentId);
+  const uploaded = await client.storage.from(WORKING_DRAFT_ATTACHMENT_BUCKET).upload(storagePath, input.bytes, {
+    contentType: input.mimeType || "application/octet-stream",
+    upsert: false,
+  });
+  if (uploaded.error) throw new Error("ATTACHMENT_UPLOAD_FAILED");
+  const { error } = await client.from("mail_working_draft_attachments").insert({
+    id: attachmentId,
+    draft_id: input.draftId,
+    company_id: input.auth.companyId,
+    account_id: input.auth.accountId,
+    client_key: input.clientKey,
+    kind: input.kind,
+    filename: input.filename,
+    mime_type: input.mimeType || "application/octet-stream",
+    size_bytes: size,
+    disposition: input.disposition ?? null,
+    cid: input.cid ?? null,
+    storage_path: storagePath,
+    source_descriptor: null,
+  });
+  if (error) {
+    await client.storage.from(WORKING_DRAFT_ATTACHMENT_BUCKET).remove([storagePath]);
+    throw new Error("ATTACHMENT_RECORD_CREATE_FAILED");
+  }
+  return {
+    attachmentId,
+    clientKey: input.clientKey,
+    kind: input.kind,
+    filename: input.filename,
+    mimeType: input.mimeType || "application/octet-stream",
+    size,
+    disposition: input.disposition,
+    cid: input.cid,
+  };
+}
+
+async function resolveBridgeForWorkingDraft(auth: WorkingDraftAuth) {
+  const { resolveBridgeAuthForVerifiedClaims } = await import("@/lib/mail-bridge-auth.server");
+  const bridge = await resolveBridgeAuthForVerifiedClaims({ sub: auth.accountId, cid: auth.companyId });
+  if (!bridge.ok) throw new Error(bridge.code);
+  const { loadDecryptedPasswordForAccount } = await import("@/lib/mail-credentials.server");
+  const password = await loadDecryptedPasswordForAccount(supabaseAdmin, auth.accountId, auth.companyId);
+  return { bridge, password };
+}
+
+/**
+ * Reconcile the stable checkpoint revision before importing an external
+ * provider source or reading/staging any attachment object. A response lost
+ * after a successful IMAP APPEND is therefore recovered without touching an
+ * obsolete UID or retransferring bytes.
+ */
+async function reconcileWorkingDraftRevision(input: {
+  auth: WorkingDraftAuth;
+  draftId: string;
+  revisionId: string;
+}): Promise<{ found: boolean; serverRef: DraftServerRef | null }> {
+  const { bridge, password } = await resolveBridgeForWorkingDraft(input.auth);
+  const response = await fetch(`${bridge.bridgeUrl}/api/draft-revision-reconcile`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Bridge-Key": bridge.bridgeKey },
+    body: JSON.stringify({
+      account: bridge.bridgeAccount,
+      password,
+      draftId: input.draftId,
+      revisionId: input.revisionId,
+    }),
+  });
+  const result = (await response.json().catch(() => null)) as Record<string, unknown> | null;
+  if (!response.ok || !result?.ok || typeof result.found !== "boolean") {
+    throw new Error("CHECKPOINT_RECONCILIATION_FAILED");
+  }
+  const serverRef =
+    typeof result.folderPath === "string" &&
+    Number.isSafeInteger(result.uid) &&
+    Number(result.uid) > 0 &&
+    typeof result.uidValidity === "string"
+      ? { folderPath: result.folderPath, uid: Number(result.uid), uidValidity: result.uidValidity }
+      : null;
+  return { found: result.found, serverRef };
+}
+
+const externalImportFlights = new Map<string, Promise<AttachmentRow>>();
+
+function sourceOf(row: AttachmentRow): WorkingDraftSourceDescriptor | null {
+  const source = row.source_descriptor;
+  if (!source || typeof source !== "object") return null;
+  const value = source as Record<string, unknown>;
+  return typeof value.folderPath === "string" &&
+    Number.isSafeInteger(value.uid) &&
+    Number(value.uid) > 0 &&
+    typeof value.uidValidity === "string" &&
+    typeof value.part === "string" &&
+    /^\d+(?:\.\d+)*$/.test(value.part)
+    ? { folderPath: value.folderPath, uid: Number(value.uid), uidValidity: value.uidValidity, part: value.part }
+    : null;
+}
+
+/** Imports an external provider attachment exactly once per process flight, into its stable object path. */
+async function importExternalAttachment(
+  auth: WorkingDraftAuth,
+  row: AttachmentRow,
+): Promise<AttachmentRow> {
+  if (row.storage_path) return row;
+  const key = `${auth.companyId}:${auth.accountId}:${row.draft_id}:${row.id}`;
+  const existing = externalImportFlights.get(key);
+  if (existing) return existing;
+  const flight = (async () => {
+    const source = sourceOf(row);
+    if (!source) throw new Error("SOURCE_DESCRIPTOR_INVALID");
+    const { bridge, password } = await resolveBridgeForWorkingDraft(auth);
+    const response = await fetch(`${bridge.bridgeUrl}/api/draft-source-attachment`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Bridge-Key": bridge.bridgeKey },
+      body: JSON.stringify({
+        account: bridge.bridgeAccount,
+        password,
+        ...source,
+        filename: row.filename,
+        mimeType: row.mime_type,
+        size: row.size_bytes,
+        kind: row.kind,
+      }),
+    });
+    if (!response.ok) throw new Error("SOURCE_ATTACHMENT_IMPORT_FAILED");
+    const bytes = await response.blob();
+    if (bytes.size > WORKING_DRAFT_MAX_ATTACHMENT_BYTES) throw new Error("ATTACHMENT_LIMIT_EXCEEDED");
+    const storagePath = attachmentStoragePath(auth, row.draft_id, row.id);
+    const client = db();
+    const uploaded = await client.storage.from(WORKING_DRAFT_ATTACHMENT_BUCKET).upload(storagePath, bytes, {
+      contentType: row.mime_type,
+      upsert: false,
+    });
+    if (uploaded.error && !/exists|duplicate/i.test(String(uploaded.error.message ?? ""))) {
+      throw new Error("SOURCE_ATTACHMENT_STORE_FAILED");
+    }
+    const { data, error } = await client
+      .from("mail_working_draft_attachments")
+      .update({
+        storage_path: storagePath,
+        source_descriptor: null,
+        size_bytes: bytes.size,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", row.id)
+      .eq("draft_id", row.draft_id)
+      .eq("company_id", auth.companyId)
+      .eq("account_id", auth.accountId)
+      .select("*")
+      .maybeSingle();
+    if (error || !data) throw new Error("SOURCE_ATTACHMENT_IMPORT_COMMIT_FAILED");
+    return data as AttachmentRow;
+  })().finally(() => externalImportFlights.delete(key));
+  externalImportFlights.set(key, flight);
+  return flight;
+}
+
+async function stageOwnedAttachment(auth: WorkingDraftAuth, row: AttachmentRow): Promise<string> {
+  if (!row.storage_path) throw new Error("ATTACHMENT_NOT_IMPORTED");
+  const { bridge } = await resolveBridgeForWorkingDraft(auth);
+  const client = db();
+  const downloaded = await client.storage.from(WORKING_DRAFT_ATTACHMENT_BUCKET).download(row.storage_path);
+  if (downloaded.error || !downloaded.data) throw new Error("ATTACHMENT_STORAGE_READ_FAILED");
+  const bytes = downloaded.data as Blob;
+  const ticketResponse = await fetch(`${bridge.bridgeUrl}/api/attachment-upload-ticket`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Bridge-Key": bridge.bridgeKey },
+    body: JSON.stringify({
+      account: bridge.bridgeAccount,
+      filename: row.filename,
+      size: bytes.size,
+      mimeType: row.mime_type,
+      kind: row.kind,
+    }),
+  });
+  const ticket = (await ticketResponse.json().catch(() => null)) as
+    | { ok?: boolean; uploadUrl?: string; ticket?: string }
+    | null;
+  if (!ticketResponse.ok || !ticket?.ok || !ticket.uploadUrl || !ticket.ticket) {
+    throw new Error("CHECKPOINT_STAGE_TICKET_FAILED");
+  }
+  const staged = await fetch(ticket.uploadUrl, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${ticket.ticket}`,
+      "Content-Type": row.mime_type,
+    },
+    body: bytes,
+  });
+  const result = (await staged.json().catch(() => null)) as { ok?: boolean; handle?: string } | null;
+  if (!staged.ok || !result?.ok || !result.handle) throw new Error("CHECKPOINT_STAGE_UPLOAD_FAILED");
+  return result.handle;
+}
+
+async function materializePayloadAttachments(
+  auth: WorkingDraftAuth,
+  draftId: string,
+  payload: WorkingDraftPayload,
+): Promise<AttachmentRow[]> {
+  await syncAttachmentReferences(auth, draftId, payload.attachments);
+  const rows = await attachmentRows(auth, draftId);
+  const byClientKey = new Map(rows.map((row) => [row.client_key, row]));
+  const output: AttachmentRow[] = [];
+  for (const reference of payload.attachments) {
+    const row = reference.attachmentId
+      ? rows.find((candidate) => candidate.id === reference.attachmentId)
+      : byClientKey.get(reference.clientKey);
+    if (!row) throw new Error("ATTACHMENT_REFERENCE_MISSING");
+    output.push(row.storage_path ? row : await importExternalAttachment(auth, row));
+  }
+  return output;
+}
+
+function recipients(items: unknown): Array<{ name: string; email: string }> {
+  if (!Array.isArray(items)) return [];
+  return items.flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const value = item as Record<string, unknown>;
+    return value.valid !== false && typeof value.email === "string"
+      ? [{ name: typeof value.name === "string" ? value.name : "", email: value.email }]
+      : [];
+  });
+}
+
+function stripHtml(html: string): string {
+  return html.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+}
+
+async function invokeBridgeWithStagedAttachments(input: {
+  auth: WorkingDraftAuth;
+  draftId: string;
+  revisionId: string;
+  payload: WorkingDraftPayload;
+  rows: readonly AttachmentRow[];
+  endpoint: "/api/draft-save-v2" | "/api/send-v2";
+  previousRef?: DraftServerRef | null;
+}): Promise<Record<string, unknown>> {
+  const { bridge, password } = await resolveBridgeForWorkingDraft(input.auth);
+  const staged: string[] = [];
+  try {
+    const handles: string[] = [];
+    for (const row of input.rows) {
+      const handle = await stageOwnedAttachment(input.auth, row);
+      handles.push(handle);
+      staged.push(handle);
+    }
+    const normal: string[] = [];
+    const inline: Array<{ handle: string; uploadFilename: string; cid: string; contentType: string }> = [];
+    input.rows.forEach((row, index) => {
+      if (row.kind === "attachment") normal.push(handles[index]);
+      else {
+        if (!row.cid) throw new Error("INLINE_CID_REQUIRED");
+        inline.push({
+          handle: handles[index],
+          uploadFilename: row.filename,
+          cid: row.cid,
+          contentType: row.mime_type,
+        });
+      }
+    });
+    const snapshot = input.payload.snapshot;
+    const response = await fetch(`${bridge.bridgeUrl}${input.endpoint}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Bridge-Key": bridge.bridgeKey },
+      body: JSON.stringify({
+        account: bridge.bridgeAccount,
+        password,
+        draftId: input.draftId,
+        revisionId: input.revisionId,
+        to: recipients(snapshot.to),
+        cc: recipients(snapshot.cc),
+        bcc: recipients(snapshot.bcc),
+        subject: snapshot.subject || " ",
+        inReplyTo: snapshot.inReplyTo,
+        references: snapshot.references ?? [],
+        bodyHtml: snapshot.html,
+        bodyText: stripHtml(snapshot.html),
+        previousRef: input.previousRef ?? undefined,
+        attachmentHandles: normal,
+        stagedInlineImages: inline,
+        sourceAttachments: [],
+        sourceInlineImages: [],
+      }),
+    });
+    const result = (await response.json().catch(() => null)) as Record<string, unknown> | null;
+    if (!response.ok || !result?.ok) throw new Error("BRIDGE_DRAFT_TRANSFER_FAILED");
+    return result;
+  } finally {
+    // Bridge staging is only a transient hand-off to the downstream provider.
+    // The durable Supabase object stays authoritative for the next checkpoint
+    // or send, so a successful checkpoint must not retain a 24-hour copy.
+    if (staged.length > 0) {
+      await fetch(`${bridge.bridgeUrl}/api/staged-release`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Bridge-Key": bridge.bridgeKey },
+        body: JSON.stringify({ account: bridge.bridgeAccount, handles: staged }),
+      }).catch(() => undefined);
+    }
+  }
+}
+
+export async function checkpointWorkingDraft(input: {
+  auth: WorkingDraftAuth;
+  draftId: string;
+}): Promise<{ ok: true; skipped?: boolean; revision?: number; serverRef?: DraftServerRef | null } | { ok: false; code: string }> {
+  const record = await loadWorkingDraft(input.auth, input.draftId);
+  if (!record) return { ok: true, skipped: true };
+  if (record.checkpoint.committedRevision >= record.revision) return { ok: true, skipped: true };
+  const claim = await db().rpc("claim_mail_working_draft_checkpoint", {
+    p_draft_id: input.draftId,
+    p_company_id: input.auth.companyId,
+    p_account_id: input.auth.accountId,
+    p_revision: record.revision,
+  });
+  if (claim.error) return { ok: false, code: "CHECKPOINT_CLAIM_FAILED" };
+  const claimed = Array.isArray(claim.data) ? claim.data[0] : null;
+  if (!claimed?.claimed || !isUuid(claimed.revision_id)) return { ok: true, skipped: true };
+  try {
+    const reconciliation = await reconcileWorkingDraftRevision({
+      auth: input.auth,
+      draftId: input.draftId,
+      revisionId: claimed.revision_id,
+    });
+    if (reconciliation.found) {
+      await db().rpc("finish_mail_working_draft_checkpoint", {
+        p_draft_id: input.draftId,
+        p_company_id: input.auth.companyId,
+        p_account_id: input.auth.accountId,
+        p_checkpoint_revision: record.revision,
+        p_success: true,
+        p_server_ref: reconciliation.serverRef,
+        p_error: null,
+      });
+      return { ok: true, revision: record.revision, serverRef: reconciliation.serverRef };
+    }
+    const rows = await materializePayloadAttachments(input.auth, input.draftId, record.payload);
+    const result = await invokeBridgeWithStagedAttachments({
+      auth: input.auth,
+      draftId: input.draftId,
+      revisionId: claimed.revision_id,
+      payload: record.payload,
+      rows,
+      endpoint: "/api/draft-save-v2",
+      previousRef: record.checkpoint.serverRef,
+    });
+    const serverRef =
+      typeof result.folderPath === "string" &&
+      Number.isSafeInteger(result.uid) &&
+      Number(result.uid) > 0 &&
+      typeof result.uidValidity === "string"
+        ? { folderPath: result.folderPath, uid: Number(result.uid), uidValidity: result.uidValidity }
+        : null;
+    await db().rpc("finish_mail_working_draft_checkpoint", {
+      p_draft_id: input.draftId,
+      p_company_id: input.auth.companyId,
+      p_account_id: input.auth.accountId,
+      p_checkpoint_revision: record.revision,
+      p_success: true,
+      p_server_ref: serverRef,
+      p_error: null,
+    });
+    return { ok: true, revision: record.revision, serverRef };
+  } catch (error) {
+    const code = error instanceof Error ? error.message.slice(0, 120) : "CHECKPOINT_FAILED";
+    await db().rpc("finish_mail_working_draft_checkpoint", {
+      p_draft_id: input.draftId,
+      p_company_id: input.auth.companyId,
+      p_account_id: input.auth.accountId,
+      p_checkpoint_revision: record.revision,
+      p_success: false,
+      p_server_ref: null,
+      p_error: code,
+    });
+    return { ok: false, code };
+  }
+}
+
+export async function deleteWorkingDraft(input: {
+  auth: WorkingDraftAuth;
+  draftId: string;
+}): Promise<{ deleted: boolean; serverRef: DraftServerRef | null }> {
+  const record = await loadWorkingDraft(input.auth, input.draftId);
+  if (!record) return { deleted: false, serverRef: null };
+  const rows = await attachmentRows(input.auth, input.draftId);
+  const { error } = await db()
+    .from("mail_working_drafts")
+    .delete()
+    .eq("id", input.draftId)
+    .eq("company_id", input.auth.companyId)
+    .eq("account_id", input.auth.accountId);
+  if (error) throw new Error("WORKING_DRAFT_DELETE_FAILED");
+  const paths = rows.flatMap((row) => (row.storage_path ? [row.storage_path] : []));
+  if (paths.length > 0) await db().storage.from(WORKING_DRAFT_ATTACHMENT_BUCKET).remove(paths);
+  return { deleted: true, serverRef: record.checkpoint.serverRef };
+}
+
+/** Best-effort downstream cleanup; a failed provider delete never resurrects a deleted working Draft. */
+export async function deleteProviderDraftCheckpoint(input: {
+  auth: WorkingDraftAuth;
+  draftId: string;
+  previousRef: DraftServerRef | null;
+}): Promise<void> {
+  try {
+    const { bridge, password } = await resolveBridgeForWorkingDraft(input.auth);
+    await fetch(`${bridge.bridgeUrl}/api/draft-delete`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Bridge-Key": bridge.bridgeKey },
+      body: JSON.stringify({
+        account: bridge.bridgeAccount,
+        password,
+        draftId: input.draftId,
+        previousRef: input.previousRef ?? undefined,
+      }),
+    });
+  } catch {
+    // The server-side row is already deleted; normal provider reconciliation
+    // can remove a stale interoperability copy later.
+  }
+}
+
+/** Draft-origin send only. Normal compose send continues to use /api/mail-send-v2 unchanged. */
+export async function sendWorkingDraft(input: {
+  auth: WorkingDraftAuth;
+  draftId: string;
+}): Promise<Record<string, unknown>> {
+  const record = await loadWorkingDraft(input.auth, input.draftId);
+  if (!record) throw new Error("WORKING_DRAFT_NOT_FOUND");
+  const rows = await materializePayloadAttachments(input.auth, input.draftId, record.payload);
+  const result = await invokeBridgeWithStagedAttachments({
+    auth: input.auth,
+    draftId: input.draftId,
+    revisionId: randomUUID(),
+    payload: record.payload,
+    rows,
+    endpoint: "/api/send-v2",
+  });
+  try {
+    const removed = await deleteWorkingDraft({ auth: input.auth, draftId: input.draftId });
+    void deleteProviderDraftCheckpoint({
+      auth: input.auth,
+      draftId: input.draftId,
+      previousRef: removed.serverRef,
+    });
+    return result;
+  } catch {
+    // SMTP/send-v2 has already accepted the message. Never report that send
+    // as failed (or invite a duplicate retry) merely because downstream Draft
+    // cleanup needs a later retry.
+    return { ...result, draftCleanupPending: true };
+  }
+}
+
+export { isAuthError };
