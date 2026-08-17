@@ -1,11 +1,55 @@
 import { describe, expect, it, vi } from "vitest";
-import { deleteSavedDraft, shouldShowDeleteDraft } from "../mail-composer-delete-draft";
+import {
+  applyDraftDeleteOptimistic,
+  deleteSavedDraft,
+  rollbackDraftDeleteOptimistic,
+  shouldShowDeleteDraft,
+} from "../mail-composer-delete-draft";
 
 describe("MAILMAESTRO_COMPOSER_PLACEHOLDERS_AND_DELETE_DRAFT", () => {
   it("shows delete only when a saved local or remote draft exists", () => {
     expect(shouldShowDeleteDraft(false, false)).toBe(false);
     expect(shouldShowDeleteDraft(true, false)).toBe(true);
     expect(shouldShowDeleteDraft(false, true)).toBe(true);
+  });
+
+  it("removes both provider and Working Draft projections and decrements exactly once", () => {
+    const result = applyDraftDeleteOptimistic(
+      {
+        messages: [
+          { id: "a", draftIdHeader: "draft-1" },
+          { id: "b", draftIdHeader: "draft-2" },
+          { id: "c" },
+        ],
+        workingDraftRecords: [{ draftId: "draft-1" }, { draftId: "draft-2" }],
+        draftsTotal: 2,
+      },
+      "draft-1",
+    );
+
+    expect(result.messages.map((message) => message.id)).toEqual(["b", "c"]);
+    expect(result.workingDraftRecords.map((record) => record.draftId)).toEqual(["draft-2"]);
+    expect(result.draftsTotal).toBe(1);
+  });
+
+  it("never decrements the Draft count below zero", () => {
+    const result = applyDraftDeleteOptimistic(
+      { messages: [], workingDraftRecords: [], draftsTotal: 0 },
+      "missing",
+    );
+    expect(result.draftsTotal).toBe(0);
+  });
+
+  it("rolls UI/count back to the exact pre-delete snapshot after failure", () => {
+    const snapshot = {
+      messages: [
+        { id: "a", draftIdHeader: "draft-1" },
+        { id: "b", draftIdHeader: "draft-2" },
+      ],
+      workingDraftRecords: [{ draftId: "draft-1" }],
+      draftsTotal: 2,
+    };
+    expect(rollbackDraftDeleteOptimistic(snapshot)).toEqual(snapshot);
   });
 
   it("deletes remote then local and closes with exactly one refresh", async () => {

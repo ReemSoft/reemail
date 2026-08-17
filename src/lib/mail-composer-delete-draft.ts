@@ -23,6 +23,44 @@ export function shouldShowDeleteDraft(hasLocalCopy: boolean, hasRemoteCopy: bool
   return hasLocalCopy || hasRemoteCopy;
 }
 
+export interface DraftListSnapshot<
+  TMessage extends { draftIdHeader?: string },
+  TRecord extends { draftId: string },
+> {
+  messages: TMessage[];
+  workingDraftRecords: TRecord[];
+  draftsTotal: number;
+}
+
+/**
+ * Pure optimistic projection for an explicit Draft delete. It removes every
+ * provider/Working Draft row carrying the deleted draftId and decrements the
+ * Draft count exactly once, never below zero.
+ */
+export function applyDraftDeleteOptimistic<
+  TMessage extends { draftIdHeader?: string },
+  TRecord extends { draftId: string },
+>(
+  snapshot: DraftListSnapshot<TMessage, TRecord>,
+  draftId: string,
+): { messages: TMessage[]; workingDraftRecords: TRecord[]; draftsTotal: number } {
+  return {
+    messages: snapshot.messages.filter((message) => message.draftIdHeader !== draftId),
+    workingDraftRecords: snapshot.workingDraftRecords.filter((record) => record.draftId !== draftId),
+    draftsTotal: Math.max(0, snapshot.draftsTotal - 1),
+  };
+}
+
+/** Restores the exact pre-delete snapshot when the explicit delete fails. */
+export function rollbackDraftDeleteOptimistic<
+  TMessage extends { draftIdHeader?: string },
+  TRecord extends { draftId: string },
+>(
+  snapshot: DraftListSnapshot<TMessage, TRecord>,
+): DraftListSnapshot<TMessage, TRecord> {
+  return snapshot;
+}
+
 export async function deleteSavedDraft({
   mayHaveRemoteCopy,
   deleteRemote,

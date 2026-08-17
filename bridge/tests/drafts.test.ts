@@ -653,6 +653,86 @@ test("delete: only touches the account's own Drafts folder (never a caller-suppl
   assert.equal(rec.opens.includes("INBOX"), false);
 });
 
+test("delete: modern header-based Draft still deletes", async () => {
+  const { client, rec } = mkClient({
+    mailboxes: [box("Drafts")],
+    searchResults: [[77]],
+  });
+  const r = await executeDraftDelete(client, DELETE_INPUT);
+  assert.equal(r.ok, true);
+  if (!r.ok) return;
+  assert.equal(r.deleted, true);
+  assert.deepEqual(rec.deletes[0], [77]);
+});
+
+test("delete: legacy headerless Draft deletes by valid previousRef", async () => {
+  const { client, rec } = mkClient({
+    mailboxes: [box("Drafts")],
+    uidValidity: "1000",
+    searchResults: [[]],
+  });
+  const r = await executeDraftDelete(client, {
+    ...DELETE_INPUT,
+    previousRef: { folderPath: "Drafts", uid: 42, uidValidity: "1000" },
+  });
+  assert.equal(r.ok, true);
+  if (!r.ok) return;
+  assert.equal(r.deleted, true);
+  assert.deepEqual(rec.deletes[0], [42]);
+  assert.equal(rec.softDeletes.length, 0);
+});
+
+test("delete: stale UIDVALIDITY previousRef is NOT trusted", async () => {
+  const { client, rec } = mkClient({
+    mailboxes: [box("Drafts")],
+    uidValidity: "1000",
+    searchResults: [[]],
+  });
+  const r = await executeDraftDelete(client, {
+    ...DELETE_INPUT,
+    previousRef: { folderPath: "Drafts", uid: 42, uidValidity: "999" },
+  });
+  assert.equal(r.ok, true);
+  if (!r.ok) return;
+  assert.equal(r.deleted, false);
+  assert.equal(rec.deletes.length, 0);
+  assert.equal(rec.softDeletes.length, 0);
+});
+
+test("delete: wrong folderPath previousRef is NOT trusted", async () => {
+  const { client, rec } = mkClient({
+    mailboxes: [box("Drafts")],
+    uidValidity: "1000",
+    searchResults: [[]],
+  });
+  const r = await executeDraftDelete(client, {
+    ...DELETE_INPUT,
+    previousRef: { folderPath: "INBOX", uid: 1, uidValidity: "1000" },
+  });
+  assert.equal(r.ok, true);
+  if (!r.ok) return;
+  assert.equal(r.deleted, false);
+  assert.equal(rec.deletes.length, 0);
+  assert.equal(rec.softDeletes.length, 0);
+});
+
+test("delete: unrelated Draft is never deleted without header or valid previousRef", async () => {
+  const { client, rec } = mkClient({
+    mailboxes: [box("Drafts")],
+    uidValidity: "1000",
+    searchResults: [[]],
+  });
+  const r = await executeDraftDelete(client, {
+    ...DELETE_INPUT,
+    previousRef: { folderPath: "Drafts", uid: 9999, uidValidity: "888" },
+  });
+  assert.equal(r.ok, true);
+  if (!r.ok) return;
+  assert.equal(r.deleted, false);
+  assert.equal(rec.deletes.length, 0);
+  assert.equal(rec.softDeletes.length, 0);
+});
+
 // ---------- Contract / safety tests -----------------------------------------
 
 test("contract: DraftSavePayload rejects oversize body (>5 MiB single body)", () => {

@@ -35,11 +35,11 @@ export const Route = createFileRoute("/api/mail-working-draft")({
             return json(result, result.ok ? 200 : 409);
           }
           if (action === "delete") {
-            const result = await working.deleteWorkingDraft({ auth, draftId });
-            void working.deleteProviderDraftCheckpoint({
+            const previousRef = working.asServerRef(body.previousRef);
+            const result = await working.deleteWorkingDraftExplicit({
               auth,
               draftId,
-              previousRef: result.serverRef,
+              previousRef,
             });
             return json({ ok: true, deleted: result.deleted });
           }

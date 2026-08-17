@@ -83,7 +83,7 @@ function isUuid(value: unknown): value is string {
   );
 }
 
-function asServerRef(value: unknown): DraftServerRef | null {
+export function asServerRef(value: unknown): DraftServerRef | null {
   if (!value || typeof value !== "object") return null;
   const ref = value as Record<string, unknown>;
   return typeof ref.folderPath === "string" &&
@@ -721,12 +721,27 @@ export async function checkpointWorkingDraft(input: {
   const claimed = Array.isArray(claim.data) ? claim.data[0] : null;
   if (!claimed?.claimed || !isUuid(claimed.revision_id)) return { ok: true, skipped: true };
   try {
+    // DELETE-vs-CHECKPOINT fence: before any expensive provider reconciliation,
+    // materialization, or APPEND, the row must still exist. If explicit delete
+    // already won, stop here without creating a provider copy.
+    if (!(await loadWorkingDraft(input.auth, input.draftId))) {
+      return { ok: true, skipped: true };
+    }
+
     const reconciliation = await reconcileWorkingDraftRevision({
       auth: input.auth,
       draftId: input.draftId,
       revisionId: claimed.revision_id,
     });
     if (reconciliation.found) {
+      if (!(await loadWorkingDraft(input.auth, input.draftId))) {
+        await deleteProviderDraftExplicit({
+          auth: input.auth,
+          draftId: input.draftId,
+          previousRef: reconciliation.serverRef,
+        }).catch(() => undefined);
+        return { ok: true, skipped: true };
+      }
       await db().rpc("finish_mail_working_draft_checkpoint", {
         p_draft_id: input.draftId,
         p_company_id: input.auth.companyId,
@@ -736,6 +751,14 @@ export async function checkpointWorkingDraft(input: {
         p_server_ref: reconciliation.serverRef,
         p_error: null,
       });
+      if (!(await loadWorkingDraft(input.auth, input.draftId))) {
+        await deleteProviderDraftExplicit({
+          auth: input.auth,
+          draftId: input.draftId,
+          previousRef: reconciliation.serverRef,
+        }).catch(() => undefined);
+        return { ok: true, skipped: true };
+      }
       return { ok: true, revision: record.revision, serverRef: reconciliation.serverRef };
     }
     const rows = await materializePayloadAttachments(input.auth, input.draftId, record.payload);
@@ -755,6 +778,14 @@ export async function checkpointWorkingDraft(input: {
       typeof result.uidValidity === "string"
         ? { folderPath: result.folderPath, uid: Number(result.uid), uidValidity: result.uidValidity }
         : null;
+    if (!(await loadWorkingDraft(input.auth, input.draftId))) {
+      await deleteProviderDraftExplicit({
+        auth: input.auth,
+        draftId: input.draftId,
+        previousRef: serverRef,
+      }).catch(() => undefined);
+      return { ok: true, skipped: true };
+    }
     await db().rpc("finish_mail_working_draft_checkpoint", {
       p_draft_id: input.draftId,
       p_company_id: input.auth.companyId,
@@ -764,18 +795,28 @@ export async function checkpointWorkingDraft(input: {
       p_server_ref: serverRef,
       p_error: null,
     });
+    if (!(await loadWorkingDraft(input.auth, input.draftId))) {
+      await deleteProviderDraftExplicit({
+        auth: input.auth,
+        draftId: input.draftId,
+        previousRef: serverRef,
+      }).catch(() => undefined);
+      return { ok: true, skipped: true };
+    }
     return { ok: true, revision: record.revision, serverRef };
   } catch (error) {
     const code = error instanceof Error ? error.message.slice(0, 120) : "CHECKPOINT_FAILED";
-    await db().rpc("finish_mail_working_draft_checkpoint", {
-      p_draft_id: input.draftId,
-      p_company_id: input.auth.companyId,
-      p_account_id: input.auth.accountId,
-      p_checkpoint_revision: record.revision,
-      p_success: false,
-      p_server_ref: null,
-      p_error: code,
-    });
+    if (await loadWorkingDraft(input.auth, input.draftId)) {
+      await db().rpc("finish_mail_working_draft_checkpoint", {
+        p_draft_id: input.draftId,
+        p_company_id: input.auth.companyId,
+        p_account_id: input.auth.accountId,
+        p_checkpoint_revision: record.revision,
+        p_success: false,
+        p_server_ref: null,
+        p_error: code,
+      });
+    }
     return { ok: false, code };
   }
 }
@@ -799,6 +840,72 @@ export async function deleteWorkingDraft(input: {
   return { deleted: true, serverRef: record.checkpoint.serverRef };
 }
 
+/**
+ * Explicit-user-delete path. Provider deletion is AWAITED and verified before
+ * the durable Working Draft row/objects are removed, so a failed provider
+ * delete leaves the row in place for retry instead of silently losing the
+ * only recoverable copy. Provider-only Drafts are handled even when no
+ * Working Draft row exists.
+ */
+export async function deleteWorkingDraftExplicit(input: {
+  auth: WorkingDraftAuth;
+  draftId: string;
+  previousRef?: DraftServerRef | null;
+}): Promise<{ deleted: boolean; serverRef: DraftServerRef | null }> {
+  if (!isUuid(input.draftId)) throw new Error("INVALID_DRAFT_ID");
+  const record = await loadWorkingDraft(input.auth, input.draftId);
+  const providerRef = record?.checkpoint.serverRef ?? input.previousRef ?? null;
+  const providerDelete = await deleteProviderDraftExplicit({
+    auth: input.auth,
+    draftId: input.draftId,
+    previousRef: providerRef,
+  });
+  if (!providerDelete.ok) throw new Error("PROVIDER_DRAFT_DELETE_FAILED");
+
+  if (!record) {
+    // Provider-only/legacy Draft: no Working Draft row exists, but the
+    // provider delete succeeded (or confirmed no copy). This is idempotent.
+    return { deleted: true, serverRef: providerRef };
+  }
+
+  const rows = await attachmentRows(input.auth, input.draftId);
+  const { error } = await db()
+    .from("mail_working_drafts")
+    .delete()
+    .eq("id", input.draftId)
+    .eq("company_id", input.auth.companyId)
+    .eq("account_id", input.auth.accountId);
+  if (error) throw new Error("WORKING_DRAFT_DELETE_FAILED");
+  const paths = rows.flatMap((row) => (row.storage_path ? [row.storage_path] : []));
+  if (paths.length > 0) await db().storage.from(WORKING_DRAFT_ATTACHMENT_BUCKET).remove(paths);
+  return { deleted: true, serverRef: record.checkpoint.serverRef };
+}
+
+async function deleteProviderDraftExplicit(input: {
+  auth: WorkingDraftAuth;
+  draftId: string;
+  previousRef: DraftServerRef | null;
+}): Promise<{ ok: boolean; deleted: boolean; code?: string }> {
+  const { bridge, password } = await resolveBridgeForWorkingDraft(input.auth);
+  const response = await fetch(`${bridge.bridgeUrl}/api/draft-delete`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Bridge-Key": bridge.bridgeKey },
+    body: JSON.stringify({
+      account: bridge.bridgeAccount,
+      password,
+      draftId: input.draftId,
+      previousRef: input.previousRef ?? undefined,
+    }),
+  });
+  const result = (await response.json().catch(() => null)) as
+    | { ok?: boolean; deleted?: boolean; error?: string }
+    | null;
+  if (!response.ok || !result?.ok) {
+    return { ok: false, deleted: false, code: result?.error || "PROVIDER_DRAFT_DELETE_FAILED" };
+  }
+  return { ok: true, deleted: result.deleted === true };
+}
+
 /** Best-effort downstream cleanup; a failed provider delete never resurrects a deleted working Draft. */
 export async function deleteProviderDraftCheckpoint(input: {
   auth: WorkingDraftAuth;
@@ -806,17 +913,7 @@ export async function deleteProviderDraftCheckpoint(input: {
   previousRef: DraftServerRef | null;
 }): Promise<void> {
   try {
-    const { bridge, password } = await resolveBridgeForWorkingDraft(input.auth);
-    await fetch(`${bridge.bridgeUrl}/api/draft-delete`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Bridge-Key": bridge.bridgeKey },
-      body: JSON.stringify({
-        account: bridge.bridgeAccount,
-        password,
-        draftId: input.draftId,
-        previousRef: input.previousRef ?? undefined,
-      }),
-    });
+    await deleteProviderDraftExplicit(input);
   } catch {
     // The server-side row is already deleted; normal provider reconciliation
     // can remove a stale interoperability copy later.

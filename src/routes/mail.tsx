@@ -984,7 +984,12 @@ import {
   type MessageOpenIntent,
 } from "@/lib/mail-navigation-race";
 import { mailPerf } from "@/lib/mail-performance";
-import { deleteSavedDraft, shouldShowDeleteDraft } from "@/lib/mail-composer-delete-draft";
+import {
+  applyDraftDeleteOptimistic,
+  deleteSavedDraft,
+  rollbackDraftDeleteOptimistic,
+  shouldShowDeleteDraft,
+} from "@/lib/mail-composer-delete-draft";
 import { tombstoneGhostMessage } from "@/lib/mail-ghost-cleanup.functions";
 import { indexListMessages } from "@/lib/mail-index.functions";
 import {
@@ -2815,34 +2820,33 @@ function MailApp() {
   // Draft-folder-only server projection. This is intentionally outside the
   // shared list loader so Inbox/Sent/startup make no Working Draft request.
   const [workingDraftRecords, setWorkingDraftRecords] = useState<WorkingDraftRecord[]>([]);
-  useEffect(() => {
+  const refreshWorkingDrafts = useCallback(async () => {
     if (folder !== "drafts" || !session?.mailSessionToken) {
       setWorkingDraftRecords([]);
       return;
     }
-    let cancelled = false;
-    void fetch("/api/mail-working-draft", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ mailSessionToken: session.mailSessionToken, action: "list" }),
-    })
-      .then(async (response) => {
-        const result = (await response.json().catch(() => null)) as {
-          ok?: boolean;
-          records?: WorkingDraftRecord[];
-        } | null;
-        if (!cancelled && response.ok && result?.ok && Array.isArray(result.records)) {
-          setWorkingDraftRecords(result.records);
-        }
-      })
-      .catch(() => {
-        // Provider Drafts remain usable while this optional projection retries
-        // on the next Draft-folder visit.
+    try {
+      const response = await fetch("/api/mail-working-draft", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mailSessionToken: session.mailSessionToken, action: "list" }),
       });
-    return () => {
-      cancelled = true;
-    };
+      const result = (await response.json().catch(() => null)) as {
+        ok?: boolean;
+        records?: WorkingDraftRecord[];
+      } | null;
+      if (response.ok && result?.ok && Array.isArray(result.records)) {
+        setWorkingDraftRecords(result.records);
+      }
+    } catch {
+      // Provider Drafts remain usable while this optional projection retries
+      // on the next Draft-folder visit.
+    }
   }, [folder, session?.account.id, session?.mailSessionToken]);
+
+  useEffect(() => {
+    void refreshWorkingDrafts();
+  }, [refreshWorkingDrafts]);
 
   // Sender Folders — O(1) lookup for the per-row folder icon.
   const senderFolderMap = useMemo(
@@ -2919,11 +2923,62 @@ function MailApp() {
     },
     [currentAccountId],
   );
+  const draftDeleteSnapshotRef = useRef<{
+    messages: MailMessage[];
+    workingDraftRecords: WorkingDraftRecord[];
+    draftsTotal: number;
+  } | null>(null);
+
   const handleDraftDeleted = useCallback(
     (draftId: string) => {
+      draftDeleteSnapshotRef.current = null;
       if (currentAccountId) savedDraftGuardRef.current?.clearDraft(currentAccountId, draftId);
     },
     [currentAccountId],
+  );
+
+  // Optimistic Draft-only delete: remove the row(s) and decrement the count
+  // once, BEFORE the explicit server delete settles. The snapshot is restored
+  // if the delete fails so the row/count never lie.
+  const handleDraftDeleteStart = useCallback(
+    (draftId: string) => {
+      const snapshot = {
+        messages,
+        workingDraftRecords,
+        draftsTotal: counts.drafts.total,
+      };
+      draftDeleteSnapshotRef.current = snapshot;
+      const next = applyDraftDeleteOptimistic(snapshot, draftId);
+      bumpCountsGen();
+      setMessages(next.messages);
+      setWorkingDraftRecords(next.workingDraftRecords);
+      setCounts((prev) => ({
+        ...prev,
+        drafts: {
+          ...prev.drafts,
+          total: next.draftsTotal,
+        },
+      }));
+    },
+    [bumpCountsGen, counts.drafts.total, messages, workingDraftRecords],
+  );
+
+  const handleDraftDeleteRollback = useCallback(
+    (draftId: string) => {
+      const snapshot = draftDeleteSnapshotRef.current;
+      draftDeleteSnapshotRef.current = null;
+      if (!snapshot) return;
+      void draftId;
+      const restored = rollbackDraftDeleteOptimistic(snapshot);
+      bumpCountsGen();
+      setMessages(restored.messages);
+      setWorkingDraftRecords(restored.workingDraftRecords);
+      setCounts((prev) => ({
+        ...prev,
+        drafts: { ...prev.drafts, total: restored.draftsTotal },
+      }));
+    },
+    [bumpCountsGen],
   );
 
   // Serialize Refresh with a single-flight guard (ref, not React state) so a
@@ -5794,11 +5849,18 @@ function MailApp() {
               initial={compose}
               onClose={({ refreshDrafts }) => {
                 setCompose(null);
-                if (refreshDrafts) void refreshAfterComposerClose();
+                if (refreshDrafts) {
+                  void (async () => {
+                    await refreshAfterComposerClose();
+                    if (folder === "drafts") await refreshWorkingDrafts();
+                  })();
+                }
               }}
               onSent={onAfterSend}
               onDraftCreated={onDraftCreated}
               onDraftSaved={handleDraftSaved}
+              onDraftDeleteStart={handleDraftDeleteStart}
+              onDraftDeleteRollback={handleDraftDeleteRollback}
               onDraftDeleted={handleDraftDeleted}
             />
           ) : selectedMessage ? (
@@ -7324,6 +7386,8 @@ function Composer({
   onSent,
   onDraftCreated,
   onDraftSaved,
+  onDraftDeleteStart,
+  onDraftDeleteRollback,
   onDraftDeleted,
 }: {
   session: MailSession;
@@ -7335,6 +7399,8 @@ function Composer({
     identity: SavedDraftIdentity,
     previousRef?: { folderPath: string; uid: number; uidValidity: string } | null,
   ) => void;
+  onDraftDeleteStart: (draftId: string) => void;
+  onDraftDeleteRollback: (draftId: string) => void;
   onDraftDeleted: (draftId: string) => void;
 }) {
   // Draft storage keying is owned by mail-draft-lifecycle (v3 + auto-migration).
@@ -7750,14 +7816,21 @@ function Composer({
   const mailSessionTokenRef = useRef<string>(session.mailSessionToken ?? "");
   mailSessionTokenRef.current = session.mailSessionToken ?? "";
 
-  async function deleteServerWorkingDraft(): Promise<{ ok: boolean; code?: string }> {
+  async function deleteServerWorkingDraft(
+    previousRef: { folderPath: string; uid: number; uidValidity: string } | null = null,
+  ): Promise<{ ok: boolean; code?: string }> {
     const token = mailSessionTokenRef.current;
     if (!token) return { ok: false, code: "SESSION_REQUIRED" };
     try {
       const response = await fetch("/api/mail-working-draft", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mailSessionToken: token, action: "delete", draftId }),
+        body: JSON.stringify({
+          mailSessionToken: token,
+          action: "delete",
+          draftId,
+          previousRef: previousRef ?? undefined,
+        }),
       });
       const result = (await response.json().catch(() => null)) as {
         ok?: boolean;
@@ -10596,6 +10669,7 @@ function Composer({
     closeIntentAfterUploadRef.current = null;
     for (const file of filesRef.current) abandonedUploadsRef.current.add(file);
     for (const image of inlineImagesRef.current) abandonedUploadsRef.current.add(image.file);
+    onDraftDeleteStart(draftId);
     // Wait for any in-flight remote save (running AND coalesced) to settle so
     // the delete never races a still-running APPEND from this composer. The
     // latest serverRef is guaranteed to be settled before the delete starts.
@@ -10605,7 +10679,7 @@ function Composer({
       // was lost. The Working Draft delete is authoritative; its downstream
       // provider cleanup is explicitly best-effort and never blocks discard.
       mayHaveRemoteCopy: hasLocalDraft || hasRemoteDraft,
-      deleteRemote: deleteServerWorkingDraft,
+      deleteRemote: () => deleteServerWorkingDraft(serverRefRef.current ?? initial?.previousRef ?? null),
       clearLocal: () => {
         clearDraftDoc(window.localStorage, accountEmail, draftId);
         clearDraftTransportCache(window.localStorage, accountEmail, draftId);
@@ -10621,6 +10695,7 @@ function Composer({
       deleteIntentRef.current = false;
       for (const file of filesRef.current) abandonedUploadsRef.current.delete(file);
       for (const image of inlineImagesRef.current) abandonedUploadsRef.current.delete(image.file);
+      onDraftDeleteRollback(draftId);
       // Keep the coarse, PII-safe failure code for diagnostics (never PII).
       try {
         console.error("[draft-delete] failed code=", deleted.code);

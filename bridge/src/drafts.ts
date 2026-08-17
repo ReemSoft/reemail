@@ -659,12 +659,6 @@ export async function executeDraftDelete(
     const opened = await client.openWithLock(folderPath);
     t.mark("mailbox-lock");
     try {
-      // If the caller passed a previousRef, verify UIDVALIDITY BEFORE trusting
-      // any UID. On mismatch we DO NOT expunge by that UID — we still try
-      // header search, which is safe.
-      const uidValidityOk =
-        !input.previousRef || String(input.previousRef.uidValidity) === opened.uidValidity;
-
       let matched: number[] = [];
       try {
         matched = await client.searchByHeader(DRAFT_ID_HEADER, input.draftId);
@@ -675,15 +669,32 @@ export async function executeDraftDelete(
         return { ok: false, error: "IMAP_ERROR" };
       }
 
-      if (matched.length === 0) {
+      // Deletion candidates are the safe union of exact header matches and the
+      // caller-supplied legacy previousRef. The previousRef UID is trusted ONLY
+      // when the folder is the server-resolved Drafts folder, the UIDVALIDITY
+      // equals the CURRENT opened mailbox, and the UID is a positive safe
+      // integer. A stale/wrong previousRef can therefore never delete an
+      // unrelated message.
+      const candidates = new Set<number>(matched);
+      const prev = input.previousRef;
+      const canTrustPreviousRef =
+        !!prev &&
+        prev.folderPath === folderPath &&
+        String(prev.uidValidity) === opened.uidValidity &&
+        Number.isSafeInteger(prev.uid) &&
+        prev.uid > 0;
+      if (canTrustPreviousRef && prev) candidates.add(prev.uid);
+
+      if (candidates.size === 0) {
         t.finish("ok");
         return { ok: true, draftId: input.draftId, folderPath, deleted: false };
       }
       // UIDPLUS → selective UID EXPUNGE. Otherwise → UID STORE +\Deleted on
-      // the exact header-derived UIDs. A global EXPUNGE is NEVER used.
+      // the exact candidates. A global EXPUNGE is NEVER used.
+      const exactCandidates = [...candidates];
       if (!client.hasUidPlus()) {
         try {
-          await client.softDeleteByUid(matched);
+          await client.softDeleteByUid(exactCandidates);
           t.mark("delete");
         } catch {
           t.finish("error", "code=IMAP_ERROR");
@@ -692,11 +703,8 @@ export async function executeDraftDelete(
         t.finish("ok");
         return { ok: true, draftId: input.draftId, folderPath, deleted: true };
       }
-      // If uidValidity is stale, we still expunge by header-derived UIDs
-      // (safe because the search returned them from the CURRENT mailbox).
-      void uidValidityOk;
       try {
-        await client.deleteByUid(matched);
+        await client.deleteByUid(exactCandidates);
         t.mark("delete");
       } catch {
         t.finish("error", "code=IMAP_ERROR");
