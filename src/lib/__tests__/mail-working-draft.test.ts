@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   WORKING_DRAFT_MAX_ATTACHMENT_BYTES,
   emptyWorkingDraftPayload,
+  findWorkingDraftIdByServerRef,
   isStaleProviderDraftRow,
   isWorkingDraftAttachmentReference,
   isWorkingDraftPayload,
@@ -163,5 +164,17 @@ describe("Draft provider-row reconciliation", () => {
         workingDraftRecords: [{ ...record(9000), checkpoint: { ...record(9000).checkpoint, serverRef: null } }],
       }),
     ).toBe(false);
+  });
+
+  it("resolves the stable logical Draft id for a current provider UID", () => {
+    expect(
+      findWorkingDraftIdByServerRef([record(9000)], "42", 9000),
+    ).toBe("draft-1");
+  });
+
+  it("does not resolve a stale provider UID to the current logical Draft", () => {
+    expect(
+      findWorkingDraftIdByServerRef([record(9000)], "42", 8575),
+    ).toBeNull();
   });
 });

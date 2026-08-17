@@ -164,3 +164,18 @@ export function isStaleProviderDraftRow(input: {
   if (!serverRef) return false;
   return serverRef.uid !== input.messageUid || serverRef.uidValidity !== input.messageUidValidity;
 }
+
+/** Resolve the stable logical Draft id for a provider UID/UIDVALIDITY pair. */
+export function findWorkingDraftIdByServerRef(
+  workingDraftRecords: readonly WorkingDraftRecord[],
+  uidValidity: string,
+  uid: number,
+): string | null {
+  if (!uidValidity || !Number.isSafeInteger(uid) || uid <= 0) return null;
+  const record = workingDraftRecords.find(
+    (candidate) =>
+      candidate.checkpoint.serverRef?.uidValidity === uidValidity &&
+      candidate.checkpoint.serverRef.uid === uid,
+  );
+  return record?.draftId ?? null;
+}

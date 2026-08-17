@@ -234,6 +234,16 @@ describe("composer inline images", () => {
     expect(result.inlineImages).toHaveLength(1);
   });
 
+  it("keeps a remote HTTPS signature image URL-backed without adding inline metadata", () => {
+    const result = serializeInlineImages(
+      `<div class="mm_signature"><img src="https://example.com/signature.png" alt="sig"></div>`,
+      [],
+    );
+    expect(result.html).toContain('src="https://example.com/signature.png"');
+    expect(result.html).not.toContain("cid:");
+    expect(result.inlineImages).toHaveLength(0);
+  });
+
   it("keeps the hydrated quoted CID staging filename identical to the Send V2 declaration", () => {
     const file = dataUriToFile("data:image/png;base64,iVBORw0KGgo=", "inline-image", "image/png");
     const image = createInlineComposeImage(file);

@@ -951,7 +951,7 @@ import type {
   WorkingDraftPayload,
   WorkingDraftRecord,
 } from "@/lib/mail-working-draft";
-import { isStaleProviderDraftRow } from "@/lib/mail-working-draft";
+import { findWorkingDraftIdByServerRef, isStaleProviderDraftRow } from "@/lib/mail-working-draft";
 import {
   createAutosaveScheduler,
   attachInputListener,
@@ -3992,7 +3992,17 @@ function MailApp() {
   );
   const visibleMessages = useMemo(() => {
     if (folder !== "drafts") return messages;
-    const visibleProviderMessages = messages.filter((message) => {
+    const enrichedProviderMessages = messages.map((message) => {
+      const parsed = parseMessageId(message.id);
+      if (!parsed || message.draftIdHeader) return message;
+      const uidValidity = validUidValidity(message.uidValidity);
+      const draftId = uidValidity
+        ? findWorkingDraftIdByServerRef(workingDraftRecords, uidValidity, parsed.uid)
+        : null;
+      return draftId ? { ...message, draftIdHeader: draftId } : message;
+    });
+
+    const visibleProviderMessages = enrichedProviderMessages.filter((message) => {
       const parsed = parseMessageId(message.id);
       if (!parsed) return true;
       return !isStaleProviderDraftRow({
@@ -8250,7 +8260,11 @@ function Composer({
           }
           return { ok: false, code: result?.error || "WORKING_DRAFT_SAVE_FAILED" };
         } catch (error) {
-          return { ok: false, code: error instanceof Error ? error.message : "NETWORK" };
+          const code = error instanceof Error ? error.message : "NETWORK";
+          if (code !== "NETWORK") {
+            console.warn("[draft-save-preflight] failed code=", code);
+          }
+          return { ok: false, code };
         }
 
         /* Legacy temporary Bridge-stage path intentionally unreachable. It is
@@ -11411,48 +11425,10 @@ function Composer({
               const editor = editorRef.current;
               if (!editor) return;
               insertSignatureIntoEditor(editor, html);
-              for (const img of editor.querySelectorAll<HTMLImageElement>(
-                `.${SIGNATURE_CLASS} img`,
-              )) {
-                if (img.dataset.mmInlineId || !/^https:\/\//i.test(img.src)) continue;
-                setSignatureImagesLoading((count) => count + 1);
-                void fetch(img.src)
-                  .then(async (response) => {
-                    if (!response.ok) throw new Error("SIGNATURE_IMAGE_FETCH_FAILED");
-                    const blob = await response.blob();
-                    const extension =
-                      blob.type === "image/png"
-                        ? "png"
-                        : blob.type === "image/gif"
-                          ? "gif"
-                          : blob.type === "image/webp"
-                            ? "webp"
-                            : "jpg";
-                    const file = new File([blob], `signature-${crypto.randomUUID()}.${extension}`, {
-                      type: blob.type,
-                    });
-                    if (!validateInlineImageFile(file).ok)
-                      throw new Error("SIGNATURE_IMAGE_INVALID");
-                    const image = createInlineComposeImage(file);
-                    await persistInlineImage(inlineScope, toInlineImageMetadata(image), image.file);
-                    img.src = image.objectUrl;
-                    img.dataset.mmInlineId = image.id;
-                    img.draggable = false;
-                    img.style.maxWidth = "100%";
-                    img.style.height = "auto";
-                    setInlineImages((current) => [...current, image]);
-                    notifyEditorChange();
-                    const key = `new-inline:${image.id}`;
-                    draftEngineRef.current?.registerResourceDependency(key);
-                    fileDependencyByFileRef.current.set(image.file, { key });
-                  })
-                  .catch(() => {
-                    img.remove();
-                    notifyEditorChange();
-                    toast.error(tr("تعذّر إدراج صورة التوقيع"));
-                  })
-                  .finally(() => setSignatureImagesLoading((count) => Math.max(0, count - 1)));
-              }
+              // Remote signature images remain URL-backed in the Draft HTML.
+              // They must not be fetched/converted into local inline uploads:
+              // that makes autosave depend on CORS/network and re-uploads the
+              // image every session.
               notifyEditorChange();
             }}
           />
