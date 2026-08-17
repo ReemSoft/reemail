@@ -7793,7 +7793,11 @@ function Composer({
             restoredHandles: restoredHandleByAttachmentIdRef.current,
             preservedHandles: preservedSourceHandlesRef.current,
             sourceRef: attachmentSourceRef.current,
+            // Draft saves send handle + source together: the Bridge reuses the
+            // staged bytes when they exist and re-reads IMAP when they don't.
+            carryHandleWithSource: true,
           });
+
           if (attachmentPlan.unresolvedAttachmentIds.length > 0) {
             return { ok: false, code: "SOURCE_ATTACHMENT_UNRESOLVED" };
           }
