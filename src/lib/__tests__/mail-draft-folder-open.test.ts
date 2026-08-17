@@ -1,18 +1,70 @@
 // Zero-latency Draft folder open — regression contracts.
 //
-// Drafts V4 renders from the Local Index on the critical path. These contracts
-// lock that:
+// Drafts V4 renders from the Bridge Draft list on the critical path because the
+// Local Index can expose a stale physical UID. These contracts lock that:
 //   * the cold initial Draft sync is gated by ACTUAL first-list completion
 //     (draftListSettled), NOT a time-based heuristic,
 //   * a post-Draft-save close never runs a global /api/folders count sweep,
 //   * an index hit renders without any Bridge fallback.
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { shouldUseLocalIndexForFolder } from "../mail-draft-open-orchestration";
 
 const mail = () => readFileSync(new URL("../../routes/mail.tsx", import.meta.url), "utf8");
 const hook = () => readFileSync(new URL("../../hooks/use-mail-index-sync.ts", import.meta.url), "utf8");
 
 describe("Draft folder zero-latency open (deterministic gate)", () => {
+  it("Drafts bypass Local Index while Inbox/Sent/Starred behavior stays unchanged", () => {
+    expect(
+      shouldUseLocalIndexForFolder({
+        folder: "drafts",
+        sort: "date-desc",
+        mailIndexEnabled: true,
+        hasMailSessionToken: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldUseLocalIndexForFolder({
+        folder: "inbox",
+        sort: "date-desc",
+        mailIndexEnabled: true,
+        hasMailSessionToken: true,
+      }),
+    ).toBe(true);
+    expect(
+      shouldUseLocalIndexForFolder({
+        folder: "sent",
+        sort: "date-desc",
+        mailIndexEnabled: true,
+        hasMailSessionToken: true,
+      }),
+    ).toBe(true);
+    expect(
+      shouldUseLocalIndexForFolder({
+        folder: "starred",
+        sort: "date-desc",
+        mailIndexEnabled: true,
+        hasMailSessionToken: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldUseLocalIndexForFolder({
+        folder: "drafts",
+        sort: "date-desc",
+        mailIndexEnabled: false,
+        hasMailSessionToken: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldUseLocalIndexForFolder({
+        folder: "inbox",
+        sort: "date-asc",
+        mailIndexEnabled: true,
+        hasMailSessionToken: true,
+      }),
+    ).toBe(false);
+  });
+
   it("has NO time-based heuristic (no initialDeferMs / 2000ms)", () => {
     const h = hook();
     expect(h).not.toContain("initialDeferMs");

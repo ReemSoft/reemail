@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
+import { shouldUseLocalIndexForFolder } from "../mail-draft-open-orchestration";
 
 type Folder = "inbox" | "starred" | "sent" | "drafts";
 type Count = { folder: Folder; total: number; unread: number; supported?: boolean };
@@ -118,7 +119,22 @@ describe("wiring and unchanged behavior", () => {
   });
 
   it("keeps Starred listing on the existing Bridge fallback", () => {
-    expect(source).toContain('f !== "starred",');
+    expect(
+      shouldUseLocalIndexForFolder({
+        folder: "starred",
+        sort: "date-desc",
+        mailIndexEnabled: true,
+        hasMailSessionToken: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldUseLocalIndexForFolder({
+        folder: "inbox",
+        sort: "date-desc",
+        mailIndexEnabled: true,
+        hasMailSessionToken: true,
+      }),
+    ).toBe(true);
     expect(indexSource).toContain('if (canonical === "starred")');
   });
 });

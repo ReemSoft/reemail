@@ -929,7 +929,6 @@ import {
   shouldFinalizeCleanClose,
   isCleanRemoteDraft,
   shouldCloseAfterUploadWait,
-  shouldSendAfterDraftSave,
   createDraftSaver,
   createPendingDeleteQueue,
   deleteDraftAfterSend,
@@ -1023,6 +1022,12 @@ import type {
 } from "@/lib/mail-draft-save-diagnostics";
 import { decidePreNetworkDraftOpen, decideSettledDraftFetch } from "@/lib/mail-stale-draft-open";
 import { DraftEngine } from "@/lib/mail-draft-engine";
+import {
+  chooseDraftOpenTarget,
+  draftSendNeedsWorkingDraftPersist,
+  isDraftEditComposeInitial,
+  shouldUseLocalIndexForFolder,
+} from "@/lib/mail-draft-open-orchestration";
 import { indexUpdateFlag } from "@/lib/mail-flags.functions";
 import { indexMoveMessage } from "@/lib/mail-move.functions";
 import { indexDeleteMessage } from "@/lib/mail-delete.functions";
@@ -1394,8 +1399,11 @@ type EditDraftSource = {
 type ComposeInitial = {
   to?: string;
   cc?: string;
+  bcc?: string;
   subject?: string;
   body?: string;
+  showCc?: boolean;
+  showBcc?: boolean;
   /**
    * Edit-Draft mode: when set, the composer opens as an EDIT of an existing
    * server-side draft. draftId reuses the sticky X-MailMaestro-Draft-ID when
@@ -1431,8 +1439,12 @@ function buildWorkingDraftInitial(record: WorkingDraftRecord): ComposeInitial {
   return {
     to: addressText(snapshot.to),
     cc: addressText(snapshot.cc),
+    bcc: addressText(snapshot.bcc),
     body: snapshot.html,
+    subject: snapshot.subject || "",
     bodyIsHtml: true,
+    showCc: Boolean(snapshot.showCc),
+    showBcc: Boolean(snapshot.showBcc),
     editDraftId: record.draftId,
     inReplyTo: snapshot.inReplyTo,
     references: snapshot.references,
@@ -1564,6 +1576,8 @@ function buildEditDraft(message: MailMessage, draftsFolderPath?: string): Compos
     subject: rawSubject,
     body: message.body ?? "",
     bodyIsHtml: true,
+    showCc: (message.cc ?? []).length > 0,
+    showBcc: false,
     editDraftId,
     previousRef,
     attachmentSourceRef: normalAttachments.length > 0 ? previousRef : undefined,
@@ -2006,20 +2020,12 @@ function useMailData(session: MailSession | null) {
   // Only "date-desc" is index-native; other sorts fall back to the bridge.
   const canUseIndex = useCallback(
     (f: MailFolder, s: SortOption) =>
-      MAIL_INDEX_ENABLED &&
-      s === "date-desc" &&
-      !!session?.mailSessionToken &&
-      // NOTE: `folderPaths` is intentionally NOT required here. It is only
-      // populated by the Bridge/Index counts round-trip, and gating on it
-      // forced the very first list render to wait for IMAP (slow path) and
-      // then re-run the whole load once paths arrived (double fetch).
-      // `indexListMessages` resolves the folder by `canonical` on its own and
-      // returns `indexed:false` cleanly when it is not synced yet.
-      // V4: "starred" is a virtual view over INBOX (\Flagged). The Local
-      // Index has no distinct row for it, so serving it from the index
-      // would either return zero rows or (worse) return every inbox row
-      // regardless of the \Flagged flag. Always fall through to the Bridge.
-      f !== "starred",
+      shouldUseLocalIndexForFolder({
+        folder: f,
+        sort: s,
+        mailIndexEnabled: MAIL_INDEX_ENABLED,
+        hasMailSessionToken: !!session?.mailSessionToken,
+      }),
     [session],
   );
 
@@ -2438,7 +2444,11 @@ function useMailData(session: MailSession | null) {
       // Background rounds only: refresh the current folder from the index
       // when the sync actually changed something (the hook already gates on
       // meaningful-change; suppressed rounds do NOT reach this callback).
-      loadMessages();
+      // Drafts now use the Bridge Draft list as their visible authority. A
+      // background Draft reconcile must keep the Local Index converged for
+      // later provider UID suppression, but it must NOT cause a redundant
+      // Bridge Draft list reload.
+      if (folder !== "drafts") loadMessages();
       loadCountsFast();
     },
   });
@@ -2748,11 +2758,19 @@ function MailApp() {
   const [query, setQuery] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [compose, setCompose] = useState<ComposeInitial | null>(null);
+  const [draftEditComposeNonce, setDraftEditComposeNonce] = useState(0);
   const [selectedMessage, setSelectedMessage] = useState<MailMessage | null>(null);
   const [reading, setReading] = useState(false);
   const [selection, setSelection] = useState<Set<string>>(() => new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
   const [selectMode, setSelectMode] = useState(false);
+
+  const openDraftEdit = useCallback((initial: ComposeInitial) => {
+    if (isDraftEditComposeInitial(initial)) {
+      setDraftEditComposeNonce((current) => current + 1);
+    }
+    setCompose(initial);
+  }, []);
 
   // Guarded navigation: if the composer is open with unsaved changes, prompt
   // (Save / Discard / Cancel) before running the destructive nav action.
@@ -2855,6 +2873,72 @@ function MailApp() {
       // on the next Draft-folder visit.
     }
   }, [folder, session?.account.id, session?.mailSessionToken]);
+
+  const rememberWorkingDraftRecord = useCallback((record: WorkingDraftRecord) => {
+    setWorkingDraftRecords((current) => {
+      const existingIndex = current.findIndex((item) => item.draftId === record.draftId);
+      if (existingIndex === -1) return [...current, record];
+      const next = [...current];
+      next[existingIndex] = record;
+      return next;
+    });
+  }, []);
+
+  const currentMailSessionTokenRef = useRef<string>(session?.mailSessionToken ?? "");
+  currentMailSessionTokenRef.current = session?.mailSessionToken ?? "";
+
+  /**
+   * Exact logical Draft lookup. A provider Draft row with a valid
+   * X-MailMaestro-Draft-ID must resolve through this BEFORE generic
+   * /api/message so a list-load race can never open a stale physical UID.
+   */
+  const loadWorkingDraftById = useCallback(
+    async (draftId: string): Promise<WorkingDraftRecord | null> => {
+      const token = currentMailSessionTokenRef.current;
+      if (!token || !draftId) return null;
+      try {
+        const response = await fetch("/api/mail-working-draft", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ mailSessionToken: token, action: "load", draftId }),
+        });
+        const result = (await response.json().catch(() => null)) as {
+          ok?: boolean;
+          record?: WorkingDraftRecord | null;
+        } | null;
+        const record = result?.ok ? result.record : null;
+        if (!record || !Number.isSafeInteger(record.revision)) return null;
+        rememberWorkingDraftRecord(record);
+        return record;
+      } catch {
+        return null;
+      }
+    },
+    [rememberWorkingDraftRecord],
+  );
+
+  const resolveDraftWorkingRecord = useCallback(
+    async (
+      row: MailMessage | null,
+      parsed: ReturnType<typeof parseMessageId>,
+    ): Promise<WorkingDraftRecord | null> => {
+      if (!row) return null;
+      const isServerWorkingRow = row.id.startsWith("working-draft:");
+      if (parsed && parsed.folder !== "drafts" && !isServerWorkingRow) return null;
+      const target = chooseDraftOpenTarget({
+        rowId: row.id,
+        draftIdHeader: row.draftIdHeader,
+        uidValidity: parsed ? validUidValidity(row.uidValidity) ?? undefined : undefined,
+        uid: parsed?.uid ?? 0,
+        records: workingDraftRecords,
+        isDraftIdValid: (value) => UUID_RE.test(value),
+      });
+      if (target.kind === "server-working") return target.record;
+      if (target.kind === "working-by-header") return loadWorkingDraftById(target.draftId);
+      return null;
+    },
+    [workingDraftRecords, loadWorkingDraftById],
+  );
 
   useEffect(() => {
     void refreshWorkingDrafts();
@@ -3171,8 +3255,19 @@ function MailApp() {
     [],
   );
 
-  type ClientMessageSource = "memory" | "server-cache" | "imap" | "error" | "draft-syncing";
-  type ClientMessageResult = { message: MailMessage | null; source: ClientMessageSource };
+  type ClientMessageSource =
+    | "memory"
+    | "server-cache"
+    | "imap"
+    | "error"
+    | "draft-syncing"
+    | "draft-working-record"
+    | "draft-provider-gone";
+  type ClientMessageResult = {
+    message: MailMessage | null;
+    source: ClientMessageSource;
+    draftRecord?: WorkingDraftRecord | null;
+  };
   type MessageOpenContext =
     | { kind: "current-list"; intent?: MessageOpenIntent }
     | { kind: "historical"; base: MailMessage };
@@ -3462,7 +3557,7 @@ function MailApp() {
         },
         signal: controller.signal,
       })
-        .then((result) => {
+        .then(async (result) => {
           if (scopeGeneration !== activeScopeGenerationRef.current || controller.signal.aborted) {
             mailPerf("stale-response-dropped", { phase: "scope" });
             return { message: null, source: "error" } as ClientMessageResult;
@@ -3583,6 +3678,31 @@ function MailApp() {
               );
             }
 
+            if (parsed.folder === "drafts") {
+              // Physical Draft UID NOT_FOUND is transport state. It must never
+              // destroy the logical MailMaestro Working Draft or run generic
+              // destructive ghost cleanup.
+              const logicalRecord = await resolveDraftWorkingRecord(fetchBase, parsed);
+              if (logicalRecord) {
+                return {
+                  message: null,
+                  source: "draft-working-record",
+                  draftRecord: logicalRecord,
+                } as ClientMessageResult;
+              }
+
+              // Provider-only/legacy physical Draft disappeared. Reconcile only
+              // the physical row, never a logical Draft, and never decrement the
+              // logical Draft count.
+              messageCache.current.delete(id);
+              setMessages((prev) => prev.filter((m) => m.id !== id));
+              hideRow(id);
+              setSelectedId((cur) => (cur === id ? null : cur));
+              setSelectedMessage((cur) => (cur && cur.id === id ? null : cur));
+              toast.info(tr("تعذّر فتح هذه المسودة. تم تحديث قائمة المسودات."));
+              return { message: null, source: "draft-provider-gone" } as ClientMessageResult;
+            }
+
             if (parsed.folder !== "all") {
               void cleanupGhost({
                 data: {
@@ -3623,6 +3743,7 @@ function MailApp() {
       cleanupGhost,
       recoverJustSavedDraft,
       openDraftByIdentity,
+      resolveDraftWorkingRecord,
     ],
   );
 
@@ -3996,10 +4117,6 @@ function MailApp() {
     };
   }, [query, searchMode, deepIncludeBody, folder, session, searchFn]);
 
-  const workingDraftByRowId = useMemo(
-    () => new Map(workingDraftRecords.map((record) => [`working-draft:${record.draftId}`, record])),
-    [workingDraftRecords],
-  );
   const visibleMessages = useMemo(() => {
     if (folder !== "drafts") return messages;
     const enrichedProviderMessages = messages.map((message) => {
@@ -4217,16 +4334,15 @@ function MailApp() {
     if (!(await guardComposerNav())) return;
     const parsed = parseMessageId(id);
     const base = filteredMessages.find((message) => message.id === id) ?? null;
-    const serverWorking = workingDraftByRowId.get(id);
-    const providerWorkingDraft =
-      parsed?.folder === "drafts" && base?.draftIdHeader
-        ? workingDraftRecords.find((record) => record.draftId === base.draftIdHeader) ?? null
+    const draftRecord =
+      parsed?.folder === "drafts" || id.startsWith("working-draft:")
+        ? await resolveDraftWorkingRecord(base, parsed)
         : null;
-    const reuseWorking = serverWorking ?? providerWorkingDraft;
-    if (reuseWorking) {
-      // Draft-only fast path: no provider/message-open request is issued for
-      // a server Working Draft that has not yet checkpointed to IMAP.
-      setCompose(buildWorkingDraftInitial(reuseWorking));
+    if (draftRecord) {
+      // Draft-only fast path: logical Working Draft wins BEFORE any generic
+      // provider /api/message request. This is independent of whether the
+      // Working Draft list request has completed.
+      openDraftEdit(buildWorkingDraftInitial(draftRecord));
       setSelectedId(null);
       setSelectedMessage(null);
       setReading(false);
@@ -4300,6 +4416,18 @@ function MailApp() {
         setReading(false);
         toast.info(tr("المسودة لا تزال قيد المزامنة، حاول فتحها بعد لحظات."));
         return;
+      } else if (result.source === "draft-working-record" && result.draftRecord) {
+        // A Draft NOT_FOUND raced with the Working Draft list and the exact
+        // logical record was recovered. Open it without a generic message call.
+        openDraftEdit(buildWorkingDraftInitial(result.draftRecord));
+        setSelectedId(null);
+        setSelectedMessage(null);
+        setReading(false);
+        return;
+      } else if (result.source === "draft-provider-gone") {
+        // The physical provider-only row was already reconciled and notified.
+        setReading(false);
+        return;
       } else if (!cached) throw new Error(tr("فشل فتح الرسالة"));
 
       // M4-C: Drafts folder → open the message directly inside the composer
@@ -4309,7 +4437,7 @@ function MailApp() {
       const loaded = msg ?? cached ?? null;
       if (loaded && parsed.folder === "drafts") {
         const draftsPath = folderPaths.drafts ?? undefined;
-        setCompose(buildEditDraft(loaded, draftsPath));
+        openDraftEdit(buildEditDraft(loaded, draftsPath));
         setSelectedId(null);
         setSelectedMessage(null);
         setReading(false);
@@ -5890,6 +6018,11 @@ function MailApp() {
         >
           {compose ? (
             <Composer
+              key={
+                compose.editDraftId
+                  ? `draft-edit:${compose.editDraftId}:${draftEditComposeNonce}`
+                  : undefined
+              }
               session={session}
               initial={compose}
               onClose={({ refreshDrafts }) => {
@@ -7554,11 +7687,21 @@ function Composer({
   const [cc, setCc] = useState<Recipient[]>(
     () => restored?.cc ?? parseRecipientText(initial?.cc ?? ""),
   );
-  const [bcc, setBcc] = useState<Recipient[]>(() => restored?.bcc ?? []);
-  const [showCc, setShowCc] = useState<boolean>(
-    () => restored?.showCc ?? parseRecipientText(initial?.cc ?? "").length > 0,
+  const [bcc, setBcc] = useState<Recipient[]>(
+    () => restored?.bcc ?? parseRecipientText(initial?.bcc ?? ""),
   );
-  const [showBcc, setShowBcc] = useState<boolean>(() => restored?.showBcc ?? false);
+  const [showCc, setShowCc] = useState<boolean>(
+    () =>
+      restored?.showCc ??
+      initial?.showCc ??
+      parseRecipientText(initial?.cc ?? "").length > 0,
+  );
+  const [showBcc, setShowBcc] = useState<boolean>(
+    () =>
+      restored?.showBcc ??
+      initial?.showBcc ??
+      parseRecipientText(initial?.bcc ?? "").length > 0,
+  );
   const [subject, setSubject] = useState<string>(() => restored?.subject ?? initial?.subject ?? "");
   const initialHtml = useMemo(() => {
     if (restored?.html) return restored.html;
@@ -7659,6 +7802,7 @@ function Composer({
     closeIntentAfterUploadRef.current = null;
     recomputeDirty();
   };
+  const suppressNextServerHydrationDirtyRef = useRef(false);
   // bodyRev mirrors generation for the autosave effect dependency (React
   // needs a value in deps; contentEditable does not trigger re-renders).
   const [bodyRev, setBodyRev] = useState(0);
@@ -7721,6 +7865,8 @@ function Composer({
   >(new Map());
   const workingDraftRecordRef = useRef<WorkingDraftRecord | null>(null);
   const workingDraftLoadPromiseRef = useRef<Promise<WorkingDraftRecord | null> | null>(null);
+  const currentMailSessionTokenRef = useRef<string>(session.mailSessionToken ?? "");
+  currentMailSessionTokenRef.current = session.mailSessionToken ?? "";
   const hydratedInlineImageIdsRef = useRef<Set<string>>(new Set());
   const fileDependencyByFileRef = useRef<Map<File, { key: string }>>(new Map());
   const unresolvedInlineDependenciesRef = useRef<Map<string, string>>(new Map());
@@ -7767,7 +7913,7 @@ function Composer({
   // from durable references and no provider attachment bytes are fetched.
   useEffect(() => {
     let cancelled = false;
-    const token = session.mailSessionToken;
+    const token = currentMailSessionTokenRef.current;
     if (!token) return;
     const load = (async (): Promise<WorkingDraftRecord | null> => {
       try {
@@ -7786,6 +7932,10 @@ function Composer({
         workingRevisionRef.current = record.revision;
         if (cancelled || isDirtyRef.current) return record;
         const snapshot = record.payload.snapshot;
+        // One-shot hydration guard: applying server-owned fields below must
+        // not be interpreted by the structural dirty-marking effect as a user
+        // edit. The effect consumes this flag on the next render.
+        suppressNextServerHydrationDirtyRef.current = true;
         setTo(snapshot.to ?? []);
         setCc(snapshot.cc ?? []);
         setBcc(snapshot.bcc ?? []);
@@ -8222,7 +8372,7 @@ function Composer({
   if (!saverRef.current) {
     saverRef.current = createDraftSaver(draftId, {
       saveRemote: async ({ snapshot, previousRef, generation, trigger, revisionId }) => {
-        const token = session.mailSessionToken;
+        const token = mailSessionTokenRef.current;
         if (!token) return { ok: false, code: "SESSION_REQUIRED" };
         const logicalRevisionId = revisionId ?? currentRevisionIdRef.current;
         remoteSaveStartedAtByGenerationRef.current.set(generation, performance.now());
@@ -9589,6 +9739,10 @@ function Composer({
       editMarkMountedRef.current = true;
       return;
     }
+    if (suppressNextServerHydrationDirtyRef.current) {
+      suppressNextServerHydrationDirtyRef.current = false;
+      return;
+    }
     markEdited();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [to, cc, bcc, subject, showCc, showBcc, existingKept]);
@@ -9698,7 +9852,9 @@ function Composer({
       }
       let discarded = false;
       try {
-        discarded = (await deleteServerWorkingDraft()).ok;
+        discarded = (
+          await deleteServerWorkingDraft(serverRefRef.current ?? initial?.previousRef ?? null)
+        ).ok;
       } catch {
         discarded = false;
       }
@@ -10252,27 +10408,35 @@ function Composer({
   };
 
   async function performSend() {
-    if (sendInProgressRef.current) return;
+    if (sendInProgressRef.current) {
+      toast.info(tr("جاري الإرسال"));
+      return;
+    }
     sendInProgressRef.current = true;
     setSending(true);
     setProgress(0);
-    console.info("[draft-send] phase=send-click");
-    autosaveRef.current?.cancel();
-    if (remoteAutosaveTimerRef.current !== null) {
-      window.clearTimeout(remoteAutosaveTimerRef.current);
-      remoteAutosaveTimerRef.current = null;
-    }
-    if (workingCheckpointTimerRef.current !== null) {
-      window.clearTimeout(workingCheckpointTimerRef.current);
-      workingCheckpointTimerRef.current = null;
-    }
-    workingCheckpointPendingRef.current = false;
-    pendingRemoteSaveRef.current = null;
-    await (workingCheckpointFlightRef.current ?? Promise.resolve());
-    console.info("[draft-send] phase=checkpoint-wait-complete");
     let sendAccepted = false;
     try {
+      console.info("[draft-send] phase=send-click");
+      autosaveRef.current?.cancel();
+      if (remoteAutosaveTimerRef.current !== null) {
+        window.clearTimeout(remoteAutosaveTimerRef.current);
+        remoteAutosaveTimerRef.current = null;
+      }
+      if (workingCheckpointTimerRef.current !== null) {
+        window.clearTimeout(workingCheckpointTimerRef.current);
+        workingCheckpointTimerRef.current = null;
+      }
+      workingCheckpointPendingRef.current = false;
+      pendingRemoteSaveRef.current = null;
+      await (workingCheckpointFlightRef.current ?? Promise.resolve());
+      console.info("[draft-send] phase=checkpoint-wait-complete");
       await inlineReadinessRef.current;
+      // Settle any currently-running Draft autosave before deciding whether a
+      // send-time Working Draft persistence pass is required. This never lets
+      // an autosave rejection leak into the Send flow.
+      await saverRef.current?.cancelPendingAndAwaitRunning();
+      syncDraftEngineRefs();
       const serialized = serializeInlineImages(
         editorRef.current?.innerHTML ?? "",
         inlineImagesRef.current,
@@ -10296,23 +10460,23 @@ function Composer({
       const draftOrigin = isEditMode || workingRevisionRef.current > 0;
       let response: Response;
       if (draftOrigin) {
-        const saved = await saveDraftNow("explicit");
-        const alreadyClean = isCleanRemoteDraft({
-          isDirty: isDirtyRef.current,
-          hasRemoteDraft,
-          serverRef: serverRefRef.current,
-          isEditMode,
+        // isEditMode alone must never authorize /api/mail-working-draft-send.
+        // A clean provider/legacy Draft is promoted into a real Working Draft
+        // row here, without fabricating a user edit, before SMTP is allowed.
+        const needsWorkingDraftPersist = draftSendNeedsWorkingDraftPersist({
+          workingRevision: workingRevisionRef.current,
+          dirty: isDirtyRef.current,
         });
-        const sendableAfterSave = shouldSendAfterDraftSave(saved, alreadyClean);
-        if (!sendableAfterSave) {
-          if (saved === "failed") {
-            console.warn("[draft-send-readiness] code=draft-save-failed");
-          } else {
-            console.warn("[draft-send-readiness] code=draft-not-sendable", {
-              saved,
-              alreadyClean,
-            });
-          }
+        const saved = needsWorkingDraftPersist
+          ? await saveDraftNow("send", {
+              forceWorkingDraftPersist: workingRevisionRef.current <= 0,
+            })
+          : "saved_server";
+        if (saved !== "saved_server") {
+          return;
+        }
+        if (workingRevisionRef.current <= 0) {
+          toast.error(tr("تعذّر تجهيز المسودة للإرسال. أعد المحاولة."));
           return;
         }
         response = await fetch("/api/mail-working-draft-send", {
@@ -10596,7 +10760,10 @@ function Composer({
   })();
 
   type SaveNowResult = "saved_server" | "failed" | "empty";
-  async function saveDraftNow(reason: DraftSaveTriggerReason = "explicit"): Promise<SaveNowResult> {
+  async function saveDraftNow(
+    reason: DraftSaveTriggerReason = "explicit",
+    options?: { forceWorkingDraftPersist?: boolean },
+  ): Promise<SaveNowResult> {
     if (typeof window === "undefined") return "failed";
     if (deleteIntentRef.current) return "failed";
     const exceeded = classifyAttachmentLimitExceeded({
@@ -10621,11 +10788,18 @@ function Composer({
       remoteAutosaveTimerRef.current = null;
     }
     pendingRemoteSaveRef.current = null;
+    // Explicit Save / Save-before-Send must never be rejected just because an
+    // automatic save is currently running. Cancel any coalesced follow-up,
+    // settle the running save, then re-read the latest dirty/generation state.
+    await saverRef.current?.cancelPendingAndAwaitRunning();
     await inlineReadinessRef.current;
 
     for (let attemptNumber = 0; attemptNumber < 5; attemptNumber += 1) {
       if (deleteIntentRef.current) return "failed";
+      const forceWorkingDraftPersist =
+        options?.forceWorkingDraftPersist === true && workingRevisionRef.current <= 0;
       if (
+        !forceWorkingDraftPersist &&
         isCleanRemoteDraft({
           isDirty: isDirtyRef.current,
           hasRemoteDraft,
@@ -10687,19 +10861,6 @@ function Composer({
             ? tr("الملف لا يزال قيد الرفع. انتظر اكتماله ثم حاول مجدداً.")
             : tr("تعذّر تجهيز أحد محتويات المسودّة للحفظ."),
         );
-        return "failed";
-      }
-      if (engine.state !== "SAVING" && !engine.beginSave()) {
-        if (
-          isCleanRemoteDraft({
-            isDirty: engine.isDirty,
-            hasRemoteDraft,
-            serverRef: serverRefRef.current,
-            isEditMode,
-          })
-        ) {
-          return "saved_server";
-        }
         return "failed";
       }
       const completion = await saverRef.current?.requestSave(
