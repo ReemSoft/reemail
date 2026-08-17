@@ -32,10 +32,7 @@ describe("releaseStagedHandles (best-effort browser release)", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({ ok: false })));
     expect(await releaseStagedHandles("t", ["a"])).toBe(false);
 
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue(new Response("", { status: 500 })),
-    );
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("", { status: 500 })));
     expect(await releaseStagedHandles("t", ["a"])).toBe(false);
   });
 
@@ -69,8 +66,13 @@ describe("Composer staged-handle release lifecycle (mail.tsx)", () => {
   });
 
   it("releases the staged handle when a pending file is removed", () => {
-    const removal = route.slice(route.indexOf("function removeFile"), route.indexOf("function exec"));
-    expect(removal).toContain('getStagedReady(stagedReadyRef.current, file, "attachment", file.name)');
+    const removal = route.slice(
+      route.indexOf("function removeFile"),
+      route.indexOf("function exec"),
+    );
+    expect(removal).toContain(
+      'getStagedReady(stagedReadyRef.current, file, "attachment", file.name)',
+    );
     expect(removal).toContain("releaseStagedHandle(staged.handle, () => {");
   });
 
@@ -79,7 +81,7 @@ describe("Composer staged-handle release lifecycle (mail.tsx)", () => {
       route.indexOf("const removed = inlineImagesRef.current.filter"),
       route.indexOf("setInlineImages((current) => current.filter((image) => ids.has(image.id)))"),
     );
-    expect(listener).toContain('getStagedReady(');
+    expect(listener).toContain("getStagedReady(");
     expect(listener).toContain("restoredInlineHandlesRef.current.get(image.uploadFilename)");
     expect(listener).toContain("releaseStagedHandle(handle, () => {");
   });
@@ -93,10 +95,8 @@ describe("Composer staged-handle release lifecycle (mail.tsx)", () => {
   });
 
   it("releases all owned staged handles on explicit draft delete", () => {
-    const del = route.slice(
-      route.indexOf("async function handleDeleteDraft"),
-      route.indexOf("return (\n    <div"),
-    );
+    const start = route.indexOf("async function handleDeleteDraft");
+    const del = route.slice(start, route.indexOf("\n  return (\n    <div", start));
     expect(del).toContain("if (!deleted.ok)");
     expect(del).toContain("releaseAllOwnedStagedHandles();");
   });

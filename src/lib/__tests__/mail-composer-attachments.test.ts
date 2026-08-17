@@ -483,7 +483,7 @@ describe("Reply, Reply All, Forward and Composer wiring", () => {
 
   it("surfaces Bridge attachment-size rejections with the clear local message", () => {
     expect(route).toContain("isAttachmentSizeLimitError(result.error)");
-    expect(route).toContain("tr(\"تجاوزت حدود المرفقات المسموحة\")");
+    expect(route).toContain('tr("تجاوزت حدود المرفقات المسموحة")');
   });
 
   it("persists and restores local source metadata without byte hydration", () => {
@@ -494,8 +494,8 @@ describe("Reply, Reply All, Forward and Composer wiring", () => {
   });
 
   it("keeps Ctrl/Cmd+Enter attachment limits and mention state current", () => {
-    expect(route).toContain(
-      "[to, cc, bcc, subject, files, existingKept, inlineImages, normalAttachmentCount, inlineImageCount, totalBytes]",
+    expect(route).toMatch(
+      /\[\s*to,\s*cc,\s*bcc,\s*subject,\s*files,\s*existingKept,\s*inlineImages,\s*normalAttachmentCount,\s*inlineImageCount,\s*totalBytes,?\s*\]/,
     );
     expect(route).toContain("existingKept.length + files.length === 0");
   });
@@ -607,7 +607,9 @@ describe("Reply, Reply All, Forward and Composer wiring", () => {
       route.indexOf("const totalAttachmentBytes"),
       route.indexOf("const stagedFiles"),
     );
-    expect(saveRemote).toContain("const normalParts = existingKeptRef.current.length + currentFiles.length");
+    expect(saveRemote).toContain(
+      "const normalParts = existingKeptRef.current.length + currentFiles.length",
+    );
     expect(saveRemote).toContain("const inlineParts = transportImages.length");
     expect(saveRemote).toContain("classifyAttachmentLimitExceeded({");
     expect(saveRemote).not.toContain(
@@ -619,7 +621,11 @@ describe("Reply, Reply All, Forward and Composer wiring", () => {
 describe("classifyAttachmentLimitExceeded resource-class model", () => {
   it("allows 4 existing normal attachments + 7 inline images", () => {
     expect(
-      classifyAttachmentLimitExceeded({ normalAttachmentCount: 4, inlineImageCount: 7, totalBytes: 1 }),
+      classifyAttachmentLimitExceeded({
+        normalAttachmentCount: 4,
+        inlineImageCount: 7,
+        totalBytes: 1,
+      }),
     ).toBeNull();
   });
 
@@ -635,13 +641,21 @@ describe("classifyAttachmentLimitExceeded resource-class model", () => {
 
   it("rejects 11 normal attachments with 0 inline images", () => {
     expect(
-      classifyAttachmentLimitExceeded({ normalAttachmentCount: 11, inlineImageCount: 0, totalBytes: 1 }),
+      classifyAttachmentLimitExceeded({
+        normalAttachmentCount: 11,
+        inlineImageCount: 0,
+        totalBytes: 1,
+      }),
     ).toBe("normal");
   });
 
   it("rejects 4 normal attachments + 21 inline images", () => {
     expect(
-      classifyAttachmentLimitExceeded({ normalAttachmentCount: 4, inlineImageCount: 21, totalBytes: 1 }),
+      classifyAttachmentLimitExceeded({
+        normalAttachmentCount: 4,
+        inlineImageCount: 21,
+        totalBytes: 1,
+      }),
     ).toBe("inline");
   });
 

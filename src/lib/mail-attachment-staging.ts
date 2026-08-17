@@ -86,6 +86,13 @@ export function setStagedReady(
   byKind.set(kind, result);
 }
 
+export function shouldReleaseAbandonedStagedResult(input: {
+  resourceAbandoned: boolean;
+  lifecycleFinalizing: boolean;
+}): boolean {
+  return input.resourceAbandoned || input.lifecycleFinalizing;
+}
+
 export async function uploadAttachmentDirect(
   file: File,
   options: {

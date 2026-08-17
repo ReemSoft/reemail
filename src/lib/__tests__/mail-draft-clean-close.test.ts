@@ -9,6 +9,7 @@ import { describe, expect, it } from "vitest";
 import {
   shouldFinalizeCleanClose,
   readDraftDoc,
+  readDraftDocById,
   writeDraftDoc,
   clearDraftDoc,
   type DraftServerRef,
@@ -35,27 +36,58 @@ describe("shouldFinalizeCleanClose", () => {
   });
 
   it("failed remote save preserves recovery", () => {
-    expect(
-      shouldFinalizeCleanClose({ isDirty: true, serverRef: null, saveStatus: "failed" }),
-    ).toBe(false);
+    expect(shouldFinalizeCleanClose({ isDirty: true, serverRef: null, saveStatus: "failed" })).toBe(
+      false,
+    );
   });
 
   it("a dirty composer never finalizes", () => {
-    expect(
-      shouldFinalizeCleanClose({ isDirty: true, serverRef, saveStatus: "saving" }),
-    ).toBe(false);
+    expect(shouldFinalizeCleanClose({ isDirty: true, serverRef, saveStatus: "saving" })).toBe(
+      false,
+    );
   });
 
   it("a local-only unsaved draft (no serverRef) never finalizes on clean close", () => {
-    expect(
-      shouldFinalizeCleanClose({ isDirty: false, serverRef: null, saveStatus: "idle" }),
-    ).toBe(false);
+    expect(shouldFinalizeCleanClose({ isDirty: false, serverRef: null, saveStatus: "idle" })).toBe(
+      false,
+    );
   });
 
-  it("explicitly opening an existing server Draft keeps its content (no local wipe)", () => {
-    // isEditMode ignores the local v3 doc and reads the server draft instead.
-    const src = route();
-    expect(src).toContain("if (isEditMode) return null;");
+  it("same-Draft edit recovery is readable without touching another Draft", () => {
+    const store = new Map<string, string>();
+    const storage = {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => void store.set(key, value),
+      removeItem: (key: string) => void store.delete(key),
+    };
+    writeDraftDoc(
+      storage,
+      "a@example.com",
+      {
+        version: 3,
+        draftId: "provider-draft",
+        snapshot: {
+          to: [],
+          cc: [],
+          bcc: [],
+          subject: "newer local edit",
+          html: "<p>recovered</p>",
+          showCc: false,
+          showBcc: false,
+        },
+        serverRef,
+        updatedAt: 1,
+        recoveryKind: "edit",
+        localRevision: 2,
+        remoteCommittedRevision: 1,
+        remoteCommitConfirmed: false,
+        revisionId: "revision-2",
+      },
+      "edit",
+    );
+    expect(readDraftDocById(storage, "a@example.com", "provider-draft")?.snapshot.subject).toBe(
+      "newer local edit",
+    );
   });
 });
 
@@ -91,7 +123,10 @@ describe("recovery document lifecycle", () => {
 describe("clean-close wiring (mail.tsx)", () => {
   it("finalizes on the clean close path", () => {
     const src = route();
-    const clean = src.slice(src.indexOf("if (!isDirtyRef.current) {"), src.indexOf("const choice = await"));
+    const clean = src.slice(
+      src.indexOf("if (!isDirtyRef.current) {"),
+      src.indexOf("const choice = await"),
+    );
     expect(clean).toContain("finalizeCleanClose();");
     expect(clean).toContain("closeComposer();");
   });
@@ -103,7 +138,10 @@ describe("clean-close wiring (mail.tsx)", () => {
 
   it("cancel close never finalizes", () => {
     const src = route();
-    const cancel = src.slice(src.indexOf('if (choice === "cancel")'), src.indexOf('if (choice === "save")'));
+    const cancel = src.slice(
+      src.indexOf('if (choice === "cancel")'),
+      src.indexOf('if (choice === "save")'),
+    );
     expect(cancel).toContain("return false;");
     expect(cancel).not.toContain("finalizeCleanClose");
   });

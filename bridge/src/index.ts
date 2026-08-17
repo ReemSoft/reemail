@@ -18,7 +18,10 @@ import { configuredAppOrigins, isAllowedAppOrigin, publicBridgeBase } from "./pu
 import { TransferConcurrency } from "./transfer-concurrency.js";
 import {
   stageServerAttachmentSources,
+  stageDraftServerAttachmentSources,
   stageServerInlineSources,
+  draftSourceHandlesToRelease,
+  rebindServerSourcesToCanonicalDraft,
 } from "./server-attachment-sources.js";
 import { pipeline } from "node:stream/promises";
 import { attachmentContentDisposition, sanitizeAttachmentFilename } from "./attachment-transfer.js";
@@ -76,6 +79,7 @@ import {
   DraftDeletePayloadSchema,
   DraftTriggerDiagnosticsSchema,
   saveDraft,
+  reconcileDraftRevision,
   deleteDraft,
 } from "./drafts.js";
 import type { MailAccount, MailFolder } from "./types.js";
@@ -1209,7 +1213,19 @@ app.post("/api/send-status", requireKey, (req, res) => {
 app.post("/api/draft-save-v2", requireKey, imapGate("interactive"), async (req, res) => {
   let stagedAccount: string | null = null;
   let preservedSourceHandles: string[] = [];
+  let preservedInlineSourceHandles: string[] = [];
   let saveSucceeded = false;
+  const routeStartedAt = performance.now();
+  let phaseStartedAt = routeStartedAt;
+  const markRoutePhase = (phase: string, bytes = 0) => {
+    const now = performance.now();
+    if (TIMING_ENABLED) {
+      console.log(
+        `[draft-route-timing] phase=${phase} ms=${Math.round(now - phaseStartedAt)} bytes=${bytes}`,
+      );
+    }
+    phaseStartedAt = now;
+  };
   try {
     const diagnostics = (req.body as { diagnostics?: unknown } | undefined)?.diagnostics;
     if (diagnostics != null) {
@@ -1222,6 +1238,26 @@ app.post("/api/draft-save-v2", requireKey, imapGate("interactive"), async (req, 
     }
     const payload = DraftSavePayloadSchema.parse(req.body);
     const contract = DraftV2AttachmentSchema.parse(req.body);
+    let normalSourceInputs = contract.sourceAttachments.map((source) => ({
+      folderPath: source.folderPath,
+      uid: source.uid,
+      uidValidity: source.uidValidity,
+      part: source.part,
+      filename: source.filename,
+      size: source.size,
+      mimeType: source.mimeType,
+    }));
+    let inlineSourceInputs = contract.sourceInlineImages.map((source) => ({
+      folderPath: source.folderPath,
+      uid: source.uid,
+      uidValidity: source.uidValidity,
+      part: source.part,
+      filename: source.filename,
+      size: source.size,
+      mimeType: source.mimeType,
+      uploadFilename: source.uploadFilename,
+      cid: source.cid,
+    }));
     // Raw-payload fail-fast: reject an impossible combined normal count before
     // resolving handles or staging server sources (see send-v2).
     if (
@@ -1230,12 +1266,62 @@ app.post("/api/draft-save-v2", requireKey, imapGate("interactive"), async (req, 
     ) {
       return res.status(413).json({ ok: false, error: "ATTACHMENTS_TOO_LARGE" });
     }
+    if (contract.sourceAttachments.length > 0 || contract.sourceInlineImages.length > 0) {
+      const reconciled = await reconcileDraftRevision(
+        payload.account as MailAccount,
+        payload.password,
+        { draftId: payload.draftId, revisionId: payload.revisionId },
+      );
+      markRoutePhase("pre-source-revision-reconciliation");
+      if ("error" in reconciled) {
+        const status =
+          reconciled.error === "RETRYABLE_DRAFT_IDENTITY_SEARCH"
+            ? 503
+            : reconciled.error === "NO_DRAFTS_FOLDER"
+              ? 422
+              : 500;
+        return res.status(status).json(reconciled);
+      }
+      if (reconciled.found) {
+        saveSucceeded = true;
+        return res.json({
+          ...reconciled,
+          sourceAttachmentHandles: [],
+          inlineSourceHandles: [],
+        });
+      }
+      if ("canonicalRef" in reconciled && reconciled.canonicalRef) {
+        const descriptorIsStale = [...normalSourceInputs, ...inlineSourceInputs].some(
+          (source) =>
+            source.folderPath !== reconciled.canonicalRef!.folderPath ||
+            source.uid !== reconciled.canonicalRef!.uid ||
+            source.uidValidity !== reconciled.canonicalRef!.uidValidity,
+        );
+        if (descriptorIsStale) {
+          const rebound = await rebindServerSourcesToCanonicalDraft({
+            account: payload.account as MailAccount,
+            password: payload.password,
+            canonicalRef: reconciled.canonicalRef,
+            normal: normalSourceInputs,
+            inline: inlineSourceInputs,
+            draftTiming: true,
+          });
+          normalSourceInputs = rebound.normal;
+          inlineSourceInputs = rebound.inline;
+          markRoutePhase("canonical-source-rebind");
+        }
+      }
+    }
     const account = accountBinding(payload.account as MailAccount);
     stagedAccount = account;
     const resolvedNormal = await Promise.all(
       contract.attachmentHandles.map((handle) =>
         resolveStagedAttachment(BRIDGE_API_KEY, handle, account),
       ),
+    );
+    markRoutePhase(
+      "staged-normal-resolution",
+      resolvedNormal.reduce((sum, item) => sum + item.size, 0),
     );
     if (resolvedNormal.some((item) => item.kind !== "attachment")) {
       return res.status(400).json({ ok: false, error: "ATTACHMENT_KIND_MISMATCH" });
@@ -1246,39 +1332,35 @@ app.post("/api/draft-save-v2", requireKey, imapGate("interactive"), async (req, 
         staged: await resolveStagedAttachment(BRIDGE_API_KEY, item.handle, account),
       })),
     );
+    markRoutePhase(
+      "staged-inline-resolution",
+      resolvedInline.reduce((sum, item) => sum + item.staged.size, 0),
+    );
     const preservedInlineSources = await stageServerInlineSources({
       secret: BRIDGE_API_KEY,
       account: payload.account as MailAccount,
       password: payload.password,
-      sources: contract.sourceInlineImages.map((source) => ({
-        folderPath: source.folderPath,
-        uid: source.uid,
-        uidValidity: source.uidValidity,
-        part: source.part,
-        filename: source.filename,
-        size: source.size,
-        mimeType: source.mimeType,
-        uploadFilename: source.uploadFilename,
-        cid: source.cid,
-      })),
+      sources: inlineSourceInputs,
       maxBytes: SEND_MAX_TOTAL_BYTES,
+      draftTiming: true,
     });
-    const preserved = await stageServerAttachmentSources({
+    preservedInlineSourceHandles = preservedInlineSources.map(({ staged }) => staged.handle);
+    markRoutePhase(
+      "server-inline-source-staging",
+      preservedInlineSources.reduce((sum, item) => sum + item.resolved.size, 0),
+    );
+    const preserved = await stageDraftServerAttachmentSources({
       secret: BRIDGE_API_KEY,
       account: payload.account as MailAccount,
       password: payload.password,
-      sources: contract.sourceAttachments.map((source) => ({
-        folderPath: source.folderPath,
-        uid: source.uid,
-        uidValidity: source.uidValidity,
-        part: source.part,
-        filename: source.filename,
-        size: source.size,
-        mimeType: source.mimeType,
-      })),
+      sources: normalSourceInputs,
       maxBytes: SEND_MAX_TOTAL_BYTES,
     });
     preservedSourceHandles = preserved.map(({ staged }) => staged.handle);
+    markRoutePhase(
+      "server-normal-source-staging",
+      preserved.reduce((sum, item) => sum + item.resolved.size, 0),
+    );
     const all = [
       ...resolvedNormal,
       ...preserved.map(({ resolved }) => resolved),
@@ -1318,6 +1400,15 @@ app.post("/api/draft-save-v2", requireKey, imapGate("interactive"), async (req, 
         })),
       ],
     );
+    markRoutePhase(
+      "mime-attachment-mapping",
+      all.reduce((sum, item) => sum + item.size, 0),
+    );
+    if (TIMING_ENABLED) {
+      console.log(
+        `[draft-route-timing] phase=total-before-save-draft ms=${Math.round(performance.now() - routeStartedAt)} bytes=${all.reduce((sum, item) => sum + item.size, 0)}`,
+      );
+    }
     const result = await saveDraft(payload.account as MailAccount, payload.password, {
       ...payload,
       attachments,
@@ -1326,9 +1417,11 @@ app.post("/api/draft-save-v2", requireKey, imapGate("interactive"), async (req, 
       const status =
         result.error === "NO_DRAFTS_FOLDER"
           ? 422
-          : result.error === "SAFE_DRAFT_REPLACE_UNSUPPORTED"
-            ? 409
-            : 500;
+          : result.error === "RETRYABLE_DRAFT_IDENTITY_SEARCH"
+            ? 503
+            : result.error === "SAFE_DRAFT_REPLACE_UNSUPPORTED"
+              ? 409
+              : 500;
       return res.status(status).json(result);
     }
     saveSucceeded = true;
@@ -1350,8 +1443,13 @@ app.post("/api/draft-save-v2", requireKey, imapGate("interactive"), async (req, 
     // are owned by no one (the client only learns the returned handles when
     // the save succeeds). Release them so they cannot leak forever. On success
     // the client keeps them for reuse by the next save/send.
-    if (stagedAccount && preservedSourceHandles.length > 0 && !saveSucceeded) {
-      await releaseStagedAttachments(BRIDGE_API_KEY, preservedSourceHandles, stagedAccount).catch(
+    const abandonedSourceHandles = draftSourceHandlesToRelease({
+      normal: preservedSourceHandles,
+      inline: preservedInlineSourceHandles,
+      saveSucceeded,
+    });
+    if (stagedAccount && abandonedSourceHandles.length > 0 && !saveSucceeded) {
+      await releaseStagedAttachments(BRIDGE_API_KEY, abandonedSourceHandles, stagedAccount).catch(
         () => undefined,
       );
     }

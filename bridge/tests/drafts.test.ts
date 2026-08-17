@@ -15,9 +15,11 @@ import { resolveDraftsPath, resolveTrashPath } from "../src/smtp.js";
 import {
   executeDraftSave,
   executeDraftDelete,
+  executeDraftRevisionReconcile,
   saveDraft,
   hasImapCapability,
   DRAFT_ID_HEADER,
+  DRAFT_REVISION_HEADER,
   DraftSavePayloadSchema,
   draftMutexInflight,
   type ImapDraftClient,
@@ -67,11 +69,13 @@ const ACCT: MailAccount = {
 };
 
 const DRAFT_ID = "11111111-2222-4333-8444-555555555555";
+const REVISION_ID = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
 
 const BASE_INPUT: DraftSavePayload = DraftSavePayloadSchema.parse({
   account: ACCT,
   password: "pw",
   draftId: DRAFT_ID,
+  revisionId: REVISION_ID,
   to: [{ name: "You", email: "dest@example.com" }],
   subject: "Draft subject",
   bodyText: "draft body",
@@ -85,6 +89,7 @@ interface FakeOpts {
   appendUid?: number;
   appendFail?: boolean;
   searchResults?: number[][]; // per-call
+  revisionSearchResults?: number[][]; // per-call
   searchFail?: boolean;
   deleteFail?: boolean;
   moveFail?: boolean;
@@ -132,6 +137,7 @@ function mkClient(opts: FakeOpts): { client: ImapDraftClient; rec: Recorder } {
     hasMoveCalls: 0,
   };
   let searchIdx = 0;
+  let revisionSearchIdx = 0;
   const client: ImapDraftClient = {
     async connect() {
       rec.connects++;
@@ -162,6 +168,11 @@ function mkClient(opts: FakeOpts): { client: ImapDraftClient; rec: Recorder } {
     async searchByHeader(name, value) {
       rec.searches.push({ name, value });
       if (opts.searchFail) throw new Error("search failed");
+      if (name === DRAFT_REVISION_HEADER) {
+        const result = opts.revisionSearchResults?.[revisionSearchIdx] ?? [];
+        revisionSearchIdx++;
+        return result;
+      }
       const result = opts.searchResults?.[searchIdx] ?? [];
       searchIdx++;
       return result;
@@ -233,6 +244,84 @@ test("save: MIME contains X-MailMaestro-Draft-ID header with the given draftId",
     `MIME missing ${DRAFT_ID_HEADER}: ${mime.slice(0, 400)}`,
   );
   assert.ok(mime.includes(DRAFT_ID), `MIME missing draftId ${DRAFT_ID}`);
+});
+
+test("save: MIME contains the PII-free logical Draft revision header", async () => {
+  const { client, rec } = mkClient({ mailboxes: [box("Drafts")], searchResults: [[]] });
+  await executeDraftSave(client, BASE_INPUT);
+  const mime = rec.appends[0].raw.toString("utf8");
+  assert.match(mime, new RegExp(DRAFT_REVISION_HEADER, "i"));
+  assert.ok(mime.includes(REVISION_ID));
+});
+
+test("save: identical logical revision retry reconciles with zero APPEND", async () => {
+  const { client, rec } = mkClient({
+    mailboxes: [box("Drafts")],
+    searchResults: [[42]],
+    revisionSearchResults: [[42]],
+  });
+  const result = await executeDraftSave(client, BASE_INPUT);
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.reconciled, true);
+  assert.equal(result.uid, 42);
+  assert.equal(rec.appends.length, 0);
+});
+
+test("save: newer logical revision performs exactly one APPEND", async () => {
+  const { client, rec } = mkClient({
+    mailboxes: [box("Drafts")],
+    searchResults: [[42]],
+    revisionSearchResults: [[]],
+    appendUid: 43,
+  });
+  const result = await executeDraftSave(client, {
+    ...BASE_INPUT,
+    revisionId: "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff",
+  });
+  assert.equal(result.ok, true);
+  assert.equal(rec.appends.length, 1);
+});
+
+test("save: identity pre-search failure is retryable and performs zero APPEND", async () => {
+  const { client, rec } = mkClient({ mailboxes: [box("Drafts")], searchFail: true });
+  const result = await executeDraftSave(client, BASE_INPUT);
+  assert.deepEqual(result, { ok: false, error: "RETRYABLE_DRAFT_IDENTITY_SEARCH" });
+  assert.equal(rec.appends.length, 0);
+});
+
+test("revision reconciliation recovers canonical response-loss identity before source work", async () => {
+  const { client, rec } = mkClient({
+    mailboxes: [box("Drafts")],
+    uidValidity: "900",
+    searchResults: [[71]],
+    revisionSearchResults: [[71]],
+  });
+  const result = await executeDraftRevisionReconcile(client, BASE_INPUT);
+  assert.equal(result.ok, true);
+  if (!result.ok || !result.found) return;
+  assert.equal(result.uid, 71);
+  assert.equal(result.uidValidity, "900");
+  assert.equal(result.reconciled, true);
+  assert.equal(rec.appends.length, 0);
+});
+
+test("revision reconciliation exposes canonical Y when newer Z must rebind stale X sources", async () => {
+  const { client } = mkClient({
+    mailboxes: [box("Drafts")],
+    uidValidity: "901",
+    searchResults: [[71]],
+    revisionSearchResults: [[]],
+  });
+  const result = await executeDraftRevisionReconcile(client, {
+    ...BASE_INPUT,
+    revisionId: "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff",
+  });
+  assert.deepEqual(result, {
+    ok: true,
+    found: false,
+    canonicalRef: { folderPath: "Drafts", uid: 71, uidValidity: "901" },
+  });
 });
 
 test("save: APPEND failure returns APPEND_FAILED and NEVER deletes old copies", async () => {
@@ -476,6 +565,7 @@ test("attachments: schema rejects unknown fields — attachments never enter via
     account: ACCT,
     password: "pw",
     draftId: DRAFT_ID,
+    revisionId: REVISION_ID,
     subject: "s",
     bodyText: "b",
     // @ts-expect-error — smuggled attachments field
@@ -571,6 +661,7 @@ test("contract: DraftSavePayload rejects oversize body (>5 MiB single body)", ()
     account: ACCT,
     password: "pw",
     draftId: DRAFT_ID,
+    revisionId: REVISION_ID,
     bodyHtml: huge,
   });
   assert.equal(parsed.success, false);
@@ -582,6 +673,7 @@ test("contract: DraftSavePayload rejects combined bodies over the total cap", ()
     account: ACCT,
     password: "pw",
     draftId: DRAFT_ID,
+    revisionId: REVISION_ID,
     bodyHtml: near,
     bodyText: near + "y", // 5MiB + 5MiB + 1 > 10MiB
   });

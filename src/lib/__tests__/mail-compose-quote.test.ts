@@ -585,7 +585,7 @@ describe("reply/forward source hydration wiring", () => {
 
     const hydration = route.slice(
       route.indexOf("const attachRemoteFile"),
-      route.indexOf("setInlineImages(hydrated)"),
+      route.indexOf("setInlineImages((current) => mergeHydratedInlineImages(current, hydrated))"),
     );
     expect(hydration).toContain("streamInlineCidPartsSequential");
     expect(hydration).toContain('fetch("/api/mail-inline-part"');

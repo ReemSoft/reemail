@@ -7,17 +7,20 @@ const route = () => readFileSync(new URL("../../routes/mail.tsx", import.meta.ur
 describe("just-saved Draft readability wiring", () => {
   it("records the exact identity ONLY on a confirmed remote save (status === saved)", () => {
     const src = route();
-    expect(src).toContain("onDraftSaved({");
+    expect(src).toMatch(/onDraftSaved\(\s*\{/);
     // The save-success branch is the only place onDraftSaved is invoked.
-    const savedBranch = src.slice(src.indexOf('if (status === "saved") {'), src.indexOf("} else if (status === \"failed\")"));
-    expect(savedBranch).toContain("onDraftSaved({");
+    const savedBranch = src.slice(
+      src.indexOf('if (status === "saved") {'),
+      src.indexOf('} else if (status === "failed")'),
+    );
+    expect(savedBranch).toMatch(/onDraftSaved\(\s*\{/);
     expect(savedBranch).toContain("folderPath: serverRef.folderPath");
     expect(savedBranch).toContain("uidValidity: serverRef.uidValidity");
     expect(savedBranch).toContain("uid: serverRef.uid");
     // No onDraftSaved in the failure branch.
     const failedBranch = src.slice(
       src.indexOf('} else if (status === "failed")'),
-      src.indexOf("// status === \"failed\" → no savedGeneration advance"),
+      src.indexOf('// status === "failed" → no savedGeneration advance'),
     );
     expect(failedBranch).not.toContain("onDraftSaved");
   });
@@ -43,7 +46,7 @@ describe("just-saved Draft readability wiring", () => {
     );
     expect(recover).toContain("await incrementalNow({ suppressOnSynced: true })");
     expect(recover).toContain("guard.markRecoveryAttempted(identity)");
-    expect(recover).toContain("folder: \"drafts\"");
+    expect(recover).toContain('folder: "drafts"');
     expect(recover).not.toContain("getCounts");
     expect(recover).not.toContain("/api/folders");
   });
@@ -51,16 +54,23 @@ describe("just-saved Draft readability wiring", () => {
   it("surfaces a non-destructive transient state, not the generic failure", () => {
     const src = route();
     expect(src).toContain('"draft-syncing"');
-    const open = src.slice(src.indexOf("} else if (result.source === \"draft-syncing\")"), src.indexOf("} else if (!cached)"));
+    const open = src.slice(
+      src.indexOf('} else if (result.source === "draft-syncing")'),
+      src.indexOf("} else if (!cached)"),
+    );
     expect(open).toContain("المسودة لا تزال قيد المزامنة");
     expect(open).not.toContain("فشل فتح الرسالة");
   });
 
   it("clears the marker on successful open, explicit delete, and account switch", () => {
     const src = route();
-    expect(src).toContain("savedDraftGuardRef.current?.clearDraft(matched.accountId, matched.draftId)");
+    expect(src).toContain(
+      "savedDraftGuardRef.current?.clearDraft(matched.accountId, matched.draftId)",
+    );
     expect(src).toContain("savedDraftGuardRef.current?.clearDraft(currentAccountId, draftId)");
-    expect(src).toContain("if (prev && prev !== currentAccountId) savedDraftGuardRef.current?.clearAll()");
+    expect(src).toContain(
+      "if (prev && prev !== currentAccountId) savedDraftGuardRef.current?.clearAll()",
+    );
   });
 
   it("protection is identity-based, never attachment-based", () => {
@@ -68,10 +78,7 @@ describe("just-saved Draft readability wiring", () => {
     expect(src).toContain("savedDraftGuardRef.current?.find(");
     // The guard decision is keyed by (accountId + uidValidity + uid) only —
     // the identity module never consults attachments.
-    const guard = readFileSync(
-      new URL("../mail-saved-draft-guard.ts", import.meta.url),
-      "utf8",
-    );
+    const guard = readFileSync(new URL("../mail-saved-draft-guard.ts", import.meta.url), "utf8");
     expect(guard).not.toContain("hasAttachments");
     expect(guard).not.toContain("attachment");
   });

@@ -129,6 +129,32 @@ export function hydrateInlineComposeImage(
   return { ...metadata, file, objectUrl: URL.createObjectURL(file) };
 }
 
+/** Merge delayed hydration into the live resource set without replacing images added by the user. */
+export function mergeHydratedInlineImages(
+  current: readonly InlineComposeImage[],
+  hydrated: readonly InlineComposeImage[],
+): InlineComposeImage[] {
+  const result = [...current];
+  const identities = new Set(
+    current.flatMap((image) => [
+      `id:${image.id}`,
+      `cid:${image.cid.toLowerCase()}`,
+      `upload:${image.uploadFilename}`,
+    ]),
+  );
+  for (const image of hydrated) {
+    const keys = [
+      `id:${image.id}`,
+      `cid:${image.cid.toLowerCase()}`,
+      `upload:${image.uploadFilename}`,
+    ];
+    if (keys.some((key) => identities.has(key))) continue;
+    result.push(image);
+    for (const key of keys) identities.add(key);
+  }
+  return result;
+}
+
 export function dataUriToFile(dataUri: string, filename: string, mimeType: InlineImageMime): File {
   const prefix = `data:${mimeType};base64,`;
   if (!dataUri.startsWith(prefix)) throw new Error("INLINE_IMAGE_DATA");
@@ -731,7 +757,7 @@ export function applyInlineImageToCidNode(
 export function serializeInlineImages(
   html: string,
   images: readonly InlineComposeImage[],
-  options: { keepEditorIds?: boolean } = {},
+  options: { keepEditorIds?: boolean; preserveUnresolvedCid?: boolean } = {},
 ): { html: string; inlineImages: InlineImageMetadata[] } {
   const template = document.createElement("template");
   template.innerHTML = html;
@@ -769,8 +795,16 @@ export function serializeInlineImages(
   }
   for (const unsafe of root.querySelectorAll<HTMLImageElement>(
     'img[src^="blob:"],img[src^="data:"],img[src^="cid:" i],img[data-mm-source-cid]',
-  ))
-    if (!serializedNodes.has(unsafe)) unsafe.remove();
+  )) {
+    if (serializedNodes.has(unsafe)) continue;
+    const cid = unsafe.dataset.mmSourceCid ?? unsafe.getAttribute("src")?.replace(/^cid:/i, "");
+    if (options.preserveUnresolvedCid && cid) {
+      unsafe.setAttribute("src", `cid:${cid}`);
+      unsafe.dataset.mmSourceCid = cid;
+      continue;
+    }
+    unsafe.remove();
+  }
   if (!options.keepEditorIds) {
     // Remote images blocked for compose privacy are restored to their original
     // safe URL on this detached copy only; the live Composer never sees it.

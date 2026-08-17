@@ -14,7 +14,8 @@ export type DraftEngineState =
   | "READY_TO_SAVE"
   | "SAVING"
   | "FAILED"
-  | "DELETING";
+  | "DELETING"
+  | "DISCARDING";
 
 export class DraftEngine {
   private currentState: DraftEngineState = "HYDRATING";
@@ -22,7 +23,7 @@ export class DraftEngine {
   private savedGen = 0;
   private hydrationDependencies = new Set<string>();
   private hydrationSettled = false;
-  private attachmentDependencies = new Map<number, Map<string, "pending" | "resolved" | "failed">>();
+  private resourceDependencies = new Map<string, "pending" | "resolved" | "failed">();
 
   get state(): DraftEngineState {
     return this.currentState;
@@ -49,6 +50,18 @@ export class DraftEngine {
     this.hydrationSettled = false;
   }
 
+  /** Initialize persisted local/remote generations before hydration settles. */
+  restoreGenerations(localRevision: number, remoteCommittedRevision: number): void {
+    if (this.currentState !== "HYDRATING") return;
+    const local = Number.isSafeInteger(localRevision) && localRevision >= 0 ? localRevision : 0;
+    const remote =
+      Number.isSafeInteger(remoteCommittedRevision) && remoteCommittedRevision >= 0
+        ? Math.min(local, remoteCommittedRevision)
+        : 0;
+    this.userGen = local;
+    this.savedGen = remote;
+  }
+
   registerHydrationDependency(key: string): void {
     if (this.currentState !== "HYDRATING") return;
     this.hydrationDependencies.add(key);
@@ -62,45 +75,60 @@ export class DraftEngine {
     if (this.currentState !== "HYDRATING") return;
     if (this.hydrationDependencies.size > 0) return;
     this.hydrationSettled = true;
-    this.currentState = this.isDirty ? "DIRTY" : "CLEAN";
+    this.currentState = this.isDirty
+      ? this.hasFailedDependencies()
+        ? "FAILED"
+        : this.hasPendingDependencies()
+          ? "UPLOADING"
+          : "DIRTY"
+      : "CLEAN";
   }
 
   markUserEdit(): void {
-    if (this.currentState === "DELETING") return;
+    if (this.currentState === "DELETING" || this.currentState === "DISCARDING") return;
     if (this.currentState === "HYDRATING") {
       // User edits are not expected during hydration. Once the barrier
       // completes, the dirty state will still be calculated from generation.
     }
+    const wasSaving = this.currentState === "SAVING";
     this.userGen += 1;
-    this.currentState = this.hasPendingDependenciesFor(this.userGen)
-      ? "UPLOADING"
-      : "DIRTY";
+    if (wasSaving) return;
+    this.currentState = this.hasFailedDependencies()
+      ? "FAILED"
+      : this.hasPendingDependencies()
+        ? "UPLOADING"
+        : "DIRTY";
   }
 
   markSaved(generation: number): void {
     if (generation > this.savedGen) this.savedGen = generation;
-    for (const key of [...this.attachmentDependencies.keys()]) {
-      if (key <= generation) this.attachmentDependencies.delete(key);
-    }
-    if (this.currentState !== "DELETING") {
+    if (this.currentState !== "DELETING" && this.currentState !== "DISCARDING") {
       this.currentState = this.isDirty
-        ? this.hasPendingDependenciesFor(this.userGen)
-          ? "UPLOADING"
-          : "DIRTY"
+        ? this.hasFailedDependencies()
+          ? "FAILED"
+          : this.hasPendingDependencies()
+            ? "UPLOADING"
+            : "DIRTY"
         : "CLEAN";
     }
   }
 
   markSaveFailed(): void {
-    if (this.currentState === "DELETING") return;
+    if (this.currentState === "DELETING" || this.currentState === "DISCARDING") return;
     this.currentState = "FAILED";
   }
 
   beginSave(): boolean {
-    if (this.currentState === "DELETING" || this.currentState === "HYDRATING") return false;
+    if (
+      this.currentState === "DELETING" ||
+      this.currentState === "DISCARDING" ||
+      this.currentState === "HYDRATING" ||
+      this.currentState === "SAVING"
+    )
+      return false;
     if (!this.isDirty) return false;
-    if (this.hasPendingDependenciesFor(this.userGen)) return false;
-    if (this.hasFailedDependenciesFor(this.userGen)) return false;
+    if (this.hasPendingDependencies()) return false;
+    if (this.hasFailedDependencies()) return false;
     this.currentState = "SAVING";
     return true;
   }
@@ -109,84 +137,105 @@ export class DraftEngine {
     return (
       this.currentState !== "HYDRATING" &&
       this.currentState !== "DELETING" &&
+      this.currentState !== "DISCARDING" &&
       this.isDirty &&
       this.userGen > this.savedGen &&
-      !this.hasPendingDependenciesFor(this.userGen) &&
-      !this.hasFailedDependenciesFor(this.userGen) &&
+      !this.hasPendingDependencies() &&
+      !this.hasFailedDependencies() &&
       this.currentState !== "SAVING"
     );
   }
 
-  registerAttachmentDependency(generation: number, key: string): void {
-    const keys = this.attachmentDependencies.get(generation) ?? new Map<string, "pending" | "resolved" | "failed">();
-    keys.set(key, "pending");
-    this.attachmentDependencies.set(generation, keys);
-    if (generation === this.userGen && this.isDirty) {
-      this.currentState = "UPLOADING";
-    }
+  registerResourceDependency(key: string): void {
+    this.resourceDependencies.set(key, "pending");
+    if (this.isDirty && this.currentState !== "HYDRATING") this.currentState = "UPLOADING";
   }
 
-  resolveAttachmentDependency(generation: number, key: string): void {
-    const keys = this.attachmentDependencies.get(generation);
-    if (!keys) return;
-    keys.set(key, "resolved");
+  resolveResourceDependency(key: string): void {
+    if (!this.resourceDependencies.has(key)) return;
+    this.resourceDependencies.set(key, "resolved");
     if (
-      generation === this.userGen &&
       this.isDirty &&
       this.currentState !== "DELETING" &&
+      this.currentState !== "DISCARDING" &&
       this.currentState !== "SAVING" &&
       this.currentState !== "HYDRATING"
     ) {
-      this.currentState = this.hasPendingDependenciesFor(generation)
-        ? "UPLOADING"
-        : "READY_TO_SAVE";
+      this.currentState = this.hasFailedDependencies()
+        ? "FAILED"
+        : this.hasPendingDependencies()
+          ? "UPLOADING"
+          : "READY_TO_SAVE";
     }
   }
 
-  failAttachmentDependency(generation: number, key: string): void {
-    const keys = this.attachmentDependencies.get(generation);
-    if (!keys) return;
-    keys.set(key, "failed");
-    if (generation === this.userGen && this.currentState !== "DELETING") {
+  failResourceDependency(key: string): void {
+    if (!this.resourceDependencies.has(key)) return;
+    this.resourceDependencies.set(key, "failed");
+    if (
+      this.currentState !== "DELETING" &&
+      this.currentState !== "DISCARDING" &&
+      this.currentState !== "HYDRATING"
+    ) {
       this.currentState = "FAILED";
     }
   }
 
-  cancelAttachmentDependency(generation: number, key: string): void {
-    const keys = this.attachmentDependencies.get(generation);
-    if (!keys) return;
-    keys.delete(key);
-    if (keys.size === 0) this.attachmentDependencies.delete(generation);
+  cancelResourceDependency(key: string): void {
+    if (!this.resourceDependencies.delete(key)) return;
     if (
-      generation === this.userGen &&
       this.isDirty &&
       this.currentState !== "DELETING" &&
+      this.currentState !== "DISCARDING" &&
       this.currentState !== "SAVING" &&
       this.currentState !== "HYDRATING"
     ) {
-      this.currentState = this.hasPendingDependenciesFor(generation)
-        ? "UPLOADING"
-        : "READY_TO_SAVE";
+      this.currentState = this.hasFailedDependencies()
+        ? "FAILED"
+        : this.hasPendingDependencies()
+          ? "UPLOADING"
+          : "READY_TO_SAVE";
     }
+  }
+
+  /** @deprecated Compatibility wrapper; ownership is resource-scoped, not generation-scoped. */
+  registerAttachmentDependency(generation: number, key: string): void {
+    void generation;
+    this.registerResourceDependency(key);
+  }
+
+  resolveAttachmentDependency(generation: number, key: string): void {
+    void generation;
+    this.resolveResourceDependency(key);
+  }
+
+  failAttachmentDependency(generation: number, key: string): void {
+    void generation;
+    this.failResourceDependency(key);
+  }
+
+  cancelAttachmentDependency(generation: number, key: string): void {
+    void generation;
+    this.cancelResourceDependency(key);
   }
 
   hasPendingDependencies(): boolean {
-    return this.hasPendingDependenciesFor(this.userGen);
-  }
-
-  hasPendingDependenciesFor(generation: number): boolean {
-    const keys = this.attachmentDependencies.get(generation);
-    if (!keys) return false;
-    for (const value of keys.values()) {
-      if (value === "pending") return true;
-    }
+    for (const value of this.resourceDependencies.values()) if (value === "pending") return true;
     return false;
   }
 
+  hasPendingDependenciesFor(generation: number): boolean {
+    void generation;
+    return this.hasPendingDependencies();
+  }
+
   hasFailedDependenciesFor(generation: number): boolean {
-    const keys = this.attachmentDependencies.get(generation);
-    if (!keys) return false;
-    for (const value of keys.values()) {
+    void generation;
+    return this.hasFailedDependencies();
+  }
+
+  hasFailedDependencies(): boolean {
+    for (const value of this.resourceDependencies.values()) {
       if (value === "failed") return true;
     }
     return false;
@@ -196,9 +245,19 @@ export class DraftEngine {
     this.currentState = "DELETING";
   }
 
+  beginDiscard(): void {
+    this.currentState = "DISCARDING";
+  }
+
   completeDeleteFailure(): void {
-    if (this.currentState !== "DELETING") return;
-    this.currentState = this.isDirty ? "DIRTY" : "CLEAN";
+    if (this.currentState !== "DELETING" && this.currentState !== "DISCARDING") return;
+    this.currentState = this.isDirty
+      ? this.hasFailedDependencies()
+        ? "FAILED"
+        : this.hasPendingDependencies()
+          ? "UPLOADING"
+          : "DIRTY"
+      : "CLEAN";
   }
 
   resetForDiscard(): void {

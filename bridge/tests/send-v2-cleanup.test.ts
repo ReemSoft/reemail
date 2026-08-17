@@ -25,13 +25,14 @@ test("draft-save-v2 releases fresh source staging only on failure, retains on su
   // save returns them for reuse by the next save/send.
   assert.match(draftV2, /saveSucceeded = true/);
   assert.match(draftV2, /sourceAttachmentHandles: preserved\.map/);
+  assert.match(draftV2, /inlineSourceHandles: preservedInlineSources\.map/);
   assert.match(
     draftV2,
-    /if \(stagedAccount && preservedSourceHandles\.length > 0 && !saveSucceeded\)/,
+    /if \(stagedAccount && abandonedSourceHandles\.length > 0 && !saveSucceeded\)/,
   );
   assert.match(
     draftV2,
-    /releaseStagedAttachments\(BRIDGE_API_KEY, preservedSourceHandles, stagedAccount\)/,
+    /releaseStagedAttachments\(BRIDGE_API_KEY, abandonedSourceHandles, stagedAccount\)/,
   );
 });
 
@@ -56,8 +57,14 @@ test("aggregate decoded-size limit remains enforced after staging", () => {
   // The per-attachment decoded limiter covers a single file; the aggregate
   // check across every resolved attachment (client + source + inline) must
   // stay intact for send-v2 and draft-save-v2.
-  assert.match(sendV2, /all\.reduce\(\(sum, item\) => sum \+ item\.size, 0\) > SEND_MAX_TOTAL_BYTES/);
+  assert.match(
+    sendV2,
+    /all\.reduce\(\(sum, item\) => sum \+ item\.size, 0\) > SEND_MAX_TOTAL_BYTES/,
+  );
   assert.match(sendV2, /"ATTACHMENTS_TOO_LARGE"/);
-  assert.match(draftV2, /all\.reduce\(\(sum, item\) => sum \+ item\.size, 0\) > SEND_MAX_TOTAL_BYTES/);
+  assert.match(
+    draftV2,
+    /all\.reduce\(\(sum, item\) => sum \+ item\.size, 0\) > SEND_MAX_TOTAL_BYTES/,
+  );
   assert.match(draftV2, /"ATTACHMENTS_TOO_LARGE"/);
 });

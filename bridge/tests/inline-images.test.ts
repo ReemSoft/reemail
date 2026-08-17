@@ -172,6 +172,7 @@ test("remote draft MIME preserves the CID attachment for later edit/send", async
     },
     password: "secret",
     draftId: "01234567-89ab-cdef-0123-456789abcdef",
+    revisionId: "11234567-89ab-4def-8123-456789abcdef",
     to: [{ name: "Receiver", email: "receiver@example.com" }],
     cc: [],
     bcc: [],

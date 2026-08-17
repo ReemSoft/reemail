@@ -632,7 +632,7 @@ describe("static post-send safety", () => {
     const mail = readFileSync(new URL("../../routes/mail.tsx", import.meta.url), "utf8");
     const bridge = readFileSync(new URL("../../../bridge/src/index.ts", import.meta.url), "utf8");
     expect(mail).toContain('fetch("/api/mail-sent-copy-status"');
-    expect(mail).toContain("onClose({ refreshDrafts: false });\n      onSent({");
+    expect(mail).toMatch(/onClose\(\{ refreshDrafts: false \}\);\s*onSent\(\{/);
     expect(bridge).toMatch(
       /app\.post\("\/api\/sync\/(?:initial|incremental)", requireKey, imapGate\("background"\)/,
     );

@@ -10,6 +10,7 @@ import {
   clearDraftDoc,
   draftKeyV2,
   draftKeyV3,
+  draftKeyV4,
   pendingDeleteKey,
   readDraftDoc,
   writeDraftDoc,
@@ -110,8 +111,8 @@ describe("v2 → v3 migration", () => {
     expect(doc!.snapshot.showCc).toBe(true);
     // v2 key removed after v3 write.
     expect(s.getItem(draftKeyV2(email))).toBeNull();
-    // v3 key written.
-    expect(s.getItem(draftKeyV3(email))).toContain("fixed-id");
+    // Draft-scoped recovery key written.
+    expect(s.getItem(draftKeyV4(email, "fixed-id"))).toContain("fixed-id");
   });
 
   it("returns the existing v3 doc without touching v2 when both present", () => {
@@ -414,10 +415,12 @@ describe("createDraftSaver — same-generation dedupe", () => {
   });
 
   it("Close generation N after N was successfully saved performs ZERO additional saves", async () => {
-    const saveRemote = vi.fn(async (): Promise<SaveRemoteResult> => ({
-      ok: true,
-      serverRef: { folderPath: "Drafts", uid: 10, uidValidity: "v" },
-    }));
+    const saveRemote = vi.fn(
+      async (): Promise<SaveRemoteResult> => ({
+        ok: true,
+        serverRef: { folderPath: "Drafts", uid: 10, uidValidity: "v" },
+      }),
+    );
     const saver = createDraftSaver("d-saved", { saveRemote });
     await saver.requestSave(snap({ subject: "same" }), null, 32);
     await saver.requestSave(snap({ subject: "same" }), null, 32);

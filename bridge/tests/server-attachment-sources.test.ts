@@ -29,11 +29,15 @@ test("empty server source list returns before account binding or IMAP work", () 
     new URL("../src/server-attachment-sources.ts", import.meta.url),
     "utf8",
   );
-  const earlyReturn = source.indexOf("if (input.sources.length === 0) return []");
+  const handler = source.slice(
+    source.indexOf("export async function stageServerAttachmentSources"),
+    source.indexOf("export interface ServerInlineSourceDeps"),
+  );
+  const earlyReturn = handler.indexOf("if (input.sources.length === 0) return []");
   assert.ok(earlyReturn > 0);
-  assert.ok(earlyReturn < source.indexOf("accountBinding(input.account)"));
-  assert.ok(earlyReturn < source.indexOf("getMailboxesCached("));
-  assert.ok(earlyReturn < source.indexOf("withAccountMailbox("));
+  assert.ok(earlyReturn < handler.indexOf("accountBinding(input.account)"));
+  assert.ok(earlyReturn < handler.indexOf("getMailboxesCached("));
+  assert.ok(earlyReturn < handler.indexOf("withAccountMailbox("));
 });
 
 test("whole-message RFC822/BODYSTRUCTURE encoded sizes never pre-reject a server-source attachment", () => {

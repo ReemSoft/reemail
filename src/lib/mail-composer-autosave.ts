@@ -153,6 +153,31 @@ export function attachInputListener(target: EventTargetLike, handler: () => void
   };
 }
 
+/**
+ * Run one programmatic contentEditable mutation and expose exactly one input
+ * event when (and only when) the outgoing HTML changed. Browser commands are
+ * inconsistent: some emit `input` synchronously while direct DOM writes do
+ * not. The temporary capture listener absorbs command-generated events and a
+ * single canonical event is dispatched after the mutation.
+ */
+export function mutateEditorWithSingleInput(editor: HTMLElement, mutation: () => void): boolean {
+  const before = editor.innerHTML;
+  const absorb = (event: Event) => {
+    if (event.target === editor || editor.contains(event.target as Node | null)) {
+      event.stopImmediatePropagation();
+    }
+  };
+  editor.addEventListener("input", absorb, true);
+  try {
+    mutation();
+  } finally {
+    editor.removeEventListener("input", absorb, true);
+  }
+  if (editor.innerHTML === before) return false;
+  editor.dispatchEvent(new Event("input", { bubbles: true }));
+  return true;
+}
+
 type WindowLike = {
   addEventListener(type: "beforeunload", listener: (ev: BeforeUnloadEvent) => void): void;
   removeEventListener(type: "beforeunload", listener: (ev: BeforeUnloadEvent) => void): void;

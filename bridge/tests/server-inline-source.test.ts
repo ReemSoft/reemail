@@ -3,6 +3,9 @@ import assert from "node:assert/strict";
 import { Readable } from "node:stream";
 import {
   createStageServerInlineSources,
+  draftSourceHandlesToRelease,
+  rebindServerSourcesFromCanonicalParts,
+  type ServerAttachmentSource,
   type ServerInlineSource,
   type ServerInlineSourceDeps,
 } from "../src/server-attachment-sources.js";
@@ -46,7 +49,11 @@ function makeDeps(overrides: Partial<ServerInlineSourceDeps> = {}): {
     }>;
   };
 } {
-  const calls = { mailboxes: [] as string[][], downloads: [] as Array<{ uid: string; part: string }>, staged: [] as Array<{ filename: string; kind: string; mimeType: string }> };
+  const calls = {
+    mailboxes: [] as string[][],
+    downloads: [] as Array<{ uid: string; part: string }>,
+    staged: [] as Array<{ filename: string; kind: string; mimeType: string }>,
+  };
   const deps: ServerInlineSourceDeps = {
     getMailboxesCached: async () => {
       const list = ["INBOX", "Drafts"];
@@ -107,7 +114,9 @@ test("valid restored inline source fetches exact part and stages inline-image on
     maxBytes: 100,
   });
   assert.deepEqual(calls.downloads, [{ uid: "10", part: "1.2" }]);
-  assert.deepEqual(calls.staged, [{ filename: "mm-inline-a.png", kind: "inline-image", mimeType: "image/png" }]);
+  assert.deepEqual(calls.staged, [
+    { filename: "mm-inline-a.png", kind: "inline-image", mimeType: "image/png" },
+  ]);
   assert.equal(result.staged.handle, "handle-mm-inline-a.png");
   assert.equal(result.resolved.kind, "inline-image");
 });
@@ -128,7 +137,10 @@ test("multiple restored sources stage each exact source once", async () => {
   assert.equal(calls.downloads.length, 2);
   assert.deepEqual(calls.downloads[0], { uid: "10", part: "1.2" });
   assert.deepEqual(calls.downloads[1], { uid: "10", part: "2.1" });
-  assert.deepEqual(results.map((r) => r.staged.handle), ["handle-a.png", "handle-b.png"]);
+  assert.deepEqual(
+    results.map((r) => r.staged.handle),
+    ["handle-a.png", "handle-b.png"],
+  );
 });
 
 test("UIDVALIDITY mismatch fails before staging", async () => {
@@ -145,7 +157,13 @@ test("UIDVALIDITY mismatch fails before staging", async () => {
   });
   const stage = createStageServerInlineSources(deps);
   await assert.rejects(
-    stage({ secret: "secret", account: ACCOUNT, password: "pw", sources: [source()], maxBytes: 100 }),
+    stage({
+      secret: "secret",
+      account: ACCOUNT,
+      password: "pw",
+      sources: [source()],
+      maxBytes: 100,
+    }),
     /SOURCE_UIDVALIDITY_MISMATCH/,
   );
   assert.equal(calls.downloads.length, 0);
@@ -164,7 +182,13 @@ test("missing MIME part produces typed failure", async () => {
   });
   const stage = createStageServerInlineSources(deps);
   await assert.rejects(
-    stage({ secret: "secret", account: ACCOUNT, password: "pw", sources: [source()], maxBytes: 100 }),
+    stage({
+      secret: "secret",
+      account: ACCOUNT,
+      password: "pw",
+      sources: [source()],
+      maxBytes: 100,
+    }),
     /SOURCE_ATTACHMENT_MISSING/,
   );
   assert.equal(calls.staged.length, 0);
@@ -190,11 +214,23 @@ test("invalid UID and invalid part are rejected before fetch", async () => {
   const { deps, calls } = makeDeps();
   const stage = createStageServerInlineSources(deps);
   await assert.rejects(
-    stage({ secret: "secret", account: ACCOUNT, password: "pw", sources: [source({ uid: 0 })], maxBytes: 100 }),
+    stage({
+      secret: "secret",
+      account: ACCOUNT,
+      password: "pw",
+      sources: [source({ uid: 0 })],
+      maxBytes: 100,
+    }),
     /INVALID_SOURCE_UID/,
   );
   await assert.rejects(
-    stage({ secret: "secret", account: ACCOUNT, password: "pw", sources: [source({ part: "../etc" })], maxBytes: 100 }),
+    stage({
+      secret: "secret",
+      account: ACCOUNT,
+      password: "pw",
+      sources: [source({ part: "../etc" })],
+      maxBytes: 100,
+    }),
     /INVALID_SOURCE_PART/,
   );
   assert.equal(calls.downloads.length, 0);
@@ -214,7 +250,13 @@ test("source fetch throw surfaces as typed/safe failure", async () => {
   });
   const stage = createStageServerInlineSources(deps);
   await assert.rejects(
-    stage({ secret: "secret", account: ACCOUNT, password: "pw", sources: [source()], maxBytes: 100 }),
+    stage({
+      secret: "secret",
+      account: ACCOUNT,
+      password: "pw",
+      sources: [source()],
+      maxBytes: 100,
+    }),
     /SOURCE_ATTACHMENT_MISSING/,
   );
   assert.equal(calls.staged.length, 0);
@@ -233,5 +275,100 @@ test("returned handle maps deterministically back to source order", async () => 
     ],
     maxBytes: 100,
   });
-  assert.deepEqual(results.map((r) => r.staged.handle), ["handle-a.png", "handle-b.png"]);
+  assert.deepEqual(
+    results.map((r) => r.staged.handle),
+    ["handle-a.png", "handle-b.png"],
+  );
+});
+
+test("later Draft save failure releases normal and inline server-source handles", () => {
+  assert.deepEqual(
+    draftSourceHandlesToRelease({
+      normal: ["normal-handle"],
+      inline: ["inline-handle"],
+      saveSucceeded: false,
+    }),
+    ["normal-handle", "inline-handle"],
+  );
+  assert.deepEqual(
+    draftSourceHandlesToRelease({
+      normal: ["normal-handle"],
+      inline: ["inline-handle"],
+      saveSucceeded: true,
+    }),
+    [],
+  );
+});
+
+test("stale X normal and inline descriptors rebind to canonical Y parts", () => {
+  const normal: ServerAttachmentSource = {
+    folderPath: "Drafts",
+    uid: 10,
+    uidValidity: "1000",
+    part: "1.2",
+    filename: "report.pdf",
+    size: 100,
+    mimeType: "application/pdf",
+  };
+  const rebound = rebindServerSourcesFromCanonicalParts({
+    canonicalRef: { folderPath: "Drafts", uid: 71, uidValidity: "2000" },
+    normal: [normal],
+    inline: [source()],
+    parts: [
+      {
+        id: "2",
+        part: "2",
+        filename: "report.pdf",
+        size: 111,
+        mimeType: "application/pdf",
+      },
+      {
+        id: "3",
+        part: "3",
+        filename: "inline.png",
+        size: 4,
+        mimeType: "image/png",
+        contentId: "<cid-a@mailmaestro>",
+      },
+    ],
+  });
+  assert.deepEqual(rebound.normal[0], {
+    ...normal,
+    uid: 71,
+    uidValidity: "2000",
+    part: "2",
+    size: 111,
+  });
+  assert.deepEqual(rebound.inline[0], {
+    ...source(),
+    uid: 71,
+    uidValidity: "2000",
+    part: "3",
+    size: 4,
+  });
+});
+
+test("canonical rebind fails closed instead of choosing an ambiguous MIME part", () => {
+  const normal: ServerAttachmentSource = {
+    folderPath: "Drafts",
+    uid: 10,
+    uidValidity: "1000",
+    part: "2",
+    filename: "duplicate.pdf",
+    size: 10,
+    mimeType: "application/pdf",
+  };
+  assert.throws(
+    () =>
+      rebindServerSourcesFromCanonicalParts({
+        canonicalRef: { folderPath: "Drafts", uid: 71, uidValidity: "2000" },
+        normal: [normal],
+        inline: [],
+        parts: [
+          { ...normal, id: "3", part: "3" },
+          { ...normal, id: "4", part: "4" },
+        ],
+      }),
+    /DRAFT_ATTACHMENT_SOURCE_NOT_FOUND/,
+  );
 });

@@ -31,11 +31,7 @@
  */
 import { z } from "zod";
 import type { ImapFlow, ListResponse } from "imapflow";
-import {
-  acquireAccountClient,
-  getMailboxesCached,
-  TIMING_ENABLED,
-} from "./imap-connection.js";
+import { acquireAccountClient, getMailboxesCached, TIMING_ENABLED } from "./imap-connection.js";
 import {
   resolveDraftsPath,
   resolveTrashPath,
@@ -52,6 +48,7 @@ import type { MailAccount } from "./types.js";
 import { InlineImageMetadataSchema } from "./inline-images.js";
 
 export const DRAFT_ID_HEADER = "X-MailMaestro-Draft-ID";
+export const DRAFT_REVISION_HEADER = "X-MailMaestro-Draft-Revision";
 
 // PII-safe save-trigger diagnostics. These fields are the ONLY values allowed
 // in the existing Draft save request's `diagnostics` metadata.
@@ -188,6 +185,7 @@ export const DraftSavePayloadSchema = z
     account: AccountSchema,
     password: z.string().min(1),
     draftId: z.string().uuid(),
+    revisionId: z.string().uuid(),
     to: z.array(RecipientSchema).max(200).optional().default([]),
     cc: z.array(RecipientSchema).max(200).optional().default([]),
     bcc: z.array(RecipientSchema).max(200).optional().default([]),
@@ -237,6 +235,7 @@ export interface DraftSaveOk {
   uidValidity: string;
   messageId: string;
   savedAt: string;
+  reconciled?: boolean;
 }
 export interface DraftDeleteOk {
   ok: true;
@@ -248,6 +247,7 @@ export type DraftErrorCode =
   | "NO_DRAFTS_FOLDER"
   | "APPEND_FAILED"
   | "IMAP_ERROR"
+  | "RETRYABLE_DRAFT_IDENTITY_SEARCH"
   | "UIDPLUS_UNSUPPORTED"
   | "SAFE_DRAFT_REPLACE_UNSUPPORTED";
 export interface DraftErr {
@@ -346,6 +346,20 @@ export function draftMimePayload(input: DraftSavePayload): SendMessagePayload {
   };
 }
 
+async function probeDraftRevisionInOpenMailbox(
+  client: ImapDraftClient,
+  input: Pick<DraftSavePayload, "draftId" | "revisionId">,
+): Promise<{ priorCopies: number[]; exactRevisionCopies: number[] }> {
+  const priorCopies = await client.searchByHeader(DRAFT_ID_HEADER, input.draftId);
+  if (priorCopies.length === 0) return { priorCopies, exactRevisionCopies: [] };
+  const revisionCopies = await client.searchByHeader(DRAFT_REVISION_HEADER, input.revisionId);
+  const identityUids = new Set(priorCopies);
+  return {
+    priorCopies,
+    exactRevisionCopies: revisionCopies.filter((uid) => identityUids.has(uid)),
+  };
+}
+
 /**
  * Core save routine. Extracted so tests can drive every branch without
  * booting a real IMAP server. Never logs / returns PII.
@@ -388,13 +402,6 @@ export async function executeDraftSave(
     const rawTrashPath = resolveTrashPath(mailboxes);
     const trashPath = rawTrashPath && rawTrashPath !== folderPath ? rawTrashPath : undefined;
 
-    // Build MIME (with the sticky draft id header) BEFORE we take any locks
-    // so IMAP holds nothing while nodemailer compiles.
-    spool = await createSpool(draftMimePayload(input), {
-      [DRAFT_ID_HEADER]: input.draftId,
-    });
-    t.mark("spool");
-
     // 1) Pre-APPEND probe: does a prior copy already exist for this draftId?
     //    Prior copies become stale candidates after a successful APPEND.
     let priorCopies: number[] = [];
@@ -404,16 +411,40 @@ export async function executeDraftSave(
       try {
         priorUidValidity = probe.uidValidity;
         try {
-          priorCopies = await client.searchByHeader(DRAFT_ID_HEADER, input.draftId);
+          const identity = await probeDraftRevisionInOpenMailbox(client, input);
+          priorCopies = identity.priorCopies;
+          if (identity.exactRevisionCopies.length > 0) {
+            const canonical = Math.max(...identity.exactRevisionCopies);
+            t.mark("revision-reconciled");
+            t.finish("ok");
+            return {
+              ok: true,
+              draftId: input.draftId,
+              folderPath,
+              uid: canonical,
+              uidValidity: priorUidValidity,
+              messageId: "",
+              savedAt: now().toISOString(),
+              reconciled: true,
+            };
+          }
         } catch {
-          // Search failure = we can't prove idempotency; treat as no priors.
-          // The post-APPEND scan (MOVE/soft-delete path) will re-scan anyway.
+          t.finish("error", "code=RETRYABLE_DRAFT_IDENTITY_SEARCH");
+          return { ok: false, error: "RETRYABLE_DRAFT_IDENTITY_SEARCH" };
         }
       } finally {
         probe.release();
       }
     }
     t.mark("pre-search");
+
+    // Build MIME only after identity was established. Search failure must
+    // return before any expensive MIME work and, critically, before APPEND.
+    spool = await createSpool(draftMimePayload(input), {
+      [DRAFT_ID_HEADER]: input.draftId,
+      [DRAFT_REVISION_HEADER]: input.revisionId,
+    });
+    t.mark("spool");
 
     const uidPlus = client.hasUidPlus();
     const hasMove = client.hasMove();
@@ -542,6 +573,68 @@ export async function executeDraftSave(
   } finally {
     await spool?.cleanup().catch(() => undefined);
     await client.logout().catch(() => {});
+  }
+}
+
+export type DraftRevisionReconcileResult =
+  | {
+      ok: true;
+      found: false;
+      /** Latest provider copy for this Draft identity, when one exists. */
+      canonicalRef?: { folderPath: string; uid: number; uidValidity: string };
+    }
+  | (DraftSaveOk & { found: true; reconciled: true })
+  | DraftErr;
+
+/** Lightweight provider-authoritative probe used before stale source staging. */
+export async function executeDraftRevisionReconcile(
+  client: ImapDraftClient,
+  input: Pick<DraftSavePayload, "draftId" | "revisionId">,
+  now: () => Date = () => new Date(),
+): Promise<DraftRevisionReconcileResult> {
+  await client.connect();
+  try {
+    const folderPath = resolveDraftsPath(await client.list());
+    if (!folderPath) return { ok: false, error: "NO_DRAFTS_FOLDER" };
+    const opened = await client.openWithLock(folderPath);
+    try {
+      let identity: Awaited<ReturnType<typeof probeDraftRevisionInOpenMailbox>>;
+      try {
+        identity = await probeDraftRevisionInOpenMailbox(client, input);
+      } catch {
+        return { ok: false, error: "RETRYABLE_DRAFT_IDENTITY_SEARCH" };
+      }
+      if (identity.exactRevisionCopies.length === 0) {
+        return {
+          ok: true,
+          found: false,
+          ...(identity.priorCopies.length > 0
+            ? {
+                canonicalRef: {
+                  folderPath,
+                  uid: Math.max(...identity.priorCopies),
+                  uidValidity: opened.uidValidity,
+                },
+              }
+            : {}),
+        };
+      }
+      return {
+        ok: true,
+        found: true,
+        reconciled: true,
+        draftId: input.draftId,
+        folderPath,
+        uid: Math.max(...identity.exactRevisionCopies),
+        uidValidity: opened.uidValidity,
+        messageId: "",
+        savedAt: now().toISOString(),
+      };
+    } finally {
+      opened.release();
+    }
+  } finally {
+    await client.logout().catch(() => undefined);
   }
 }
 
@@ -758,6 +851,23 @@ async function withDraftMutex<T>(key: string, fn: () => Promise<T>): Promise<T> 
 }
 
 // --- High-level entry points (used by HTTP layer) ---------------------------
+
+export async function reconcileDraftRevision(
+  account: MailAccount,
+  password: string,
+  payload: Pick<DraftSavePayload, "draftId" | "revisionId">,
+  deps: DraftDeps = defaultDeps(),
+): Promise<DraftRevisionReconcileResult> {
+  const key = draftMutexKey(account.email_address, payload.draftId);
+  return withDraftMutex(key, async () => {
+    const client = deps.createImapDraftClient(account, password);
+    try {
+      return await executeDraftRevisionReconcile(client, payload, deps.now);
+    } catch {
+      return { ok: false, error: "IMAP_ERROR" };
+    }
+  });
+}
 
 export async function saveDraft(
   account: MailAccount,

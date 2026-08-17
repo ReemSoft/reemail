@@ -134,6 +134,7 @@ test("remote draft MIME retains threading metadata through the production draft 
     },
     password: "secret",
     draftId: "00000000-0000-4000-8000-000000000001",
+    revisionId: "00000000-0000-4000-8000-000000000002",
     to: [{ name: "Support", email: "support@example.com" }],
     cc: [],
     bcc: [],

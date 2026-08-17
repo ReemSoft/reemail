@@ -24,6 +24,7 @@ export const Route = createFileRoute("/api/mail-draft-save-v2")({
                 account: auth.bridgeAccount,
                 password,
                 draftId: body?.draftId,
+                revisionId: body?.revisionId,
                 to: Array.isArray(body?.to) ? body.to : [],
                 cc: Array.isArray(body?.cc) ? body.cc : [],
                 bcc: Array.isArray(body?.bcc) ? body.bcc : [],

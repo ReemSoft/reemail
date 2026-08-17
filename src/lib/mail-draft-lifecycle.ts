@@ -78,12 +78,14 @@ export interface DraftSnapshot {
     filename: string;
     uploadFilename: string;
     stagedHandle?: string;
+    stagedExpiresAt?: number;
   }>;
   stagedAttachments?: Array<{
     handle: string;
     filename: string;
     size: number;
     mimeType: string;
+    expiresAt?: number;
   }>;
   sourceAttachments?: {
     sourceRef: DraftAttachmentSourceRef;
@@ -103,6 +105,11 @@ export interface DraftDocV3 {
   snapshot: DraftSnapshot;
   serverRef: DraftServerRef | null;
   updatedAt: number;
+  recoveryKind?: "new" | "edit";
+  localRevision?: number;
+  remoteCommittedRevision?: number;
+  remoteCommitConfirmed?: boolean;
+  revisionId?: string;
 }
 
 /** v2 shape from before M4-B. No draftId, no serverRef. */
@@ -119,6 +126,8 @@ interface DraftDocV2 {
 export interface SaveRemoteResult {
   ok: boolean;
   serverRef?: DraftServerRef;
+  /** True when Bridge found this exact revision already committed. */
+  reconciled?: boolean;
   /** Coarse error code from the bridge. Present only when ok=false. */
   code?: string;
 }
@@ -138,10 +147,18 @@ export interface DraftStorageLike {
 
 export const DRAFT_V2_KEY_PREFIX = "mailmaestro:draft:v2:";
 export const DRAFT_V3_KEY_PREFIX = "mailmaestro:draft:v3:";
+export const DRAFT_V4_KEY_PREFIX = "mailmaestro:draft:v4:";
+export const DRAFT_V4_ACTIVE_NEW_PREFIX = "mailmaestro:draft-active-new:v4:";
 export const DRAFT_PENDING_DELETE_PREFIX = "mailmaestro:draft-pending-delete:v1:";
 
 export function draftKeyV3(accountEmail: string): string {
   return `${DRAFT_V3_KEY_PREFIX}${accountEmail}`;
+}
+export function draftKeyV4(accountEmail: string, draftId: string): string {
+  return `${DRAFT_V4_KEY_PREFIX}${encodeURIComponent(accountEmail)}:${draftId}`;
+}
+export function activeNewDraftKeyV4(accountEmail: string): string {
+  return `${DRAFT_V4_ACTIVE_NEW_PREFIX}${encodeURIComponent(accountEmail)}`;
 }
 export function draftKeyV2(accountEmail: string): string {
   return `${DRAFT_V2_KEY_PREFIX}${accountEmail}`;
@@ -186,6 +203,78 @@ function isV3Doc(v: unknown): v is DraftDocV3 {
   );
 }
 
+function nonNegativeRevision(value: unknown, fallback: number): number {
+  return Number.isSafeInteger(value) && Number(value) >= 0 ? Number(value) : fallback;
+}
+
+/** Legacy documents are conservatively unconfirmed so they can never restore false-clean. */
+export function normalizeDraftRecoveryDoc(
+  doc: DraftDocV3,
+  recoveryKind: "new" | "edit" = doc.recoveryKind ?? "new",
+): DraftDocV3 {
+  const hasExplicitCommitMetadata =
+    Number.isSafeInteger(doc.localRevision) &&
+    Number.isSafeInteger(doc.remoteCommittedRevision) &&
+    typeof doc.remoteCommitConfirmed === "boolean";
+  if (!hasExplicitCommitMetadata) {
+    return {
+      ...doc,
+      recoveryKind,
+      localRevision: 1,
+      remoteCommittedRevision: 0,
+      remoteCommitConfirmed: false,
+      revisionId: doc.revisionId || newDraftId(),
+    };
+  }
+  const localRevision = nonNegativeRevision(doc.localRevision, 1);
+  const remoteCommittedRevision = Math.min(
+    localRevision,
+    nonNegativeRevision(doc.remoteCommittedRevision, 0),
+  );
+  return {
+    ...doc,
+    recoveryKind,
+    localRevision,
+    remoteCommittedRevision,
+    remoteCommitConfirmed:
+      doc.remoteCommitConfirmed === true && localRevision === remoteCommittedRevision,
+    revisionId: doc.revisionId || newDraftId(),
+  };
+}
+
+function readV4DraftById(
+  storage: DraftStorageLike,
+  accountEmail: string,
+  draftId: string,
+): DraftDocV3 | null {
+  try {
+    const raw = storage.getItem(draftKeyV4(accountEmail, draftId));
+    if (!raw) return null;
+    const parsed: unknown = JSON.parse(raw);
+    return isV3Doc(parsed) && parsed.draftId === draftId ? normalizeDraftRecoveryDoc(parsed) : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeV4Draft(
+  storage: DraftStorageLike,
+  accountEmail: string,
+  doc: DraftDocV3,
+  recoveryKind: "new" | "edit",
+): boolean {
+  try {
+    const normalized = normalizeDraftRecoveryDoc({ ...doc, recoveryKind }, recoveryKind);
+    storage.setItem(draftKeyV4(accountEmail, doc.draftId), JSON.stringify(normalized));
+    if (recoveryKind === "new") {
+      storage.setItem(activeNewDraftKeyV4(accountEmail), doc.draftId);
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Read a draft document. On a legacy v2 blob, migrate atomically:
  *   1. Build a v3 doc with a fresh `draftId` and null `serverRef`.
@@ -200,12 +289,28 @@ export function readDraftDoc(
   idFactory: () => string = newDraftId,
   now: () => number = () => Date.now(),
 ): DraftDocV3 | null {
+  try {
+    const activeDraftId = storage.getItem(activeNewDraftKeyV4(accountEmail));
+    if (activeDraftId) {
+      const active = readV4DraftById(storage, accountEmail, activeDraftId);
+      if (active?.recoveryKind === "new") return active;
+      storage.removeItem(activeNewDraftKeyV4(accountEmail));
+    }
+  } catch {
+    /* fall through to legacy migration */
+  }
+
   const v3Key = draftKeyV3(accountEmail);
   try {
     const rawV3 = storage.getItem(v3Key);
     if (rawV3) {
       const parsed: unknown = JSON.parse(rawV3);
-      if (isV3Doc(parsed)) return parsed;
+      if (isV3Doc(parsed)) {
+        const migrated = normalizeDraftRecoveryDoc(parsed, "new");
+        if (!writeV4Draft(storage, accountEmail, migrated, "new")) return null;
+        storage.removeItem(v3Key);
+        return migrated;
+      }
     }
   } catch {
     /* fall through to v2 attempt */
@@ -222,11 +327,38 @@ export function readDraftDoc(
       snapshot: emptySnapshotShape(parsed),
       serverRef: null,
       updatedAt: now(),
+      recoveryKind: "new",
+      localRevision: 1,
+      remoteCommittedRevision: 0,
+      remoteCommitConfirmed: false,
+      revisionId: idFactory(),
     };
-    storage.setItem(v3Key, JSON.stringify(doc));
-    // Only remove v2 AFTER v3 write succeeded (no data loss on a quota error).
+    if (!writeV4Draft(storage, accountEmail, doc, "new")) return null;
+    // Only remove v2 AFTER the Draft-scoped write succeeded.
     storage.removeItem(v2Key);
     return doc;
+  } catch {
+    return null;
+  }
+}
+
+/** Read recovery owned by one provider Draft without touching another Draft. */
+export function readDraftDocById(
+  storage: DraftStorageLike,
+  accountEmail: string,
+  draftId: string,
+): DraftDocV3 | null {
+  const scoped = readV4DraftById(storage, accountEmail, draftId);
+  if (scoped) return scoped;
+  try {
+    const rawLegacy = storage.getItem(draftKeyV3(accountEmail));
+    if (!rawLegacy) return null;
+    const parsed: unknown = JSON.parse(rawLegacy);
+    if (!isV3Doc(parsed) || parsed.draftId !== draftId) return null;
+    const migrated = normalizeDraftRecoveryDoc(parsed, "edit");
+    if (!writeV4Draft(storage, accountEmail, migrated, "edit")) return null;
+    storage.removeItem(draftKeyV3(accountEmail));
+    return migrated;
   } catch {
     return null;
   }
@@ -237,13 +369,9 @@ export function writeDraftDoc(
   storage: DraftStorageLike,
   accountEmail: string,
   doc: DraftDocV3,
+  recoveryKind: "new" | "edit" = doc.recoveryKind ?? "new",
 ): boolean {
-  try {
-    storage.setItem(draftKeyV3(accountEmail), JSON.stringify(doc));
-    return true;
-  } catch {
-    return false;
-  }
+  return writeV4Draft(storage, accountEmail, doc, recoveryKind);
 }
 
 /**
@@ -261,13 +389,52 @@ export function updateDraftDocServerRef(
   now: () => number = () => Date.now(),
 ): boolean {
   try {
-    const raw = storage.getItem(draftKeyV3(accountEmail));
+    const key = draftKeyV4(accountEmail, draftId);
+    const raw = storage.getItem(key);
     if (!raw) return false;
     const parsed: unknown = JSON.parse(raw);
     if (!isV3Doc(parsed)) return false;
     if (parsed.draftId !== draftId) return false;
     const next: DraftDocV3 = { ...parsed, serverRef, updatedAt: now() };
-    storage.setItem(draftKeyV3(accountEmail), JSON.stringify(next));
+    storage.setItem(key, JSON.stringify(next));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Confirm only the exact local revision/token acknowledged by the provider. */
+export function confirmDraftDocRemoteCommit(
+  storage: DraftStorageLike,
+  accountEmail: string,
+  draftId: string,
+  input: {
+    localRevision: number;
+    revisionId: string;
+    serverRef: DraftServerRef | null;
+    snapshot?: DraftSnapshot;
+  },
+  now: () => number = () => Date.now(),
+): boolean {
+  try {
+    const key = draftKeyV4(accountEmail, draftId);
+    const raw = storage.getItem(key);
+    if (!raw) return false;
+    const parsed: unknown = JSON.parse(raw);
+    if (!isV3Doc(parsed) || parsed.draftId !== draftId) return false;
+    const current = normalizeDraftRecoveryDoc(parsed);
+    if (current.localRevision !== input.localRevision || current.revisionId !== input.revisionId) {
+      return false;
+    }
+    const next: DraftDocV3 = {
+      ...current,
+      snapshot: input.snapshot ?? current.snapshot,
+      serverRef: input.serverRef ?? current.serverRef,
+      remoteCommittedRevision: input.localRevision,
+      remoteCommitConfirmed: true,
+      updatedAt: now(),
+    };
+    storage.setItem(key, JSON.stringify(next));
     return true;
   } catch {
     return false;
@@ -296,15 +463,41 @@ export function shouldFinalizeCleanClose(input: {
   return input.serverRef != null || input.saveStatus === "saved";
 }
 
-export function clearDraftDoc(storage: DraftStorageLike, accountEmail: string): void {
+export function clearDraftDoc(
+  storage: DraftStorageLike,
+  accountEmail: string,
+  expectedDraftId?: string,
+): void {
   try {
-    storage.removeItem(draftKeyV3(accountEmail));
+    if (expectedDraftId) {
+      storage.removeItem(draftKeyV4(accountEmail, expectedDraftId));
+      if (storage.getItem(activeNewDraftKeyV4(accountEmail)) === expectedDraftId) {
+        storage.removeItem(activeNewDraftKeyV4(accountEmail));
+      }
+    } else {
+      const activeDraftId = storage.getItem(activeNewDraftKeyV4(accountEmail));
+      if (activeDraftId) storage.removeItem(draftKeyV4(accountEmail, activeDraftId));
+      storage.removeItem(activeNewDraftKeyV4(accountEmail));
+    }
+  } catch {
+    /* ignore */
+  }
+  try {
+    const rawLegacy = storage.getItem(draftKeyV3(accountEmail));
+    if (!expectedDraftId) {
+      storage.removeItem(draftKeyV3(accountEmail));
+    } else if (rawLegacy) {
+      const parsed: unknown = JSON.parse(rawLegacy);
+      if (isV3Doc(parsed) && parsed.draftId === expectedDraftId) {
+        storage.removeItem(draftKeyV3(accountEmail));
+      }
+    }
   } catch {
     /* ignore */
   }
   try {
     // Belt-and-suspenders: sweep the legacy v2 key too.
-    storage.removeItem(draftKeyV2(accountEmail));
+    if (!expectedDraftId) storage.removeItem(draftKeyV2(accountEmail));
   } catch {
     /* ignore */
   }
@@ -325,11 +518,17 @@ export interface DraftSaveCompletion {
    * dirty model can advance `savedGeneration` unconditionally.
    */
   completedGeneration: number;
+  /** Stable identity of the logical remote revision that settled. */
+  revisionId?: string;
   status: DraftSaveStatus;
   /** Populated only when `status === "saved"` and the bridge returned a UID. */
   serverRef?: DraftServerRef;
   /** The prior identity this successful save replaced, when one was known. */
   previousRef?: DraftServerRef | null;
+  /** Bridge proved this revision already existed and performed zero APPENDs. */
+  reconciled?: boolean;
+  /** Trigger that initiated the physical run (used for automatic timing). */
+  trigger?: DraftSaveTriggerDiagnostics;
   /** Coarse error code from the bridge — present when the remote failed. */
   code?: string;
 }
@@ -348,6 +547,8 @@ export interface CreateDraftSaverOptions {
      * that `onCompleted` echoes back.
      */
     generation: number;
+    /** Stable across retries of this exact logical generation. */
+    revisionId?: string;
   }) => Promise<SaveRemoteResult>;
   onStatus?: (status: DraftSaveStatus) => void;
   onServerRef?: (ref: DraftServerRef) => void;
@@ -376,7 +577,8 @@ export interface DraftSaver {
     previousRef: DraftServerRef | null,
     generation: number,
     trigger?: DraftSaveTriggerDiagnostics,
-  ): Promise<void>;
+    revisionId?: string,
+  ): Promise<DraftSaveCompletion>;
   isBusy(): boolean;
   getStatus(): DraftSaveStatus;
   /**
@@ -395,22 +597,40 @@ export interface DraftSaver {
   cancelPendingAndAwaitRunning(): Promise<void>;
 }
 
+export function isCleanRemoteDraft(input: {
+  isDirty: boolean;
+  hasRemoteDraft: boolean;
+  serverRef: DraftServerRef | null;
+  isEditMode: boolean;
+}): boolean {
+  return !input.isDirty && (input.hasRemoteDraft || input.serverRef !== null || input.isEditMode);
+}
+
+export function shouldCloseAfterUploadWait(input: {
+  expectedGeneration: number;
+  currentGeneration: number;
+  saveSucceeded: boolean;
+}): boolean {
+  return input.saveSucceeded && input.expectedGeneration === input.currentGeneration;
+}
+
 export function createDraftSaver(draftId: string, opts: CreateDraftSaverOptions): DraftSaver {
   let status: DraftSaveStatus = "idle";
   let seq = 0;
   let latestIssuedSeq = 0;
   let inFlight: Promise<void> | null = null;
+  let runningCompletion: Promise<DraftSaveCompletion> | null = null;
   let latestKnownServerRef: DraftServerRef | null = null;
   let runningGeneration: number | null = null;
-  let completedGeneration: number | null = null;
-  let completedStatus: DraftSaveStatus | null = null;
+  let completed: DraftSaveCompletion | null = null;
   // Snapshot queued while a save is in flight ("keep last edit").
   let pending: {
     snapshot: DraftSnapshot;
     previousRef: DraftServerRef | null;
     generation: number;
     trigger?: DraftSaveTriggerDiagnostics;
-    resolvers: Array<() => void>;
+    revisionId?: string;
+    resolvers: Array<(completion: DraftSaveCompletion) => void>;
   } | null = null;
 
   function setStatus(next: DraftSaveStatus) {
@@ -424,7 +644,8 @@ export function createDraftSaver(draftId: string, opts: CreateDraftSaverOptions)
     previousRef: DraftServerRef | null,
     generation: number,
     trigger?: DraftSaveTriggerDiagnostics,
-  ): Promise<void> {
+    revisionId?: string,
+  ): Promise<DraftSaveCompletion> {
     const mySeq = ++seq;
     latestIssuedSeq = mySeq;
     setStatus("saving");
@@ -438,6 +659,7 @@ export function createDraftSaver(draftId: string, opts: CreateDraftSaverOptions)
         previousRef: effectivePreviousRef,
         generation,
         trigger,
+        revisionId,
       });
     } catch {
       // Thrown remote is a transport failure → NETWORK class.
@@ -446,33 +668,48 @@ export function createDraftSaver(draftId: string, opts: CreateDraftSaverOptions)
     // Generation guard: only the latest issued sequence may mutate state.
     // Stale responses never fire `onCompleted`, never touch `serverRef`,
     // and therefore never mark newer content clean.
-    if (mySeq !== latestIssuedSeq) return;
-    completedGeneration = generation;
-    completedStatus = result.ok ? "saved" : "failed";
+    if (mySeq !== latestIssuedSeq) {
+      return {
+        completedGeneration: generation,
+        revisionId,
+        status: "failed",
+        code: "SUPERSEDED",
+      };
+    }
     if (result.ok) {
       if (result.serverRef) {
         latestKnownServerRef = result.serverRef;
         opts.onServerRef?.(result.serverRef);
       }
       setStatus("saved");
-      opts.onCompleted?.({
+      const completion: DraftSaveCompletion = {
         completedGeneration: generation,
+        revisionId,
         status: "saved",
         serverRef: result.serverRef,
         previousRef: effectivePreviousRef,
-      });
-      return;
+        reconciled: result.reconciled,
+        trigger,
+      };
+      completed = completion;
+      opts.onCompleted?.(completion);
+      return completion;
     }
     // Failure branch — "saved" may occur ONLY after a successful remote save.
     // Any NETWORK / APPEND / protocol error is a hard failure: the composer
     // stays dirty and the local snapshot is never presented as a saved draft.
     const code = result.code;
     setStatus("failed");
-    opts.onCompleted?.({
+    const completion: DraftSaveCompletion = {
       completedGeneration: generation,
+      revisionId,
       status: "failed",
       code,
-    });
+      trigger,
+    };
+    completed = completion;
+    opts.onCompleted?.(completion);
+    return completion;
   }
 
   let running = false;
@@ -482,15 +719,18 @@ export function createDraftSaver(draftId: string, opts: CreateDraftSaverOptions)
       pending = null;
       running = true;
       runningGeneration = p.generation;
+      let completion: DraftSaveCompletion;
       try {
-        await run(p.snapshot, p.previousRef, p.generation, p.trigger);
+        runningCompletion = run(p.snapshot, p.previousRef, p.generation, p.trigger, p.revisionId);
+        completion = await runningCompletion;
       } finally {
+        runningCompletion = null;
         running = false;
         runningGeneration = null;
       }
       // Resolve AFTER `running` is cleared so `isBusy()` reads false the
       // instant a waiter observes its own completion.
-      for (const r of p.resolvers) r();
+      for (const r of p.resolvers) r(completion!);
     }
   }
 
@@ -499,16 +739,15 @@ export function createDraftSaver(draftId: string, opts: CreateDraftSaverOptions)
     previousRef: DraftServerRef | null,
     generation: number,
     trigger?: DraftSaveTriggerDiagnostics,
-  ): Promise<void> {
-    return new Promise<void>((resolve) => {
+    revisionId?: string,
+  ): Promise<DraftSaveCompletion> {
+    if (runningGeneration === generation && runningCompletion) return runningCompletion;
+    if (completed?.completedGeneration === generation && completed.status === "saved") {
+      return Promise.resolve(completed);
+    }
+    return new Promise<DraftSaveCompletion>((resolve) => {
       if (runningGeneration === generation) {
-        if (inFlight) {
-          inFlight.then(resolve, resolve);
-          return;
-        }
-      }
-      if (completedGeneration === generation && completedStatus === "saved") {
-        resolve();
+        if (runningCompletion) void runningCompletion.then(resolve);
         return;
       }
       if (pending) {
@@ -521,9 +760,10 @@ export function createDraftSaver(draftId: string, opts: CreateDraftSaverOptions)
         pending.previousRef = previousRef;
         pending.generation = generation;
         pending.trigger = trigger;
+        pending.revisionId = revisionId;
         pending.resolvers.push(resolve);
       } else {
-        pending = { snapshot, previousRef, generation, trigger, resolvers: [resolve] };
+        pending = { snapshot, previousRef, generation, trigger, revisionId, resolvers: [resolve] };
       }
       if (inFlight) return;
       inFlight = loop().finally(() => {
@@ -547,9 +787,15 @@ export function createDraftSaver(draftId: string, opts: CreateDraftSaverOptions)
     if (pending) {
       const dropped = pending;
       pending = null;
-      for (const resolve of dropped.resolvers) resolve();
+      const completion: DraftSaveCompletion = {
+        completedGeneration: dropped.generation,
+        revisionId: dropped.revisionId,
+        status: "failed",
+        code: "CANCELLED",
+      };
+      for (const resolve of dropped.resolvers) resolve(completion);
     }
-    const current = inFlight;
+    const current = runningCompletion;
     if (current) await current.catch(() => undefined);
   }
 
