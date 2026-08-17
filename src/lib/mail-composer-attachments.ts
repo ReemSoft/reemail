@@ -16,7 +16,16 @@ export interface SourceAttachmentTransport {
   filename: string;
   size: number;
   mimeType: string;
+  /**
+   * Draft-only fast path: a staged copy of these exact bytes that the Bridge
+   * may reuse instead of re-downloading the part from IMAP. It is a HINT, not
+   * a promise — when the staged file is gone (TTL, cleanup, redeploy) the
+   * Bridge falls back to this descriptor, so a dead handle can never fail a
+   * draft save again.
+   */
+  handle?: string;
 }
+
 
 export interface AttachmentTransportPlan {
   attachmentHandles: string[];
