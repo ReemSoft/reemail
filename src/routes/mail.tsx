@@ -1028,6 +1028,14 @@ import {
   isDraftEditComposeInitial,
   shouldUseLocalIndexForFolder,
 } from "@/lib/mail-draft-open-orchestration";
+import {
+  activateDraftCountGuard,
+  clearDraftCountGuard,
+  createDraftCountGuard,
+  hydrateFolderCount,
+  reconcileDraftCountGuardCleanup,
+  syncDraftCountGuardTotal,
+} from "@/lib/mail-draft-count-guard";
 import { indexUpdateFlag } from "@/lib/mail-flags.functions";
 import { indexMoveMessage } from "@/lib/mail-move.functions";
 import { indexDeleteMessage } from "@/lib/mail-delete.functions";
@@ -1600,6 +1608,7 @@ type PostSendInfo = {
   sentCopyPending: boolean;
   sentCopyJobId?: string;
   sentCopyState?: SentCopyState;
+  draftOrigin: boolean;
 };
 
 // eslint-disable-next-line react-refresh/only-export-components -- executable regression contract
@@ -1795,6 +1804,7 @@ function useMailData(session: MailSession | null) {
   }, []);
 
   const currentAccountId = session?.account.id ?? null;
+  const draftCountGuardRef = useRef(createDraftCountGuard());
 
   /** Apply overrides + hidden filter + pending-move overlay, GC confirmed entries. */
   const applyPending = useCallback(
@@ -1874,6 +1884,14 @@ function useMailData(session: MailSession | null) {
         if (c.path) paths[c.folder] = c.path;
       });
       setCounts((prev) => {
+        if (draftCountGuardRef.current.active) {
+          map.drafts = hydrateFolderCount({
+            folder: "drafts",
+            previous: prev.drafts,
+            incoming: map.drafts,
+            guardedDraftTotal: draftCountGuardRef.current.total,
+          });
+        }
         // V4 count race guard: while a star mutation is in flight (or was
         // very recently), keep the optimistic starred.total instead of the
         // possibly-stale server value.
@@ -1896,7 +1914,7 @@ function useMailData(session: MailSession | null) {
             { total: c.total, unread: c.unread, supported: true },
           ]),
         ) as Record<MailFolder, { total: number; unread: number; supported: boolean }>,
-      );
+        );
     }
   }, [session, getCounts, isStarCountHot]);
 
@@ -1908,7 +1926,8 @@ function useMailData(session: MailSession | null) {
    * Starred/path metadata. Falls back to the bridge (`loadCounts`) only when
    * the index has nothing for this account/session yet (first-ever bootstrap).
    */
-  const loadCountsFast = useCallback(async () => {
+  const loadCountsFast = useCallback(
+    async (options?: { draftIndexSyncSettled?: boolean }) => {
     if (!session) return;
     // Batch A / Fix #1: monotonic guard also applies to the fast (Local
     // Index) path. If a mutation runs between the request and response,
@@ -1937,6 +1956,12 @@ function useMailData(session: MailSession | null) {
             canonicalOccurrences.set(c.folder, (canonicalOccurrences.get(c.folder) ?? 0) + 1);
           }
           const isAmbiguous = (f: MailFolder) => (canonicalOccurrences.get(f) ?? 0) > 1;
+          const draftCountForConvergence = res.counts.find(
+            (c) =>
+              c.folder === "drafts" &&
+              c.hasUidvalidity &&
+              !isAmbiguous(c.folder),
+          );
           setCounts((prev) => {
             const next = { ...prev };
             for (const c of res.counts) {
@@ -1954,10 +1979,27 @@ function useMailData(session: MailSession | null) {
                 continue;
               }
               const cur = next[c.folder] ?? { total: 0, unread: 0, supported: true };
-              next[c.folder] = { total: c.total, unread: c.unread, supported: cur.supported };
+              next[c.folder] = hydrateFolderCount({
+                folder: c.folder,
+                previous: c.folder === "drafts" ? prev.drafts : undefined,
+                incoming: { total: c.total, unread: c.unread, supported: cur.supported },
+                guardedDraftTotal:
+                  c.folder === "drafts" && draftCountGuardRef.current.active
+                    ? draftCountGuardRef.current.total
+                    : undefined,
+              });
             }
             return next;
           });
+          if (
+            options?.draftIndexSyncSettled &&
+            draftCountGuardRef.current.active &&
+            draftCountGuardRef.current.cleanupConfirmed &&
+            draftCountGuardRef.current.pendingSentDraftIds.size === 0 &&
+            draftCountForConvergence?.total === draftCountGuardRef.current.total
+          ) {
+            clearDraftCountGuard(draftCountGuardRef.current);
+          }
           setFolderPaths((prev) => {
             let changed = false;
             const next = { ...prev };
@@ -2014,7 +2056,16 @@ function useMailData(session: MailSession | null) {
       }
     }
     await loadCounts();
-  }, [session, listIndexCounts, loadCounts, isStarCountHot]);
+    },
+    [session, listIndexCounts, loadCounts, isStarCountHot],
+  );
+
+  // While the Draft-origin Send count guard is active, every optimistic Draft
+  // count mutation (create/delete/send) must keep the guard synchronized with
+  // the CURRENT logical Draft total. This is lifecycle-owned, not timer-owned.
+  useEffect(() => {
+    syncDraftCountGuardTotal(draftCountGuardRef.current, counts.drafts.total);
+  }, [counts.drafts.total]);
 
   // Decide whether this (folder, sort, session) call can use the Local Mail Index.
   // Only "date-desc" is index-native; other sorts fall back to the bridge.
@@ -2448,8 +2499,12 @@ function useMailData(session: MailSession | null) {
       // background Draft reconcile must keep the Local Index converged for
       // later provider UID suppression, but it must NOT cause a redundant
       // Bridge Draft list reload.
-      if (folder !== "drafts") loadMessages();
-      loadCountsFast();
+      if (folder !== "drafts") {
+        loadMessages();
+        loadCountsFast();
+      } else {
+        loadCountsFast({ draftIndexSyncSettled: true });
+      }
     },
   });
 
@@ -2613,6 +2668,7 @@ function useMailData(session: MailSession | null) {
     setSort,
     counts,
     setCounts,
+    draftCountGuardRef,
     messages,
     setMessages,
     loading,
@@ -2808,6 +2864,7 @@ function MailApp() {
     setSort,
     counts,
     setCounts,
+    draftCountGuardRef,
     messages,
     setMessages,
     loading,
@@ -2866,13 +2923,16 @@ function MailApp() {
       } | null;
       if (response.ok && result?.ok && Array.isArray(result.records)) {
         setWorkingDraftRecords(result.records);
-        setSentDraftRefs(Array.isArray(result.sentDraftRefs) ? result.sentDraftRefs : []);
+        const sentRefs = Array.isArray(result.sentDraftRefs) ? result.sentDraftRefs : [];
+        setSentDraftRefs(sentRefs);
+        const guard = draftCountGuardRef.current;
+        reconcileDraftCountGuardCleanup(guard, result.records, sentRefs);
       }
     } catch {
       // Provider Drafts remain usable while this optional projection retries
       // on the next Draft-folder visit.
     }
-  }, [folder, session?.account.id, session?.mailSessionToken]);
+  }, [folder, session?.account.id, session?.mailSessionToken, draftCountGuardRef]);
 
   const rememberWorkingDraftRecord = useCallback((record: WorkingDraftRecord) => {
     setWorkingDraftRecords((current) => {
@@ -3037,7 +3097,7 @@ function MailApp() {
   // once, BEFORE the explicit server delete settles. The snapshot is restored
   // if the delete fails so the row/count never lie.
   const handleDraftDeleteStart = useCallback(
-    (draftId: string) => {
+    (draftId: string, options?: { activateDraftCountGuard?: boolean }) => {
       const snapshot = {
         messages,
         workingDraftRecords,
@@ -3046,6 +3106,9 @@ function MailApp() {
       draftDeleteSnapshotRef.current = snapshot;
       const next = applyDraftDeleteOptimistic(snapshot, draftId);
       bumpCountsGen();
+      if (options?.activateDraftCountGuard) {
+        activateDraftCountGuard(draftCountGuardRef.current, next.draftsTotal, draftId);
+      }
       setMessages(next.messages);
       setWorkingDraftRecords(next.workingDraftRecords);
       setCounts((prev) => ({
@@ -7577,7 +7640,10 @@ function Composer({
     identity: SavedDraftIdentity,
     previousRef?: { folderPath: string; uid: number; uidValidity: string } | null,
   ) => void;
-  onDraftDeleteStart: (draftId: string) => void;
+  onDraftDeleteStart: (
+    draftId: string,
+    options?: { activateDraftCountGuard?: boolean },
+  ) => void;
   onDraftDeleteRollback: (draftId: string) => void;
   onDraftDeleted: (draftId: string) => void;
 }) {
@@ -10574,7 +10640,7 @@ function Composer({
         // Optimistically remove the sent logical Draft from the Draft list and
         // decrement the count exactly once. onDraftDeleted below clears the
         // snapshot; later refetch reconciliation cannot double-decrement.
-        onDraftDeleteStart(draftId);
+        onDraftDeleteStart(draftId, { activateDraftCountGuard: true });
       }
       if (!draftOrigin) {
         // Preserve the existing normal-send Draft cleanup behaviour. The
@@ -10629,6 +10695,7 @@ function Composer({
         sentCopyPending: result.sentCopyPending === true,
         sentCopyJobId: result.sentCopyJobId,
         sentCopyState: result.sentCopyState,
+        draftOrigin,
       });
       console.info("[draft-send] phase=ui-complete");
       // Address book: record recipients AFTER a successful SMTP send only.

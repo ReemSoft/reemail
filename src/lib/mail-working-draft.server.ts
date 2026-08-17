@@ -17,6 +17,10 @@ import {
 import { isDefinitePreSmtpSendError } from "@/lib/mail-working-draft-send-idempotency";
 import type { DraftServerRef } from "@/lib/mail-draft-lifecycle";
 import { trackCloudflareWork } from "@/lib/cloudflare-wait-until.server";
+import {
+  mapWithBoundedConcurrency,
+  WORKING_DRAFT_STAGE_CONCURRENCY,
+} from "@/lib/mail-working-draft-bounded";
 
 type UntypedDb = {
   from(table: string): any;
@@ -519,6 +523,17 @@ async function resolveBridgeForWorkingDraft(auth: WorkingDraftAuth) {
   return { bridge, password };
 }
 
+type WorkingDraftTransferContext = Awaited<ReturnType<typeof resolveBridgeForWorkingDraft>> & {
+  client: UntypedDb;
+};
+
+async function createWorkingDraftTransferContext(
+  auth: WorkingDraftAuth,
+): Promise<WorkingDraftTransferContext> {
+  const resolved = await resolveBridgeForWorkingDraft(auth);
+  return { ...resolved, client: db() };
+}
+
 /**
  * Reconcile the stable checkpoint revision before importing an external
  * provider source or reading/staging any attachment object. A response lost
@@ -529,8 +544,10 @@ async function reconcileWorkingDraftRevision(input: {
   auth: WorkingDraftAuth;
   draftId: string;
   revisionId: string;
+  context?: WorkingDraftTransferContext;
 }): Promise<{ found: boolean; serverRef: DraftServerRef | null }> {
-  const { bridge, password } = await resolveBridgeForWorkingDraft(input.auth);
+  const { bridge, password } =
+    input.context ?? (await createWorkingDraftTransferContext(input.auth));
   const response = await fetch(`${bridge.bridgeUrl}/api/draft-revision-reconcile`, {
     method: "POST",
     headers: { "Content-Type": "application/json", "X-Bridge-Key": bridge.bridgeKey },
@@ -575,6 +592,7 @@ function sourceOf(row: AttachmentRow): WorkingDraftSourceDescriptor | null {
 async function importExternalAttachment(
   auth: WorkingDraftAuth,
   row: AttachmentRow,
+  context?: WorkingDraftTransferContext,
 ): Promise<AttachmentRow> {
   if (row.storage_path) return row;
   const key = `${auth.companyId}:${auth.accountId}:${row.draft_id}:${row.id}`;
@@ -583,7 +601,8 @@ async function importExternalAttachment(
   const flight = (async () => {
     const source = sourceOf(row);
     if (!source) throw new Error("SOURCE_DESCRIPTOR_INVALID");
-    const { bridge, password } = await resolveBridgeForWorkingDraft(auth);
+    const transfer = context ?? (await createWorkingDraftTransferContext(auth));
+    const { bridge, password, client } = transfer;
     const response = await fetch(`${bridge.bridgeUrl}/api/draft-source-attachment`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Bridge-Key": bridge.bridgeKey },
@@ -601,7 +620,6 @@ async function importExternalAttachment(
     const bytes = await response.blob();
     if (bytes.size > WORKING_DRAFT_MAX_ATTACHMENT_BYTES) throw new Error("ATTACHMENT_LIMIT_EXCEEDED");
     const storagePath = attachmentStoragePath(auth, row.draft_id, row.id);
-    const client = db();
     const uploaded = await client.storage.from(WORKING_DRAFT_ATTACHMENT_BUCKET).upload(storagePath, bytes, {
       contentType: row.mime_type,
       upsert: false,
@@ -630,10 +648,12 @@ async function importExternalAttachment(
   return flight;
 }
 
-async function stageOwnedAttachment(auth: WorkingDraftAuth, row: AttachmentRow): Promise<string> {
+async function stageOwnedAttachment(
+  context: WorkingDraftTransferContext,
+  row: AttachmentRow,
+): Promise<string> {
   if (!row.storage_path) throw new Error("ATTACHMENT_NOT_IMPORTED");
-  const { bridge } = await resolveBridgeForWorkingDraft(auth);
-  const client = db();
+  const { bridge, client } = context;
   const downloaded = await client.storage.from(WORKING_DRAFT_ATTACHMENT_BUCKET).download(row.storage_path);
   if (downloaded.error || !downloaded.data) throw new Error("ATTACHMENT_STORAGE_READ_FAILED");
   const bytes = downloaded.data as Blob;
@@ -671,19 +691,22 @@ async function materializePayloadAttachments(
   auth: WorkingDraftAuth,
   draftId: string,
   payload: WorkingDraftPayload,
+  context: WorkingDraftTransferContext,
 ): Promise<AttachmentRow[]> {
   await syncAttachmentReferences(auth, draftId, payload.attachments);
   const rows = await attachmentRows(auth, draftId);
   const byClientKey = new Map(rows.map((row) => [row.client_key, row]));
-  const output: AttachmentRow[] = [];
-  for (const reference of payload.attachments) {
+  return mapWithBoundedConcurrency(
+    payload.attachments,
+    WORKING_DRAFT_STAGE_CONCURRENCY,
+    async (reference) => {
     const row = reference.attachmentId
       ? rows.find((candidate) => candidate.id === reference.attachmentId)
       : byClientKey.get(reference.clientKey);
     if (!row) throw new Error("ATTACHMENT_REFERENCE_MISSING");
-    output.push(row.storage_path ? row : await importExternalAttachment(auth, row));
-  }
-  return output;
+    return row.storage_path ? row : importExternalAttachment(auth, row, context);
+    },
+  );
 }
 
 function recipients(items: unknown): Array<{ name: string; email: string }> {
@@ -709,24 +732,29 @@ async function invokeBridgeWithStagedAttachments(input: {
   rows: readonly AttachmentRow[];
   endpoint: "/api/draft-save-v2" | "/api/send-v2";
   previousRef?: DraftServerRef | null;
+  context: WorkingDraftTransferContext;
 }): Promise<Record<string, unknown>> {
-  const { bridge, password } = await resolveBridgeForWorkingDraft(input.auth);
-  const staged: string[] = [];
+  const { bridge, password } = input.context;
+  const stagedHandles: string[] = [];
+  const handles = new Array<string | undefined>(input.rows.length);
   try {
-    const handles: string[] = [];
-    for (const row of input.rows) {
-      const handle = await stageOwnedAttachment(input.auth, row);
-      handles.push(handle);
-      staged.push(handle);
-    }
+    await mapWithBoundedConcurrency(
+      input.rows,
+      WORKING_DRAFT_STAGE_CONCURRENCY,
+      async (row, index) => {
+      const handle = await stageOwnedAttachment(input.context, row);
+      handles[index] = handle;
+      stagedHandles.push(handle);
+      },
+    );
     const normal: string[] = [];
     const inline: Array<{ handle: string; uploadFilename: string; cid: string; contentType: string }> = [];
     input.rows.forEach((row, index) => {
-      if (row.kind === "attachment") normal.push(handles[index]);
+      if (row.kind === "attachment") normal.push(handles[index]!);
       else {
         if (!row.cid) throw new Error("INLINE_CID_REQUIRED");
         inline.push({
-          handle: handles[index],
+          handle: handles[index]!,
           uploadFilename: row.filename,
           cid: row.cid,
           contentType: row.mime_type,
@@ -778,11 +806,11 @@ async function invokeBridgeWithStagedAttachments(input: {
     // Bridge staging is only a transient hand-off to the downstream provider.
     // The durable Supabase object stays authoritative for the next checkpoint
     // or send, so a successful checkpoint must not retain a 24-hour copy.
-    if (staged.length > 0) {
+    if (stagedHandles.length > 0) {
       await fetch(`${bridge.bridgeUrl}/api/staged-release`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-Bridge-Key": bridge.bridgeKey },
-        body: JSON.stringify({ account: bridge.bridgeAccount, handles: staged }),
+        body: JSON.stringify({ account: bridge.bridgeAccount, handles: stagedHandles }),
       }).catch(() => undefined);
     }
   }
@@ -812,10 +840,12 @@ export async function checkpointWorkingDraft(input: {
       return { ok: true, skipped: true };
     }
 
+    const transferContext = await createWorkingDraftTransferContext(input.auth);
     const reconciliation = await reconcileWorkingDraftRevision({
       auth: input.auth,
       draftId: input.draftId,
       revisionId: claimed.revision_id,
+      context: transferContext,
     });
     if (reconciliation.found) {
       if (!(await loadWorkingDraft(input.auth, input.draftId))) {
@@ -845,7 +875,12 @@ export async function checkpointWorkingDraft(input: {
       }
       return { ok: true, revision: record.revision, serverRef: reconciliation.serverRef };
     }
-    const rows = await materializePayloadAttachments(input.auth, input.draftId, record.payload);
+    const rows = await materializePayloadAttachments(
+      input.auth,
+      input.draftId,
+      record.payload,
+      transferContext,
+    );
     const result = await invokeBridgeWithStagedAttachments({
       auth: input.auth,
       draftId: input.draftId,
@@ -854,6 +889,7 @@ export async function checkpointWorkingDraft(input: {
       rows,
       endpoint: "/api/draft-save-v2",
       previousRef: record.checkpoint.serverRef,
+      context: transferContext,
     });
     const serverRef =
       typeof result.folderPath === "string" &&
@@ -1084,8 +1120,15 @@ export async function sendWorkingDraft(input: {
   }
 
   let rows: Awaited<ReturnType<typeof materializePayloadAttachments>>;
+  let transferContext: WorkingDraftTransferContext | null = null;
   try {
-    rows = await materializePayloadAttachments(input.auth, input.draftId, record.payload);
+    transferContext = await createWorkingDraftTransferContext(input.auth);
+    rows = await materializePayloadAttachments(
+      input.auth,
+      input.draftId,
+      record.payload,
+      transferContext,
+    );
   } catch (error) {
     await markWorkingDraftSendFailed(
       input.auth,
@@ -1105,6 +1148,7 @@ export async function sendWorkingDraft(input: {
       payload: record.payload,
       rows,
       endpoint: "/api/send-v2",
+      context: transferContext!,
     });
     await markWorkingDraftSendSent(input.auth, input.draftId, result);
   } catch (error) {
