@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   WORKING_DRAFT_MAX_ATTACHMENT_BYTES,
   emptyWorkingDraftPayload,
+  isStaleProviderDraftRow,
   isWorkingDraftAttachmentReference,
   isWorkingDraftPayload,
+  type WorkingDraftRecord,
 } from "../mail-working-draft";
 
 const attachmentId = "18c561d5-ffae-4ea7-b0f8-b3b6155d6d55";
@@ -107,6 +109,58 @@ describe("Working Draft attachment references", () => {
         filename: "too-large.bin",
         mimeType: "application/octet-stream",
         size: WORKING_DRAFT_MAX_ATTACHMENT_BYTES + 1,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("Draft provider-row reconciliation", () => {
+  const record = (serverRefUid: number): WorkingDraftRecord => ({
+    draftId: "draft-1",
+    revision: 1,
+    payload: emptyWorkingDraftPayload(),
+    checkpoint: {
+      revision: 1,
+      state: "checkpointed",
+      committedRevision: 1,
+      serverRef: {
+        folderPath: "[Gmail]/Drafts",
+        uid: serverRefUid,
+        uidValidity: "42",
+      },
+    },
+    updatedAt: "2026-08-17T00:00:00.000Z",
+  });
+
+  it("suppresses a provider row whose UID was replaced by checkpoint B", () => {
+    expect(
+      isStaleProviderDraftRow({
+        draftIdHeader: "draft-1",
+        messageUid: 8575,
+        messageUidValidity: "42",
+        workingDraftRecords: [record(9000)],
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps the current provider row whose UID matches the durable serverRef", () => {
+    expect(
+      isStaleProviderDraftRow({
+        draftIdHeader: "draft-1",
+        messageUid: 9000,
+        messageUidValidity: "42",
+        workingDraftRecords: [record(9000)],
+      }),
+    ).toBe(false);
+  });
+
+  it("does not hide a provider row when there is no durable serverRef yet", () => {
+    expect(
+      isStaleProviderDraftRow({
+        draftIdHeader: "draft-1",
+        messageUid: 8575,
+        messageUidValidity: "42",
+        workingDraftRecords: [{ ...record(9000), checkpoint: { ...record(9000).checkpoint, serverRef: null } }],
       }),
     ).toBe(false);
   });

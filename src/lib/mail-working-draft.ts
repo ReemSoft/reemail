@@ -142,3 +142,25 @@ export function emptyWorkingDraftPayload(): WorkingDraftPayload {
     attachments: [],
   };
 }
+
+/**
+ * Draft-list projection guard: a provider Draft row with the same stable
+ * logical draftId may still carry a stale physical UID after checkpoint
+ * APPEND replaced the provider copy. The durable Working Draft checkpoint
+ * serverRef is authoritative, so the stale provider row must be suppressed.
+ */
+export function isStaleProviderDraftRow(input: {
+  draftIdHeader?: string;
+  messageUid: number;
+  messageUidValidity?: string;
+  workingDraftRecords: readonly WorkingDraftRecord[];
+}): boolean {
+  if (!input.draftIdHeader || !Number.isSafeInteger(input.messageUid) || input.messageUid <= 0) {
+    return false;
+  }
+  if (!input.messageUidValidity) return false;
+  const record = input.workingDraftRecords.find((candidate) => candidate.draftId === input.draftIdHeader);
+  const serverRef = record?.checkpoint.serverRef;
+  if (!serverRef) return false;
+  return serverRef.uid !== input.messageUid || serverRef.uidValidity !== input.messageUidValidity;
+}

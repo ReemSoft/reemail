@@ -951,6 +951,7 @@ import type {
   WorkingDraftPayload,
   WorkingDraftRecord,
 } from "@/lib/mail-working-draft";
+import { isStaleProviderDraftRow } from "@/lib/mail-working-draft";
 import {
   createAutosaveScheduler,
   attachInputListener,
@@ -3991,8 +3992,20 @@ function MailApp() {
   );
   const visibleMessages = useMemo(() => {
     if (folder !== "drafts") return messages;
+    const visibleProviderMessages = messages.filter((message) => {
+      const parsed = parseMessageId(message.id);
+      if (!parsed) return true;
+      return !isStaleProviderDraftRow({
+        draftIdHeader: message.draftIdHeader,
+        messageUid: parsed.uid,
+        messageUidValidity: validUidValidity(message.uidValidity) ?? undefined,
+        workingDraftRecords,
+      });
+    });
     const providerDraftIds = new Set(
-      messages.map((message) => message.draftIdHeader).filter((value): value is string => Boolean(value)),
+      visibleProviderMessages
+        .map((message) => message.draftIdHeader)
+        .filter((value): value is string => Boolean(value)),
     );
     const ownAddress = session?.account.email_address ?? "";
     const serverOnly = workingDraftRecords
@@ -4028,7 +4041,9 @@ function MailApp() {
           draftIdHeader: record.draftId,
         };
       });
-    return [...serverOnly, ...messages].sort((a, b) => Date.parse(b.date) - Date.parse(a.date));
+    return [...serverOnly, ...visibleProviderMessages].sort(
+      (a, b) => Date.parse(b.date) - Date.parse(a.date),
+    );
   }, [folder, messages, session, workingDraftRecords]);
 
   const filteredMessages = useMemo(() => {
@@ -4176,11 +4191,18 @@ function MailApp() {
 
   async function openMessage(id: string) {
     if (!(await guardComposerNav())) return;
+    const parsed = parseMessageId(id);
+    const base = filteredMessages.find((message) => message.id === id) ?? null;
     const serverWorking = workingDraftByRowId.get(id);
-    if (serverWorking) {
+    const providerWorkingDraft =
+      parsed?.folder === "drafts" && base?.draftIdHeader
+        ? workingDraftRecords.find((record) => record.draftId === base.draftIdHeader) ?? null
+        : null;
+    const reuseWorking = serverWorking ?? providerWorkingDraft;
+    if (reuseWorking) {
       // Draft-only fast path: no provider/message-open request is issued for
       // a server Working Draft that has not yet checkpointed to IMAP.
-      setCompose(buildWorkingDraftInitial(serverWorking));
+      setCompose(buildWorkingDraftInitial(reuseWorking));
       setSelectedId(null);
       setSelectedMessage(null);
       setReading(false);
@@ -4198,12 +4220,10 @@ function MailApp() {
     const startedAt = performance.now();
     const generation = navigationGenerationRef.current!.next();
     setSelectedId(id);
-    const parsed = parseMessageId(id);
     if (!parsed || !session) {
       setSelectedMessage(getMockMessage(id) ?? null);
       return;
     }
-    const base = filteredMessages.find((message) => message.id === id) ?? null;
     const baseUidValidity = validUidValidity(base?.uidValidity);
     const staleDraftIdentity =
       parsed.folder === "drafts" && currentAccountId && baseUidValidity
