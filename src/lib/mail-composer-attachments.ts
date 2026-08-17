@@ -176,6 +176,13 @@ export function buildAttachmentTransportPlan(input: {
   restoredHandles: ReadonlyMap<string, string>;
   preservedHandles: ReadonlyMap<string, string>;
   sourceRef: AttachmentSourceRef | null;
+  /**
+   * Draft save only: keep the IMAP source descriptor alongside a known staged
+   * handle so the Bridge can reuse the staged bytes AND still recover when
+   * that staged file no longer exists. Send keeps the strict handle-only
+   * behavior.
+   */
+  carryHandleWithSource?: boolean;
 }): AttachmentTransportPlan {
   const attachmentHandles: string[] = [];
   const sourceAttachments: SourceAttachmentTransport[] = [];
@@ -183,25 +190,28 @@ export function buildAttachmentTransportPlan(input: {
   const unresolvedAttachmentIds: string[] = [];
 
   for (const attachment of input.attachments) {
-    const restored = input.restoredHandles.get(attachment.id);
-    if (restored) {
-      attachmentHandles.push(restored);
+    const handle =
+      input.restoredHandles.get(attachment.id) ?? input.preservedHandles.get(attachment.id);
+    const sourceUsable =
+      Boolean(input.sourceRef) && Boolean(attachment.part) && /^\d+(?:\.\d+)*$/.test(attachment.part ?? "");
+    if (handle && !(input.carryHandleWithSource && sourceUsable)) {
+      attachmentHandles.push(handle);
       continue;
     }
-    const preserved = input.preservedHandles.get(attachment.id);
-    if (preserved) {
-      attachmentHandles.push(preserved);
-      continue;
-    }
-    if (input.sourceRef && attachment.part && /^\d+(?:\.\d+)*$/.test(attachment.part)) {
+    if (sourceUsable) {
       sourceAttachmentIds.push(attachment.id);
       sourceAttachments.push({
-        ...input.sourceRef,
-        part: attachment.part,
+        ...input.sourceRef!,
+        part: attachment.part!,
         filename: attachment.filename,
         size: attachment.size,
         mimeType: attachment.mimeType || "application/octet-stream",
+        ...(handle ? { handle } : {}),
       });
+      continue;
+    }
+    if (handle) {
+      attachmentHandles.push(handle);
       continue;
     }
     unresolvedAttachmentIds.push(attachment.id);
@@ -209,3 +219,4 @@ export function buildAttachmentTransportPlan(input: {
 
   return { attachmentHandles, sourceAttachments, sourceAttachmentIds, unresolvedAttachmentIds };
 }
+
