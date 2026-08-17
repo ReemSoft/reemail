@@ -121,6 +121,19 @@ export function canStartRemoteAutosave(input: {
   return !input.sending && input.dirty && !input.deleteIntent;
 }
 
+/**
+ * Gate for provider checkpoints. Unlike `canStartRemoteAutosave`, this is
+ * also false after a send has completed: a late autosave/checkpoint callback
+ * must never recreate a Draft that Send already removed.
+ */
+export function canScheduleWorkingDraftCheckpoint(input: {
+  sendInProgress: boolean;
+  deleteIntent: boolean;
+  sendCompleted: boolean;
+}): boolean {
+  return !input.sendInProgress && !input.deleteIntent && !input.sendCompleted;
+}
+
 // -------------------------------------------------------------- listeners
 
 export interface Disposable {

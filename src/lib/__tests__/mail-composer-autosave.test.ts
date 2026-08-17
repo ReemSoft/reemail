@@ -8,6 +8,7 @@ import {
   decideAttachmentSizeBlock,
   createRequestBoundSignatureStore,
   canStartRemoteAutosave,
+  canScheduleWorkingDraftCheckpoint,
 } from "../mail-composer-autosave";
 import { createSingleFlight } from "../single-flight";
 
@@ -138,6 +139,48 @@ describe("canStartRemoteAutosave", () => {
     expect(canStartRemoteAutosave({ sending: false, dirty: false, deleteIntent: false })).toBe(false);
     expect(canStartRemoteAutosave({ sending: true, dirty: true, deleteIntent: false })).toBe(false);
     expect(canStartRemoteAutosave({ sending: false, dirty: true, deleteIntent: true })).toBe(false);
+  });
+});
+
+describe("canScheduleWorkingDraftCheckpoint", () => {
+  it("allows normal checkpointing before send completes", () => {
+    expect(
+      canScheduleWorkingDraftCheckpoint({
+        sendInProgress: false,
+        deleteIntent: false,
+        sendCompleted: false,
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects checkpoint scheduling while send is in progress", () => {
+    expect(
+      canScheduleWorkingDraftCheckpoint({
+        sendInProgress: true,
+        deleteIntent: false,
+        sendCompleted: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("rejects late checkpoint scheduling after send completed", () => {
+    expect(
+      canScheduleWorkingDraftCheckpoint({
+        sendInProgress: false,
+        deleteIntent: false,
+        sendCompleted: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("rejects checkpoint scheduling after delete intent", () => {
+    expect(
+      canScheduleWorkingDraftCheckpoint({
+        sendInProgress: false,
+        deleteIntent: true,
+        sendCompleted: false,
+      }),
+    ).toBe(false);
   });
 });
 

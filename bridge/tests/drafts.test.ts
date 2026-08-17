@@ -929,6 +929,24 @@ test("mutex: two concurrent UIDPLUS saves converge to exactly one canonical copy
   assert.equal(draftMutexInflight(), 0, "mutex map MUST be empty after both calls settle");
 });
 
+test("sequential autosaves with different revisions keep exactly one provider Draft", async () => {
+  const server = mkServer();
+  const deps = mkSharedDeps(server);
+  const revisionIds = [
+    "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+    "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff",
+    "cccccccc-dddd-4eee-8fff-000000000000",
+  ];
+
+  for (const revisionId of revisionIds) {
+    const r = await saveDraft(ACCT, "pw", { ...BASE_INPUT, revisionId }, deps);
+    assert.equal(r.ok, true);
+  }
+
+  assert.equal(server.messages.size, 1, "sequential autosaves MUST converge to one copy");
+  assert.equal(draftMutexInflight(), 0, "mutex map MUST be empty after sequential saves settle");
+});
+
 test("mutex: two concurrent UIDPLUS saves NEVER delete each other into an empty folder", async () => {
   const server = mkServer();
   const deps = mkSharedDeps(server);

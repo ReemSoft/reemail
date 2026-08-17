@@ -12,6 +12,7 @@ import {
   type WorkingDraftAttachmentContent,
   type WorkingDraftSourceDescriptor,
 } from "@/lib/mail-working-draft";
+import { isDefinitePreSmtpSendError } from "@/lib/mail-working-draft-send-idempotency";
 import type { DraftServerRef } from "@/lib/mail-draft-lifecycle";
 
 type UntypedDb = {
@@ -55,6 +56,15 @@ export type WorkingDraftAuth = {
   companyId: string;
 };
 
+type WorkingDraftSendClaim = {
+  claimed: boolean;
+  state: "preparing" | "sending" | "sent" | "failed";
+  smtpResult: Record<string, unknown> | null;
+  error: string | null;
+};
+
+class DraftSendRejectedError extends Error {}
+
 export type WorkingDraftError = {
   ok: false;
   status: number;
@@ -70,6 +80,21 @@ function db(): UntypedDb {
 
 function authError(status: number, code: string, error: string): WorkingDraftError {
   return { ok: false, status, code, error };
+}
+
+function sendClaimFromRpc(data: unknown): WorkingDraftSendClaim | null {
+  if (!Array.isArray(data)) return null;
+  const row = data[0] as Record<string, unknown> | undefined;
+  if (!row || typeof row.state !== "string") return null;
+  return {
+    claimed: row.claimed === true,
+    state: row.state as WorkingDraftSendClaim["state"],
+    smtpResult:
+      row.smtp_result && typeof row.smtp_result === "object"
+        ? (row.smtp_result as Record<string, unknown>)
+        : null,
+    error: typeof row.error === "string" ? row.error : null,
+  };
 }
 
 function isAuthError(value: WorkingDraftAuthResult): value is WorkingDraftError {
@@ -688,7 +713,21 @@ async function invokeBridgeWithStagedAttachments(input: {
       }),
     });
     const result = (await response.json().catch(() => null)) as Record<string, unknown> | null;
-    if (!response.ok || !result?.ok) throw new Error("BRIDGE_DRAFT_TRANSFER_FAILED");
+    if (!response.ok) {
+      if (isDefinitePreSmtpSendError(result?.error)) {
+        throw new DraftSendRejectedError("BRIDGE_DRAFT_TRANSFER_FAILED");
+      }
+      throw new Error("BRIDGE_DRAFT_TRANSFER_AMBIGUOUS");
+    }
+    if (!result?.ok) {
+      if (result && result.ok === false) {
+        if (isDefinitePreSmtpSendError(result.error)) {
+          throw new DraftSendRejectedError("BRIDGE_DRAFT_TRANSFER_FAILED");
+        }
+        throw new Error("BRIDGE_DRAFT_TRANSFER_AMBIGUOUS");
+      }
+      throw new Error("BRIDGE_DRAFT_TRANSFER_RESPONSE_MISSING");
+    }
     return result;
   } finally {
     // Bridge staging is only a transient hand-off to the downstream provider.
@@ -881,6 +920,62 @@ export async function deleteWorkingDraftExplicit(input: {
   return { deleted: true, serverRef: record.checkpoint.serverRef };
 }
 
+async function claimWorkingDraftSend(
+  auth: WorkingDraftAuth,
+  draftId: string,
+): Promise<WorkingDraftSendClaim> {
+  if (!isUuid(draftId)) throw new Error("INVALID_DRAFT_ID");
+  const { data, error } = await db().rpc("claim_mail_working_draft_send", {
+    p_draft_id: draftId,
+    p_company_id: auth.companyId,
+    p_account_id: auth.accountId,
+  });
+  if (error) throw new Error("SEND_IDEMPOTENCY_CLAIM_FAILED");
+  const claim = sendClaimFromRpc(data);
+  if (!claim) throw new Error("SEND_IDEMPOTENCY_INVALID_REPLY");
+  return claim;
+}
+
+async function markWorkingDraftSendSent(
+  auth: WorkingDraftAuth,
+  draftId: string,
+  smtpResult: Record<string, unknown>,
+): Promise<void> {
+  const { error } = await db().rpc("mark_mail_working_draft_send_sent", {
+    p_draft_id: draftId,
+    p_company_id: auth.companyId,
+    p_account_id: auth.accountId,
+    p_result: smtpResult,
+  });
+  if (error) throw new Error("SEND_IDEMPOTENCY_COMMIT_FAILED");
+}
+
+async function markWorkingDraftSendInFlight(
+  auth: WorkingDraftAuth,
+  draftId: string,
+): Promise<void> {
+  const { data, error } = await db().rpc("mark_mail_working_draft_send_in_flight", {
+    p_draft_id: draftId,
+    p_company_id: auth.companyId,
+    p_account_id: auth.accountId,
+  });
+  if (error || data !== true) throw new Error("SEND_CLAIM_LOST");
+}
+
+async function markWorkingDraftSendFailed(
+  auth: WorkingDraftAuth,
+  draftId: string,
+  reason: string,
+): Promise<void> {
+  const { error } = await db().rpc("mark_mail_working_draft_send_failed", {
+    p_draft_id: draftId,
+    p_company_id: auth.companyId,
+    p_account_id: auth.accountId,
+    p_error: reason.slice(0, 120),
+  });
+  if (error) throw new Error("SEND_IDEMPOTENCY_FAILURE_COMMIT_FAILED");
+}
+
 async function deleteProviderDraftExplicit(input: {
   auth: WorkingDraftAuth;
   draftId: string;
@@ -925,29 +1020,69 @@ export async function sendWorkingDraft(input: {
   auth: WorkingDraftAuth;
   draftId: string;
 }): Promise<Record<string, unknown>> {
+  const claim = await claimWorkingDraftSend(input.auth, input.draftId);
+  if (claim.state === "sent") {
+    // SMTP already accepted this logical Draft. Return the stored result
+    // without touching SMTP, attachments, or provider cleanup again.
+    return claim.smtpResult ?? { ok: true };
+  }
+  if (!claim.claimed) {
+    throw new Error("SEND_IN_PROGRESS");
+  }
+
   const record = await loadWorkingDraft(input.auth, input.draftId);
-  if (!record) throw new Error("WORKING_DRAFT_NOT_FOUND");
-  const rows = await materializePayloadAttachments(input.auth, input.draftId, record.payload);
-  const result = await invokeBridgeWithStagedAttachments({
-    auth: input.auth,
-    draftId: input.draftId,
-    revisionId: randomUUID(),
-    payload: record.payload,
-    rows,
-    endpoint: "/api/send-v2",
-  });
+  if (!record) {
+    await markWorkingDraftSendFailed(input.auth, input.draftId, "WORKING_DRAFT_NOT_FOUND").catch(
+      () => undefined,
+    );
+    throw new Error("WORKING_DRAFT_NOT_FOUND");
+  }
+
+  let rows: Awaited<ReturnType<typeof materializePayloadAttachments>>;
   try {
-    const removed = await deleteWorkingDraft({ auth: input.auth, draftId: input.draftId });
-    void deleteProviderDraftCheckpoint({
+    rows = await materializePayloadAttachments(input.auth, input.draftId, record.payload);
+  } catch (error) {
+    await markWorkingDraftSendFailed(
+      input.auth,
+      input.draftId,
+      error instanceof Error ? error.message : "ATTACHMENT_MATERIALIZATION_FAILED",
+    ).catch(() => undefined);
+    throw error;
+  }
+
+  let result: Record<string, unknown>;
+  try {
+    await markWorkingDraftSendInFlight(input.auth, input.draftId);
+    result = await invokeBridgeWithStagedAttachments({
       auth: input.auth,
       draftId: input.draftId,
-      previousRef: removed.serverRef,
+      revisionId: randomUUID(),
+      payload: record.payload,
+      rows,
+      endpoint: "/api/send-v2",
+    });
+    await markWorkingDraftSendSent(input.auth, input.draftId, result);
+  } catch (error) {
+    if (error instanceof DraftSendRejectedError) {
+      await markWorkingDraftSendFailed(
+        input.auth,
+        input.draftId,
+        error instanceof Error ? error.message : "SEND_FAILED",
+      ).catch(() => undefined);
+    }
+    throw error;
+  }
+
+  try {
+    // Provider cleanup is deliberately after the idempotency row is marked
+    // sent. A cleanup failure cannot reopen or retry SMTP.
+    await deleteWorkingDraftExplicit({
+      auth: input.auth,
+      draftId: input.draftId,
+      previousRef: record.checkpoint.serverRef ?? null,
     });
     return result;
   } catch {
-    // SMTP/send-v2 has already accepted the message. Never report that send
-    // as failed (or invite a duplicate retry) merely because downstream Draft
-    // cleanup needs a later retry.
     return { ...result, draftCleanupPending: true };
   }
 }

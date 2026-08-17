@@ -960,6 +960,7 @@ import {
   decideAttachmentSizeBlock,
   createRequestBoundSignatureStore,
   canStartRemoteAutosave,
+  canScheduleWorkingDraftCheckpoint,
   mutateEditorWithSingleInput,
   type RequestBoundSignatureStore,
 } from "@/lib/mail-composer-autosave";
@@ -8208,13 +8209,15 @@ function Composer({
           if (result?.ok && Number.isSafeInteger(result.revision)) {
             workingRevisionRef.current = result.revision!;
             const hasAttachments = payload.attachments.length > 0;
-            if (trigger?.reason === "explicit" || trigger?.reason === "close") {
-              // Fire-and-forget only: the authoritative Working Draft save
-              // above has already completed, so Save and Close never wait for
-              // an IMAP APPEND. Starting it now lets a close survive unmount.
-              startWorkingDraftCheckpoint(hasAttachments);
-            } else {
-              scheduleWorkingDraftCheckpoint(hasAttachments);
+            if (!sendCompletedRef.current) {
+              if (trigger?.reason === "explicit" || trigger?.reason === "close") {
+                // Fire-and-forget only: the authoritative Working Draft save
+                // above has already completed, so Save and Close never wait for
+                // an IMAP APPEND. Starting it now lets a close survive unmount.
+                startWorkingDraftCheckpoint(hasAttachments);
+              } else {
+                scheduleWorkingDraftCheckpoint(hasAttachments);
+              }
             }
             return { ok: true, serverRef: result.serverRef ?? undefined };
           }
@@ -9174,6 +9177,7 @@ function Composer({
   const workingCheckpointTimerRef = useRef<number | null>(null);
   const workingCheckpointInFlightRef = useRef(false);
   const workingCheckpointPendingRef = useRef(false);
+  const workingCheckpointFlightRef = useRef<Promise<void> | null>(null);
   const lastProviderCheckpointAtRef = useRef<number | null>(null);
   const lastProviderCheckpointDurationMsRef = useRef<number | null>(null);
   const sendInProgressRef = useRef(false);
@@ -9185,15 +9189,18 @@ function Composer({
   const autosaveScheduleReasonRef = useRef<DraftSaveTriggerReason>("automatic");
 
   function startWorkingDraftCheckpoint(hasAttachments: boolean) {
+    if (!canScheduleWorkingDraftCheckpoint({
+      sendInProgress: sendInProgressRef.current,
+      deleteIntent: deleteIntentRef.current,
+      sendCompleted: sendCompletedRef.current,
+    })) {
+      return;
+    }
     if (
       typeof window === "undefined" ||
-      deleteIntentRef.current ||
-      sendInProgressRef.current ||
       workingCheckpointInFlightRef.current
     ) {
-      if (!deleteIntentRef.current && !sendInProgressRef.current) {
-        workingCheckpointPendingRef.current = true;
-      }
+      workingCheckpointPendingRef.current = true;
       return;
     }
     if (workingCheckpointTimerRef.current !== null) {
@@ -9203,10 +9210,10 @@ function Composer({
     workingCheckpointPendingRef.current = false;
     workingCheckpointInFlightRef.current = true;
     const startedAt = performance.now();
-    void fetch("/api/mail-working-draft-checkpoint", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ mailSessionToken: mailSessionTokenRef.current, draftId }),
+    workingCheckpointFlightRef.current = fetch("/api/mail-working-draft-checkpoint", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mailSessionToken: mailSessionTokenRef.current, draftId }),
     })
       .then((response) => {
         if (response.ok) {
@@ -9217,12 +9224,22 @@ function Composer({
       .catch(() => undefined)
       .finally(() => {
         workingCheckpointInFlightRef.current = false;
+        workingCheckpointFlightRef.current = null;
         if (workingCheckpointPendingRef.current) scheduleWorkingDraftCheckpoint(hasAttachments);
       });
   }
 
   function scheduleWorkingDraftCheckpoint(hasAttachments: boolean, immediate = false) {
-    if (typeof window === "undefined" || deleteIntentRef.current || sendInProgressRef.current) return;
+    if (
+      typeof window === "undefined" ||
+      !canScheduleWorkingDraftCheckpoint({
+        sendInProgress: sendInProgressRef.current,
+        deleteIntent: deleteIntentRef.current,
+        sendCompleted: sendCompletedRef.current,
+      })
+    ) {
+      return;
+    }
     workingCheckpointPendingRef.current = true;
     if (workingCheckpointInFlightRef.current || workingCheckpointTimerRef.current !== null) return;
     // This is deliberately independent from the 1.5s/5s Working Draft save
@@ -9241,8 +9258,16 @@ function Composer({
     const delay = immediate ? 0 : plan.delayMs;
     workingCheckpointTimerRef.current = window.setTimeout(() => {
       workingCheckpointTimerRef.current = null;
-      if (!workingCheckpointPendingRef.current || deleteIntentRef.current || sendInProgressRef.current)
+      if (
+        !workingCheckpointPendingRef.current ||
+        !canScheduleWorkingDraftCheckpoint({
+          sendInProgress: sendInProgressRef.current,
+          deleteIntent: deleteIntentRef.current,
+          sendCompleted: sendCompletedRef.current,
+        })
+      ) {
         return;
+      }
       startWorkingDraftCheckpoint(hasAttachments);
     }, delay);
   }
@@ -10179,6 +10204,7 @@ function Composer({
   };
 
   async function performSend() {
+    if (sendInProgressRef.current) return;
     sendInProgressRef.current = true;
     autosaveRef.current?.cancel();
     if (remoteAutosaveTimerRef.current !== null) {
@@ -10191,6 +10217,7 @@ function Composer({
     }
     workingCheckpointPendingRef.current = false;
     pendingRemoteSaveRef.current = null;
+    await (workingCheckpointFlightRef.current ?? Promise.resolve());
     let sendAccepted = false;
     setSending(true);
     setProgress(0);
