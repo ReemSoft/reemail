@@ -13,7 +13,9 @@ import {
   stageAttachmentStream,
   stagedAttachmentStats,
   validateStagedHandle,
+  type ResolvedStagedAttachment,
 } from "./staged-attachments.js";
+
 import { configuredAppOrigins, isAllowedAppOrigin, publicBridgeBase } from "./public-bridge-url.js";
 import { TransferConcurrency } from "./transfer-concurrency.js";
 import {
@@ -309,6 +311,20 @@ const SendV2PayloadSchema = SendPayloadSchema.extend({
   sourceAttachments: z.array(ServerAttachmentSourceSchema).max(10).default([]),
 });
 
+// Draft-only: a kept server source may carry a staged handle as a reuse hint.
+// Send keeps the strict handle-or-source contract untouched.
+const DraftServerAttachmentSourceSchema = ServerAttachmentSourceSchema.extend({
+  handle: z
+    .string()
+    .min(20)
+    .max(32 * 1024)
+    .optional(),
+});
+const DraftServerInlineSourceSchema = DraftServerAttachmentSourceSchema.extend({
+  uploadFilename: z.string().min(1).max(255),
+  cid: z.string().min(1).max(255),
+});
+
 const DraftV2AttachmentSchema = z.object({
   attachmentHandles: z
     .array(
@@ -320,9 +336,10 @@ const DraftV2AttachmentSchema = z.object({
     .max(10)
     .default([]),
   stagedInlineImages: z.array(StagedInlineSchema).max(20).default([]),
-  sourceAttachments: z.array(ServerAttachmentSourceSchema).max(10).default([]),
-  sourceInlineImages: z.array(ServerInlineSourceSchema).max(20).default([]),
+  sourceAttachments: z.array(DraftServerAttachmentSourceSchema).max(10).default([]),
+  sourceInlineImages: z.array(DraftServerInlineSourceSchema).max(20).default([]),
 });
+
 
 const DownloadTicketPayloadSchema = MessagePayloadSchema.extend({
   part: z.string().regex(/^\d+(?:\.\d+)*$/),
@@ -1238,26 +1255,6 @@ app.post("/api/draft-save-v2", requireKey, imapGate("interactive"), async (req, 
     }
     const payload = DraftSavePayloadSchema.parse(req.body);
     const contract = DraftV2AttachmentSchema.parse(req.body);
-    let normalSourceInputs = contract.sourceAttachments.map((source) => ({
-      folderPath: source.folderPath,
-      uid: source.uid,
-      uidValidity: source.uidValidity,
-      part: source.part,
-      filename: source.filename,
-      size: source.size,
-      mimeType: source.mimeType,
-    }));
-    let inlineSourceInputs = contract.sourceInlineImages.map((source) => ({
-      folderPath: source.folderPath,
-      uid: source.uid,
-      uidValidity: source.uidValidity,
-      part: source.part,
-      filename: source.filename,
-      size: source.size,
-      mimeType: source.mimeType,
-      uploadFilename: source.uploadFilename,
-      cid: source.cid,
-    }));
     // Raw-payload fail-fast: reject an impossible combined normal count before
     // resolving handles or staging server sources (see send-v2).
     if (
@@ -1266,7 +1263,71 @@ app.post("/api/draft-save-v2", requireKey, imapGate("interactive"), async (req, 
     ) {
       return res.status(413).json({ ok: false, error: "ATTACHMENTS_TOO_LARGE" });
     }
-    if (contract.sourceAttachments.length > 0 || contract.sourceInlineImages.length > 0) {
+    const account = accountBinding(payload.account as MailAccount);
+
+    stagedAccount = account;
+
+    // --- Staged-source reuse pass -------------------------------------
+    // A kept draft attachment whose staged copy is still on disk is served
+    // straight from disk: no IMAP download, no re-staging, and (when every
+    // source is reusable) no draft-identity round-trip at all. A handle that
+    // is missing, expired, foreign or of the wrong kind is simply ignored and
+    // the attachment falls back to its IMAP descriptor — a dead handle can
+    // never fail a draft save.
+    const reuseStagedSource = async (
+      handle: string | undefined,
+      kind: "attachment" | "inline-image",
+    ): Promise<{ handle: string; resolved: ResolvedStagedAttachment } | null> => {
+      if (!handle) return null;
+      try {
+        const resolved = await resolveStagedAttachment(BRIDGE_API_KEY, handle, account);
+        if (resolved.kind !== kind) return null;
+        return { handle, resolved };
+      } catch {
+        return null;
+      }
+    };
+    const reusedNormalSources = await Promise.all(
+      contract.sourceAttachments.map((source) => reuseStagedSource(source.handle, "attachment")),
+    );
+    const reusedInlineSources = await Promise.all(
+      contract.sourceInlineImages.map((source) =>
+        reuseStagedSource(source.handle, "inline-image"),
+      ),
+    );
+    markRoutePhase(
+      "staged-source-reuse",
+      [...reusedNormalSources, ...reusedInlineSources].reduce(
+        (sum, item) => sum + (item?.resolved.size ?? 0),
+        0,
+      ),
+    );
+
+    let normalSourceInputs = contract.sourceAttachments
+      .filter((_, index) => !reusedNormalSources[index])
+      .map((source) => ({
+        folderPath: source.folderPath,
+        uid: source.uid,
+        uidValidity: source.uidValidity,
+        part: source.part,
+        filename: source.filename,
+        size: source.size,
+        mimeType: source.mimeType,
+      }));
+    let inlineSourceInputs = contract.sourceInlineImages
+      .filter((_, index) => !reusedInlineSources[index])
+      .map((source) => ({
+        folderPath: source.folderPath,
+        uid: source.uid,
+        uidValidity: source.uidValidity,
+        part: source.part,
+        filename: source.filename,
+        size: source.size,
+        mimeType: source.mimeType,
+        uploadFilename: source.uploadFilename,
+        cid: source.cid,
+      }));
+    if (normalSourceInputs.length > 0 || inlineSourceInputs.length > 0) {
       const reconciled = await reconcileDraftRevision(
         payload.account as MailAccount,
         payload.password,
@@ -1312,8 +1373,6 @@ app.post("/api/draft-save-v2", requireKey, imapGate("interactive"), async (req, 
         }
       }
     }
-    const account = accountBinding(payload.account as MailAccount);
-    stagedAccount = account;
     const resolvedNormal = await Promise.all(
       contract.attachmentHandles.map((handle) =>
         resolveStagedAttachment(BRIDGE_API_KEY, handle, account),
@@ -1336,7 +1395,7 @@ app.post("/api/draft-save-v2", requireKey, imapGate("interactive"), async (req, 
       "staged-inline-resolution",
       resolvedInline.reduce((sum, item) => sum + item.staged.size, 0),
     );
-    const preservedInlineSources = await stageServerInlineSources({
+    const freshInlineSources = await stageServerInlineSources({
       secret: BRIDGE_API_KEY,
       account: payload.account as MailAccount,
       password: payload.password,
@@ -1344,23 +1403,42 @@ app.post("/api/draft-save-v2", requireKey, imapGate("interactive"), async (req, 
       maxBytes: SEND_MAX_TOTAL_BYTES,
       draftTiming: true,
     });
-    preservedInlineSourceHandles = preservedInlineSources.map(({ staged }) => staged.handle);
+    // Only freshly staged copies are owned by this request; reused handles
+    // belong to the client and must survive a failed save.
+    preservedInlineSourceHandles = freshInlineSources.map(({ staged }) => staged.handle);
     markRoutePhase(
       "server-inline-source-staging",
-      preservedInlineSources.reduce((sum, item) => sum + item.resolved.size, 0),
+      freshInlineSources.reduce((sum, item) => sum + item.resolved.size, 0),
     );
-    const preserved = await stageDraftServerAttachmentSources({
+    const freshNormalSources = await stageDraftServerAttachmentSources({
       secret: BRIDGE_API_KEY,
       account: payload.account as MailAccount,
       password: payload.password,
       sources: normalSourceInputs,
       maxBytes: SEND_MAX_TOTAL_BYTES,
     });
-    preservedSourceHandles = preserved.map(({ staged }) => staged.handle);
+    preservedSourceHandles = freshNormalSources.map(({ staged }) => staged.handle);
     markRoutePhase(
       "server-normal-source-staging",
-      preserved.reduce((sum, item) => sum + item.resolved.size, 0),
+      freshNormalSources.reduce((sum, item) => sum + item.resolved.size, 0),
     );
+    // Re-interleave reused and freshly staged sources back into the exact
+    // request order so the returned handle arrays stay index-aligned with the
+    // client's attachment ids.
+    const mergeSources = (
+      reused: ReadonlyArray<{ handle: string; resolved: ResolvedStagedAttachment } | null>,
+      fresh: ReadonlyArray<{ staged: { handle: string }; resolved: ResolvedStagedAttachment }>,
+    ): Array<{ handle: string; resolved: ResolvedStagedAttachment }> => {
+      let next = 0;
+      return reused.map((item) => {
+        if (item) return item;
+        const staged = fresh[next++]!;
+        return { handle: staged.staged.handle, resolved: staged.resolved };
+      });
+    };
+    const preserved = mergeSources(reusedNormalSources, freshNormalSources);
+    const preservedInlineSources = mergeSources(reusedInlineSources, freshInlineSources);
+
     const all = [
       ...resolvedNormal,
       ...preserved.map(({ resolved }) => resolved),
@@ -1427,8 +1505,9 @@ app.post("/api/draft-save-v2", requireKey, imapGate("interactive"), async (req, 
     saveSucceeded = true;
     return res.json({
       ...result,
-      sourceAttachmentHandles: preserved.map(({ staged }) => staged.handle),
-      inlineSourceHandles: preservedInlineSources.map(({ staged }) => staged.handle),
+      sourceAttachmentHandles: preserved.map(({ handle }) => handle),
+      inlineSourceHandles: preservedInlineSources.map(({ handle }) => handle),
+
     });
   } catch (error) {
     const code =

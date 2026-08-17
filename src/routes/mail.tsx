@@ -7793,7 +7793,11 @@ function Composer({
             restoredHandles: restoredHandleByAttachmentIdRef.current,
             preservedHandles: preservedSourceHandlesRef.current,
             sourceRef: attachmentSourceRef.current,
+            // Draft saves send handle + source together: the Bridge reuses the
+            // staged bytes when they exist and re-reads IMAP when they don't.
+            carryHandleWithSource: true,
           });
+
           if (attachmentPlan.unresolvedAttachmentIds.length > 0) {
             return { ok: false, code: "SOURCE_ATTACHMENT_UNRESOLVED" };
           }
@@ -7814,9 +7818,16 @@ function Composer({
             currentFiles.map((file) => ensureStaged(file, "attachment")),
           );
           const uploadInline = transportImages.filter((image) => !image.sourceDescriptor);
+          // Inline images that came from the saved draft keep their IMAP
+          // descriptor for good, and carry the staged handle as a reuse hint.
+          // Reuse makes the save instant; the descriptor keeps it recoverable.
           const restoredInlineSources = transportImages
             .filter((image) => image.sourceDescriptor)
-            .map((image) => image.sourceDescriptor!);
+            .map((image) => ({
+              ...image.sourceDescriptor!,
+              ...(image.stagedHandle ? { handle: image.stagedHandle } : {}),
+            }));
+
           const stagedInline = await Promise.all(
             uploadInline.map((image) => {
               if (image.stagedHandle) {
@@ -7922,9 +7933,11 @@ function Composer({
                   (candidate) => candidate.uploadFilename === source.uploadFilename,
                 );
                 if (image) {
+                  // Keep the descriptor: the handle is a reuse hint, not the
+                  // only way back to these bytes.
                   image.stagedHandle = handle;
-                  image.sourceDescriptor = undefined;
                 }
+
               });
             }
             const nextServerRef =
