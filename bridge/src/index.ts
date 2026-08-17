@@ -13,7 +13,9 @@ import {
   stageAttachmentStream,
   stagedAttachmentStats,
   validateStagedHandle,
+  type ResolvedStagedAttachment,
 } from "./staged-attachments.js";
+
 import { configuredAppOrigins, isAllowedAppOrigin, publicBridgeBase } from "./public-bridge-url.js";
 import { TransferConcurrency } from "./transfer-concurrency.js";
 import {
