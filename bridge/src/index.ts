@@ -1255,7 +1255,16 @@ app.post("/api/draft-save-v2", requireKey, imapGate("interactive"), async (req, 
     }
     const payload = DraftSavePayloadSchema.parse(req.body);
     const contract = DraftV2AttachmentSchema.parse(req.body);
+    // Raw-payload fail-fast: reject an impossible combined normal count before
+    // resolving handles or staging server sources (see send-v2).
+    if (
+      contract.attachmentHandles.length + contract.sourceAttachments.length >
+      MAX_NORMAL_ATTACHMENTS
+    ) {
+      return res.status(413).json({ ok: false, error: "ATTACHMENTS_TOO_LARGE" });
+    }
     const account = accountBinding(payload.account as MailAccount);
+
     stagedAccount = account;
 
     // --- Staged-source reuse pass -------------------------------------
