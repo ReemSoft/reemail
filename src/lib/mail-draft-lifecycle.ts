@@ -615,6 +615,14 @@ export function shouldCloseAfterUploadWait(input: {
   return input.saveSucceeded && input.expectedGeneration === input.currentGeneration;
 }
 
+/** A clean already-server-saved Draft may send after an empty no-op save. */
+export function shouldSendAfterDraftSave(
+  result: "saved_server" | "failed" | "empty",
+  alreadyClean: boolean,
+): boolean {
+  return result === "saved_server" || (result === "empty" && alreadyClean);
+}
+
 export function createDraftSaver(draftId: string, opts: CreateDraftSaverOptions): DraftSaver {
   let status: DraftSaveStatus = "idle";
   let seq = 0;

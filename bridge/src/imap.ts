@@ -342,6 +342,7 @@ export async function getMessages(
             internalDate: true,
             flags: true,
             bodyStructure: true,
+            headers: ["X-MailMaestro-Draft-ID"],
           },
           { uid: true },
         )) {
@@ -1570,7 +1571,7 @@ async function messageFromFetch(
   const subject = envelope?.subject || "(بدون موضوع)";
   const preview = "";
 
-  return {
+  const parsed: MailMessage = {
     id: `${folder}:${uid}`,
     threadId: envelope?.messageId || `${folder}:${uid}`,
     folder,
@@ -1587,6 +1588,16 @@ async function messageFromFetch(
     attachments: hasAttachments ? attachments : undefined,
     labels: [],
   };
+
+  if (folder === "drafts" && msg.headers) {
+    const rawParsed = await simpleParser(msg.headers as Buffer);
+    const draftIdHeader = headerValue(rawParsed, "X-MailMaestro-Draft-ID").trim();
+    if (draftIdHeader) parsed.draftIdHeader = draftIdHeader;
+    const mailbox = (client as unknown as { mailbox?: { uidValidity?: unknown } }).mailbox;
+    if (mailbox?.uidValidity != null) parsed.uidValidity = String(mailbox.uidValidity);
+  }
+
+  return parsed;
 }
 
 function accountEmail(client: ImapFlow): string {

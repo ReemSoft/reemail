@@ -13,6 +13,7 @@ import {
   draftKeyV4,
   pendingDeleteKey,
   readDraftDoc,
+  shouldSendAfterDraftSave,
   writeDraftDoc,
   updateDraftDocServerRef,
   type DraftSaveStatus,
@@ -47,6 +48,24 @@ describe("post-send draft deletion", () => {
     await Promise.resolve();
     await Promise.resolve();
     expect(onFailure).toHaveBeenCalledOnce();
+  });
+});
+
+describe("Draft Send save-readiness", () => {
+  it("continues after a clean already-server-saved empty no-op", () => {
+    expect(shouldSendAfterDraftSave("empty", true)).toBe(true);
+  });
+
+  it("continues after an explicit saved_server result", () => {
+    expect(shouldSendAfterDraftSave("saved_server", false)).toBe(true);
+  });
+
+  it("blocks a genuine failed save", () => {
+    expect(shouldSendAfterDraftSave("failed", true)).toBe(false);
+  });
+
+  it("blocks an empty draft that is not already cleanly server-saved", () => {
+    expect(shouldSendAfterDraftSave("empty", false)).toBe(false);
   });
 });
 

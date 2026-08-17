@@ -929,6 +929,7 @@ import {
   shouldFinalizeCleanClose,
   isCleanRemoteDraft,
   shouldCloseAfterUploadWait,
+  shouldSendAfterDraftSave,
   createDraftSaver,
   createPendingDeleteQueue,
   deleteDraftAfterSend,
@@ -10253,6 +10254,9 @@ function Composer({
   async function performSend() {
     if (sendInProgressRef.current) return;
     sendInProgressRef.current = true;
+    setSending(true);
+    setProgress(0);
+    console.info("[draft-send] phase=send-click");
     autosaveRef.current?.cancel();
     if (remoteAutosaveTimerRef.current !== null) {
       window.clearTimeout(remoteAutosaveTimerRef.current);
@@ -10265,9 +10269,8 @@ function Composer({
     workingCheckpointPendingRef.current = false;
     pendingRemoteSaveRef.current = null;
     await (workingCheckpointFlightRef.current ?? Promise.resolve());
+    console.info("[draft-send] phase=checkpoint-wait-complete");
     let sendAccepted = false;
-    setSending(true);
-    setProgress(0);
     try {
       await inlineReadinessRef.current;
       const serialized = serializeInlineImages(
@@ -10294,7 +10297,24 @@ function Composer({
       let response: Response;
       if (draftOrigin) {
         const saved = await saveDraftNow("explicit");
-        if (saved !== "saved_server") return;
+        const alreadyClean = isCleanRemoteDraft({
+          isDirty: isDirtyRef.current,
+          hasRemoteDraft,
+          serverRef: serverRefRef.current,
+          isEditMode,
+        });
+        const sendableAfterSave = shouldSendAfterDraftSave(saved, alreadyClean);
+        if (!sendableAfterSave) {
+          if (saved === "failed") {
+            console.warn("[draft-send-readiness] code=draft-save-failed");
+          } else {
+            console.warn("[draft-send-readiness] code=draft-not-sendable", {
+              saved,
+              alreadyClean,
+            });
+          }
+          return;
+        }
         response = await fetch("/api/mail-working-draft-send", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -10376,6 +10396,7 @@ function Composer({
       sendAccepted = true;
       sendCompletedRef.current = true;
       setProgress(100);
+      console.info("[draft-send] phase=smtp-accepted");
       // Clear draft on successful send: local wipe + best-effort server delete,
       // with any failure re-queued so the next composer mount can retry it.
       try {
@@ -10445,6 +10466,7 @@ function Composer({
         sentCopyJobId: result.sentCopyJobId,
         sentCopyState: result.sentCopyState,
       });
+      console.info("[draft-send] phase=ui-complete");
       // Address book: record recipients AFTER a successful SMTP send only.
       // Never let this failure poison the send outcome.
       try {
