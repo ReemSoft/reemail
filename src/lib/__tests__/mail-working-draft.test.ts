@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   WORKING_DRAFT_MAX_ATTACHMENT_BYTES,
   emptyWorkingDraftPayload,
+  filterSentWorkingDraftRecords,
   findWorkingDraftIdByServerRef,
+  isSentProviderDraftRef,
   isStaleProviderDraftRow,
   isWorkingDraftAttachmentReference,
   isWorkingDraftPayload,
@@ -176,5 +178,37 @@ describe("Draft provider-row reconciliation", () => {
     expect(
       findWorkingDraftIdByServerRef([record(9000)], "42", 8575),
     ).toBeNull();
+  });
+
+  it("hides Working Draft rows after durable send success", () => {
+    const sent = record(9000);
+    const pending = { ...record(9001), draftId: "draft-2" };
+    expect(
+      filterSentWorkingDraftRecords([sent, pending], new Set(["draft-1"])).map(
+        (item) => item.draftId,
+      ),
+    ).toEqual(["draft-2"]);
+  });
+
+  it("suppresses a still-existing provider row for a durably-sent Draft ref", () => {
+    expect(
+      isSentProviderDraftRef("42", 9000, [
+        {
+          draftId: "draft-1",
+          serverRef: { folderPath: "[Gmail]/Drafts", uid: 9000, uidValidity: "42" },
+        },
+      ]),
+    ).toBe(true);
+  });
+
+  it("does not suppress a different provider UID for the sent Draft", () => {
+    expect(
+      isSentProviderDraftRef("42", 8575, [
+        {
+          draftId: "draft-1",
+          serverRef: { folderPath: "[Gmail]/Drafts", uid: 9000, uidValidity: "42" },
+        },
+      ]),
+    ).toBe(false);
   });
 });

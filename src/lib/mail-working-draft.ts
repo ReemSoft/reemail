@@ -56,6 +56,11 @@ export interface WorkingDraftRecord {
   updatedAt: string;
 }
 
+export interface WorkingDraftSentRef {
+  draftId: string;
+  serverRef: DraftServerRef | null;
+}
+
 export interface WorkingDraftAttachmentContent {
   attachmentId: string;
   filename: string;
@@ -178,4 +183,24 @@ export function findWorkingDraftIdByServerRef(
       candidate.checkpoint.serverRef.uid === uid,
   );
   return record?.draftId ?? null;
+}
+
+/** Hide Working Draft rows whose Draft Send is durably marked sent. */
+export function filterSentWorkingDraftRecords(
+  records: readonly WorkingDraftRecord[],
+  sentDraftIds: ReadonlySet<string>,
+): WorkingDraftRecord[] {
+  return records.filter((record) => !sentDraftIds.has(record.draftId));
+}
+
+/** Suppress a provider Draft row when its UID matches a durably-sent Draft ref. */
+export function isSentProviderDraftRef(
+  uidValidity: string | undefined,
+  uid: number,
+  sentDraftRefs: readonly WorkingDraftSentRef[],
+): boolean {
+  if (!uidValidity || !Number.isSafeInteger(uid) || uid <= 0) return false;
+  return sentDraftRefs.some(
+    (ref) => ref.serverRef?.uidValidity === uidValidity && ref.serverRef.uid === uid,
+  );
 }

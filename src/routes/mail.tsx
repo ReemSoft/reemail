@@ -950,8 +950,13 @@ import type {
   WorkingDraftAttachmentReference,
   WorkingDraftPayload,
   WorkingDraftRecord,
+  WorkingDraftSentRef,
 } from "@/lib/mail-working-draft";
-import { findWorkingDraftIdByServerRef, isStaleProviderDraftRow } from "@/lib/mail-working-draft";
+import {
+  findWorkingDraftIdByServerRef,
+  isSentProviderDraftRef,
+  isStaleProviderDraftRow,
+} from "@/lib/mail-working-draft";
 import {
   createAutosaveScheduler,
   attachInputListener,
@@ -2822,9 +2827,11 @@ function MailApp() {
   // Draft-folder-only server projection. This is intentionally outside the
   // shared list loader so Inbox/Sent/startup make no Working Draft request.
   const [workingDraftRecords, setWorkingDraftRecords] = useState<WorkingDraftRecord[]>([]);
+  const [sentDraftRefs, setSentDraftRefs] = useState<WorkingDraftSentRef[]>([]);
   const refreshWorkingDrafts = useCallback(async () => {
     if (folder !== "drafts" || !session?.mailSessionToken) {
       setWorkingDraftRecords([]);
+      setSentDraftRefs([]);
       return;
     }
     try {
@@ -2836,9 +2843,11 @@ function MailApp() {
       const result = (await response.json().catch(() => null)) as {
         ok?: boolean;
         records?: WorkingDraftRecord[];
+        sentDraftRefs?: WorkingDraftSentRef[];
       } | null;
       if (response.ok && result?.ok && Array.isArray(result.records)) {
         setWorkingDraftRecords(result.records);
+        setSentDraftRefs(Array.isArray(result.sentDraftRefs) ? result.sentDraftRefs : []);
       }
     } catch {
       // Provider Drafts remain usable while this optional projection retries
@@ -4005,10 +4014,14 @@ function MailApp() {
     const visibleProviderMessages = enrichedProviderMessages.filter((message) => {
       const parsed = parseMessageId(message.id);
       if (!parsed) return true;
+      const uidValidity = validUidValidity(message.uidValidity);
+      if (isSentProviderDraftRef(uidValidity ?? undefined, parsed.uid, sentDraftRefs)) {
+        return false;
+      }
       return !isStaleProviderDraftRow({
         draftIdHeader: message.draftIdHeader,
         messageUid: parsed.uid,
-        messageUidValidity: validUidValidity(message.uidValidity) ?? undefined,
+        messageUidValidity: uidValidity ?? undefined,
         workingDraftRecords,
       });
     });
@@ -4054,7 +4067,7 @@ function MailApp() {
     return [...serverOnly, ...visibleProviderMessages].sort(
       (a, b) => Date.parse(b.date) - Date.parse(a.date),
     );
-  }, [folder, messages, session, workingDraftRecords]);
+  }, [folder, messages, session, workingDraftRecords, sentDraftRefs]);
 
   const filteredMessages = useMemo(() => {
     // Deep server-side search: always show server results (even empty).
@@ -10371,6 +10384,12 @@ function Composer({
         void clearInlineImages(inlineScope).catch(() => undefined);
       } catch {
         /* noop */
+      }
+      if (draftOrigin) {
+        // Optimistically remove the sent logical Draft from the Draft list and
+        // decrement the count exactly once. onDraftDeleted below clears the
+        // snapshot; later refetch reconciliation cannot double-decrement.
+        onDraftDeleteStart(draftId);
       }
       if (!draftOrigin) {
         // Preserve the existing normal-send Draft cleanup behaviour. The

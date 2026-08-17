@@ -6,14 +6,17 @@ import {
   emptyWorkingDraftPayload,
   isWorkingDraftAttachmentReference,
   isWorkingDraftPayload,
+  filterSentWorkingDraftRecords,
   type WorkingDraftAttachmentReference,
   type WorkingDraftPayload,
   type WorkingDraftRecord,
+  type WorkingDraftSentRef,
   type WorkingDraftAttachmentContent,
   type WorkingDraftSourceDescriptor,
 } from "@/lib/mail-working-draft";
 import { isDefinitePreSmtpSendError } from "@/lib/mail-working-draft-send-idempotency";
 import type { DraftServerRef } from "@/lib/mail-draft-lifecycle";
+import { trackCloudflareWork } from "@/lib/cloudflare-wait-until.server";
 
 type UntypedDb = {
   from(table: string): any;
@@ -207,7 +210,9 @@ export async function loadWorkingDraft(
 }
 
 /** Draft-folder-only projection for cross-device access before IMAP catches up. */
-export async function listWorkingDrafts(auth: WorkingDraftAuth): Promise<WorkingDraftRecord[]> {
+export async function listWorkingDrafts(
+  auth: WorkingDraftAuth,
+): Promise<{ records: WorkingDraftRecord[]; sentDraftRefs: WorkingDraftSentRef[] }> {
   const { data, error } = await db()
     .from("mail_working_drafts")
     .select("*")
@@ -216,9 +221,49 @@ export async function listWorkingDrafts(auth: WorkingDraftAuth): Promise<Working
     .order("updated_at", { ascending: false })
     .limit(100);
   if (error) throw new Error("WORKING_DRAFT_LIST_FAILED");
-  return (Array.isArray(data) ? data : [])
-    .map((row) => recordFromRow(row as WorkingDraftRow))
+  const sent = await db()
+    .from("mail_working_draft_sends")
+    .select("draft_id")
+    .eq("company_id", auth.companyId)
+    .eq("account_id", auth.accountId)
+    .eq("state", "sent");
+  const sentIds = new Set<string>(
+    Array.isArray(sent.data)
+      ? (sent.data as Array<{ draft_id: string }>).map((row) => row.draft_id)
+      : [],
+  );
+  const rows = Array.isArray(data) ? (data as WorkingDraftRow[]) : [];
+  const records = rows
+    .map((row) => recordFromRow(row))
     .filter((record): record is WorkingDraftRecord => record !== null);
+
+  const sentDraftRefs: WorkingDraftSentRef[] = records
+    .filter((record) => sentIds.has(record.draftId))
+    .map((record) => ({
+      draftId: record.draftId,
+      serverRef: record.checkpoint.serverRef,
+    }));
+
+  for (const record of records) {
+    if (!sentIds.has(record.draftId)) continue;
+    const cleanup = (async () => {
+      try {
+        await deleteWorkingDraftExplicit({
+          auth,
+          draftId: record.draftId,
+          previousRef: record.checkpoint.serverRef ?? null,
+        });
+      } catch {
+        // Row remains durable and hidden by sentDraftRefs until a later retry.
+      }
+    })();
+    trackCloudflareWork(cleanup);
+  }
+
+  return {
+    records: filterSentWorkingDraftRecords(records, sentIds),
+    sentDraftRefs,
+  };
 }
 
 async function attachmentRows(auth: WorkingDraftAuth, draftId: string): Promise<AttachmentRow[]> {
@@ -1073,18 +1118,23 @@ export async function sendWorkingDraft(input: {
     throw error;
   }
 
-  try {
-    // Provider cleanup is deliberately after the idempotency row is marked
-    // sent. A cleanup failure cannot reopen or retry SMTP.
-    await deleteWorkingDraftExplicit({
-      auth: input.auth,
-      draftId: input.draftId,
-      previousRef: record.checkpoint.serverRef ?? null,
-    });
-    return result;
-  } catch {
-    return { ...result, draftCleanupPending: true };
-  }
+  // Provider cleanup is after durable sent and never blocks the Send response.
+  // The Working Draft row remains durable until cleanup succeeds, and the
+  // Draft list query hides sent rows, so a delayed/failed cleanup cannot
+  // resurrect the Draft or block the UI.
+  const cleanup = (async () => {
+    try {
+      await deleteWorkingDraftExplicit({
+        auth: input.auth,
+        draftId: input.draftId,
+        previousRef: record.checkpoint.serverRef ?? null,
+      });
+    } catch {
+      // The row remains for later reconciliation; do not reopen SMTP.
+    }
+  })();
+  trackCloudflareWork(cleanup);
+  return result;
 }
 
 export { isAuthError };

@@ -17,8 +17,12 @@ export const Route = createFileRoute("/api/mail-working-draft")({
           if (working.isAuthError(auth)) return json({ ok: false, code: auth.code }, auth.status);
 
           if (action === "list") {
-            const records = await working.listWorkingDrafts(auth);
-            return json({ ok: true, records });
+            const result = await working.listWorkingDrafts(auth);
+            return json({
+              ok: true,
+              records: result.records,
+              sentDraftRefs: result.sentDraftRefs,
+            });
           }
           if (action === "load") {
             const record = await working.loadWorkingDraft(auth, draftId);
