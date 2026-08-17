@@ -1487,8 +1487,9 @@ app.post("/api/draft-save-v2", requireKey, imapGate("interactive"), async (req, 
     saveSucceeded = true;
     return res.json({
       ...result,
-      sourceAttachmentHandles: preserved.map(({ staged }) => staged.handle),
-      inlineSourceHandles: preservedInlineSources.map(({ staged }) => staged.handle),
+      sourceAttachmentHandles: preserved.map(({ handle }) => handle),
+      inlineSourceHandles: preservedInlineSources.map(({ handle }) => handle),
+
     });
   } catch (error) {
     const code =
