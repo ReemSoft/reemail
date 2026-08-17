@@ -7818,9 +7818,16 @@ function Composer({
             currentFiles.map((file) => ensureStaged(file, "attachment")),
           );
           const uploadInline = transportImages.filter((image) => !image.sourceDescriptor);
+          // Inline images that came from the saved draft keep their IMAP
+          // descriptor for good, and carry the staged handle as a reuse hint.
+          // Reuse makes the save instant; the descriptor keeps it recoverable.
           const restoredInlineSources = transportImages
             .filter((image) => image.sourceDescriptor)
-            .map((image) => image.sourceDescriptor!);
+            .map((image) => ({
+              ...image.sourceDescriptor!,
+              ...(image.stagedHandle ? { handle: image.stagedHandle } : {}),
+            }));
+
           const stagedInline = await Promise.all(
             uploadInline.map((image) => {
               if (image.stagedHandle) {
