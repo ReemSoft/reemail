@@ -1318,14 +1318,6 @@ app.post("/api/draft-save-v2", requireKey, imapGate("interactive"), async (req, 
         uploadFilename: source.uploadFilename,
         cid: source.cid,
       }));
-    // Raw-payload fail-fast: reject an impossible combined normal count before
-    // resolving handles or staging server sources (see send-v2).
-    if (
-      contract.attachmentHandles.length + contract.sourceAttachments.length >
-      MAX_NORMAL_ATTACHMENTS
-    ) {
-      return res.status(413).json({ ok: false, error: "ATTACHMENTS_TOO_LARGE" });
-    }
     if (normalSourceInputs.length > 0 || inlineSourceInputs.length > 0) {
       const reconciled = await reconcileDraftRevision(
         payload.account as MailAccount,
