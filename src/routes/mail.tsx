@@ -7933,9 +7933,11 @@ function Composer({
                   (candidate) => candidate.uploadFilename === source.uploadFilename,
                 );
                 if (image) {
+                  // Keep the descriptor: the handle is a reuse hint, not the
+                  // only way back to these bytes.
                   image.stagedHandle = handle;
-                  image.sourceDescriptor = undefined;
                 }
+
               });
             }
             const nextServerRef =
