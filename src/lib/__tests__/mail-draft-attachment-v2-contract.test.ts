@@ -9,8 +9,8 @@ describe("draft attachment V2 contract", () => {
     expect(composer).toContain("getOrCreateStagedUpload(stagedUploadsRef.current");
     expect(composer).toContain('fetch("/api/mail-draft-save-v2"');
     expect(composer).toContain("sourceAttachments");
-    expect(composer).toContain("planRemoteDraftSave({");
-    expect(composer).toContain("hasAttachments");
+    expect(composer).toContain("DRAFT_PROVIDER_CHECKPOINT_CADENCE_MS");
+    expect(composer).toContain("scheduleWorkingDraftCheckpoint(hasAttachments");
     const remoteSave = composer.slice(
       composer.indexOf("saveRemote: async"),
       composer.indexOf("onStatus: setSaveStatus"),

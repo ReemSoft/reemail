@@ -22,6 +22,7 @@ export const Route = createFileRoute("/api/mail-working-draft")({
               ok: true,
               records: result.records,
               sentDraftRefs: result.sentDraftRefs,
+              sendingProviderRefs: result.sendingProviderRefs,
             });
           }
           if (action === "load") {

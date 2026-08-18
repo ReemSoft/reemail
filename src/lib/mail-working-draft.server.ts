@@ -21,6 +21,7 @@ import {
   mapWithBoundedConcurrency,
   WORKING_DRAFT_STAGE_CONCURRENCY,
 } from "@/lib/mail-working-draft-bounded";
+import { isDraftProviderCheckpointFenced } from "@/lib/mail-draft-provider-checkpoint";
 
 type UntypedDb = {
   from(table: string): any;
@@ -216,7 +217,11 @@ export async function loadWorkingDraft(
 /** Draft-folder-only projection for cross-device access before IMAP catches up. */
 export async function listWorkingDrafts(
   auth: WorkingDraftAuth,
-): Promise<{ records: WorkingDraftRecord[]; sentDraftRefs: WorkingDraftSentRef[] }> {
+): Promise<{
+  records: WorkingDraftRecord[];
+  sentDraftRefs: WorkingDraftSentRef[];
+  sendingProviderRefs: WorkingDraftSentRef[];
+}> {
   const { data, error } = await db()
     .from("mail_working_drafts")
     .select("*")
@@ -231,9 +236,20 @@ export async function listWorkingDrafts(
     .eq("company_id", auth.companyId)
     .eq("account_id", auth.accountId)
     .eq("state", "sent");
+  const sending = await db()
+    .from("mail_working_draft_sends")
+    .select("draft_id")
+    .eq("company_id", auth.companyId)
+    .eq("account_id", auth.accountId)
+    .eq("state", "sending");
   const sentIds = new Set<string>(
     Array.isArray(sent.data)
       ? (sent.data as Array<{ draft_id: string }>).map((row) => row.draft_id)
+      : [],
+  );
+  const sendingIds = new Set<string>(
+    Array.isArray(sending.data)
+      ? (sending.data as Array<{ draft_id: string }>).map((row) => row.draft_id)
       : [],
   );
   const rows = Array.isArray(data) ? (data as WorkingDraftRow[]) : [];
@@ -243,6 +259,12 @@ export async function listWorkingDrafts(
 
   const sentDraftRefs: WorkingDraftSentRef[] = records
     .filter((record) => sentIds.has(record.draftId))
+    .map((record) => ({
+      draftId: record.draftId,
+      serverRef: record.checkpoint.serverRef,
+    }));
+  const sendingProviderRefs: WorkingDraftSentRef[] = records
+    .filter((record) => sendingIds.has(record.draftId))
     .map((record) => ({
       draftId: record.draftId,
       serverRef: record.checkpoint.serverRef,
@@ -267,6 +289,7 @@ export async function listWorkingDrafts(
   return {
     records: filterSentWorkingDraftRecords(records, sentIds),
     sentDraftRefs,
+    sendingProviderRefs,
   };
 }
 
@@ -709,6 +732,50 @@ async function materializePayloadAttachments(
   );
 }
 
+async function getWorkingDraftSendState(
+  auth: WorkingDraftAuth,
+  draftId: string,
+): Promise<string | null> {
+  const { data, error } = await db()
+    .from("mail_working_draft_sends")
+    .select("state")
+    .eq("draft_id", draftId)
+    .eq("company_id", auth.companyId)
+    .eq("account_id", auth.accountId)
+    .maybeSingle();
+  if (error || !data) return null;
+  return typeof data.state === "string" ? data.state : null;
+}
+
+async function finishWorkingDraftCheckpointIfActive(
+  auth: WorkingDraftAuth,
+  draftId: string,
+  checkpointRevision: number,
+  success: boolean,
+  serverRef: DraftServerRef | null,
+  error: string | null,
+): Promise<{ committed: boolean; fenced: boolean; sendState: string }> {
+  const { data, error: rpcError } = await db().rpc(
+    "finish_mail_working_draft_checkpoint_if_active",
+    {
+      p_draft_id: draftId,
+      p_company_id: auth.companyId,
+      p_account_id: auth.accountId,
+      p_checkpoint_revision: checkpointRevision,
+      p_success: success,
+      p_server_ref: serverRef,
+      p_error: error,
+    },
+  );
+  if (rpcError) throw new Error("CHECKPOINT_ATOMIC_FINALIZE_FAILED");
+  const row = Array.isArray(data) ? data[0] : null;
+  return {
+    committed: row?.committed === true,
+    fenced: row?.fenced === true,
+    sendState: typeof row?.send_state === "string" ? row.send_state : "unknown",
+  };
+}
+
 function recipients(items: unknown): Array<{ name: string; email: string }> {
   if (!Array.isArray(items)) return [];
   return items.flatMap((item) => {
@@ -819,7 +886,16 @@ async function invokeBridgeWithStagedAttachments(input: {
 export async function checkpointWorkingDraft(input: {
   auth: WorkingDraftAuth;
   draftId: string;
-}): Promise<{ ok: true; skipped?: boolean; revision?: number; serverRef?: DraftServerRef | null } | { ok: false; code: string }> {
+}): Promise<
+  | {
+      ok: true;
+      skipped?: boolean;
+      fenced?: boolean;
+      revision?: number;
+      serverRef?: DraftServerRef | null;
+    }
+  | { ok: false; code: string }
+> {
   const record = await loadWorkingDraft(input.auth, input.draftId);
   if (!record) return { ok: true, skipped: true };
   if (record.checkpoint.committedRevision >= record.revision) return { ok: true, skipped: true };
@@ -840,6 +916,11 @@ export async function checkpointWorkingDraft(input: {
       return { ok: true, skipped: true };
     }
 
+    const preSendState = await getWorkingDraftSendState(input.auth, input.draftId);
+    if (isDraftProviderCheckpointFenced(preSendState)) {
+      return { ok: true, skipped: true, fenced: true };
+    }
+
     const transferContext = await createWorkingDraftTransferContext(input.auth);
     const reconciliation = await reconcileWorkingDraftRevision({
       auth: input.auth,
@@ -856,15 +937,25 @@ export async function checkpointWorkingDraft(input: {
         }).catch(() => undefined);
         return { ok: true, skipped: true };
       }
-      await db().rpc("finish_mail_working_draft_checkpoint", {
-        p_draft_id: input.draftId,
-        p_company_id: input.auth.companyId,
-        p_account_id: input.auth.accountId,
-        p_checkpoint_revision: record.revision,
-        p_success: true,
-        p_server_ref: reconciliation.serverRef,
-        p_error: null,
-      });
+      const reconciliationFinalize = await finishWorkingDraftCheckpointIfActive(
+        input.auth,
+        input.draftId,
+        record.revision,
+        true,
+        reconciliation.serverRef,
+        null,
+      );
+      if (reconciliationFinalize.fenced) {
+        await deleteProviderDraftExplicit({
+          auth: input.auth,
+          draftId: input.draftId,
+          previousRef: reconciliation.serverRef,
+        }).catch(() => undefined);
+        return { ok: true, skipped: true, fenced: true };
+      }
+      if (!reconciliationFinalize.committed) {
+        return { ok: true, skipped: true };
+      }
       if (!(await loadWorkingDraft(input.auth, input.draftId))) {
         await deleteProviderDraftExplicit({
           auth: input.auth,
@@ -906,15 +997,37 @@ export async function checkpointWorkingDraft(input: {
       }).catch(() => undefined);
       return { ok: true, skipped: true };
     }
-    await db().rpc("finish_mail_working_draft_checkpoint", {
-      p_draft_id: input.draftId,
-      p_company_id: input.auth.companyId,
-      p_account_id: input.auth.accountId,
-      p_checkpoint_revision: record.revision,
-      p_success: true,
-      p_server_ref: serverRef,
-      p_error: null,
-    });
+    const finalize = await finishWorkingDraftCheckpointIfActive(
+      input.auth,
+      input.draftId,
+      record.revision,
+      true,
+      serverRef,
+      null,
+    );
+    if (finalize.fenced) {
+      await deleteProviderDraftExplicit({
+        auth: input.auth,
+        draftId: input.draftId,
+        previousRef: serverRef,
+      }).catch(() => undefined);
+      return { ok: true, skipped: true, fenced: true };
+    }
+    if (!finalize.committed) {
+      if (
+        serverRef &&
+        (!record.checkpoint.serverRef ||
+          serverRef.uid !== record.checkpoint.serverRef.uid ||
+          serverRef.uidValidity !== record.checkpoint.serverRef.uidValidity)
+      ) {
+        await deleteProviderDraftExplicit({
+          auth: input.auth,
+          draftId: input.draftId,
+          previousRef: serverRef,
+        }).catch(() => undefined);
+      }
+      return { ok: true, skipped: true };
+    }
     if (!(await loadWorkingDraft(input.auth, input.draftId))) {
       await deleteProviderDraftExplicit({
         auth: input.auth,
