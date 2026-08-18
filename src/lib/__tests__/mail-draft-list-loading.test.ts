@@ -63,6 +63,15 @@ describe("Draft list loading reconciliation", () => {
     expect(src).toContain("currentAccountId");
   });
 
+  it("scopes Working Draft projection to the active account", () => {
+    const src = mail();
+    expect(src).toContain("workingDraftProjectionScopeRef");
+    expect(src).toContain("projectionMatchesCurrent");
+    expect(src).toContain("scopedWorkingDraftRecords");
+    expect(src).toContain("scopedSentDraftRefs");
+    expect(src).toContain("scopedSendingProviderRefs");
+  });
+
   it("first Draft open uses an explicit Draft loading state", () => {
     const src = mail();
     expect(src).toContain("const effectiveLoading =");

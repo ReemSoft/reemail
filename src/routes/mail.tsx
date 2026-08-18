@@ -2910,6 +2910,7 @@ function MailApp() {
   const [sendingProviderRefs, setSendingProviderRefs] = useState<WorkingDraftSentRef[]>([]);
   const [workingDraftsLoaded, setWorkingDraftsLoaded] = useState(false);
   const [workingDraftsSettled, setWorkingDraftsSettled] = useState(false);
+  const workingDraftProjectionScopeRef = useRef<string>("");
   const draftReconciledMessagesRef = useRef<MailMessage[]>([]);
   const draftReconciledScopeRef = useRef<string>("");
   const workingDraftsRequestRef = useRef(0);
@@ -2939,6 +2940,7 @@ function MailApp() {
       } | null;
       if (response.ok && result?.ok && Array.isArray(result.records)) {
         if (requestId !== workingDraftsRequestRef.current) return;
+        workingDraftProjectionScopeRef.current = session?.account.id ?? "";
         setWorkingDraftRecords(result.records);
         const sentRefs = Array.isArray(result.sentDraftRefs) ? result.sentDraftRefs : [];
         setSentDraftRefs(sentRefs);
@@ -4207,17 +4209,22 @@ function MailApp() {
 
   const visibleMessages = useMemo(() => {
     if (folder !== "drafts") return messages;
+    const projectionMatchesCurrent =
+      workingDraftProjectionScopeRef.current === currentAccountId;
+    const scopedWorkingDraftRecords = projectionMatchesCurrent ? workingDraftRecords : [];
+    const scopedSentDraftRefs = projectionMatchesCurrent ? sentDraftRefs : [];
+    const scopedSendingProviderRefs = projectionMatchesCurrent ? sendingProviderRefs : [];
     const enrichedProviderMessages = messages.map((message) => {
       const parsed = parseMessageId(message.id);
       if (!parsed || message.draftIdHeader) return message;
       const uidValidity = validUidValidity(message.uidValidity);
       const draftId = uidValidity
-        ? findWorkingDraftIdByServerRef(workingDraftRecords, uidValidity, parsed.uid)
+        ? findWorkingDraftIdByServerRef(scopedWorkingDraftRecords, uidValidity, parsed.uid)
         : null;
       return draftId ? { ...message, draftIdHeader: draftId } : message;
     });
 
-    const providerSuppressionRefs = [...sentDraftRefs, ...sendingProviderRefs];
+    const providerSuppressionRefs = [...scopedSentDraftRefs, ...scopedSendingProviderRefs];
     const visibleProviderMessages = enrichedProviderMessages.filter((message) => {
       const parsed = parseMessageId(message.id);
       if (!parsed) return true;
@@ -4229,7 +4236,7 @@ function MailApp() {
         draftIdHeader: message.draftIdHeader,
         messageUid: parsed.uid,
         messageUidValidity: uidValidity ?? undefined,
-        workingDraftRecords,
+        workingDraftRecords: scopedWorkingDraftRecords,
       });
     });
     const providerDraftIds = new Set(
@@ -4238,7 +4245,7 @@ function MailApp() {
         .filter((value): value is string => Boolean(value)),
     );
     const ownAddress = session?.account.email_address ?? "";
-    const serverOnly = workingDraftRecords
+    const serverOnly = scopedWorkingDraftRecords
       .filter((record) => !providerDraftIds.has(record.draftId))
       .map<MailMessage>((record) => {
         const snapshot = record.payload.snapshot;
