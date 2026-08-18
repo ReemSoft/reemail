@@ -29,6 +29,8 @@ type UntypedDb = {
   storage: { from(bucket: string): any };
 };
 
+const discardedCleanupFlights = new Map<string, Promise<void>>();
+
 type WorkingDraftRow = {
   id: string;
   company_id: string;
@@ -66,7 +68,7 @@ export type WorkingDraftAuth = {
 
 type WorkingDraftSendClaim = {
   claimed: boolean;
-  state: "preparing" | "sending" | "sent" | "failed";
+  state: "preparing" | "sending" | "sent" | "failed" | "discarded";
   smtpResult: Record<string, unknown> | null;
   error: string | null;
 };
@@ -172,32 +174,6 @@ export async function resolveWorkingDraftAuth(
   return { ok: true, accountId: claims.sub, companyId: claims.cid };
 }
 
-async function ensureDraftShell(auth: WorkingDraftAuth, draftId: string): Promise<WorkingDraftRow> {
-  if (!isUuid(draftId)) throw new Error("INVALID_DRAFT_ID");
-  const client = db();
-  const inserted = await client
-    .from("mail_working_drafts")
-    .insert({
-      id: draftId,
-      company_id: auth.companyId,
-      account_id: auth.accountId,
-      payload: emptyWorkingDraftPayload(),
-      revision: 0,
-    })
-    .select("*")
-    .maybeSingle();
-  if (inserted.data) return inserted.data as WorkingDraftRow;
-  const { data, error } = await client
-    .from("mail_working_drafts")
-    .select("*")
-    .eq("id", draftId)
-    .eq("company_id", auth.companyId)
-    .eq("account_id", auth.accountId)
-    .maybeSingle();
-  if (error || !data) throw new Error("WORKING_DRAFT_CREATE_FAILED");
-  return data as WorkingDraftRow;
-}
-
 export async function loadWorkingDraft(
   auth: WorkingDraftAuth,
   draftId: string,
@@ -214,6 +190,131 @@ export async function loadWorkingDraft(
   return data ? recordFromRow(data as WorkingDraftRow) : null;
 }
 
+async function finishDiscardedCleanup(
+  auth: WorkingDraftAuth,
+  draftId: string,
+  removedRef: DraftServerRef | null,
+): Promise<boolean> {
+  const { data, error } = await db().rpc(
+    "finish_mail_working_draft_discard_cleanup",
+    {
+      p_draft_id: draftId,
+      p_company_id: auth.companyId,
+      p_account_id: auth.accountId,
+      p_removed_ref: removedRef ?? null,
+    },
+  );
+  if (error) throw new Error("DISCARD_CLEANUP_ADVANCE_FAILED");
+  return data === true;
+}
+
+async function cleanupDiscardedWorkingDraft(
+  auth: WorkingDraftAuth,
+  draftId: string,
+): Promise<void> {
+  const tombstone = await db()
+    .from("mail_working_draft_discards")
+    .select("provider_refs, cleanup_state")
+    .eq("draft_id", draftId)
+    .eq("company_id", auth.companyId)
+    .eq("account_id", auth.accountId)
+    .maybeSingle();
+  if (!tombstone.data) return;
+
+  const rawRefs: unknown[] = Array.isArray(tombstone.data.provider_refs)
+    ? tombstone.data.provider_refs
+    : [];
+  const providerRefs = rawRefs.flatMap((ref: unknown) => {
+    const parsed = asServerRef(ref);
+    return parsed ? [parsed] : [];
+  });
+
+  let storagePaths: string[] = [];
+  try {
+    const rows = await attachmentRows(auth, draftId);
+    storagePaths = rows.flatMap((row) =>
+      row.storage_path ? [row.storage_path] : [],
+    );
+  } catch {
+    // Storage cleanup is best-effort and cannot block the durable tombstone.
+  }
+
+  let allProviderDeletesSucceeded = true;
+  const advance = async (ref: DraftServerRef | null): Promise<boolean> => {
+    try {
+      return await finishDiscardedCleanup(auth, draftId, ref);
+    } catch {
+      return false;
+    }
+  };
+
+  if (providerRefs.length > 0) {
+    for (const ref of providerRefs) {
+      let deleted = false;
+      try {
+        const result = await deleteProviderDraftExplicit({
+          auth,
+          draftId,
+          previousRef: ref,
+        });
+        deleted = result.ok;
+      } catch {
+        deleted = false;
+      }
+      if (!deleted) {
+        allProviderDeletesSucceeded = false;
+        continue;
+      }
+      await advance(ref);
+    }
+  } else {
+    let deleted = false;
+    try {
+      const result = await deleteProviderDraftExplicit({
+        auth,
+        draftId,
+        previousRef: null,
+      });
+      deleted = result.ok;
+    } catch {
+      deleted = false;
+    }
+    if (!deleted) {
+      allProviderDeletesSucceeded = false;
+    }
+  }
+
+  if (!allProviderDeletesSucceeded) return;
+
+  const purged = await advance(null);
+  if (purged && storagePaths.length > 0) {
+    try {
+      await db()
+        .storage.from(WORKING_DRAFT_ATTACHMENT_BUCKET)
+        .remove(storagePaths);
+    } catch {
+      // Owned storage removal is best-effort after the durable row is gone.
+    }
+  }
+}
+
+function startDiscardedCleanup(
+  auth: WorkingDraftAuth,
+  draftId: string,
+): Promise<void> {
+  const key = `${auth.companyId}:${auth.accountId}:${draftId}`;
+  const existing = discardedCleanupFlights.get(key);
+  if (existing) return existing;
+  const flight = cleanupDiscardedWorkingDraft(auth, draftId);
+  discardedCleanupFlights.set(key, flight);
+  void flight.finally(() => {
+    if (discardedCleanupFlights.get(key) === flight) {
+      discardedCleanupFlights.delete(key);
+    }
+  });
+  return flight;
+}
+
 /** Draft-folder-only projection for cross-device access before IMAP catches up. */
 export async function listWorkingDrafts(
   auth: WorkingDraftAuth,
@@ -221,6 +322,7 @@ export async function listWorkingDrafts(
   records: WorkingDraftRecord[];
   sentDraftRefs: WorkingDraftSentRef[];
   sendingProviderRefs: WorkingDraftSentRef[];
+  discardedProviderRefs: WorkingDraftSentRef[];
 }> {
   const { data, error } = await db()
     .from("mail_working_drafts")
@@ -252,10 +354,24 @@ export async function listWorkingDrafts(
       ? (sending.data as Array<{ draft_id: string }>).map((row) => row.draft_id)
       : [],
   );
+  const discards = await db()
+    .from("mail_working_draft_discards")
+    .select("draft_id, provider_refs, cleanup_state")
+    .eq("company_id", auth.companyId)
+    .eq("account_id", auth.accountId);
+  const discardRows = Array.isArray(discards.data) ? (discards.data as Array<{
+    draft_id: string;
+    provider_refs: unknown;
+    cleanup_state: string;
+  }>) : [];
+  const discardIds = new Set(discardRows.map((row) => row.draft_id));
   const rows = Array.isArray(data) ? (data as WorkingDraftRow[]) : [];
   const records = rows
     .map((row) => recordFromRow(row))
-    .filter((record): record is WorkingDraftRecord => record !== null);
+    .filter(
+      (record): record is WorkingDraftRecord =>
+        record !== null && !discardIds.has(record.draftId),
+    );
 
   const sentDraftRefs: WorkingDraftSentRef[] = records
     .filter((record) => sentIds.has(record.draftId))
@@ -269,6 +385,20 @@ export async function listWorkingDrafts(
       draftId: record.draftId,
       serverRef: record.checkpoint.serverRef,
     }));
+  const discardedProviderRefs: WorkingDraftSentRef[] = discardRows.flatMap((row) => {
+    const refs = Array.isArray(row.provider_refs) ? row.provider_refs : [];
+    return refs.flatMap((ref) => {
+      const serverRef = asServerRef(ref);
+      return serverRef ? [{ draftId: row.draft_id, serverRef }] : [];
+    });
+  });
+
+  for (const row of discardRows) {
+    const refs = Array.isArray(row.provider_refs) ? row.provider_refs : [];
+    if (row.cleanup_state !== "cleaned" || refs.length > 0) {
+      trackCloudflareWork(startDiscardedCleanup(auth, row.draft_id));
+    }
+  }
 
   for (const record of records) {
     if (!sentIds.has(record.draftId)) continue;
@@ -290,6 +420,7 @@ export async function listWorkingDrafts(
     records: filterSentWorkingDraftRecords(records, sentIds),
     sentDraftRefs,
     sendingProviderRefs,
+    discardedProviderRefs,
   };
 }
 
@@ -437,6 +568,7 @@ export async function saveWorkingDraft(input: {
   if (!isUuid(input.draftId) || !Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 0) {
     throw new Error("INVALID_WORKING_DRAFT_MUTATION");
   }
+  await ensureDraftNotDiscarded(input.auth, input.draftId);
   if (!isWorkingDraftPayload(input.payload)) throw new Error("INVALID_WORKING_DRAFT_PAYLOAD");
   const result = await db().rpc("save_mail_working_draft", {
     p_draft_id: input.draftId,
@@ -445,7 +577,10 @@ export async function saveWorkingDraft(input: {
     p_expected_revision: input.expectedRevision,
     p_payload: input.payload,
   });
-  if (result.error) throw new Error("WORKING_DRAFT_SAVE_FAILED");
+  if (result.error) {
+    if (isDraftDiscardedRpcError(result.error)) throw new Error("DRAFT_DISCARDED");
+    throw new Error("WORKING_DRAFT_SAVE_FAILED");
+  }
   const reply = Array.isArray(result.data) ? result.data[0] : null;
   if (!reply || !Number.isSafeInteger(Number(reply.revision))) throw new Error("WORKING_DRAFT_SAVE_INVALID_REPLY");
   if (reply.conflict === true) return { ok: false, conflict: true, revision: Number(reply.revision) };
@@ -473,7 +608,6 @@ export async function uploadWorkingDraftAttachment(input: {
   if (!Number.isSafeInteger(size) || size <= 0 || size > WORKING_DRAFT_MAX_ATTACHMENT_BYTES) {
     throw new Error("ATTACHMENT_LIMIT_EXCEEDED");
   }
-  await ensureDraftShell(input.auth, input.draftId);
   const client = db();
   const { data: previous, error: previousError } = await client
     .from("mail_working_draft_attachments")
@@ -506,23 +640,28 @@ export async function uploadWorkingDraftAttachment(input: {
     upsert: false,
   });
   if (uploaded.error) throw new Error("ATTACHMENT_UPLOAD_FAILED");
-  const { error } = await client.from("mail_working_draft_attachments").insert({
-    id: attachmentId,
-    draft_id: input.draftId,
-    company_id: input.auth.companyId,
-    account_id: input.auth.accountId,
-    client_key: input.clientKey,
-    kind: input.kind,
-    filename: input.filename,
-    mime_type: input.mimeType || "application/octet-stream",
-    size_bytes: size,
-    disposition: input.disposition ?? null,
-    cid: input.cid ?? null,
-    storage_path: storagePath,
-    source_descriptor: null,
-  });
-  if (error) {
+  const { data: createdId, error } = await client.rpc(
+    "create_mail_working_draft_attachment",
+    {
+      p_draft_id: input.draftId,
+      p_company_id: input.auth.companyId,
+      p_account_id: input.auth.accountId,
+      p_attachment_id: attachmentId,
+      p_client_key: input.clientKey,
+      p_kind: input.kind,
+      p_filename: input.filename,
+      p_mime_type: input.mimeType || "application/octet-stream",
+      p_size_bytes: size,
+      p_disposition: input.disposition ?? null,
+      p_cid: input.cid ?? null,
+      p_storage_path: storagePath,
+      p_source_descriptor: null,
+      p_payload: emptyWorkingDraftPayload(),
+    },
+  );
+  if (error || createdId !== attachmentId) {
     await client.storage.from(WORKING_DRAFT_ATTACHMENT_BUCKET).remove([storagePath]);
+    if (isDraftDiscardedRpcError(error)) throw new Error("DRAFT_DISCARDED");
     throw new Error("ATTACHMENT_RECORD_CREATE_FAILED");
   }
   return {
@@ -745,6 +884,40 @@ async function getWorkingDraftSendState(
     .maybeSingle();
   if (error || !data) return null;
   return typeof data.state === "string" ? data.state : null;
+}
+
+async function isDraftDiscarded(
+  auth: WorkingDraftAuth,
+  draftId: string,
+): Promise<boolean> {
+  const { data, error } = await db()
+    .from("mail_working_draft_discards")
+    .select("id")
+    .eq("draft_id", draftId)
+    .eq("company_id", auth.companyId)
+    .eq("account_id", auth.accountId)
+    .maybeSingle();
+  return !error && Boolean(data);
+}
+
+async function ensureDraftNotDiscarded(
+  auth: WorkingDraftAuth,
+  draftId: string,
+): Promise<void> {
+  if (await isDraftDiscarded(auth, draftId)) {
+    throw new Error("DRAFT_DISCARDED");
+  }
+}
+
+function isDraftDiscardedRpcError(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const value = error as { code?: unknown; message?: unknown; details?: unknown };
+  return (
+    value.code === "23514" ||
+    value.code === "DRAFT_DISCARDED" ||
+    String(value.message ?? "").includes("DRAFT_DISCARDED") ||
+    String(value.details ?? "").includes("DRAFT_DISCARDED")
+  );
 }
 
 async function finishWorkingDraftCheckpointIfActive(
@@ -1074,6 +1247,29 @@ export async function deleteWorkingDraft(input: {
 }
 
 /**
+ * Durable, non-blocking discard fence. Provider cleanup is retried separately;
+ * the composer may close as soon as this RPC acknowledges the tombstone.
+ */
+export async function discardWorkingDraft(input: {
+  auth: WorkingDraftAuth;
+  draftId: string;
+  serverRef?: DraftServerRef | null;
+  previousRef?: DraftServerRef | null;
+}): Promise<{ ok: true }> {
+  if (!isUuid(input.draftId)) throw new Error("INVALID_DRAFT_ID");
+  const { error } = await db().rpc("discard_mail_working_draft", {
+    p_draft_id: input.draftId,
+    p_company_id: input.auth.companyId,
+    p_account_id: input.auth.accountId,
+    p_server_ref: input.serverRef ?? null,
+    p_previous_ref: input.previousRef ?? null,
+  });
+  if (error) throw new Error("DISCARD_WORKING_DRAFT_FAILED");
+  trackCloudflareWork(startDiscardedCleanup(input.auth, input.draftId));
+  return { ok: true };
+}
+
+/**
  * Explicit-user-delete path. Provider deletion is AWAITED and verified before
  * the durable Working Draft row/objects are removed, so a failed provider
  * delete leaves the row in place for retry instead of silently losing the
@@ -1220,6 +1416,9 @@ export async function sendWorkingDraft(input: {
     // without touching SMTP, attachments, or provider cleanup again.
     return claim.smtpResult ?? { ok: true };
   }
+  if (claim.state === "discarded") {
+    throw new Error("DRAFT_DISCARDED");
+  }
   if (!claim.claimed) {
     throw new Error("SEND_IN_PROGRESS");
   }
@@ -1253,6 +1452,7 @@ export async function sendWorkingDraft(input: {
 
   let result: Record<string, unknown>;
   try {
+    await ensureDraftNotDiscarded(input.auth, input.draftId);
     await markWorkingDraftSendInFlight(input.auth, input.draftId);
     result = await invokeBridgeWithStagedAttachments({
       auth: input.auth,

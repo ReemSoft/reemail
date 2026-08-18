@@ -340,7 +340,7 @@ describe("Reply, Reply All, Forward and Composer wiring", () => {
     const reply = builders.slice(0, builders.indexOf("function buildForward"));
     expect(reply).not.toContain("selectNormalComposerAttachments(message)");
     expect(reply).not.toContain("existingAttachments:");
-    expect(reply).not.toContain("attachmentSourceRef:");
+    expect(reply).toContain("attachmentSourceRef: attachmentSourceRef ?? undefined");
     expect(reply).toContain("const recipients = buildReplyRecipients(message, myEmail, all)");
 
     expect(builders.match(/selectNormalComposerAttachments\(message\)/g)).toHaveLength(2);

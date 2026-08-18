@@ -1470,7 +1470,12 @@ function stripHtml(html: string): string {
   return tmp.textContent || tmp.innerText || "";
 }
 
-function buildReply(message: MailMessage, myEmail: string, all: boolean): ComposeInitial {
+function buildReply(
+  message: MailMessage,
+  myEmail: string,
+  all: boolean,
+  attachmentSourceRef?: AttachmentSourceRef | null,
+): ComposeInitial {
   const subject = replySubject(message.subject);
   const recipients = buildReplyRecipients(message, myEmail, all);
   const to = recipients.to.map(formatComposeAddress).filter(Boolean).join(", ");
@@ -1495,6 +1500,7 @@ function buildReply(message: MailMessage, myEmail: string, all: boolean): Compos
     inlineImages: message.inlineImages,
     inlineMessageId: message.id,
     inlineUidValidity: message.uidValidity,
+    attachmentSourceRef: attachmentSourceRef ?? undefined,
     quoteSourceHtml,
     ...threading,
   };
@@ -2908,6 +2914,7 @@ function MailApp() {
   const [workingDraftRecords, setWorkingDraftRecords] = useState<WorkingDraftRecord[]>([]);
   const [sentDraftRefs, setSentDraftRefs] = useState<WorkingDraftSentRef[]>([]);
   const [sendingProviderRefs, setSendingProviderRefs] = useState<WorkingDraftSentRef[]>([]);
+  const [discardedProviderRefs, setDiscardedProviderRefs] = useState<WorkingDraftSentRef[]>([]);
   const [workingDraftsLoaded, setWorkingDraftsLoaded] = useState(false);
   const [workingDraftsSettled, setWorkingDraftsSettled] = useState(false);
   const workingDraftProjectionScopeRef = useRef<string>("");
@@ -2920,6 +2927,7 @@ function MailApp() {
       setWorkingDraftRecords([]);
       setSentDraftRefs([]);
       setSendingProviderRefs([]);
+      setDiscardedProviderRefs([]);
       setWorkingDraftsLoaded(false);
       setWorkingDraftsSettled(false);
       return;
@@ -2937,6 +2945,7 @@ function MailApp() {
         records?: WorkingDraftRecord[];
         sentDraftRefs?: WorkingDraftSentRef[];
         sendingProviderRefs?: WorkingDraftSentRef[];
+        discardedProviderRefs?: WorkingDraftSentRef[];
       } | null;
       if (response.ok && result?.ok && Array.isArray(result.records)) {
         if (requestId !== workingDraftsRequestRef.current) return;
@@ -2946,6 +2955,9 @@ function MailApp() {
         setSentDraftRefs(sentRefs);
         setSendingProviderRefs(
           Array.isArray(result.sendingProviderRefs) ? result.sendingProviderRefs : [],
+        );
+        setDiscardedProviderRefs(
+          Array.isArray(result.discardedProviderRefs) ? result.discardedProviderRefs : [],
         );
         setWorkingDraftsLoaded(true);
         const guard = draftCountGuardRef.current;
@@ -4214,6 +4226,7 @@ function MailApp() {
     const scopedWorkingDraftRecords = projectionMatchesCurrent ? workingDraftRecords : [];
     const scopedSentDraftRefs = projectionMatchesCurrent ? sentDraftRefs : [];
     const scopedSendingProviderRefs = projectionMatchesCurrent ? sendingProviderRefs : [];
+    const scopedDiscardedProviderRefs = projectionMatchesCurrent ? discardedProviderRefs : [];
     const enrichedProviderMessages = messages.map((message) => {
       const parsed = parseMessageId(message.id);
       if (!parsed || message.draftIdHeader) return message;
@@ -4224,7 +4237,11 @@ function MailApp() {
       return draftId ? { ...message, draftIdHeader: draftId } : message;
     });
 
-    const providerSuppressionRefs = [...scopedSentDraftRefs, ...scopedSendingProviderRefs];
+    const providerSuppressionRefs = [
+      ...scopedSentDraftRefs,
+      ...scopedSendingProviderRefs,
+      ...scopedDiscardedProviderRefs,
+    ];
     const visibleProviderMessages = enrichedProviderMessages.filter((message) => {
       const parsed = parseMessageId(message.id);
       if (!parsed) return true;
@@ -4301,6 +4318,7 @@ function MailApp() {
     workingDraftRecords,
     sentDraftRefs,
     sendingProviderRefs,
+    discardedProviderRefs,
     workingDraftsSettled,
     workingDraftsLoaded,
     currentAccountId,
@@ -6177,10 +6195,24 @@ function MailApp() {
                 setReading(false);
               }}
               onReply={() => {
-                setCompose(buildReply(selectedMessage, session.account.email_address, false));
+                setCompose(
+                  buildReply(
+                    selectedMessage,
+                    session.account.email_address,
+                    false,
+                    deriveAttachmentSourceRef(selectedMessage, folderPaths),
+                  ),
+                );
               }}
               onReplyAll={() => {
-                setCompose(buildReply(selectedMessage, session.account.email_address, true));
+                setCompose(
+                  buildReply(
+                    selectedMessage,
+                    session.account.email_address,
+                    true,
+                    deriveAttachmentSourceRef(selectedMessage, folderPaths),
+                  ),
+                );
               }}
               onForward={() => {
                 const next = buildForward(
@@ -6205,7 +6237,12 @@ function MailApp() {
                 const next =
                   mode === "forward"
                     ? buildForward(msg, deriveAttachmentSourceRef(msg, folderPaths))
-                    : buildReply(msg, session.account.email_address, mode === "replyAll");
+                    : buildReply(
+                        msg,
+                        session.account.email_address,
+                        mode === "replyAll",
+                        deriveAttachmentSourceRef(msg, folderPaths),
+                      );
                 if (!next) {
                   toast.error(tr("تعذّر تجهيز مرفقات الرسالة"));
                   return;
@@ -8162,6 +8199,37 @@ function Composer({
     }
   }
 
+  async function discardServerWorkingDraft(
+    refs: {
+      serverRef?: { folderPath: string; uid: number; uidValidity: string } | null;
+      previousRef?: { folderPath: string; uid: number; uidValidity: string } | null;
+    } = {},
+  ): Promise<{ ok: boolean; code?: string }> {
+    const token = mailSessionTokenRef.current;
+    if (!token) return { ok: false, code: "SESSION_REQUIRED" };
+    try {
+      const response = await fetch("/api/mail-working-draft", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mailSessionToken: token,
+          action: "discard",
+          draftId,
+          serverRef: refs.serverRef ?? undefined,
+          previousRef: refs.previousRef ?? undefined,
+        }),
+      });
+      const result = (await response.json().catch(() => null)) as {
+        ok?: boolean;
+        code?: string;
+      } | null;
+      if (response.ok && result?.ok === true) return { ok: true };
+      return { ok: false, code: result?.code ?? "UNKNOWN" };
+    } catch {
+      return { ok: false, code: "NETWORK" };
+    }
+  }
+
   // ----- Explicit staged-handle release (best-effort, never blocks the UI) -----
   // Handles are released only when genuinely abandoned: an attachment or inline
   // image removed, a draft deleted, or the composer discarded. A failed release
@@ -8469,6 +8537,25 @@ function Composer({
       if (owned) {
         workingAttachmentByInlineIdRef.current.set(image.id, owned);
         return owned;
+      }
+      const trustedSource = initial?.attachmentSourceRef ?? initial?.previousRef;
+      if (!image.sourceDescriptor && trustedSource) {
+        const sourcePart = (initial?.inlineParts ?? []).find(
+          (part) => part.cid.trim().replace(/^<|>$/g, "").toLowerCase() === image.cid.toLowerCase(),
+        );
+        if (sourcePart) {
+          image.sourceDescriptor = {
+            folderPath: trustedSource.folderPath,
+            uid: trustedSource.uid,
+            uidValidity: trustedSource.uidValidity,
+            part: sourcePart.part,
+            cid: image.cid,
+            mimeType: image.mimeType,
+            filename: sourcePart.part,
+            size: sourcePart.size,
+            uploadFilename: image.uploadFilename,
+          };
+        }
       }
       if (!image.sourceDescriptor) throw new Error("INLINE_ATTACHMENT_UNRESOLVED");
       const source = image.sourceDescriptor;
@@ -9152,11 +9239,12 @@ function Composer({
           canonicalSourceCid.toLowerCase(),
         );
         const sourcePart = sourcePartByCid.get(sourceCid.toLowerCase());
-        if (sourcePart && initial?.previousRef) {
+        const trustedSource = initial?.attachmentSourceRef ?? initial?.previousRef;
+        if (sourcePart && trustedSource) {
           image.sourceDescriptor = {
-            folderPath: initial.previousRef.folderPath,
-            uid: initial.previousRef.uid,
-            uidValidity: initial.previousRef.uidValidity,
+            folderPath: trustedSource.folderPath,
+            uid: trustedSource.uid,
+            uidValidity: trustedSource.uidValidity,
             part: sourcePart.part,
             cid: canonicalSourceCid,
             mimeType: image.mimeType,
@@ -10043,7 +10131,10 @@ function Composer({
       let discarded = false;
       try {
         discarded = (
-          await deleteServerWorkingDraft(serverRefRef.current ?? initial?.previousRef ?? null)
+          await discardServerWorkingDraft({
+            serverRef: serverRefRef.current ?? initial?.previousRef ?? null,
+            previousRef: initial?.previousRef ?? null,
+          })
         ).ok;
       } catch {
         discarded = false;
@@ -11132,18 +11223,9 @@ function Composer({
     // the delete never races a still-running APPEND from this composer. The
     // latest serverRef is guaranteed to be settled before the delete starts.
     await saverRef.current?.cancelPendingAndAwaitRunning();
-    const deleted = await deleteSavedDraft({
-      // A local-only status can mean the APPEND succeeded but its response
-      // was lost. The Working Draft delete is authoritative; its downstream
-      // provider cleanup is explicitly best-effort and never blocks discard.
-      mayHaveRemoteCopy: hasLocalDraft || hasRemoteDraft,
-      deleteRemote: () => deleteServerWorkingDraft(serverRefRef.current ?? initial?.previousRef ?? null),
-      clearLocal: () => {
-        clearDraftDoc(window.localStorage, accountEmail, draftId);
-        clearDraftTransportCache(window.localStorage, accountEmail, draftId);
-        void clearInlineImages(inlineScope).catch(() => undefined);
-      },
-      closeWithRefresh: () => onClose({ refreshDrafts: true }),
+    const deleted = await discardServerWorkingDraft({
+      serverRef: serverRefRef.current ?? initial?.previousRef ?? null,
+      previousRef: initial?.previousRef ?? null,
     });
 
     if (!deleted.ok) {
@@ -11164,11 +11246,19 @@ function Composer({
       // failed Delete can never immediately trigger another remote save.
       toast.error(tr("تعذّر حذف المسودة. احتفظنا بنسختك؛ حاول مرة أخرى."));
     } else {
+      try {
+        clearDraftDoc(window.localStorage, accountEmail, draftId);
+        clearDraftTransportCache(window.localStorage, accountEmail, draftId);
+        void clearInlineImages(inlineScope).catch(() => undefined);
+      } catch {
+        /* best effort after durable discard ack */
+      }
       // Explicit draft delete abandons every staged handle owned by this
       // composer session (the draft will no longer reference them).
       releaseAllOwnedStagedHandles();
       // A deleted draft must no longer be protected from ghost cleanup.
       onDraftDeleted(draftId);
+      onClose({ refreshDrafts: true });
       // deleteIntentRef stays true; the composer unmounts via closeWithRefresh.
     }
   }

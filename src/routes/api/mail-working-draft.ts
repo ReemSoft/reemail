@@ -23,6 +23,7 @@ export const Route = createFileRoute("/api/mail-working-draft")({
               records: result.records,
               sentDraftRefs: result.sentDraftRefs,
               sendingProviderRefs: result.sendingProviderRefs,
+              discardedProviderRefs: result.discardedProviderRefs,
             });
           }
           if (action === "load") {
@@ -47,6 +48,15 @@ export const Route = createFileRoute("/api/mail-working-draft")({
               previousRef,
             });
             return json({ ok: true, deleted: result.deleted });
+          }
+          if (action === "discard") {
+            const result = await working.discardWorkingDraft({
+              auth,
+              draftId,
+              serverRef: working.asServerRef(body.serverRef),
+              previousRef: working.asServerRef(body.previousRef),
+            });
+            return json(result);
           }
           return json({ ok: false, code: "INVALID_ACTION" }, 400);
         } catch (error) {

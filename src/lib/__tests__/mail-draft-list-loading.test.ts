@@ -72,6 +72,19 @@ describe("Draft list loading reconciliation", () => {
     expect(src).toContain("scopedSendingProviderRefs");
   });
 
+  it("suppresses discarded provider refs without hiding provider-only Drafts", () => {
+    const src = mail();
+    expect(src).toContain("discardedProviderRefs");
+    expect(src).toContain("scopedDiscardedProviderRefs");
+    expect(src).toContain("providerSuppressionRefs");
+  });
+
+  it("Reply/Forward source logic uses attachmentSourceRef before previousRef", () => {
+    const src = mail();
+    expect(src).toContain("initial?.attachmentSourceRef ?? initial?.previousRef");
+    expect(src).toContain("deriveAttachmentSourceRef(selectedMessage, folderPaths)");
+  });
+
   it("first Draft open uses an explicit Draft loading state", () => {
     const src = mail();
     expect(src).toContain("const effectiveLoading =");
