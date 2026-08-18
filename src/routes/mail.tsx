@@ -2908,13 +2908,23 @@ function MailApp() {
   const [workingDraftRecords, setWorkingDraftRecords] = useState<WorkingDraftRecord[]>([]);
   const [sentDraftRefs, setSentDraftRefs] = useState<WorkingDraftSentRef[]>([]);
   const [sendingProviderRefs, setSendingProviderRefs] = useState<WorkingDraftSentRef[]>([]);
+  const [workingDraftsLoaded, setWorkingDraftsLoaded] = useState(false);
+  const [workingDraftsSettled, setWorkingDraftsSettled] = useState(false);
+  const draftReconciledMessagesRef = useRef<MailMessage[]>([]);
+  const draftReconciledScopeRef = useRef<string>("");
   const refreshWorkingDrafts = useCallback(async () => {
     if (folder !== "drafts" || !session?.mailSessionToken) {
       setWorkingDraftRecords([]);
       setSentDraftRefs([]);
       setSendingProviderRefs([]);
+      setWorkingDraftsLoaded(false);
+      setWorkingDraftsSettled(false);
       return;
     }
+    const scopeKey = session?.account.id ?? "";
+    draftReconciledScopeRef.current = scopeKey;
+    setWorkingDraftsLoaded(false);
+    setWorkingDraftsSettled(false);
     try {
       const response = await fetch("/api/mail-working-draft", {
         method: "POST",
@@ -2934,12 +2944,16 @@ function MailApp() {
         setSendingProviderRefs(
           Array.isArray(result.sendingProviderRefs) ? result.sendingProviderRefs : [],
         );
+        setWorkingDraftsLoaded(true);
+        setWorkingDraftsSettled(true);
         const guard = draftCountGuardRef.current;
         reconcileDraftCountGuardCleanup(guard, result.records, sentRefs);
       }
     } catch {
       // Provider Drafts remain usable while this optional projection retries
       // on the next Draft-folder visit.
+      setWorkingDraftsLoaded(false);
+      setWorkingDraftsSettled(true);
     }
   }, [folder, session?.account.id, session?.mailSessionToken, draftCountGuardRef]);
 
@@ -4255,10 +4269,33 @@ function MailApp() {
           draftIdHeader: record.draftId,
         };
       });
-    return [...serverOnly, ...visibleProviderMessages].sort(
+    const reconciled = [...serverOnly, ...visibleProviderMessages].sort(
       (a, b) => Date.parse(b.date) - Date.parse(a.date),
     );
-  }, [folder, messages, session, workingDraftRecords, sentDraftRefs, sendingProviderRefs]);
+    if (!workingDraftsSettled) {
+      return draftReconciledScopeRef.current === currentAccountId
+        ? draftReconciledMessagesRef.current
+        : [];
+    }
+    if (!workingDraftsLoaded) {
+      return draftReconciledScopeRef.current === currentAccountId
+        ? draftReconciledMessagesRef.current
+        : reconciled;
+    }
+    draftReconciledMessagesRef.current = reconciled;
+    draftReconciledScopeRef.current = currentAccountId ?? "";
+    return reconciled;
+  }, [
+    folder,
+    messages,
+    session,
+    workingDraftRecords,
+    sentDraftRefs,
+    sendingProviderRefs,
+    workingDraftsSettled,
+    workingDraftsLoaded,
+    currentAccountId,
+  ]);
 
   const filteredMessages = useMemo(() => {
     // Deep server-side search: always show server results (even empty).
@@ -4276,6 +4313,8 @@ function MailApp() {
     );
   }, [visibleMessages, query, searchMode, deepResults]);
   const inDeepSearch = searchMode === "deep" && query.trim().length >= 2;
+  const effectiveLoading =
+    folder === "drafts" ? loading || !workingDraftsSettled : loading;
   useEffect(() => {
     messagesRef.current = filteredMessages;
     const scope = cacheScopeRef.current;
@@ -5942,7 +5981,7 @@ function MailApp() {
                 </span>
               </div>
               <div className="flex items-center gap-1">
-                {loading && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />}
+                {effectiveLoading && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />}
                 <button
                   onClick={toggleSelectMode}
                   className={`rounded px-2 py-1.5 text-xs font-medium transition ${
@@ -5996,7 +6035,7 @@ function MailApp() {
           )}
 
           <div className="flex-1 overflow-hidden">
-            {(loading || (inDeepSearch && deepLoading)) && filteredMessages.length === 0 ? (
+            {(effectiveLoading || (inDeepSearch && deepLoading)) && filteredMessages.length === 0 ? (
               <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
                 <Loader2 className="h-6 w-6 animate-spin text-primary" />
                 {inDeepSearch && (
@@ -6031,7 +6070,7 @@ function MailApp() {
                 endReached={() => {
                   if (
                     listPaginationReady &&
-                    !loading &&
+                    !effectiveLoading &&
                     hasMore &&
                     !loadingMore &&
                     !query.trim() &&
