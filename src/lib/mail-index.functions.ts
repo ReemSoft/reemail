@@ -131,6 +131,12 @@ export const indexListMessages = createServerFn({ method: "POST" })
       .order("id", { ascending: false })
       .limit(limit + 1);
 
+    // drafts must only expose rows from the current mailbox uidvalidity.
+    // stale legacy rows from an older uidvalidity are not current drafts.
+    if (canonical === "drafts") {
+      q = q.eq("uidvalidity", +folderUidValidity);
+    }
+
     if (cursor) {
       // Keyset: (internal_date, id) < (cursor.date, cursor.id)
       // Emulated via OR because PostgREST lacks tuple comparison.
