@@ -996,7 +996,7 @@ import {
   rollbackDraftDeleteOptimistic,
   shouldShowDeleteDraft,
 } from "@/lib/mail-composer-delete-draft";
-import { tombstoneGhostMessage, tombstoneDraftGhostIndexRow } from "@/lib/mail-ghost-cleanup.functions";
+import { tombstoneGhostMessage } from "@/lib/mail-ghost-cleanup.functions";
 import { indexListMessages } from "@/lib/mail-index.functions";
 import {
   listSenderFolders,
@@ -3202,7 +3202,6 @@ function MailApp() {
   const prefetchWindowFn = useMailServerFn(prefetchMessageWindow);
   const resolveInlineImagesBackground = useMailServerFn(resolveMessageInlineImages);
   const cleanupGhost = useMailServerFn(tombstoneGhostMessage);
-  const cleanupDraftGhost = useMailServerFn(tombstoneDraftGhostIndexRow);
 
   // Mirror of `messages` so the open path can merge a cached body into the
   // clicked row without re-creating the callback on every list change.
@@ -3794,13 +3793,6 @@ function MailApp() {
                 } as ClientMessageResult;
               }
 
-              await cleanupDraftGhost({
-                data: {
-                  mailSessionToken: session.mailSessionToken ?? "",
-                  uid: fetchUid,
-                  uidvalidity: uidValidity ? Number(uidValidity) : undefined,
-                },
-              }).catch(() => undefined);
               // Provider-only/legacy physical Draft disappeared. Reconcile only
               // the physical row, never a logical Draft, and never decrement the
               // logical Draft count.
@@ -3851,7 +3843,6 @@ function MailApp() {
       applyPendingOne,
       currentAccountId,
       cleanupGhost,
-      cleanupDraftGhost,
       recoverJustSavedDraft,
       openDraftByIdentity,
       resolveDraftWorkingRecord,
