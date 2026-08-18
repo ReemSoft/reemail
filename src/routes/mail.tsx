@@ -2912,7 +2912,9 @@ function MailApp() {
   const [workingDraftsSettled, setWorkingDraftsSettled] = useState(false);
   const draftReconciledMessagesRef = useRef<MailMessage[]>([]);
   const draftReconciledScopeRef = useRef<string>("");
+  const workingDraftsRequestRef = useRef(0);
   const refreshWorkingDrafts = useCallback(async () => {
+    const requestId = ++workingDraftsRequestRef.current;
     if (folder !== "drafts" || !session?.mailSessionToken) {
       setWorkingDraftRecords([]);
       setSentDraftRefs([]);
@@ -2921,8 +2923,6 @@ function MailApp() {
       setWorkingDraftsSettled(false);
       return;
     }
-    const scopeKey = session?.account.id ?? "";
-    draftReconciledScopeRef.current = scopeKey;
     setWorkingDraftsLoaded(false);
     setWorkingDraftsSettled(false);
     try {
@@ -2938,6 +2938,7 @@ function MailApp() {
         sendingProviderRefs?: WorkingDraftSentRef[];
       } | null;
       if (response.ok && result?.ok && Array.isArray(result.records)) {
+        if (requestId !== workingDraftsRequestRef.current) return;
         setWorkingDraftRecords(result.records);
         const sentRefs = Array.isArray(result.sentDraftRefs) ? result.sentDraftRefs : [];
         setSentDraftRefs(sentRefs);
@@ -2945,15 +2946,16 @@ function MailApp() {
           Array.isArray(result.sendingProviderRefs) ? result.sendingProviderRefs : [],
         );
         setWorkingDraftsLoaded(true);
-        setWorkingDraftsSettled(true);
         const guard = draftCountGuardRef.current;
         reconcileDraftCountGuardCleanup(guard, result.records, sentRefs);
       }
     } catch {
       // Provider Drafts remain usable while this optional projection retries
       // on the next Draft-folder visit.
-      setWorkingDraftsLoaded(false);
-      setWorkingDraftsSettled(true);
+    } finally {
+      if (requestId === workingDraftsRequestRef.current) {
+        setWorkingDraftsSettled(true);
+      }
     }
   }, [folder, session?.account.id, session?.mailSessionToken, draftCountGuardRef]);
 

@@ -18,8 +18,7 @@ export function shouldUseLocalIndexForFolder(input: {
     input.mailIndexEnabled &&
     input.sort === "date-desc" &&
     input.hasMailSessionToken &&
-    input.folder !== "starred" &&
-    input.folder !== "drafts"
+    input.folder !== "starred"
   );
 }
 

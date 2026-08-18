@@ -14,7 +14,7 @@ const mail = () => readFileSync(new URL("../../routes/mail.tsx", import.meta.url
 const hook = () => readFileSync(new URL("../../hooks/use-mail-index-sync.ts", import.meta.url), "utf8");
 
 describe("Draft folder zero-latency open (deterministic gate)", () => {
-  it("Drafts bypass Local Index while Inbox/Sent/Starred behavior stays unchanged", () => {
+  it("Drafts may use Local Index when healthy while Starred remains Bridge-only", () => {
     expect(
       shouldUseLocalIndexForFolder({
         folder: "drafts",
@@ -22,7 +22,7 @@ describe("Draft folder zero-latency open (deterministic gate)", () => {
         mailIndexEnabled: true,
         hasMailSessionToken: true,
       }),
-    ).toBe(false);
+    ).toBe(true);
     expect(
       shouldUseLocalIndexForFolder({
         folder: "inbox",

@@ -44,7 +44,7 @@ function record(overrides: Partial<WorkingDraftRecord> = {}): WorkingDraftRecord
 }
 
 describe("Draft visible list authority", () => {
-  it("uses Bridge for Drafts and Local Index for Inbox/Sent only", () => {
+  it("uses Local Index for healthy Drafts, Inbox, and Sent; Starred remains Bridge", () => {
     expect(
       shouldUseLocalIndexForFolder({
         folder: "drafts",
@@ -52,7 +52,7 @@ describe("Draft visible list authority", () => {
         mailIndexEnabled: true,
         hasMailSessionToken: true,
       }),
-    ).toBe(false);
+    ).toBe(true);
     expect(
       shouldUseLocalIndexForFolder({
         folder: "inbox",
