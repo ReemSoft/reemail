@@ -205,7 +205,7 @@ describe("Draft provider discard and send finalization", () => {
     const finallyBlock = src.slice(perform, perform + 22000);
     expect(finallyBlock).toContain("sendInProgressRef.current = false;");
     expect(finallyBlock).toContain("setSending(false);");
-    expect(finallyBlock).toContain("setProgress(0);");
+    expect(finallyBlock).toContain('setSendProgress({ progress: 0, stage: "preparing" });');
   });
 
   it("double Send never starts a second SMTP attempt", () => {

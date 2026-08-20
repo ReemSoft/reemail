@@ -7685,11 +7685,32 @@ function ToolbarSelect({
   );
 }
 
-function SendProgressPanel({ progress }: { progress: number }) {
+type SendProgressStage =
+  | "preparing"
+  | "saving"
+  | "uploading"
+  | "delivering"
+  | "confirming"
+  | "complete";
+
+interface SendProgressState {
+  progress: number;
+  stage: SendProgressStage;
+}
+
+function SendProgressPanel({ state }: { state: SendProgressState }) {
   const isArabic = getCurrentLang() === "ar";
-  const rounded = Math.min(100, Math.max(0, Math.round(progress)));
+  const rounded = Math.min(100, Math.max(0, Math.round(state.progress)));
   const formatted = new Intl.NumberFormat(isArabic ? "ar-SA" : "en-US").format(rounded);
-  const complete = rounded >= 100;
+  const complete = state.stage === "complete" && rounded >= 100;
+  const stageLabel = {
+    preparing: tr("جاري تجهيز الرسالة للإرسال"),
+    saving: tr("جاري حفظ محتويات الرسالة بأمان"),
+    uploading: tr("جاري رفع الملفات بأمان"),
+    delivering: tr("جاري تسليم الرسالة إلى خادم البريد"),
+    confirming: tr("جاري تأكيد التسليم من خادم البريد"),
+    complete: tr("اكتمل الإرسال بنجاح"),
+  } satisfies Record<SendProgressStage, string>;
   return (
     <aside
       role="status"
@@ -7721,11 +7742,14 @@ function SendProgressPanel({ progress }: { progress: number }) {
               {formatted}%
             </span>
           </div>
-          {!complete && (
-            <p className="mt-0.5 text-[11px] text-muted-foreground">
-              {tr("يرجى الانتظار، يتم إرسال رسالتك بأمان.")}
-            </p>
-          )}
+          <p
+            className={cn(
+              "mt-0.5 text-[11px]",
+              complete ? "text-emerald-600" : "text-muted-foreground",
+            )}
+          >
+            {stageLabel[state.stage]}
+          </p>
         </div>
       </div>
       <div
@@ -7931,7 +7955,10 @@ function Composer({
     Map<File, { status: "uploading" | "ready" | "failed"; progress: number }>
   >(new Map());
   const [sending, setSending] = useState(false);
-  const [progress, setProgress] = useState(0);
+  const [sendProgress, setSendProgress] = useState<SendProgressState>({
+    progress: 0,
+    stage: "preparing",
+  });
   // Composer runs inline inside the message-viewer pane (Superhuman-style).
   const [dragging, setDragging] = useState(false);
   const [savedAt, setSavedAt] = useState<number | null>(() => initialDoc?.updatedAt ?? null);
@@ -10750,7 +10777,7 @@ function Composer({
     }
     sendInProgressRef.current = true;
     setSending(true);
-    setProgress(8);
+    setSendProgress({ progress: 8, stage: "preparing" });
     let sendAccepted = false;
     try {
       console.info("[draft-send] phase=send-click");
@@ -10767,12 +10794,13 @@ function Composer({
       pendingRemoteSaveRef.current = null;
       console.info("[draft-send] phase=provider-checkpoint-not-awaited");
       await inlineReadinessRef.current;
-      setProgress(20);
+      setSendProgress({ progress: 20, stage: "preparing" });
       // Settle any currently-running Draft autosave before deciding whether a
       // send-time Working Draft persistence pass is required. This never lets
       // an autosave rejection leak into the Send flow.
+      setSendProgress({ progress: 24, stage: "saving" });
       await saverRef.current?.cancelPendingAndAwaitRunning();
-      setProgress(30);
+      setSendProgress({ progress: 30, stage: "saving" });
       syncDraftEngineRefs();
       const serialized = serializeInlineImages(
         editorRef.current?.innerHTML ?? "",
@@ -10790,7 +10818,7 @@ function Composer({
         (document?.documentElement?.dir === "ltr" ? "ltr" : "rtl");
       const bodyHtml = buildEmailHtmlDocument(fragment, { dir: editorDir });
       const bodyText = htmlToPlainText(fragment);
-      setProgress(42);
+      setSendProgress({ progress: 42, stage: "preparing" });
 
       // A normal, never-saved Compose continues through the existing SMTP
       // path unchanged. An actual Draft (server Working Draft or provider
@@ -10798,7 +10826,7 @@ function Composer({
       const draftOrigin = isEditMode || workingRevisionRef.current > 0;
       let response: Response;
       if (draftOrigin) {
-        setProgress(52);
+        setSendProgress({ progress: 52, stage: "saving" });
         // isEditMode alone must never authorize /api/mail-working-draft-send.
         // A clean provider/legacy Draft is promoted into a real Working Draft
         // row here, without fabricating a user edit, before SMTP is allowed.
@@ -10818,7 +10846,7 @@ function Composer({
           toast.error(tr("تعذّر تجهيز المسودة للإرسال. أعد المحاولة."));
           return;
         }
-        setProgress(72);
+        setSendProgress({ progress: 72, stage: "delivering" });
         response = await fetch("/api/mail-working-draft-send", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -10828,7 +10856,6 @@ function Composer({
           }),
         });
       } else {
-        setProgress(52);
         const attachmentPlan = buildAttachmentTransportPlan({
           attachments: existingKeptRef.current,
           restoredHandles: restoredHandleByAttachmentIdRef.current,
@@ -10845,6 +10872,15 @@ function Composer({
         const sourceInlineImages = transportImages
           .filter((image) => image.sourceDescriptor)
           .map((image) => image.sourceDescriptor!);
+        const hasAttachmentsToTransfer =
+          files.length > 0 ||
+          uploadInline.length > 0 ||
+          attachmentPlan.sourceAttachments.length > 0 ||
+          sourceInlineImages.length > 0;
+        setSendProgress({
+          progress: 52,
+          stage: hasAttachmentsToTransfer ? "uploading" : "preparing",
+        });
         try {
           stagedNormal = await Promise.all(files.map((file) => ensureStaged(file, "attachment")));
           stagedInline = await Promise.all(
@@ -10862,7 +10898,7 @@ function Composer({
           inline: stagedInline,
           inlineMetadata: metadataToTransport(uploadInline),
         });
-        setProgress(72);
+        setSendProgress({ progress: 72, stage: "delivering" });
         response = await fetch("/api/mail-send-v2", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -10882,7 +10918,8 @@ function Composer({
           }),
         });
       }
-      setProgress(90);
+      setSendProgress({ progress: 90, stage: "confirming" });
+      await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
       const result = (await response.json().catch(() => ({
         ok: false,
         error: `HTTP ${response.status}`,
@@ -10907,8 +10944,7 @@ function Composer({
       }
       sendAccepted = true;
       sendCompletedRef.current = true;
-      setProgress(96);
-      setProgress(100);
+      setSendProgress({ progress: 100, stage: "complete" });
       // Let the browser visibly complete the real 100% state before the
       // successful composer close unmounts this panel.
       await new Promise<void>((resolve) => window.setTimeout(resolve, 360));
@@ -11016,7 +11052,7 @@ function Composer({
     } finally {
       sendInProgressRef.current = false;
       setSending(false);
-      setProgress(0);
+      setSendProgress({ progress: 0, stage: "preparing" });
       if (!sendAccepted && isDirtyRef.current) autosaveRef.current?.schedule();
     }
   }
@@ -11357,7 +11393,7 @@ function Composer({
         setDragging(false);
       }}
     >
-      {sending && <SendProgressPanel progress={progress} />}
+      {sending && <SendProgressPanel state={sendProgress} />}
       {/* Header — flush with the pane, on the same surface */}
       <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border/70 bg-surface/80 px-3 py-2.5 backdrop-blur sm:px-6 sm:py-3">
         <div className="flex min-w-0 items-center gap-2 sm:gap-3">

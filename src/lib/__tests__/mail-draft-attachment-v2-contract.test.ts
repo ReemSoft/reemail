@@ -91,7 +91,7 @@ describe("draft attachment V2 contract", () => {
     expect(workingDraftServer).toContain("sourceAttachments: plan.sources");
   });
 
-  it("uses a quiet bilingual side progress panel and visibly completes at 100%", () => {
+  it("uses a bilingual staged progress panel and visibly completes at 100%", () => {
     expect(composer).not.toContain("startSendFlight");
     expect(composer).toContain("function SendProgressPanel(");
     expect(composer).toContain('isArabic ? "left-4 slide-in-from-left-4"');
@@ -99,11 +99,14 @@ describe("draft attachment V2 contract", () => {
     expect(composer).toContain('"fixed bottom-4');
     expect(composer).not.toContain("current >= 92");
     expect(composer).not.toContain('tr("الوقت المنقضي")');
-    expect(composer).not.toContain('tr("جاري تسليم الرسالة إلى خادم البريد")');
+    expect(composer).toContain('uploading: tr("جاري رفع الملفات بأمان")');
+    expect(composer).toContain('delivering: tr("جاري تسليم الرسالة إلى خادم البريد")');
+    expect(composer).toContain('confirming: tr("جاري تأكيد التسليم من خادم البريد")');
     expect(composer).toContain('dir={isArabic ? "rtl" : "ltr"}');
     expect(composer).toContain('role="progressbar"');
     expect(composer).toContain("window.setTimeout(resolve, 360)");
-    expect(composer).toContain("setProgress(100)");
+    expect(composer).toContain('setSendProgress({ progress: 100, stage: "complete" })');
+    expect(composer).toContain('stage: hasAttachmentsToTransfer ? "uploading" : "preparing"');
   });
 
   it("releases transient Bridge staging without delaying the SMTP response", () => {
