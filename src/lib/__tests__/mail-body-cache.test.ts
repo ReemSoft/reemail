@@ -158,6 +158,34 @@ describe("lookupCachedBody", () => {
     expect(res).toEqual({ hit: false, reason: "oversize" });
   });
 
+  it("repairs only a legacy cache row whose referenced CID has no metadata", async () => {
+    const db = fakeSupabase({
+      mail_folders: { id: "f1", uidvalidity: 100 },
+      mail_message_body_cache: {
+        ...CACHED,
+        body_html: '<p>photo</p><img src="cid:mobile-photo@example">',
+      },
+      mail_messages: { id: "m1" },
+    });
+    expect(await lookupCachedBody(db, KEY)).toEqual({
+      hit: false,
+      reason: "incomplete-inline",
+    });
+  });
+
+  it("does not repeatedly refetch a current row with an unavailable CID", async () => {
+    const db = fakeSupabase({
+      mail_folders: { id: "f1", uidvalidity: 100 },
+      mail_message_body_cache: {
+        ...CACHED,
+        body_html: '<p>photo</p><img src="cid:unavailable@example">',
+        headers_meta: { _inlineCidMetadataVersion: 1 },
+      },
+      mail_messages: { id: "m1" },
+    });
+    expect((await lookupCachedBody(db, KEY)).hit).toBe(true);
+  });
+
   it("recovers a referenced 1.8 MiB CID image from legacy cached attachments", async () => {
     const largeSize = Math.round(1.8 * 1024 * 1024);
     const db = fakeSupabase({
@@ -384,6 +412,7 @@ describe("storeCachedBody", () => {
     expect(row["cache_version"]).toBe(BODY_CACHE_VERSION);
     expect(row["body_html"]).toBe("<p>x</p>");
     expect(row["oversize"]).toBe(false);
+    expect(row["headers_meta"]).toEqual(expect.objectContaining({ _inlineCidMetadataVersion: 1 }));
   });
 
   it("stores Reply-To inside the existing bounded headers JSON", async () => {
@@ -400,6 +429,7 @@ describe("storeCachedBody", () => {
     });
     const row = spy.upserts[0] as Record<string, unknown>;
     expect(row["headers_meta"]).toEqual({
+      _inlineCidMetadataVersion: 1,
       mailedBy: undefined,
       signedBy: undefined,
       security: undefined,

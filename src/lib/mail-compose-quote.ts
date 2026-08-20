@@ -371,6 +371,20 @@ export async function prepareQuotedEmailForComposer(hardenedHtml: string): Promi
   }
 }
 
+/**
+ * An unavailable CID inside historical reply/forward content must not poison
+ * the entire Draft. Preserve meaningful alt text and discard only that stale
+ * image. Authored/current-message images are intentionally left untouched so
+ * their normal resource dependency continues to fail closed.
+ */
+export function removeUnresolvedQuotedCidImage(image: HTMLImageElement): boolean {
+  if (!image.closest("[data-mm-quoted-content]")) return false;
+  const alt = image.getAttribute("alt")?.trim();
+  if (alt) image.replaceWith(document.createTextNode(alt));
+  else image.remove();
+  return true;
+}
+
 export const QUOTED_SOURCE_CID_ATTR = QUOTED_CID_ATTR;
 export const QUOTED_BLOCKED_REMOTE_IMAGE_ATTR = BLOCKED_REMOTE_IMAGE_ATTR;
 export const QUOTED_REMOTE_IMAGE_URL_ATTR = REMOTE_IMAGE_URL_ATTR;

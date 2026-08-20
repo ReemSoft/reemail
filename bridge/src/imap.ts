@@ -247,8 +247,9 @@ export async function getFolderCounts(
           const lock = await client.getMailboxLock(path);
           try {
             const uids =
-              ((await client.search({ deleted: false } as SearchObject, { uid: true })) as number[]) ||
-              [];
+              ((await client.search({ deleted: false } as SearchObject, {
+                uid: true,
+              })) as number[]) || [];
             const unseen =
               ((await client.search({ deleted: false, seen: false } as SearchObject, {
                 uid: true,
@@ -1628,9 +1629,15 @@ export function collectAttachmentParts(
   const filename =
     structure.dispositionParameters?.filename || structure.parameters?.name || undefined;
   const disp = structure.disposition ? String(structure.disposition).toLowerCase() : undefined;
+  const inlineCid = contentId(structure.id);
   const isAttachmentBranch =
     disp === "attachment" ||
     (disp === "inline" && !!filename) ||
+    // Some senders (including common mobile clients) emit related images with
+    // a Content-ID but no filename or Content-Disposition. They are still MIME
+    // body resources and must remain discoverable for deferred CID rendering.
+    // BODYSTRUCTURE is already part of message-open, so this adds no I/O.
+    (!isMultipart && mime.startsWith("image/") && !!inlineCid) ||
     // Fallback: a named branch without an explicit disposition is an
     // attached entity, not an ordinary structural multipart container.
     (!disp && !!filename);

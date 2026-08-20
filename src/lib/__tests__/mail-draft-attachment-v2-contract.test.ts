@@ -66,9 +66,11 @@ describe("draft attachment V2 contract", () => {
     );
     const adoption = workingDraftServer.slice(
       workingDraftServer.indexOf("if (current?.storage_path)"),
-      workingDraftServer.indexOf('if (!reference.source) throw new Error("ATTACHMENT_SOURCE_REQUIRED")'),
+      workingDraftServer.indexOf(
+        'if (!reference.source) throw new Error("ATTACHMENT_SOURCE_REQUIRED")',
+      ),
     );
-    expect(adoption).toContain('if (current.kind !== reference.kind)');
+    expect(adoption).toContain("if (current.kind !== reference.kind)");
     expect(adoption).toContain('.eq("draft_id", draftId)');
     expect(adoption).toContain('.eq("company_id", auth.companyId)');
     expect(adoption).toContain('.eq("account_id", auth.accountId)');
@@ -78,11 +80,9 @@ describe("draft attachment V2 contract", () => {
   it("sends trustworthy provider attachments directly while preserving owned fallback", () => {
     expect(workingDraftServer).toContain("async function resolveSendAttachments(");
     expect(workingDraftServer).toContain(
-      'if (row.storage_path) return { owned: row, source: null }',
+      "if (row.storage_path) return { owned: row, source: null }",
     );
-    expect(workingDraftServer).toContain(
-      'if (row.kind === "attachment" && source)',
-    );
+    expect(workingDraftServer).toContain('if (row.kind === "attachment" && source)');
     expect(workingDraftServer).toContain(
       "owned: await importExternalAttachment(auth, row, context)",
     );
@@ -91,11 +91,12 @@ describe("draft attachment V2 contract", () => {
     expect(workingDraftServer).toContain("sourceAttachments: plan.sources");
   });
 
-  it("animates the existing Send icon without adding render-loop state", () => {
-    expect(composer).toContain("function startSendFlight(");
-    expect(composer).toContain('const plane = sourceIcon.cloneNode(true) as SVGElement');
-    expect(composer).toContain("const sendFlight = startSendFlight(sendButtonRef.current)");
-    expect(composer).toContain("sendFlight.finish(sendAccepted)");
-    expect(composer).toContain('prefers-reduced-motion: reduce');
+  it("uses a bilingual side progress panel and no flying plane", () => {
+    expect(composer).not.toContain("startSendFlight");
+    expect(composer).toContain("function SendProgressPanel(");
+    expect(composer).toContain('isArabic ? "left-4 slide-in-from-left-4"');
+    expect(composer).toContain('"right-4 slide-in-from-right-4"');
+    expect(composer).toContain('dir={isArabic ? "rtl" : "ltr"}');
+    expect(composer).toContain('role="progressbar"');
   });
 });

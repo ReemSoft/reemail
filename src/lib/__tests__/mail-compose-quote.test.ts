@@ -6,6 +6,7 @@ import {
   applyQuotedDirectionFallback,
   exportPreparedQuotedDocument,
   markQuotedCidImagesPending,
+  removeUnresolvedQuotedCidImage,
 } from "@/lib/mail-compose-quote";
 import { buildForwardQuoteHtml, buildReplyQuoteHtml } from "@/lib/mail-quote";
 import {
@@ -22,6 +23,24 @@ import { buildEmailHtmlDocument } from "@/lib/mail-compose-html";
 const meta = { from: { name: "Sender", email: "sender@example.com" }, date: "2026-08-01" };
 
 describe("quoted email preparation", () => {
+  it("drops only an unavailable historical CID while preserving its alt text", () => {
+    const root = document.createElement("div");
+    root.innerHTML = `<div data-mm-quoted-content><p>History</p><img src="cid:gone" alt="Company logo"></div>`;
+    const image = root.querySelector("img")!;
+    expect(removeUnresolvedQuotedCidImage(image)).toBe(true);
+    expect(root.querySelector("img")).toBeNull();
+    expect(root.textContent).toContain("History");
+    expect(root.textContent).toContain("Company logo");
+  });
+
+  it("keeps an unresolved current-message image under the strict save fence", () => {
+    const root = document.createElement("div");
+    root.innerHTML = `<p>Current</p><img src="cid:authored">`;
+    const image = root.querySelector("img")!;
+    expect(removeUnresolvedQuotedCidImage(image)).toBe(false);
+    expect(root.querySelector("img")).toBe(image);
+  });
+
   it("adds block-level auto direction only where source direction is missing", () => {
     const root = document.createElement("div");
     root.innerHTML = `

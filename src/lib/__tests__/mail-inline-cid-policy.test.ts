@@ -160,7 +160,9 @@ describe("large inline CID receive policy", () => {
       source.indexOf("const prefetchMessage"),
     );
     expect(viewer).toContain("if (!largeReady || !messageKey) return");
-    expect(viewer).toContain("const parts = smallPartition.smallBatchParts");
+    expect(viewer).toContain("const parts = inlinePartition.smallBatchParts");
+    expect(viewer).toContain("...inlinePartition.overflowStreamParts");
+    expect(viewer).toContain("const parts = deferredStreamParts");
     expect(viewer).toContain("fetchInlineCidPartsBatch");
     expect(viewer).toContain("parts: batch");
     expect(viewer).not.toContain("streamInlineCidPartsSequential(parts");

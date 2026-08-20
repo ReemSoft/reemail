@@ -86,8 +86,17 @@ export type CacheLookup =
   | { hit: true; body: CachedBody }
   | {
       hit: false;
-      reason: "no-folder" | "no-row" | "uidvalidity" | "orphan" | "oversize" | "no-headers";
+      reason:
+        | "no-folder"
+        | "no-row"
+        | "uidvalidity"
+        | "orphan"
+        | "oversize"
+        | "no-headers"
+        | "incomplete-inline";
     };
+
+const INLINE_CID_METADATA_VERSION = 1;
 
 export interface CacheLookupContext {
   lookup: CacheLookup;
@@ -133,6 +142,43 @@ function referencedImageCids(bodyHtml: string): Set<string> {
     if (cid) cids.add(cid);
   }
   return cids;
+}
+
+function hasUnrepresentedCid(
+  bodyHtml: string,
+  inlineParts: CachedBody["inlineParts"],
+  inlineImagesValue: unknown,
+  attachmentsValue: unknown,
+): boolean {
+  const referenced = referencedImageCids(bodyHtml);
+  if (!referenced.size) return false;
+  const represented = new Set<string>();
+  for (const part of inlineParts) {
+    const cid = normalizeCid(part.cid);
+    if (cid) represented.add(cid);
+  }
+  if (Array.isArray(inlineImagesValue)) {
+    for (const image of inlineImagesValue as Array<{ cid?: unknown }>) {
+      const cid = normalizeCid(image?.cid);
+      if (cid) represented.add(cid);
+    }
+  }
+  if (Array.isArray(attachmentsValue)) {
+    for (const attachment of attachmentsValue as MailAttachment[]) {
+      const cid = normalizeCid(attachment.contentId);
+      if (cid) represented.add(cid);
+    }
+  }
+  return [...referenced].some((cid) => !represented.has(cid));
+}
+
+function hasCurrentInlineMetadataMarker(value: unknown): boolean {
+  return (
+    Boolean(value) &&
+    typeof value === "object" &&
+    Number((value as Record<string, unknown>)._inlineCidMetadataVersion) ===
+      INLINE_CID_METADATA_VERSION
+  );
 }
 
 function normalizeCachedInlineMetadata(
@@ -282,6 +328,20 @@ export async function lookupCachedBodyWithMailboxHint(
     row.inline_parts,
     row.attachments,
   );
+  // Repair only legacy rows that demonstrably lost a CID resource. All other
+  // cached messages keep their fast path; a freshly stored marker prevents a
+  // permanently unavailable CID from causing repeated live opens.
+  if (
+    !hasCurrentInlineMetadataMarker(row.headers_meta) &&
+    hasUnrepresentedCid(
+      bodyHtml,
+      normalizedInlineMetadata.inlineParts,
+      row.inline_images,
+      row.attachments,
+    )
+  ) {
+    return { lookup: { hit: false, reason: "incomplete-inline" }, mailboxHint };
+  }
 
   return {
     lookup: {
@@ -396,6 +456,12 @@ export async function lookupCachedBodies(
     }
     const bodyHtml = row.body_html ?? row.body_text ?? "";
     const metadata = normalizeCachedInlineMetadata(bodyHtml, row.inline_parts, row.attachments);
+    if (
+      !hasCurrentInlineMetadataMarker(row.headers_meta) &&
+      hasUnrepresentedCid(bodyHtml, metadata.inlineParts, row.inline_images, row.attachments)
+    ) {
+      continue;
+    }
     hits.set(uid, {
       bodyHtml,
       preview: row.preview ?? "",
@@ -488,7 +554,10 @@ export async function storeCachedBody(
       preview: input.preview.slice(0, 512),
       inline_parts: inlineParts,
       attachments: input.attachments ?? [],
-      headers_meta: sanitizeHeadersMeta(input.headersMeta),
+      headers_meta: {
+        ...sanitizeHeadersMeta(input.headersMeta),
+        _inlineCidMetadataVersion: INLINE_CID_METADATA_VERSION,
+      },
       byte_size: byteSize,
       oversize,
       cached_at: now,

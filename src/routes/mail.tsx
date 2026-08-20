@@ -41,6 +41,7 @@ import {
 import {
   markQuotedCidImagesPending,
   prepareQuotedEmailForComposer,
+  removeUnresolvedQuotedCidImage,
 } from "@/lib/mail-compose-quote";
 import { splitQuotedHtml, trimHistoricalQuotedContent } from "@/lib/mail-thread-split";
 import {
@@ -489,7 +490,7 @@ function useInlineImageMappings(
         .map((image) => ({ cid: image.cid, dataUri: image.dataUri })),
     [message.inlineImages],
   );
-  const smallPartition = useMemo(
+  const inlinePartition = useMemo(
     () =>
       partitionInlineCidParts(
         message.inlineParts ?? [],
@@ -497,9 +498,9 @@ function useInlineImageMappings(
       ),
     [message.inlineImages, message.inlineParts],
   );
-  const largeStreamParts = useMemo(
-    () => partitionInlineCidParts(message.inlineParts ?? []).largeStreamParts,
-    [message.inlineParts],
+  const deferredStreamParts = useMemo(
+    () => [...inlinePartition.largeStreamParts, ...inlinePartition.overflowStreamParts],
+    [inlinePartition],
   );
   const [resolved, setResolved] = useState<{ key: string; images: CidImageMapping[] }>({
     key: messageKey,
@@ -524,7 +525,7 @@ function useInlineImageMappings(
       });
     });
 
-    const parts = smallPartition.smallBatchParts;
+    const parts = inlinePartition.smallBatchParts;
     if (!parts.length || !messageKey) {
       return () => {
         cancelled = true;
@@ -589,7 +590,7 @@ function useInlineImageMappings(
     message.id,
     message.inlineImages,
     messageKey,
-    smallPartition.smallBatchParts,
+    inlinePartition.smallBatchParts,
     resolveInlineImages,
     uidValidity,
   ]);
@@ -599,7 +600,7 @@ function useInlineImageMappings(
     const session = getMailSession();
     const parsed = parseMessageId(message.id);
     if (!session?.mailSessionToken || !parsed) return;
-    const parts = largeStreamParts;
+    const parts = deferredStreamParts;
     if (parts.length === 0) return;
     const cached = readLargeInlineCidSessionCache(messageKey, parts);
     if (cached.misses.length === 0) {
@@ -644,7 +645,7 @@ function useInlineImageMappings(
     return () => {
       controller.abort();
     };
-  }, [largeReady, largeStreamParts, message.id, messageKey, onLargeCid, uidValidity]);
+  }, [deferredStreamParts, largeReady, message.id, messageKey, onLargeCid, uidValidity]);
 
   return resolved.key === messageKey ? resolved.images : [];
 }
@@ -941,10 +942,7 @@ import {
   type DraftDocV3,
   type PendingDeleteQueue,
 } from "@/lib/mail-draft-lifecycle";
-import {
-  DRAFT_REMOTE_IDLE_MS,
-  DRAFT_MAX_DIRTY_MS,
-} from "@/lib/mail-draft-autosave-policy";
+import { DRAFT_REMOTE_IDLE_MS, DRAFT_MAX_DIRTY_MS } from "@/lib/mail-draft-autosave-policy";
 import type {
   WorkingDraftAttachmentReference,
   WorkingDraftPayload,
@@ -1923,7 +1921,7 @@ function useMailData(session: MailSession | null) {
             { total: c.total, unread: c.unread, supported: true },
           ]),
         ) as Record<MailFolder, { total: number; unread: number; supported: boolean }>,
-        );
+      );
     }
   }, [session, getCounts, isStarCountHot]);
 
@@ -1937,134 +1935,136 @@ function useMailData(session: MailSession | null) {
    */
   const loadCountsFast = useCallback(
     async (options?: { draftIndexSyncSettled?: boolean }) => {
-    if (!session) return;
-    // Batch A / Fix #1: monotonic guard also applies to the fast (Local
-    // Index) path. If a mutation runs between the request and response,
-    // the fast result is stale — drop it and DO NOT even fall back to
-    // loadCounts (that would race the same way).
-    const gen = countsMutationGen.current;
-    if (MAIL_INDEX_ENABLED && session.mailSessionToken) {
-      try {
-        const res = await listIndexCounts({
-          data: { mailSessionToken: session.mailSessionToken },
-        });
-        if (countsMutationGen.current !== gen) return;
+      if (!session) return;
+      // Batch A / Fix #1: monotonic guard also applies to the fast (Local
+      // Index) path. If a mutation runs between the request and response,
+      // the fast result is stale — drop it and DO NOT even fall back to
+      // loadCounts (that would race the same way).
+      const gen = countsMutationGen.current;
+      if (MAIL_INDEX_ENABLED && session.mailSessionToken) {
+        try {
+          const res = await listIndexCounts({
+            data: { mailSessionToken: session.mailSessionToken },
+          });
+          if (countsMutationGen.current !== gen) return;
 
-        if (res.ok && res.counts.length > 0) {
-          // Capture the raw Local Index counts so the sync path resolver can
-          // derive a unique, non-ambiguous index path per canonical. Ambiguous
-          // or missing canonicals simply yield no index sync path.
-          setIndexFolderCounts(res.counts);
-          // Deterministic duplicate-canonical handling: a canonical that maps
-          // to MORE than one Local Index row is ambiguous (corruption). Its
-          // physical path must never be promoted (array order must not decide
-          // folderPaths.trash), and its count is left unchanged until the
-          // authoritative bridge sweep or a trusted sync reconciles it.
-          const canonicalOccurrences = new Map<MailFolder, number>();
-          for (const c of res.counts) {
-            canonicalOccurrences.set(c.folder, (canonicalOccurrences.get(c.folder) ?? 0) + 1);
-          }
-          const isAmbiguous = (f: MailFolder) => (canonicalOccurrences.get(f) ?? 0) > 1;
-          const draftCountForConvergence = res.counts.find(
-            (c) =>
-              c.folder === "drafts" &&
-              c.hasUidvalidity &&
-              !isAmbiguous(c.folder),
-          );
-          setCounts((prev) => {
-            const next = { ...prev };
+          if (res.ok && res.counts.length > 0) {
+            // Capture the raw Local Index counts so the sync path resolver can
+            // derive a unique, non-ambiguous index path per canonical. Ambiguous
+            // or missing canonicals simply yield no index sync path.
+            setIndexFolderCounts(res.counts);
+            // Deterministic duplicate-canonical handling: a canonical that maps
+            // to MORE than one Local Index row is ambiguous (corruption). Its
+            // physical path must never be promoted (array order must not decide
+            // folderPaths.trash), and its count is left unchanged until the
+            // authoritative bridge sweep or a trusted sync reconciles it.
+            const canonicalOccurrences = new Map<MailFolder, number>();
             for (const c of res.counts) {
-              if (!c.hasUidvalidity) continue;
-              if (isAmbiguous(c.folder)) continue;
-              // V4 count race guard: skip starred.total while a mutation is
-              // hot; keep the optimistic value the toggle already applied.
-              if (c.folder === "starred" && isStarCountHot() && prev.starred) {
-                const cur = next.starred ?? { total: 0, unread: 0, supported: true };
-                next.starred = {
-                  total: prev.starred.total,
-                  unread: c.unread,
-                  supported: cur.supported,
-                };
-                continue;
-              }
-              const cur = next[c.folder] ?? { total: 0, unread: 0, supported: true };
-              next[c.folder] = hydrateFolderCount({
-                folder: c.folder,
-                previous: c.folder === "drafts" ? prev.drafts : undefined,
-                incoming: { total: c.total, unread: c.unread, supported: cur.supported },
-                guardedDraftTotal:
-                  c.folder === "drafts" && draftCountGuardRef.current.active
-                    ? draftCountGuardRef.current.total
-                    : undefined,
-              });
+              canonicalOccurrences.set(c.folder, (canonicalOccurrences.get(c.folder) ?? 0) + 1);
             }
-            return next;
-          });
-          if (
-            options?.draftIndexSyncSettled &&
-            draftCountGuardRef.current.active &&
-            draftCountGuardRef.current.cleanupConfirmed &&
-            draftCountGuardRef.current.pendingSentDraftIds.size === 0 &&
-            draftCountForConvergence?.total === draftCountGuardRef.current.total
-          ) {
-            clearDraftCountGuard(draftCountGuardRef.current);
-          }
-          setFolderPaths((prev) => {
-            let changed = false;
-            const next = { ...prev };
-            for (const c of res.counts) {
-              if (isAmbiguous(c.folder)) continue;
-              if (c.path && next[c.folder] !== c.path) {
-                next[c.folder] = c.path;
-                changed = true;
-              }
-            }
-            return changed ? next : prev;
-          });
-          setBridgeError(null);
-          // BLOCKER_C — track current Trash UIDVALIDITY. When it changes
-          // (server-side UIDVALIDITY reset), purge stale final origins so
-          // an unrelated future Trash UID cannot inherit a stale origin.
-          const trashCount = res.counts.find((c) => c.folder === "trash");
-          const nextTrashUV = trashCount?.uidvalidity ?? null;
-          if (
-            nextTrashUV != null &&
-            trashUidValidityRef.current !== nextTrashUV &&
-            currentAccountId
-          ) {
-            purgeStaleTrashUidValidity(safeOriginStorage(), currentAccountId, nextTrashUV, "trash");
-          }
-          trashUidValidityRef.current = nextTrashUV;
-          // Mirror for Archive: capture current Archive UIDVALIDITY so restore
-          // from Archive can validate final-origin entries the same way Trash does.
-          const archiveCount = res.counts.find((c) => c.folder === "archive");
-          const nextArchiveUV = archiveCount?.uidvalidity ?? null;
-          if (
-            nextArchiveUV != null &&
-            archiveUidValidityRef.current !== nextArchiveUV &&
-            currentAccountId
-          ) {
-            purgeStaleTrashUidValidity(
-              safeOriginStorage(),
-              currentAccountId,
-              nextArchiveUV,
-              "archive",
+            const isAmbiguous = (f: MailFolder) => (canonicalOccurrences.get(f) ?? 0) > 1;
+            const draftCountForConvergence = res.counts.find(
+              (c) => c.folder === "drafts" && c.hasUidvalidity && !isAmbiguous(c.folder),
             );
+            setCounts((prev) => {
+              const next = { ...prev };
+              for (const c of res.counts) {
+                if (!c.hasUidvalidity) continue;
+                if (isAmbiguous(c.folder)) continue;
+                // V4 count race guard: skip starred.total while a mutation is
+                // hot; keep the optimistic value the toggle already applied.
+                if (c.folder === "starred" && isStarCountHot() && prev.starred) {
+                  const cur = next.starred ?? { total: 0, unread: 0, supported: true };
+                  next.starred = {
+                    total: prev.starred.total,
+                    unread: c.unread,
+                    supported: cur.supported,
+                  };
+                  continue;
+                }
+                const cur = next[c.folder] ?? { total: 0, unread: 0, supported: true };
+                next[c.folder] = hydrateFolderCount({
+                  folder: c.folder,
+                  previous: c.folder === "drafts" ? prev.drafts : undefined,
+                  incoming: { total: c.total, unread: c.unread, supported: cur.supported },
+                  guardedDraftTotal:
+                    c.folder === "drafts" && draftCountGuardRef.current.active
+                      ? draftCountGuardRef.current.total
+                      : undefined,
+                });
+              }
+              return next;
+            });
+            if (
+              options?.draftIndexSyncSettled &&
+              draftCountGuardRef.current.active &&
+              draftCountGuardRef.current.cleanupConfirmed &&
+              draftCountGuardRef.current.pendingSentDraftIds.size === 0 &&
+              draftCountForConvergence?.total === draftCountGuardRef.current.total
+            ) {
+              clearDraftCountGuard(draftCountGuardRef.current);
+            }
+            setFolderPaths((prev) => {
+              let changed = false;
+              const next = { ...prev };
+              for (const c of res.counts) {
+                if (isAmbiguous(c.folder)) continue;
+                if (c.path && next[c.folder] !== c.path) {
+                  next[c.folder] = c.path;
+                  changed = true;
+                }
+              }
+              return changed ? next : prev;
+            });
+            setBridgeError(null);
+            // BLOCKER_C — track current Trash UIDVALIDITY. When it changes
+            // (server-side UIDVALIDITY reset), purge stale final origins so
+            // an unrelated future Trash UID cannot inherit a stale origin.
+            const trashCount = res.counts.find((c) => c.folder === "trash");
+            const nextTrashUV = trashCount?.uidvalidity ?? null;
+            if (
+              nextTrashUV != null &&
+              trashUidValidityRef.current !== nextTrashUV &&
+              currentAccountId
+            ) {
+              purgeStaleTrashUidValidity(
+                safeOriginStorage(),
+                currentAccountId,
+                nextTrashUV,
+                "trash",
+              );
+            }
+            trashUidValidityRef.current = nextTrashUV;
+            // Mirror for Archive: capture current Archive UIDVALIDITY so restore
+            // from Archive can validate final-origin entries the same way Trash does.
+            const archiveCount = res.counts.find((c) => c.folder === "archive");
+            const nextArchiveUV = archiveCount?.uidvalidity ?? null;
+            if (
+              nextArchiveUV != null &&
+              archiveUidValidityRef.current !== nextArchiveUV &&
+              currentAccountId
+            ) {
+              purgeStaleTrashUidValidity(
+                safeOriginStorage(),
+                currentAccountId,
+                nextArchiveUV,
+                "archive",
+              );
+            }
+            archiveUidValidityRef.current = nextArchiveUV;
+            // Healthy Local Index → RETURN. No automatic getCounts / /api/folders
+            // sweep here: counts + paths already came from the index, and a warm
+            // indexed session must not open a global IMAP connection just to
+            // refresh Starred/path metadata. Authoritative path resolution (and a
+            // Starred count refresh) is driven separately, only when actually
+            // needed (see the targeted resolution below / explicit interactions).
+            return;
           }
-          archiveUidValidityRef.current = nextArchiveUV;
-          // Healthy Local Index → RETURN. No automatic getCounts / /api/folders
-          // sweep here: counts + paths already came from the index, and a warm
-          // indexed session must not open a global IMAP connection just to
-          // refresh Starred/path metadata. Authoritative path resolution (and a
-          // Starred count refresh) is driven separately, only when actually
-          // needed (see the targeted resolution below / explicit interactions).
-          return;
+        } catch {
+          /* fall through to bridge */
         }
-      } catch {
-        /* fall through to bridge */
       }
-    }
-    await loadCounts();
+      await loadCounts();
     },
     [session, listIndexCounts, loadCounts, isStarCountHot],
   );
@@ -3027,7 +3027,7 @@ function MailApp() {
       const target = chooseDraftOpenTarget({
         rowId: row.id,
         draftIdHeader: row.draftIdHeader,
-        uidValidity: parsed ? validUidValidity(row.uidValidity) ?? undefined : undefined,
+        uidValidity: parsed ? (validUidValidity(row.uidValidity) ?? undefined) : undefined,
         uid: parsed?.uid ?? 0,
         records: workingDraftRecords,
         isDraftIdValid: (value) => UUID_RE.test(value),
@@ -3499,10 +3499,7 @@ function MailApp() {
   // Draft-only stale-revision redirect. It performs ONE current-UID fetch and
   // never touches Inbox/Sent or the normal successful open path.
   const openDraftByIdentity = useCallback(
-    async (
-      identity: SavedDraftIdentity,
-      signal?: AbortSignal,
-    ): Promise<ClientMessageResult> => {
+    async (identity: SavedDraftIdentity, signal?: AbortSignal): Promise<ClientMessageResult> => {
       if (!session) return { message: null, source: "error" };
       const scope = {
         companyId: session.company?.id ?? session.account.company_id,
@@ -3533,7 +3530,14 @@ function MailApp() {
           return { message: patched, source: "imap" };
         }
         if (!opened.ok && opened.code === "NOT_FOUND") {
-          return recoverJustSavedDraft(identity, identity.uid, identity.uidValidity, scope, null, true);
+          return recoverJustSavedDraft(
+            identity,
+            identity.uid,
+            identity.uidValidity,
+            scope,
+            null,
+            true,
+          );
         }
         return { message: null, source: "error" };
       } catch {
@@ -3598,8 +3602,8 @@ function MailApp() {
       // work is discarded silently.
       const staleDraftIdentity =
         parsed.folder === "drafts" && currentAccountId && uidValidity
-          ? savedDraftGuardRef.current?.findStale(currentAccountId, uidValidity, parsed.uid) ??
-            null
+          ? (savedDraftGuardRef.current?.findStale(currentAccountId, uidValidity, parsed.uid) ??
+            null)
           : null;
       const preNetworkDecision = decidePreNetworkDraftOpen({
         isDraft: parsed.folder === "drafts",
@@ -3630,7 +3634,7 @@ function MailApp() {
           // the background request keeps running and fills the same memory
           // cache, so its network work is not discarded.
           inflight.current.delete(requestKey);
-      } else {
+        } else {
           return existing.promise;
         }
       }
@@ -3670,8 +3674,8 @@ function MailApp() {
           // background/prefetch work is discarded silently.
           const staleAtSettlement =
             parsed.folder === "drafts" && currentAccountId && uidValidity
-              ? savedDraftGuardRef.current?.findStale(currentAccountId, uidValidity, fetchUid) ??
-                null
+              ? (savedDraftGuardRef.current?.findStale(currentAccountId, uidValidity, fetchUid) ??
+                null)
               : null;
           const settlementDecision = decideSettledDraftFetch({
             isDraft: parsed.folder === "drafts",
@@ -3746,7 +3750,8 @@ function MailApp() {
                 uidValidity,
                 fetchUid,
               );
-              if (matched) savedDraftGuardRef.current?.clearDraft(matched.accountId, matched.draftId);
+              if (matched)
+                savedDraftGuardRef.current?.clearDraft(matched.accountId, matched.draftId);
             }
             return {
               message: patched,
@@ -3767,17 +3772,11 @@ function MailApp() {
             // interactive connection). Intercept only the exact identity.
             const protectedDraft =
               parsed.folder === "drafts" && currentAccountId && uidValidity
-                ? savedDraftGuardRef.current?.find(currentAccountId, uidValidity, fetchUid) ??
-                  null
+                ? (savedDraftGuardRef.current?.find(currentAccountId, uidValidity, fetchUid) ??
+                  null)
                 : null;
             if (protectedDraft && uidValidity) {
-              return recoverJustSavedDraft(
-                protectedDraft,
-                fetchUid,
-                uidValidity,
-                scope,
-                fetchBase,
-              );
+              return recoverJustSavedDraft(protectedDraft, fetchUid, uidValidity, scope, fetchBase);
             }
 
             if (parsed.folder === "drafts") {
@@ -4221,8 +4220,7 @@ function MailApp() {
 
   const visibleMessages = useMemo(() => {
     if (folder !== "drafts") return messages;
-    const projectionMatchesCurrent =
-      workingDraftProjectionScopeRef.current === currentAccountId;
+    const projectionMatchesCurrent = workingDraftProjectionScopeRef.current === currentAccountId;
     const scopedWorkingDraftRecords = projectionMatchesCurrent ? workingDraftRecords : [];
     const scopedSentDraftRefs = projectionMatchesCurrent ? sentDraftRefs : [];
     const scopedSendingProviderRefs = projectionMatchesCurrent ? sendingProviderRefs : [];
@@ -4266,7 +4264,9 @@ function MailApp() {
       .filter((record) => !providerDraftIds.has(record.draftId))
       .map<MailMessage>((record) => {
         const snapshot = record.payload.snapshot;
-        const normalAttachments = record.payload.attachments.filter((item) => item.kind === "attachment");
+        const normalAttachments = record.payload.attachments.filter(
+          (item) => item.kind === "attachment",
+        );
         return {
           id: `working-draft:${record.draftId}`,
           threadId: `working-draft:${record.draftId}`,
@@ -4340,8 +4340,7 @@ function MailApp() {
     );
   }, [visibleMessages, query, searchMode, deepResults]);
   const inDeepSearch = searchMode === "deep" && query.trim().length >= 2;
-  const effectiveLoading =
-    folder === "drafts" ? loading || !workingDraftsSettled : loading;
+  const effectiveLoading = folder === "drafts" ? loading || !workingDraftsSettled : loading;
   useEffect(() => {
     messagesRef.current = filteredMessages;
     const scope = cacheScopeRef.current;
@@ -4379,11 +4378,7 @@ function MailApp() {
       const parsed = parseMessageId(message.id);
       if (parsed && parsed.uid > 0) uids.add(parsed.uid);
     }
-    savedDraftGuardRef.current?.pruneAfterAuthoritativeRefresh(
-      currentAccountId,
-      uidValidity,
-      uids,
-    );
+    savedDraftGuardRef.current?.pruneAfterAuthoritativeRefresh(currentAccountId, uidValidity, uids);
   }, [folder, loading, filteredMessages, currentAccountId]);
 
   const connection = (
@@ -4506,8 +4501,8 @@ function MailApp() {
     const baseUidValidity = validUidValidity(base?.uidValidity);
     const staleDraftIdentity =
       parsed.folder === "drafts" && currentAccountId && baseUidValidity
-        ? savedDraftGuardRef.current?.findStale(currentAccountId, baseUidValidity, parsed.uid) ??
-          null
+        ? (savedDraftGuardRef.current?.findStale(currentAccountId, baseUidValidity, parsed.uid) ??
+          null)
         : null;
     const preNetworkDecision = decidePreNetworkDraftOpen({
       isDraft: parsed.folder === "drafts",
@@ -4515,8 +4510,7 @@ function MailApp() {
       contextKind: "current-list",
       staleIdentity: staleDraftIdentity,
     });
-    const cached =
-      preNetworkDecision.type === "normal" ? messageCache.current.get(id) : undefined;
+    const cached = preNetworkDecision.type === "normal" ? messageCache.current.get(id) : undefined;
     mailPerf("message-click-to-shell", { elapsedMs: Math.round(performance.now() - startedAt) });
     if (cached) {
       setSelectedMessage(cached);
@@ -6008,7 +6002,9 @@ function MailApp() {
                 </span>
               </div>
               <div className="flex items-center gap-1">
-                {effectiveLoading && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />}
+                {effectiveLoading && (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
+                )}
                 <button
                   onClick={toggleSelectMode}
                   className={`rounded px-2 py-1.5 text-xs font-medium transition ${
@@ -6062,7 +6058,8 @@ function MailApp() {
           )}
 
           <div className="flex-1 overflow-hidden">
-            {(effectiveLoading || (inDeepSearch && deepLoading)) && filteredMessages.length === 0 ? (
+            {(effectiveLoading || (inDeepSearch && deepLoading)) &&
+            filteredMessages.length === 0 ? (
               <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
                 <Loader2 className="h-6 w-6 animate-spin text-primary" />
                 {inDeepSearch && (
@@ -7715,82 +7712,50 @@ function ToolbarSelect({
   );
 }
 
-/**
- * A compositor-only Send flourish. It clones the existing icon into a fixed
- * layer, so it causes no React animation renders and survives the composer's
- * immediate close long enough to complete the successful exit.
- */
-function startSendFlight(anchor: HTMLButtonElement | null): { finish: (sent: boolean) => void } {
-  if (!anchor || typeof document === "undefined") return { finish: () => undefined };
-  const sourceIcon = anchor.querySelector("svg");
-  if (!sourceIcon) return { finish: () => undefined };
-
-  const start = sourceIcon.getBoundingClientRect();
-  const plane = sourceIcon.cloneNode(true) as SVGElement;
-  plane.removeAttribute("class");
-  Object.assign(plane.style, {
-    position: "fixed",
-    left: `${start.left}px`,
-    top: `${start.top}px`,
-    width: `${Math.max(20, start.width)}px`,
-    height: `${Math.max(20, start.height)}px`,
-    color: "#2563eb",
-    filter: "drop-shadow(0 5px 7px rgb(15 23 42 / 0.28))",
-    pointerEvents: "none",
-    zIndex: "2147483647",
-    willChange: "transform, opacity",
-  });
-  plane.setAttribute("aria-hidden", "true");
-  document.body.appendChild(plane);
-
-  const reduced = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true;
-  const right = Math.max(48, window.innerWidth - start.left - 64);
-  const left = -Math.max(48, start.left - 42);
-  const up = -Math.max(72, start.top - 52);
-  const flight = plane.animate(
-    reduced
-      ? [
-          { transform: "translate3d(0,0,0) scale(1)", opacity: 0.9 },
-          { transform: "translate3d(0,-8px,0) scale(1.08)", opacity: 1 },
-          { transform: "translate3d(0,0,0) scale(1)", opacity: 0.9 },
-        ]
-      : [
-          { transform: "translate3d(0,0,0) rotate(-8deg) scale(1)", offset: 0 },
-          { transform: `translate3d(${right * 0.58}px,${up * 0.72}px,0) rotate(18deg) scale(1.16)`, offset: 0.22 },
-          { transform: `translate3d(${right}px,${up * 0.18}px,0) rotate(112deg) scale(1)`, offset: 0.43 },
-          { transform: `translate3d(${left}px,${up * 0.48}px,0) rotate(218deg) scale(1.12)`, offset: 0.7 },
-          { transform: "translate3d(0,0,0) rotate(352deg) scale(1)", offset: 1 },
-        ],
-    { duration: reduced ? 900 : 2200, iterations: Infinity, easing: "ease-in-out" },
+function SendProgressPanel({ progress }: { progress: number }) {
+  const isArabic = getCurrentLang() === "ar";
+  const rounded = Math.min(100, Math.max(0, Math.round(progress)));
+  const formatted = new Intl.NumberFormat(isArabic ? "ar-SA" : "en-US").format(rounded);
+  return (
+    <aside
+      role="status"
+      aria-live="polite"
+      dir={isArabic ? "rtl" : "ltr"}
+      className={cn(
+        "fixed top-20 z-[100] w-[min(21rem,calc(100vw-2rem))] animate-in rounded-2xl border border-border/70 bg-background/95 p-4 shadow-2xl backdrop-blur-md duration-300",
+        isArabic ? "left-4 slide-in-from-left-4" : "right-4 slide-in-from-right-4",
+      )}
+    >
+      <div className="flex items-center gap-3">
+        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-brand-gradient text-white shadow-brand">
+          <Loader2 className="h-5 w-5 animate-spin" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-sm font-semibold text-foreground">{tr("جاري إرسال الرسالة")}</p>
+            <span className="font-mono text-xs font-bold tabular-nums text-primary" dir="ltr">
+              {formatted}%
+            </span>
+          </div>
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            {tr("يرجى الانتظار، يتم إرسال رسالتك بأمان.")}
+          </p>
+        </div>
+      </div>
+      <div
+        className="mt-3 h-2 overflow-hidden rounded-full bg-muted"
+        role="progressbar"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={rounded}
+      >
+        <div
+          className="h-full rounded-full bg-brand-gradient transition-[width] duration-500 ease-out"
+          style={{ width: `${rounded}%` }}
+        />
+      </div>
+    </aside>
   );
-
-  let finished = false;
-  return {
-    finish(sent: boolean) {
-      if (finished) return;
-      finished = true;
-      const current = plane.getBoundingClientRect();
-      flight.cancel();
-      plane.style.left = `${current.left}px`;
-      plane.style.top = `${current.top}px`;
-      plane.style.transform = "none";
-      const liveAnchor = sourceIcon.isConnected ? sourceIcon.getBoundingClientRect() : start;
-      const exit = sent
-        ? { x: window.innerWidth - current.left + 80, y: -Math.max(90, current.top + 70), rotate: 38 }
-        : { x: liveAnchor.left - current.left, y: liveAnchor.top - current.top, rotate: -8 };
-      const landing = plane.animate(
-        [
-          { transform: "translate3d(0,0,0) rotate(0deg) scale(1)", opacity: 1 },
-          {
-            transform: `translate3d(${exit.x}px,${exit.y}px,0) rotate(${exit.rotate}deg) scale(${sent ? 0.62 : 0.88})`,
-            opacity: sent ? 0 : 0.15,
-          },
-        ],
-        { duration: reduced ? 120 : sent ? 320 : 220, easing: sent ? "cubic-bezier(.22,.8,.35,1)" : "ease-in" },
-      );
-      void landing.finished.catch(() => undefined).finally(() => plane.remove());
-    },
-  };
 }
 
 function Composer({
@@ -7813,10 +7778,7 @@ function Composer({
     identity: SavedDraftIdentity,
     previousRef?: { folderPath: string; uid: number; uidValidity: string } | null,
   ) => void;
-  onDraftDeleteStart: (
-    draftId: string,
-    options?: { activateDraftCountGuard?: boolean },
-  ) => void;
+  onDraftDeleteStart: (draftId: string, options?: { activateDraftCountGuard?: boolean }) => void;
   onDraftDeleteRollback: (draftId: string) => void;
   onDraftDeleted: (draftId: string) => void;
 }) {
@@ -7930,16 +7892,11 @@ function Composer({
     () => restored?.bcc ?? parseRecipientText(initial?.bcc ?? ""),
   );
   const [showCc, setShowCc] = useState<boolean>(
-    () =>
-      restored?.showCc ??
-      initial?.showCc ??
-      parseRecipientText(initial?.cc ?? "").length > 0,
+    () => restored?.showCc ?? initial?.showCc ?? parseRecipientText(initial?.cc ?? "").length > 0,
   );
   const [showBcc, setShowBcc] = useState<boolean>(
     () =>
-      restored?.showBcc ??
-      initial?.showBcc ??
-      parseRecipientText(initial?.bcc ?? "").length > 0,
+      restored?.showBcc ?? initial?.showBcc ?? parseRecipientText(initial?.bcc ?? "").length > 0,
   );
   const [subject, setSubject] = useState<string>(() => restored?.subject ?? initial?.subject ?? "");
   const initialHtml = useMemo(() => {
@@ -7979,7 +7936,17 @@ function Composer({
   >(new Map());
   const [sending, setSending] = useState(false);
   const [progress, setProgress] = useState(0);
-  const sendButtonRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!sending) return;
+    const timer = window.setInterval(() => {
+      setProgress((current) => {
+        if (current >= 92) return current;
+        const step = current < 55 ? 4 : current < 80 ? 2 : 1;
+        return Math.min(92, current + step);
+      });
+    }, 400);
+    return () => window.clearInterval(timer);
+  }, [sending]);
   // Composer runs inline inside the message-viewer pane (Superhuman-style).
   const [dragging, setDragging] = useState(false);
   const [savedAt, setSavedAt] = useState<number | null>(() => initialDoc?.updatedAt ?? null);
@@ -8097,12 +8064,12 @@ function Composer({
     WeakMap<File, Promise<WorkingDraftAttachmentReference>>
   >(new WeakMap());
   const workingAttachmentClientKeyRef = useRef<WeakMap<File, string>>(new WeakMap());
-  const workingAttachmentByExistingIdRef = useRef<
-    Map<string, WorkingDraftAttachmentReference>
-  >(new Map());
-  const workingAttachmentByInlineIdRef = useRef<
-    Map<string, WorkingDraftAttachmentReference>
-  >(new Map());
+  const workingAttachmentByExistingIdRef = useRef<Map<string, WorkingDraftAttachmentReference>>(
+    new Map(),
+  );
+  const workingAttachmentByInlineIdRef = useRef<Map<string, WorkingDraftAttachmentReference>>(
+    new Map(),
+  );
   const workingDraftRecordRef = useRef<WorkingDraftRecord | null>(null);
   const workingDraftLoadPromiseRef = useRef<Promise<WorkingDraftRecord | null> | null>(null);
   const currentMailSessionTokenRef = useRef<string>(session.mailSessionToken ?? "");
@@ -8183,7 +8150,9 @@ function Composer({
         setShowCc(Boolean(snapshot.showCc));
         setShowBcc(Boolean(snapshot.showBcc));
         if (editorRef.current) editorRef.current.innerHTML = snapshot.html ?? "";
-        const normal = record.payload.attachments.filter((attachment) => attachment.kind === "attachment");
+        const normal = record.payload.attachments.filter(
+          (attachment) => attachment.kind === "attachment",
+        );
         const cards = normal.map((attachment) => ({
           id: attachment.clientKey,
           filename: attachment.filename,
@@ -8845,11 +8814,13 @@ function Composer({
               headers: { "Content-Type": "application/json" },
               body: requestBody,
             });
-            const parsed = await response.json().catch(() => null);
+            const value: unknown = await response.json().catch(() => null);
+            const parsed =
+              value && typeof value === "object" ? (value as Record<string, unknown>) : null;
             return { response, parsed };
           };
           let response: Response;
-          let res: any = null;
+          let res: Record<string, unknown> | null = null;
           try {
             ({ response, parsed: res } = await attempt());
           } catch {
@@ -8902,7 +8873,6 @@ function Composer({
                   // only way back to these bytes.
                   image.stagedHandle = handle;
                 }
-
               });
             }
             const nextServerRef: DraftServerRef | null =
@@ -8961,7 +8931,15 @@ function Composer({
       },
       onStatus: setSaveStatus,
       onServerRef: (r) => setServerRef(r),
-      onCompleted: ({ completedGeneration, revisionId, status, serverRef, previousRef, code, trigger }) => {
+      onCompleted: ({
+        completedGeneration,
+        revisionId,
+        status,
+        serverRef,
+        previousRef,
+        code,
+        trigger,
+      }) => {
         automaticSaveGenerationsRef.current.delete(completedGeneration);
         const wasAutomatic =
           trigger?.reason === "automatic" || trigger?.reason === "attachment-ready";
@@ -9119,6 +9097,7 @@ function Composer({
         for (const unresolved of editor.querySelectorAll<HTMLImageElement>(
           'img[src^="cid:" i],img[data-mm-source-cid]',
         )) {
+          if (removeUnresolvedQuotedCidImage(unresolved)) continue;
           const cid = (
             unresolved.dataset.mmSourceCid ??
             unresolved.getAttribute("src")?.slice(4) ??
@@ -9160,7 +9139,10 @@ function Composer({
                 Boolean(attachment.attachmentId) &&
                 Boolean(attachment.cid),
             )
-            .map((attachment) => [attachment.cid!.trim().replace(/^<|>$/g, "").toLowerCase(), attachment]),
+            .map((attachment) => [
+              attachment.cid!.trim().replace(/^<|>$/g, "").toLowerCase(),
+              attachment,
+            ]),
         );
         const loadedCids = new Set<string>();
         // IndexedDB blobs are accepted only when they are pinned to the same
@@ -9680,11 +9662,13 @@ function Composer({
 
   function startWorkingDraftCheckpoint(hasAttachments: boolean) {
     void hasAttachments;
-    if (!canScheduleWorkingDraftCheckpoint({
-      sendInProgress: sendInProgressRef.current,
-      deleteIntent: deleteIntentRef.current,
-      sendCompleted: sendCompletedRef.current,
-    })) {
+    if (
+      !canScheduleWorkingDraftCheckpoint({
+        sendInProgress: sendInProgressRef.current,
+        deleteIntent: deleteIntentRef.current,
+        sendCompleted: sendCompletedRef.current,
+      })
+    ) {
       return;
     }
     const latestRevision = workingRevisionRef.current;
@@ -9697,10 +9681,7 @@ function Composer({
       workingCheckpointPendingRef.current = false;
       return;
     }
-    if (
-      typeof window === "undefined" ||
-      workingCheckpointInFlightRef.current
-    ) {
+    if (typeof window === "undefined" || workingCheckpointInFlightRef.current) {
       providerCheckpointLatestRequestedRevisionRef.current = Math.max(
         providerCheckpointLatestRequestedRevisionRef.current ?? 0,
         latestRevision,
@@ -9721,9 +9702,9 @@ function Composer({
     providerCheckpointLatestRequestedRevisionRef.current = checkpointRevision;
     console.info("[draft-provider-checkpoint] event=start revision=", checkpointRevision);
     workingCheckpointFlightRef.current = fetch("/api/mail-working-draft-checkpoint", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mailSessionToken: mailSessionTokenRef.current, draftId }),
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mailSessionToken: mailSessionTokenRef.current, draftId }),
     })
       .then(async (response) => {
         if (response.ok) {
@@ -9788,16 +9769,14 @@ function Composer({
         window.clearTimeout(workingCheckpointTimerRef.current);
         workingCheckpointTimerRef.current = null;
       }
-      providerCheckpointNextWindowAtRef.current =
-        Date.now() + DRAFT_PROVIDER_CHECKPOINT_CADENCE_MS;
+      providerCheckpointNextWindowAtRef.current = Date.now() + DRAFT_PROVIDER_CHECKPOINT_CADENCE_MS;
       startWorkingDraftCheckpoint(hasAttachments);
       return;
     }
     if (workingCheckpointTimerRef.current !== null) return;
     const now = Date.now();
     const nextWindowAt =
-      providerCheckpointNextWindowAtRef.current ??
-      now + DRAFT_PROVIDER_CHECKPOINT_CADENCE_MS;
+      providerCheckpointNextWindowAtRef.current ?? now + DRAFT_PROVIDER_CHECKPOINT_CADENCE_MS;
     providerCheckpointNextWindowAtRef.current = nextWindowAt;
     const delay = Math.max(0, nextWindowAt - now);
     console.info("[draft-provider-checkpoint] event=scheduled revision=", latestRevision);
@@ -10146,7 +10125,9 @@ function Composer({
       if (!isDirtyRef.current) {
         finalizeCleanClose();
         scheduleWorkingDraftCheckpoint(
-          existingKeptRef.current.length + filesRef.current.length + inlineImagesRef.current.length >
+          existingKeptRef.current.length +
+            filesRef.current.length +
+            inlineImagesRef.current.length >
             0,
           true,
         );
@@ -10773,9 +10754,8 @@ function Composer({
       return;
     }
     sendInProgressRef.current = true;
-    const sendFlight = startSendFlight(sendButtonRef.current);
     setSending(true);
-    setProgress(0);
+    setProgress(6);
     let sendAccepted = false;
     try {
       console.info("[draft-send] phase=send-click");
@@ -10792,10 +10772,12 @@ function Composer({
       pendingRemoteSaveRef.current = null;
       console.info("[draft-send] phase=provider-checkpoint-not-awaited");
       await inlineReadinessRef.current;
+      setProgress(18);
       // Settle any currently-running Draft autosave before deciding whether a
       // send-time Working Draft persistence pass is required. This never lets
       // an autosave rejection leak into the Send flow.
       await saverRef.current?.cancelPendingAndAwaitRunning();
+      setProgress(28);
       syncDraftEngineRefs();
       const serialized = serializeInlineImages(
         editorRef.current?.innerHTML ?? "",
@@ -10813,6 +10795,7 @@ function Composer({
         (document?.documentElement?.dir === "ltr" ? "ltr" : "rtl");
       const bodyHtml = buildEmailHtmlDocument(fragment, { dir: editorDir });
       const bodyText = htmlToPlainText(fragment);
+      setProgress(38);
 
       // A normal, never-saved Compose continues through the existing SMTP
       // path unchanged. An actual Draft (server Working Draft or provider
@@ -10820,6 +10803,7 @@ function Composer({
       const draftOrigin = isEditMode || workingRevisionRef.current > 0;
       let response: Response;
       if (draftOrigin) {
+        setProgress(48);
         // isEditMode alone must never authorize /api/mail-working-draft-send.
         // A clean provider/legacy Draft is promoted into a real Working Draft
         // row here, without fabricating a user edit, before SMTP is allowed.
@@ -10848,6 +10832,7 @@ function Composer({
           }),
         });
       } else {
+        setProgress(48);
         const attachmentPlan = buildAttachmentTransportPlan({
           attachments: existingKeptRef.current,
           restoredHandles: restoredHandleByAttachmentIdRef.current,
@@ -10877,6 +10862,7 @@ function Composer({
           inline: stagedInline,
           inlineMetadata: metadataToTransport(transportImages),
         });
+        setProgress(62);
         response = await fetch("/api/mail-send-v2", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -10895,6 +10881,7 @@ function Composer({
           }),
         });
       }
+      setProgress(88);
       const result = (await response.json().catch(() => ({
         ok: false,
         error: `HTTP ${response.status}`,
@@ -11022,7 +11009,6 @@ function Composer({
     } catch (err: unknown) {
       toast.error(errorMessage(err, tr("فشل إرسال الرسالة")));
     } finally {
-      sendFlight.finish(sendAccepted);
       sendInProgressRef.current = false;
       setSending(false);
       setProgress(0);
@@ -11366,6 +11352,7 @@ function Composer({
         setDragging(false);
       }}
     >
+      {sending && <SendProgressPanel progress={progress} />}
       {/* Header — flush with the pane, on the same surface */}
       <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border/70 bg-surface/80 px-3 py-2.5 backdrop-blur sm:px-6 sm:py-3">
         <div className="flex min-w-0 items-center gap-2 sm:gap-3">
@@ -11936,15 +11923,6 @@ function Composer({
               </div>
             </div>
           )}
-
-          {sending && progress > 0 && (
-            <div className="h-1 overflow-hidden rounded-full bg-muted">
-              <div
-                className="h-full bg-brand-gradient transition-all"
-                style={{ width: `${progress}%` }}
-              />
-            </div>
-          )}
         </div>
       </div>
 
@@ -11952,14 +11930,13 @@ function Composer({
       <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-t border-border/70 bg-surface/80 px-3 py-2.5 backdrop-blur sm:gap-3 sm:px-6 sm:py-3">
         <div className="flex flex-wrap items-center gap-2">
           <button
-            ref={sendButtonRef}
             onClick={handleSend}
             disabled={sending || to.length === 0}
             className="inline-flex items-center gap-2 rounded-lg bg-brand-gradient px-4 py-2 text-xs font-semibold text-white shadow-brand transition hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-60"
             title={tr("إرسال (Ctrl+Enter)")}
           >
             {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-            {sending ? (progress > 0 ? `${progress}%` : tr("جاري الإرسال")) : tr("إرسال")}
+            {sending ? tr("جاري الإرسال") : tr("إرسال")}
           </button>
           <input
             ref={imageInputRef}

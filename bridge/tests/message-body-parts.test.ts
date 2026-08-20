@@ -300,6 +300,27 @@ test("inline image parts remain discoverable with their cid + part number", () =
   assert.equal(logo!.size, 12_000);
 });
 
+test("CID image parts without filename or disposition remain discoverable", () => {
+  const parts = collectAttachmentParts({
+    type: "multipart/related",
+    childNodes: [
+      { type: "text/html", part: "1" },
+      { type: "image/jpeg", part: "2", id: "<mobile-photo@example>", size: 450_000 },
+    ],
+  });
+  assert.deepEqual(parts, [
+    {
+      id: "2",
+      part: "2",
+      filename: "attachment_1",
+      size: 450_000,
+      mimeType: "image/jpeg",
+      disposition: undefined,
+      contentId: "<mobile-photo@example>",
+    },
+  ]);
+});
+
 test("a duplicated Content-ID is ambiguous and never selects an arbitrary MIME part", () => {
   const duplicated = [
     {
