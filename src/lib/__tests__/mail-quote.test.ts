@@ -81,6 +81,19 @@ describe("buildReplyQuoteHtml / buildForwardQuoteHtml", () => {
     expect(forward).toContain("<bdi>Project مشروع</bdi>");
     expect(forward).toContain("<bdi>Sara سارة &lt;sara@example.com&gt;</bdi>");
   });
+
+  it.each([
+    ["Arabic reply", buildReplyQuoteHtml, "ar-SA", "rtl", "right"],
+    ["Arabic forward", buildForwardQuoteHtml, "ar", "rtl", "right"],
+    ["English reply", buildReplyQuoteHtml, "en-US", "ltr", "left"],
+    ["English forward", buildForwardQuoteHtml, "en", "ltr", "left"],
+  ])("aligns every system-generated %s block with the UI language", (_name, build, locale, dir, align) => {
+    const out = build("مرحبا Hello", meta, locale);
+    expect(out).toContain(`class="mm_quote" dir="${dir}" style="direction:${dir};text-align:${align}"`);
+    expect(out).toContain(`dir="${dir}" style="color:`);
+    expect(out).toContain(`direction:${dir};text-align:${align}`);
+    expect(out).toContain('data-mm-quoted-content="1" dir="auto"');
+  });
 });
 
 describe("splitQuotedHtml", () => {

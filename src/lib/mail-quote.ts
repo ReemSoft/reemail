@@ -92,6 +92,15 @@ function bidiIsolate(text: string): string {
   return `<bdi>${escapeHtml(text)}</bdi>`;
 }
 
+function systemQuoteDirection(locale: string): "rtl" | "ltr" {
+  return locale.trim().toLowerCase().startsWith("ar") ? "rtl" : "ltr";
+}
+
+function systemQuoteStyle(direction: "rtl" | "ltr", base = ""): string {
+  const alignment = direction === "rtl" ? "right" : "left";
+  return `${base}${base ? ";" : ""}direction:${direction};text-align:${alignment}`;
+}
+
 /** Marker class used by the viewer to detect a quoted history block. */
 export const QUOTE_CLASS = "mm_quote";
 
@@ -113,13 +122,14 @@ export function buildReplyQuoteHtml(
   attributionLabel = "wrote:",
 ): string {
   const fragment = toQuotableFragment(body);
+  const direction = systemQuoteDirection(locale);
   const attribution = `${bidiIsolate(formatDate(meta.date, locale))} — ${bidiIsolate(
     formatAddress(meta.from),
   )} ${escapeHtml(attributionLabel)}`;
   return [
     "<div><br></div><div><br></div>",
-    `<div class="${QUOTE_CLASS}">`,
-    `<div style="color:#71717a;font-size:12px;margin:0 0 8px">${attribution}</div>`,
+    `<div class="${QUOTE_CLASS}" dir="${direction}" style="${systemQuoteStyle(direction)}">`,
+    `<div dir="${direction}" style="${systemQuoteStyle(direction, "color:#71717a;font-size:12px;margin:0 0 8px")}">${attribution}</div>`,
     `<blockquote style="${BLOCKQUOTE_STYLE}"><div ${QUOTED_CONTENT_ATTR}="1" dir="auto" style="${QUOTED_CONTENT_STYLE}">${fragment}</div></blockquote>`,
     "</div>",
   ].join("");
@@ -149,6 +159,7 @@ export function buildForwardQuoteHtml(
   },
 ): string {
   const fragment = toQuotableFragment(body);
+  const direction = systemQuoteDirection(locale);
   const rows: string[] = [
     `${escapeHtml(labels.from)} ${bidiIsolate(formatAddress(meta.from))}`,
     `${escapeHtml(labels.date)} ${bidiIsolate(formatDate(meta.date, locale))}`,
@@ -162,9 +173,9 @@ export function buildForwardQuoteHtml(
   }
   return [
     "<div><br></div><div><br></div>",
-    `<div class="${QUOTE_CLASS}">`,
-    `<div style="color:#71717a;font-size:12px;margin:0 0 8px">${escapeHtml(labels.header)}</div>`,
-    `<div style="color:#3f3f46;font-size:12px;margin:0 0 12px">${rows.join("<br>")}</div>`,
+    `<div class="${QUOTE_CLASS}" dir="${direction}" style="${systemQuoteStyle(direction)}">`,
+    `<div dir="${direction}" style="${systemQuoteStyle(direction, "color:#71717a;font-size:12px;margin:0 0 8px")}">${escapeHtml(labels.header)}</div>`,
+    `<div dir="${direction}" style="${systemQuoteStyle(direction, "color:#3f3f46;font-size:12px;margin:0 0 12px")}">${rows.join("<br>")}</div>`,
     `<blockquote style="${BLOCKQUOTE_STYLE}"><div ${QUOTED_CONTENT_ATTR}="1" dir="auto" style="${QUOTED_CONTENT_STYLE}">${fragment}</div></blockquote>`,
     "</div>",
   ].join("");
