@@ -896,6 +896,65 @@ async function materializePayloadAttachments(
   );
 }
 
+export interface SendSourceAttachment {
+  folderPath: string;
+  uid: number;
+  uidValidity: string;
+  part: string;
+  filename: string;
+  size: number;
+  mimeType: string;
+}
+
+/**
+ * Send-time attachment plan.
+ *
+ * A kept provider attachment that was never imported is handed to the Bridge
+ * as an IMAP source descriptor instead of being pulled through the App server
+ * (IMAP -> Worker -> Storage -> Worker -> Bridge). The Bridge streams those
+ * bytes straight from IMAP into the outgoing MIME, so Send drops two full
+ * byte hops per attachment. Owned objects and inline images keep the existing
+ * staged-object path unchanged.
+ */
+async function resolveSendAttachments(
+  auth: WorkingDraftAuth,
+  draftId: string,
+  payload: WorkingDraftPayload,
+  context: WorkingDraftTransferContext,
+): Promise<{ rows: AttachmentRow[]; sources: SendSourceAttachment[] }> {
+  await syncAttachmentReferences(auth, draftId, payload.attachments);
+  const rows = await attachmentRows(auth, draftId);
+  const byClientKey = new Map(rows.map((row) => [row.client_key, row]));
+  const resolved = await mapWithBoundedConcurrency(
+    payload.attachments,
+    WORKING_DRAFT_STAGE_CONCURRENCY,
+    async (reference) => {
+      const row = reference.attachmentId
+        ? rows.find((candidate) => candidate.id === reference.attachmentId)
+        : byClientKey.get(reference.clientKey);
+      if (!row) throw new Error("ATTACHMENT_REFERENCE_MISSING");
+      if (row.storage_path) return { owned: row, source: null };
+      const source = sourceOf(row);
+      if (row.kind === "attachment" && source) {
+        return {
+          owned: null,
+          source: {
+            ...source,
+            filename: row.filename,
+            size: Number(row.size_bytes) || 0,
+            mimeType: row.mime_type,
+          } satisfies SendSourceAttachment,
+        };
+      }
+      return { owned: await importExternalAttachment(auth, row, context), source: null };
+    },
+  );
+  return {
+    rows: resolved.flatMap((item) => (item.owned ? [item.owned] : [])),
+    sources: resolved.flatMap((item) => (item.source ? [item.source] : [])),
+  };
+}
+
 async function getWorkingDraftSendState(
   auth: WorkingDraftAuth,
   draftId: string,
