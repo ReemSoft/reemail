@@ -1517,11 +1517,11 @@ export async function sendWorkingDraft(input: {
     throw new Error("WORKING_DRAFT_NOT_FOUND");
   }
 
-  let rows: Awaited<ReturnType<typeof materializePayloadAttachments>>;
+  let plan: Awaited<ReturnType<typeof resolveSendAttachments>>;
   let transferContext: WorkingDraftTransferContext | null = null;
   try {
     transferContext = await createWorkingDraftTransferContext(input.auth);
-    rows = await materializePayloadAttachments(
+    plan = await resolveSendAttachments(
       input.auth,
       input.draftId,
       record.payload,
@@ -1545,7 +1545,8 @@ export async function sendWorkingDraft(input: {
       draftId: input.draftId,
       revisionId: randomUUID(),
       payload: record.payload,
-      rows,
+      rows: plan.rows,
+      sourceAttachments: plan.sources,
       endpoint: "/api/send-v2",
       context: transferContext!,
     });
