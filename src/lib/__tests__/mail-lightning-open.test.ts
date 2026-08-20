@@ -51,8 +51,8 @@ describe("MAILMAESTRO_LIGHTNING_MESSAGE_OPEN", () => {
       route.indexOf("function useInlineImageMappings"),
       route.indexOf("function MessageBody"),
     );
-    expect(viewer).toContain("for (let offset = 0; offset < cached.misses.length; offset += 5)");
-    expect(viewer).toContain("const batch = cached.misses.slice(offset, offset + 5)");
+    expect(viewer).toContain("for (const batch of chunkInlineCidParts(cached.misses))");
+    expect(viewer).not.toContain("cached.misses.slice(offset, offset + 5)");
     expect(viewer).toContain("fetchInlineCidPartsBatch(batch");
     expect(viewer.match(/fetch\("\/api\/mail-inline-part"/g)).toHaveLength(1);
     expect(viewer).toContain("if (cached.hits.length) onLargeCid?.(cached.hits)");

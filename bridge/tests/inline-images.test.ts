@@ -34,6 +34,19 @@ test("maps only matching uploads to CID inline attachments", async () => {
   assert.equal(mapped[1].contentDisposition, "inline");
 });
 
+test("maps a trusted provider source with its original safe Content-ID", async () => {
+  const sourceCid = "20260816.232958.mobile@example.com";
+  const mapped = await mapUploadedAttachments(
+    [{ originalname: filename, path: "/tmp/provider-image", mimetype: "image/png", size: 20 }],
+    [],
+    async () => Buffer.from("89504e470d0a1a0a", "hex"),
+    [{ uploadFilename: filename, cid: sourceCid, contentType: "image/png" }],
+  );
+
+  assert.equal(mapped[0].cid, sourceCid);
+  assert.equal(mapped[0].contentDisposition, "inline");
+});
+
 test("normalizes outgoing metadata after inline identity matching without touching bytes", async () => {
   const original = "\u062a\u0642\u0631\u064a\u0631.pdf";
   const mojibake = Buffer.from(original, "utf8").toString("latin1");

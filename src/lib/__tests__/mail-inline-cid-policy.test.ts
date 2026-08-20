@@ -4,6 +4,7 @@ import {
   INLINE_CID_FAST_MAX_BYTES,
   INLINE_CID_FAST_TOTAL_BYTES,
   INLINE_CID_STREAM_MAX_BYTES,
+  chunkInlineCidParts,
   partitionInlineCidParts,
   streamInlineCidPartsSequential,
   type InlineCidPart,
@@ -57,7 +58,7 @@ describe("large inline CID receive policy", () => {
     expect(result.overflowStreamParts.length).toBeGreaterThan(0);
   });
 
-  it("never auto-loads malformed, non-image or over-5-MiB metadata", () => {
+  it("never auto-loads malformed, non-image or over-25-MiB metadata", () => {
     const unsafe = [
       part("too-large", INLINE_CID_STREAM_MAX_BYTES + 1),
       part("svg", 100, "image/svg+xml"),
@@ -67,6 +68,26 @@ describe("large inline CID receive policy", () => {
     expect(result.smallBatchParts).toEqual([]);
     expect(result.largeStreamParts).toEqual([]);
     expect(result.oversizedUnsafeParts).toEqual(unsafe);
+  });
+
+  it("chunks deferred images by both five-part and 25 MiB request limits", () => {
+    const batches = chunkInlineCidParts([
+      part("one", 14 * 1024 * 1024),
+      part("two", 14 * 1024 * 1024),
+      ...Array.from({ length: 6 }, (_, index) => part(`small-${index}`, 1)),
+    ]);
+    expect(batches.map((batch) => batch.map((item) => item.cid))).toEqual([
+      ["one"],
+      ["two", "small-0", "small-1", "small-2", "small-3"],
+      ["small-4", "small-5"],
+    ]);
+    expect(
+      batches.every(
+        (batch) =>
+          batch.length <= 5 &&
+          batch.reduce((total, item) => total + item.size, 0) <= 25 * 1024 * 1024,
+      ),
+    ).toBe(true);
   });
 
   it("streams large CIDs with concurrency one and returns transferable bytes", async () => {
@@ -165,7 +186,7 @@ describe("large inline CID receive policy", () => {
     expect(viewer).toContain("const parts = deferredStreamParts");
     expect(viewer).toContain("fetchInlineCidPartsBatch");
     expect(viewer).toContain("parts: requested");
-    expect(viewer).toContain("offset += 5");
+    expect(viewer).toContain("chunkInlineCidParts(cached.misses)");
     expect(viewer).not.toContain("streamInlineCidPartsSequential(parts");
     expect(viewer).toContain('fetch("/api/mail-inline-part"');
     expect(viewer).not.toContain('fetch("/api/mail-attachment"');

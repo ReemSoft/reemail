@@ -414,10 +414,12 @@ export function createStageServerInlineSources(deps: ServerInlineSourceDeps) {
                   secret: input.secret,
                   account,
                   filename: source.uploadFilename,
-                  mimeType:
-                    String(
-                      (download.meta as { contentType?: string }).contentType || source.mimeType,
-                    ) || "application/octet-stream",
+                  // BODYSTRUCTURE/download metadata from Outlook/mobile mail
+                  // often says application/octet-stream for real JPEG/PNG
+                  // parts. The trusted descriptor is canonicalized to a safe
+                  // raster MIME and mapUploadedAttachments still verifies the
+                  // actual file signature before SMTP.
+                  mimeType: source.mimeType,
                   kind: "inline-image",
                   declaredSize: source.size,
                   maxSize: input.maxBytes,

@@ -284,7 +284,7 @@ describe("MAILMAESTRO_INSTANT_NAVIGATION_R1 stable CID iframe", () => {
             {
               cid: "large",
               mimeType: "image/png",
-              bytes: new ArrayBuffer(5 * 1024 * 1024 + 1),
+              bytes: new ArrayBuffer(25 * 1024 * 1024 + 1),
             },
           ],
         },

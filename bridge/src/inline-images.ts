@@ -10,7 +10,7 @@ export const INLINE_IMAGE_MIME_TYPES = [
   "image/gif",
   "image/webp",
 ] as const;
-export const INLINE_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
+export const INLINE_IMAGE_MAX_BYTES = 25 * 1024 * 1024;
 
 export const InlineImageMetadataSchema = z
   .array(
@@ -30,6 +30,27 @@ export const InlineImageMetadataSchema = z
       }
       names.add(item.uploadFilename);
       cids.add(item.cid);
+    }
+  });
+
+export const TrustedInlineImageMetadataSchema = z
+  .array(
+    z.object({
+      uploadFilename: z.string().regex(/^mm-inline-[a-f0-9]{32}\.(?:png|jpg|gif|webp)$/),
+      cid: z.string().regex(/^[^\s<>\r\n]{1,998}$/),
+      contentType: z.enum(INLINE_IMAGE_MIME_TYPES),
+    }),
+  )
+  .max(50)
+  .superRefine((items, ctx) => {
+    const names = new Set<string>();
+    const cids = new Set<string>();
+    for (const item of items) {
+      if (names.has(item.uploadFilename) || cids.has(item.cid.toLowerCase())) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: "DUPLICATE_INLINE_IMAGE" });
+      }
+      names.add(item.uploadFilename);
+      cids.add(item.cid.toLowerCase());
     }
   });
 
@@ -55,8 +76,18 @@ export async function mapUploadedAttachments(
   files: UploadedInlineFile[],
   rawMetadata: unknown,
   readPrefix: (path: string) => Promise<Uint8Array> = readFilePrefix,
+  trustedRawMetadata: unknown = [],
 ): Promise<SendAttachment[]> {
-  const metadata = InlineImageMetadataSchema.parse(rawMetadata ?? []);
+  const metadata = [
+    ...InlineImageMetadataSchema.parse(rawMetadata ?? []),
+    ...TrustedInlineImageMetadataSchema.parse(trustedRawMetadata ?? []),
+  ];
+  if (
+    new Set(metadata.map((item) => item.uploadFilename)).size !== metadata.length ||
+    new Set(metadata.map((item) => item.cid.toLowerCase())).size !== metadata.length
+  ) {
+    throw new Error("DUPLICATE_INLINE_IMAGE");
+  }
   const byName = new Map(metadata.map((item) => [item.uploadFilename, item]));
   for (const name of byName.keys()) {
     if (files.filter((file) => file.originalname === name).length !== 1) {

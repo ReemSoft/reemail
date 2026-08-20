@@ -97,7 +97,7 @@ test("two large CID requests reuse the media mailbox path without connect/login"
   assert.doesNotMatch(sharedPath, /makeImapClient|\.connect\(|\.logout\(/);
 });
 
-test("large CID endpoint helper fails closed for non-image bytes and the 5 MiB expected-size cap", async () => {
+test("large CID endpoint helper fails closed for non-image bytes and the expected-size cap", async () => {
   let mode: "non-image" | "oversize" = "non-image";
   const client = {
     async download() {

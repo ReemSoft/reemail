@@ -6,7 +6,7 @@ export const INLINE_CID_FAST_MAX_BYTES = 256 * 1024;
 export const INLINE_CID_FAST_TOTAL_BYTES = 1024 * 1024;
 export const INLINE_CID_MAX_COUNT = 20;
 export const INLINE_CID_METADATA_MAX_COUNT = 50;
-export const INLINE_CID_STREAM_MAX_BYTES = 5 * 1024 * 1024;
+export const INLINE_CID_STREAM_MAX_BYTES = 25 * 1024 * 1024;
 
 const INLINE_IMAGE_MIMES = new Set([
   "image/png",
@@ -21,6 +21,29 @@ export interface InlineCidPartition {
   largeStreamParts: InlineCidPart[];
   overflowStreamParts: InlineCidPart[];
   oversizedUnsafeParts: InlineCidPart[];
+}
+
+/** Keep each post-paint Bridge request inside both count and decoded-byte limits. */
+export function chunkInlineCidParts(
+  parts: readonly InlineCidPart[],
+  maxCount = 5,
+  maxBytes = 25 * 1024 * 1024,
+): InlineCidPart[][] {
+  const batches: InlineCidPart[][] = [];
+  let current: InlineCidPart[] = [];
+  let currentBytes = 0;
+  for (const part of parts) {
+    if (current.length && (current.length >= maxCount || currentBytes + part.size > maxBytes)) {
+      batches.push(current);
+      current = [];
+      currentBytes = 0;
+    }
+    if (part.size > maxBytes) continue;
+    current.push(part);
+    currentBytes += part.size;
+  }
+  if (current.length) batches.push(current);
+  return batches;
 }
 
 export function normalizeInlineImageMime(value: string): string {

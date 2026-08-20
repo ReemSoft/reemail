@@ -7,7 +7,12 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { pickTextPart, collectAttachmentParts, findUniqueCidAttachment } from "../src/imap.js";
+import {
+  pickTextPart,
+  collectAttachmentParts,
+  findUniqueCidAttachment,
+  resolveHtmlInlineResources,
+} from "../src/imap.js";
 import { imapConnectionStats, closeAllImapConnections } from "../src/imap-connection.js";
 
 const plainOnly = {
@@ -52,6 +57,57 @@ const relatedWithInlineImage = {
     },
   ],
 };
+
+test("a unique relative image filename is resolved to its MIME part without moving markup", () => {
+  const html =
+    '<table><tr><td>before<img class="photo" src="photos/20260816_232958.jpg?download=1" alt="sample">after</td></tr></table>';
+  const result = resolveHtmlInlineResources(html, [
+    {
+      part: "2.1",
+      filename: "20260816_232958.jpg",
+      mimeType: "application/octet-stream",
+      size: 8 * 1024 * 1024,
+      disposition: "attachment",
+    },
+  ]);
+
+  assert.equal(
+    result.html,
+    '<table><tr><td>before<img class="photo" src="cid:mm-source-2-1@mailmaestro" alt="sample">after</td></tr></table>',
+  );
+  assert.deepEqual(result.attachments[0], {
+    part: "2.1",
+    filename: "20260816_232958.jpg",
+    mimeType: "image/jpeg",
+    size: 8 * 1024 * 1024,
+    disposition: "inline",
+    contentId: "<mm-source-2-1@mailmaestro>",
+  });
+});
+
+test("relative image resolution fails closed when a filename has multiple MIME owners", () => {
+  const html = '<p><img src="same.png"></p>';
+  const result = resolveHtmlInlineResources(html, [
+    { part: "2", filename: "same.png", mimeType: "image/png", size: 10 },
+    { part: "3", filename: "same.png", mimeType: "image/png", size: 20 },
+  ]);
+
+  assert.equal(result.html, html);
+  assert.equal(
+    result.attachments.every((attachment) => !attachment.contentId),
+    true,
+  );
+});
+
+test("remote, root-relative and non-image resources are never rewritten", () => {
+  const html = '<img src="https://example.com/logo.png"><img src="/logo.png"><img src="notes.txt">';
+  const result = resolveHtmlInlineResources(html, [
+    { part: "2", filename: "logo.png", mimeType: "image/png", size: 10 },
+    { part: "3", filename: "notes.txt", mimeType: "text/plain", size: 20 },
+  ]);
+
+  assert.equal(result.html, html);
+});
 
 test("single-part text message resolves to part 1", () => {
   const pick = pickTextPart(plainOnly);

@@ -5,6 +5,7 @@ import {
   alignInlineImageNode,
   clampInlineImageWidth,
   createInlineComposeImage,
+  createSourceInlineComposeImage,
   dataUriToFile,
   insertInlineImageNode,
   installInlineImageSelectionListener,
@@ -202,6 +203,18 @@ describe("composer inline images", () => {
       ok: false,
       reason: "size",
     });
+  });
+
+  it("hydrates a trusted provider image above 5 MiB while preserving its source CID", () => {
+    const file = new File([new Uint8Array(6 * 1024 * 1024)], "phone-photo.jpg", {
+      type: "image/jpeg",
+    });
+    const image = createSourceInlineComposeImage(file, "<photo-from-provider@example.com>");
+
+    expect(image.cid).toBe("photo-from-provider@example.com");
+    expect(image.file).toBe(file);
+    expect(image.mimeType).toBe("image/jpeg");
+    expect(validateInlineImageFile(file)).toEqual({ ok: false, reason: "size" });
   });
 
   it("inserts exactly one node at the saved caret and falls back to the end", () => {

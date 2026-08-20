@@ -88,5 +88,6 @@ test("getMessageBody keeps one bounded body download and no attachment-byte down
   );
   assert.doesNotMatch(bodyPath, /downloadPartBuffer\(client, uid, (?:partInfo|attachment)/);
   assert.match(bodyPath, /parsed\.bodyTruncated = true/);
-  assert.match(bodyPath, /const structural = collectAttachmentParts\(msg\.bodyStructure\)/);
+  assert.match(bodyPath, /const discovered = resolveHtmlInlineResources\(/);
+  assert.match(bodyPath, /const structural = discovered\.attachments/);
 });

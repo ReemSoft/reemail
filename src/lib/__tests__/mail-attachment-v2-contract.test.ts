@@ -41,6 +41,9 @@ describe("active attachment V2 contract", () => {
       "utf8",
     );
     expect(sendApi).toContain('upstream.headers.get("Server-Timing")');
+    expect(sendApi).toContain("sourceInlineImages: Array.isArray(body?.sourceInlineImages)");
+    expect(composer).toContain("const sourceInlineImages = transportImages");
+    expect(composer).toContain("sourceInlineImages,");
     expect(sendApi).not.toContain("attachmentBytes");
   });
 });

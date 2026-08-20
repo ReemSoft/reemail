@@ -179,11 +179,33 @@ describe("lookupCachedBody", () => {
       mail_message_body_cache: {
         ...CACHED,
         body_html: '<p>photo</p><img src="cid:unavailable@example">',
-        headers_meta: { _inlineCidMetadataVersion: 1 },
+        headers_meta: { _inlineCidMetadataVersion: 2 },
       },
       mail_messages: { id: "m1" },
     });
     expect((await lookupCachedBody(db, KEY)).hit).toBe(true);
+  });
+
+  it("refreshes only a cached row with one uniquely recoverable relative image", async () => {
+    const db = fakeSupabase({
+      mail_folders: { id: "f1", uidvalidity: 100 },
+      mail_message_body_cache: {
+        ...CACHED,
+        body_html: '<p>photo</p><img src="20260816_232958.jpg">',
+        headers_meta: { _inlineCidMetadataVersion: 2 },
+        attachments: [
+          {
+            id: "2",
+            part: "2",
+            filename: "20260816_232958.jpg",
+            mimeType: "application/octet-stream",
+            size: 8 * 1024 * 1024,
+          },
+        ],
+      },
+      mail_messages: { id: "m1" },
+    });
+    expect(await lookupCachedBody(db, KEY)).toEqual({ hit: false, reason: "incomplete-inline" });
   });
 
   it("recovers a referenced 1.8 MiB CID image from legacy cached attachments", async () => {
@@ -331,7 +353,7 @@ describe("lookupCachedBody", () => {
     expect(res.body.attachments).toEqual([]);
   });
 
-  it("does not promote malformed, disallowed, or over-5-MiB legacy metadata", async () => {
+  it("does not promote malformed, disallowed, or over-25-MiB legacy metadata", async () => {
     const attachments = [
       {
         id: "bad-part",
@@ -355,7 +377,7 @@ describe("lookupCachedBody", () => {
         contentId: "too-large",
         part: "4",
         mimeType: "image/png",
-        size: 5 * 1024 * 1024 + 1,
+        size: 25 * 1024 * 1024 + 1,
       },
     ];
     const db = fakeSupabase({
@@ -412,7 +434,7 @@ describe("storeCachedBody", () => {
     expect(row["cache_version"]).toBe(BODY_CACHE_VERSION);
     expect(row["body_html"]).toBe("<p>x</p>");
     expect(row["oversize"]).toBe(false);
-    expect(row["headers_meta"]).toEqual(expect.objectContaining({ _inlineCidMetadataVersion: 1 }));
+    expect(row["headers_meta"]).toEqual(expect.objectContaining({ _inlineCidMetadataVersion: 2 }));
   });
 
   it("stores Reply-To inside the existing bounded headers JSON", async () => {
@@ -429,7 +451,7 @@ describe("storeCachedBody", () => {
     });
     const row = spy.upserts[0] as Record<string, unknown>;
     expect(row["headers_meta"]).toEqual({
-      _inlineCidMetadataVersion: 1,
+      _inlineCidMetadataVersion: 2,
       mailedBy: undefined,
       signedBy: undefined,
       security: undefined,

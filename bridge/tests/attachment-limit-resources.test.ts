@@ -42,11 +42,12 @@ test("v2 payload schemas allow 50 staged inline images while normal/source stay 
   );
   assert.match(schemas, /attachmentHandles:[\s\S]*?\.max\(10\)/);
   assert.match(schemas, /sourceAttachments: z\.array\(ServerAttachmentSourceSchema\)\.max\(10\)/);
+  assert.match(schemas, /sourceInlineImages: z\.array\(ServerInlineSourceSchema\)\.max\(50\)/);
 });
 
 test("send-v2 combines staged normal handles + server-source attachments for the normal 10-cap", () => {
   assert.match(sendV2, /const normalParts = normal\.length \+ sourceAttachments\.length;/);
-  assert.match(sendV2, /const inlineParts = inline\.length;/);
+  assert.match(sendV2, /const inlineParts = inline\.length \+ sourceInlineImages\.length;/);
 });
 
 test("draft-save-v2 combines staged normal handles + preserved server-source attachments for the normal 10-cap", () => {
@@ -75,8 +76,9 @@ test("total decoded-byte limit is never weakened in either v2 handler", () => {
   );
 });
 
-test("per-inline 5 MiB limit is unchanged", () => {
-  assert.match(inlineImagesSource, /export const INLINE_IMAGE_MAX_BYTES = 5 \* 1024 \* 1024;/);
+test("provider inline sources allow 25 MiB while the shared message budget stays 25 MiB", () => {
+  assert.match(inlineImagesSource, /export const INLINE_IMAGE_MAX_BYTES = 25 \* 1024 \* 1024;/);
+  assert.match(indexSource, /SEND_MAX_TOTAL_BYTES \|\| 25 \* 1024 \* 1024/);
 });
 
 test("InlineImageMetadataSchema keeps security validation at the higher 50-cap", () => {

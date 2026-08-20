@@ -20,6 +20,7 @@ import {
 import type { CidImageMapping, LargeCidByteMapping } from "@/lib/email-viewer-security";
 import {
   partitionInlineCidParts,
+  chunkInlineCidParts,
   fetchInlineCidPartsBatch,
   streamInlineCidPartsSequential,
   readLargeInlineCidSessionCache,
@@ -575,13 +576,13 @@ function useInlineImageMappings(
 
     const controller = new AbortController();
     if (cached.hits.length) onLargeCid?.(cached.hits);
-    // Five 5-MiB parts is the authenticated endpoint's 25-MiB ceiling. Fetch
-    // batches sequentially after text paint so a message with 20-50 images is
-    // progressive, bounded and never delays opening or competes in parallel.
+    // Keep every authenticated request inside both the five-part and 25-MiB
+    // ceilings. Fetch sequentially after text paint so a message with 20-50
+    // images is progressive, bounded and never delays opening or competes in
+    // parallel.
     void (async () => {
-      for (let offset = 0; offset < cached.misses.length; offset += 5) {
+      for (const batch of chunkInlineCidParts(cached.misses)) {
         if (controller.signal.aborted) return;
-        const batch = cached.misses.slice(offset, offset + 5);
         const mappings = await fetchInlineCidPartsBatch(batch, {
           signal: controller.signal,
           fetchBatch: (requested, signal) =>
@@ -1051,6 +1052,8 @@ import type { MailFolder, MailMessage } from "@/lib/mail-types";
 import { buildEmailHtmlDocument, htmlToPlainText } from "@/lib/mail-compose-html";
 import {
   createInlineComposeImage,
+  createSourceInlineComposeImage,
+  INLINE_IMAGE_MAX_BYTES,
   dataUriToFile,
   hydrateInlineComposeImage,
   insertInlineImageNode,
@@ -9278,14 +9281,21 @@ function Composer({
         }
       }
       const attachRemoteFile = async (sourceCid: string, file: File) => {
-        if (!validateInlineImageFile(file).ok) return;
-        const image = createInlineComposeImage(file);
         const canonicalSourceCid = sourceCid.trim().replace(/^<|>$/g, "");
+        const sourcePart = sourcePartByCid.get(sourceCid.toLowerCase());
+        const trustedSource = initial?.attachmentSourceRef ?? initial?.previousRef;
+        let image: InlineComposeImage;
+        try {
+          image =
+            sourcePart && trustedSource
+              ? createSourceInlineComposeImage(file, canonicalSourceCid)
+              : createInlineComposeImage(file);
+        } catch {
+          return;
+        }
         image.stagedHandle = transportInlineHandleByCidRef.current.get(
           canonicalSourceCid.toLowerCase(),
         );
-        const sourcePart = sourcePartByCid.get(sourceCid.toLowerCase());
-        const trustedSource = initial?.attachmentSourceRef ?? initial?.previousRef;
         if (sourcePart && trustedSource) {
           image.sourceDescriptor = {
             folderPath: trustedSource.folderPath,
@@ -9304,9 +9314,11 @@ function Composer({
           return;
         }
         hydrated.push(image);
-        await persistInlineImage(inlineScope, toInlineImageMetadata(image), image.file).catch(
-          () => undefined,
-        );
+        if (image.file.size <= INLINE_IMAGE_MAX_BYTES) {
+          await persistInlineImage(inlineScope, toInlineImageMetadata(image), image.file).catch(
+            () => undefined,
+          );
+        }
       };
       for (const source of remote) {
         if (
@@ -10831,10 +10843,14 @@ function Composer({
         }
         let stagedNormal: StagedAttachmentResult[];
         let stagedInline: StagedAttachmentResult[];
+        const uploadInline = transportImages.filter((image) => !image.sourceDescriptor);
+        const sourceInlineImages = transportImages
+          .filter((image) => image.sourceDescriptor)
+          .map((image) => image.sourceDescriptor!);
         try {
           stagedNormal = await Promise.all(files.map((file) => ensureStaged(file, "attachment")));
           stagedInline = await Promise.all(
-            transportImages.map((image) =>
+            uploadInline.map((image) =>
               ensureStaged(image.file, "inline-image", image.uploadFilename),
             ),
           );
@@ -10846,7 +10862,7 @@ function Composer({
           plan: attachmentPlan,
           normal: stagedNormal,
           inline: stagedInline,
-          inlineMetadata: metadataToTransport(transportImages),
+          inlineMetadata: metadataToTransport(uploadInline),
         });
         setProgress(62);
         response = await fetch("/api/mail-send-v2", {
@@ -10863,6 +10879,7 @@ function Composer({
             references: threadingHeaders.references,
             bodyHtml,
             bodyText,
+            sourceInlineImages,
             ...attachmentTransport,
           }),
         });

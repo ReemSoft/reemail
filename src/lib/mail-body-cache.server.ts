@@ -99,7 +99,7 @@ export type CacheLookup =
         | "incomplete-inline";
     };
 
-const INLINE_CID_METADATA_VERSION = 1;
+const INLINE_CID_METADATA_VERSION = 2;
 
 export interface CacheLookupContext {
   lookup: CacheLookup;
@@ -145,6 +145,37 @@ function referencedImageCids(bodyHtml: string): Set<string> {
     if (cid) cids.add(cid);
   }
   return cids;
+}
+
+function relativeImageBasename(value: string): string | undefined {
+  let decoded = value.trim().replace(/&amp;/gi, "&");
+  if (!decoded || /^(?:cid:|data:|blob:|https?:|\/\/|#|\/)/i.test(decoded)) return undefined;
+  decoded = decoded.split(/[?#]/, 1)[0].replace(/^\.\//, "");
+  try {
+    decoded = decodeURIComponent(decoded);
+  } catch {
+    /* literal percent in a filename */
+  }
+  return decoded.replace(/\\/g, "/").split("/").pop()?.trim().toLowerCase() || undefined;
+}
+
+function hasRecoverableRelativeImage(bodyHtml: string, attachmentsValue: unknown): boolean {
+  if (!Array.isArray(attachmentsValue)) return false;
+  const attachments = attachmentsValue as MailAttachment[];
+  for (const match of bodyHtml.matchAll(/<img\b[^>]*\bsrc\s*=\s*(["'])([^"']+)\1/gi)) {
+    const basename = relativeImageBasename(match[2]);
+    if (!basename) continue;
+    const matches = attachments.filter((attachment) => {
+      const filename = relativeImageBasename(attachment.filename);
+      const mime = attachment.mimeType.split(";", 1)[0].trim().toLowerCase();
+      return (
+        filename === basename &&
+        (/^image\/(?:png|jpe?g|gif|webp)$/.test(mime) || /\.(?:png|jpe?g|gif|webp)$/.test(basename))
+      );
+    });
+    if (matches.length === 1) return true;
+  }
+  return false;
 }
 
 function hasUnrepresentedCid(
@@ -335,13 +366,14 @@ export async function lookupCachedBodyWithMailboxHint(
   // cached messages keep their fast path; a freshly stored marker prevents a
   // permanently unavailable CID from causing repeated live opens.
   if (
-    !hasCurrentInlineMetadataMarker(row.headers_meta) &&
-    hasUnrepresentedCid(
-      bodyHtml,
-      normalizedInlineMetadata.inlineParts,
-      row.inline_images,
-      row.attachments,
-    )
+    (!hasCurrentInlineMetadataMarker(row.headers_meta) &&
+      hasUnrepresentedCid(
+        bodyHtml,
+        normalizedInlineMetadata.inlineParts,
+        row.inline_images,
+        row.attachments,
+      )) ||
+    hasRecoverableRelativeImage(bodyHtml, row.attachments)
   ) {
     return { lookup: { hit: false, reason: "incomplete-inline" }, mailboxHint };
   }

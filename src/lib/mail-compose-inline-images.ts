@@ -1,6 +1,7 @@
 export const INLINE_IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp"] as const;
 
 export const INLINE_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
+export const SOURCE_INLINE_IMAGE_MAX_BYTES = 25 * 1024 * 1024;
 export const INLINE_IMAGE_MIN_WIDTH = 40;
 export const INLINE_IMAGE_WRAPPER_ATTR = "data-mm-inline-wrapper";
 export const INLINE_IMAGE_POSITION_ATTR = "data-mm-image-position";
@@ -121,6 +122,36 @@ export function createInlineComposeImage(file: File): InlineComposeImage {
     mimeType: valid.mimeType,
     filename: file.name || `inline-image.${extension[valid.mimeType]}`,
     uploadFilename: `mm-inline-${id}.${extension[valid.mimeType]}`,
+  };
+}
+
+/**
+ * Hydrate a trusted provider CID for preview/forwarding without widening the
+ * 5 MiB limit for images newly inserted by the user. The bytes are never
+ * uploaded by the browser; sourceDescriptor keeps transfer on the Bridge.
+ */
+export function createSourceInlineComposeImage(file: File, sourceCid: string): InlineComposeImage {
+  const mimeType = file.type.split(";", 1)[0].trim().toLowerCase() as InlineImageMime;
+  if (!INLINE_IMAGE_TYPES.includes(mimeType) || file.size > SOURCE_INLINE_IMAGE_MAX_BYTES) {
+    throw new Error("SOURCE_INLINE_IMAGE_INVALID");
+  }
+  const cid = sourceCid.trim().replace(/^<|>$/g, "");
+  if (!cid || cid.length > 998) throw new Error("SOURCE_INLINE_IMAGE_CID");
+  const id = randomId();
+  const extension: Record<InlineImageMime, string> = {
+    "image/png": "png",
+    "image/jpeg": "jpg",
+    "image/gif": "gif",
+    "image/webp": "webp",
+  };
+  return {
+    id,
+    cid,
+    file,
+    objectUrl: URL.createObjectURL(file),
+    mimeType,
+    filename: file.name || `inline-image.${extension[mimeType]}`,
+    uploadFilename: `mm-inline-${id}.${extension[mimeType]}`,
   };
 }
 

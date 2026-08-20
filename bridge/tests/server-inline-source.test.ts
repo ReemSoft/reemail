@@ -68,7 +68,9 @@ function makeDeps(overrides: Partial<ServerInlineSourceDeps> = {}): {
           calls.downloads.push({ uid, part });
           return {
             content: Readable.from([Buffer.from("abc")]),
-            meta: { contentType: "image/png" },
+            // Real mobile/Outlook messages often declare an inline raster as
+            // generic binary; the trusted, byte-verified source MIME must win.
+            meta: { contentType: "application/octet-stream" },
           };
         },
       };

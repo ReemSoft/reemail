@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 
-const INLINE_PART_MAX_BYTES = 5 * 1024 * 1024;
+const INLINE_PART_MAX_BYTES = 25 * 1024 * 1024;
 const FOLDERS = new Set(["inbox", "starred", "sent", "drafts", "spam", "trash", "archive", "all"]);
 const INLINE_MIMES = new Set(["image/png", "image/jpeg", "image/jpg", "image/gif", "image/webp"]);
 

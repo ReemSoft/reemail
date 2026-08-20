@@ -46,7 +46,7 @@ const INLINE_IMAGE_METADATA_MAX_COUNT = envInt("INLINE_IMAGE_METADATA_MAX_COUNT"
 // declarations are never trusted alone.
 const INLINE_IMAGE_ENCODED_MAX_BYTES = INLINE_IMAGE_MAX_BYTES * 6;
 const INLINE_IMAGE_MIME_MAX_BYTES = 8 * 1024;
-const INLINE_IMAGE_STREAM_MAX_BYTES = 5 * 1024 * 1024;
+const INLINE_IMAGE_STREAM_MAX_BYTES = 25 * 1024 * 1024;
 export const MESSAGE_BODY_MAX_BYTES = 5 * 1024 * 1024;
 const MESSAGE_ENTIRE_BODY_HARD_MAX_BYTES = 25 * 1024 * 1024;
 export const MESSAGE_ENTIRE_BODY_MAX_BYTES = Math.max(
@@ -475,6 +475,89 @@ function contentId(value: string | undefined): string | undefined {
   return normalized || undefined;
 }
 
+function inlineMimeForAttachment(attachment: MailAttachment): string | undefined {
+  const declared = attachment.mimeType.split(";", 1)[0].trim().toLowerCase();
+  if (INLINE_IMAGE_SAFE_MIME.test(declared))
+    return declared === "image/jpg" ? "image/jpeg" : declared;
+  const filename = attachment.filename.toLowerCase().split(/[?#]/, 1)[0];
+  if (/\.png$/.test(filename)) return "image/png";
+  if (/\.jpe?g$/.test(filename)) return "image/jpeg";
+  if (/\.gif$/.test(filename)) return "image/gif";
+  if (/\.webp$/.test(filename)) return "image/webp";
+  return undefined;
+}
+
+function decodedResourceBasename(value: string): string | undefined {
+  let decoded = value
+    .trim()
+    .replace(/&amp;/gi, "&")
+    .replace(/&#x([0-9a-f]+);/gi, (_match, hex: string) => String.fromCodePoint(parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_match, decimal: string) => String.fromCodePoint(parseInt(decimal, 10)));
+  if (
+    !decoded ||
+    /^(?:cid:|data:|blob:|https?:|\/\/|#)/i.test(decoded) ||
+    decoded.startsWith("/")
+  ) {
+    return undefined;
+  }
+  decoded = decoded.split(/[?#]/, 1)[0].replace(/^\.\//, "");
+  try {
+    decoded = decodeURIComponent(decoded);
+  } catch {
+    // A literal percent is allowed in a MIME filename.
+  }
+  const basename = decoded.replace(/\\/g, "/").split("/").pop()?.trim().toLowerCase();
+  return basename || undefined;
+}
+
+/**
+ * Resolve safe relative <img src="filename.jpg"> references emitted by
+ * Outlook/mobile clients against one unique BODYSTRUCTURE image part. Gmail
+ * performs this Content-Location fallback too. No bytes or extra IMAP request
+ * are needed; ambiguous names remain untouched and fail closed.
+ */
+export function resolveHtmlInlineResources(
+  html: string,
+  attachments: readonly MailAttachment[],
+): { html: string; attachments: MailAttachment[] } {
+  const resolvedByPart = new Map<string, { cid: string; mimeType: string }>();
+  const nextHtml = html.replace(
+    /<img\b[^>]*\bsrc\s*=\s*(["'])([^"']+)\1[^>]*>/gi,
+    (tag, _quote, source) => {
+      const basename = decodedResourceBasename(String(source));
+      if (!basename) return tag;
+      const matches = attachments.filter(
+        (attachment) =>
+          Boolean(attachment.part) &&
+          decodedResourceBasename(attachment.filename) === basename &&
+          Boolean(inlineMimeForAttachment(attachment)),
+      );
+      if (matches.length !== 1 || !matches[0].part) return tag;
+      const attachment = matches[0];
+      const mimeType = inlineMimeForAttachment(attachment)!;
+      const cid =
+        contentId(attachment.contentId) ??
+        `mm-source-${attachment.part.replace(/\./g, "-")}@mailmaestro`;
+      resolvedByPart.set(attachment.part, { cid, mimeType });
+      return tag.replace(/(\bsrc\s*=\s*)(["'])[^"']*\2/i, `$1$2cid:${cid}$2`);
+    },
+  );
+  return {
+    html: nextHtml,
+    attachments: attachments.map((attachment) => {
+      const resolved = attachment.part ? resolvedByPart.get(attachment.part) : undefined;
+      return resolved
+        ? {
+            ...attachment,
+            contentId: `<${resolved.cid}>`,
+            mimeType: resolved.mimeType,
+            disposition: "inline",
+          }
+        : attachment;
+    }),
+  };
+}
+
 function textPartPick(node: MessageStructureObject): TextPartPick | null {
   const type = node.type.toLowerCase();
   if ((type !== "text/html" && type !== "text/plain") || isAttachmentLike(node)) {
@@ -887,15 +970,19 @@ export async function getMessageBody(
             `[imap-timing] lane=${lane} fetch-body ${Date.now() - tBody}ms ${bodyBytes}B`,
           );
       }
-      parsed.body = html;
-
       // ---- inline (cid:) images referenced by THIS html ---------------------
       // ROOT MODEL (MAILMAESTRO_INLINE_IMAGES_IN_SESSION):
       // Every open stops at CID metadata — interactive and background alike.
       // CID bytes are downloaded only after the user actually opens the
       // message, through ONE protected multi-part batch. This is what removes
       // the 3-15s of sequential CID downloads from background prefetch.
-      const structural = collectAttachmentParts(msg.bodyStructure);
+      const discovered = resolveHtmlInlineResources(
+        html,
+        collectAttachmentParts(msg.bodyStructure),
+      );
+      html = discovered.html;
+      const structural = discovered.attachments;
+      parsed.body = html;
       const deferredInline: NonNullable<MailMessage["inlineParts"]> = [];
       const referencedCids = new Set<string>();
 
@@ -908,10 +995,12 @@ export async function getMessageBody(
         for (const cid of referencedCids) {
           const partInfo = findUniqueCidAttachment(structural, cid);
           if (!partInfo?.part) continue;
+          const mimeType = inlineMimeForAttachment(partInfo);
+          if (!mimeType) continue;
           candidates.push({
             cid,
             part: partInfo.part,
-            mimeType: partInfo.mimeType || "application/octet-stream",
+            mimeType,
             size: partInfo.size || 0,
           });
         }
@@ -1036,19 +1125,24 @@ export async function downloadEntireBodyInMailbox(
     html = mini.textAsHtml || mini.text || "";
   }
 
-  const structural = collectAttachmentParts(msg.bodyStructure);
+  const discovered = resolveHtmlInlineResources(html, collectAttachmentParts(msg.bodyStructure));
+  html = discovered.html;
+  const structural = discovered.attachments;
   const referencedCids = new Set<string>();
   for (const match of html.matchAll(/cid:([^"'\s>)\\]+)/gi)) {
-    referencedCids.add(match[1].replace(/^<|>$/g, "").toLowerCase());
+    const cid = contentId(match[1]);
+    if (cid) referencedCids.add(cid);
   }
   const candidates: NonNullable<MailMessage["inlineParts"]> = [];
   for (const cid of referencedCids) {
     const partInfo = findUniqueCidAttachment(structural, cid);
     if (!partInfo?.part) continue;
+    const mimeType = inlineMimeForAttachment(partInfo);
+    if (!mimeType) continue;
     candidates.push({
       cid,
       part: partInfo.part,
-      mimeType: partInfo.mimeType || "application/octet-stream",
+      mimeType,
       size: partInfo.size || 0,
     });
   }
@@ -1308,7 +1402,7 @@ export async function getInlineImagesBatch(
   );
 }
 
-export const LARGE_INLINE_PART_MAX_BYTES = 5 * 1024 * 1024;
+export const LARGE_INLINE_PART_MAX_BYTES = 25 * 1024 * 1024;
 
 export interface LargeInlinePartResult {
   bytes: Buffer;

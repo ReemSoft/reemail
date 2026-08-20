@@ -215,7 +215,7 @@ const LargeInlinePartsPayloadSchema = MessagePayloadSchema.extend({
           .number()
           .int()
           .min(0)
-          .max(5 * 1024 * 1024),
+          .max(25 * 1024 * 1024),
       }),
     )
     .min(1)
@@ -293,8 +293,9 @@ const ServerAttachmentSourceSchema = z.object({
 });
 
 const ServerInlineSourceSchema = ServerAttachmentSourceSchema.extend({
-  uploadFilename: z.string().min(1).max(255),
-  cid: z.string().min(1).max(255),
+  uploadFilename: z.string().regex(/^mm-inline-[a-f0-9]{32}\.(?:png|jpg|gif|webp)$/),
+  cid: z.string().regex(/^[^\s<>\r\n]{1,998}$/),
+  mimeType: z.enum(["image/png", "image/jpeg", "image/gif", "image/webp"]),
 });
 
 const SendV2PayloadSchema = SendPayloadSchema.extend({
@@ -309,6 +310,7 @@ const SendV2PayloadSchema = SendPayloadSchema.extend({
     .default([]),
   stagedInlineImages: z.array(StagedInlineSchema).max(50).default([]),
   sourceAttachments: z.array(ServerAttachmentSourceSchema).max(10).default([]),
+  sourceInlineImages: z.array(ServerInlineSourceSchema).max(50).default([]),
 });
 
 // Draft-only: a kept server source may carry a staged handle as a reuse hint.
@@ -1082,7 +1084,13 @@ app.post("/api/send-v2", requireKey, async (req, res) => {
     // an invalid payload would trigger avoidable IMAP/download/staging work.
     if (
       payload.attachmentHandles.length + payload.sourceAttachments.length >
-      MAX_NORMAL_ATTACHMENTS
+        MAX_NORMAL_ATTACHMENTS ||
+      payload.stagedInlineImages.length + payload.sourceInlineImages.length > MAX_INLINE_IMAGES ||
+      payload.attachmentHandles.length +
+        payload.sourceAttachments.length +
+        payload.stagedInlineImages.length +
+        payload.sourceInlineImages.length >
+        MAX_TOTAL_FILE_PARTS
     ) {
       return res.status(413).json({ ok: false, error: "ATTACHMENTS_TOO_LARGE" });
     }
@@ -1121,8 +1129,26 @@ app.post("/api/send-v2", requireKey, async (req, res) => {
       })),
       maxBytes: SEND_MAX_TOTAL_BYTES,
     });
-    const sourceStageMs = performance.now() - sourceStageStartedAt;
     sourceHandles = sourceAttachments.map(({ staged }) => staged.handle);
+    const sourceInlineImages = await stageServerInlineSources({
+      secret: BRIDGE_API_KEY,
+      account: payload.account as MailAccount,
+      password: payload.password,
+      sources: payload.sourceInlineImages.map((source) => ({
+        folderPath: source.folderPath!,
+        uid: source.uid!,
+        uidValidity: source.uidValidity!,
+        part: source.part!,
+        filename: source.filename!,
+        size: source.size!,
+        mimeType: source.mimeType!,
+        uploadFilename: source.uploadFilename!,
+        cid: source.cid!,
+      })),
+      maxBytes: SEND_MAX_TOTAL_BYTES,
+    });
+    const sourceStageMs = performance.now() - sourceStageStartedAt;
+    sourceHandles.push(...sourceInlineImages.map(({ staged }) => staged.handle));
     const attachmentValidationFailure = classifyAttachmentValidationFailure(normal, inline);
     if (attachmentValidationFailure) {
       console.warn("[bridge] send-v2 attachment validation failed", {
@@ -1132,13 +1158,15 @@ app.post("/api/send-v2", requireKey, async (req, res) => {
     }
     const all = [...normal, ...inline.map(({ staged }) => staged)];
     all.push(...sourceAttachments.map(({ resolved }) => resolved));
+    all.push(...sourceInlineImages.map(({ resolved }) => resolved));
     // Authoritative semantic counts: normal attachments arrive partly as
     // staged client handles and partly as server-source attachments, so the
     // normal 10-cap applies to the combined resolved set. Inline/CID images
-    // get their own 20-cap; the absolute MIME file-part count caps at 30.
+    // get their own configured cap; the absolute MIME file-part count has a
+    // separate configured cap.
     // The shared decoded-byte budget stays unchanged.
     const normalParts = normal.length + sourceAttachments.length;
-    const inlineParts = inline.length;
+    const inlineParts = inline.length + sourceInlineImages.length;
     if (
       normalParts > MAX_NORMAL_ATTACHMENTS ||
       inlineParts > MAX_INLINE_IMAGES ||
@@ -1163,6 +1191,12 @@ app.post("/api/send-v2", requireKey, async (req, res) => {
         uploadFilename,
         cid,
         contentType,
+      })),
+      undefined,
+      payload.sourceInlineImages.map(({ uploadFilename, cid, mimeType }) => ({
+        uploadFilename,
+        cid,
+        contentType: mimeType,
       })),
     );
     const result = await sendMessageFast(payload.account as MailAccount, payload.password, {
@@ -1496,18 +1530,17 @@ app.post("/api/draft-save-v2", requireKey, imapGate("interactive"), async (req, 
         mimetype: item.mimeType,
         size: item.size,
       })),
-      [
-        ...contract.stagedInlineImages.map(({ uploadFilename, cid, contentType }) => ({
-          uploadFilename,
-          cid,
-          contentType,
-        })),
-        ...contract.sourceInlineImages.map(({ uploadFilename, cid, mimeType }) => ({
-          uploadFilename,
-          cid,
-          contentType: mimeType,
-        })),
-      ],
+      contract.stagedInlineImages.map(({ uploadFilename, cid, contentType }) => ({
+        uploadFilename,
+        cid,
+        contentType,
+      })),
+      undefined,
+      contract.sourceInlineImages.map(({ uploadFilename, cid, mimeType }) => ({
+        uploadFilename,
+        cid,
+        contentType: mimeType,
+      })),
     );
     markRoutePhase(
       "mime-attachment-mapping",

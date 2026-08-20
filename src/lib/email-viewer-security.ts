@@ -254,7 +254,7 @@ export function isValidLargeCidApplyPayload(
       !/^image\/(?:png|jpe?g|gif|webp)$/i.test(image.mimeType.split(";", 1)[0].trim()) ||
       !(image.bytes instanceof ArrayBuffer) ||
       image.bytes.byteLength < 1 ||
-      image.bytes.byteLength > 5 * 1024 * 1024
+      image.bytes.byteLength > 25 * 1024 * 1024
     ) {
       return false;
     }
@@ -459,12 +459,12 @@ export function buildEmailSrcDoc({
         var prepared=[], total=0;
         for(var i=0;i<data.images.length;i++){
           var item=data.images[i];
-          if(!item || typeof item.cid!=='string' || item.cid.length<1 || item.cid.length>998 || !validLargeMime(item.mimeType) || !(item.bytes instanceof ArrayBuffer) || item.bytes.byteLength<1 || item.bytes.byteLength>5242880) continue;
+          if(!item || typeof item.cid!=='string' || item.cid.length<1 || item.cid.length>998 || !validLargeMime(item.mimeType) || !(item.bytes instanceof ArrayBuffer) || item.bytes.byteLength<1 || item.bytes.byteLength>26214400) continue;
           total+=item.bytes.byteLength;
           if(total>26214400) return;
           var cid=item.cid.toLowerCase();
           var blob=new Blob([item.bytes], {type:item.mimeType.split(';',1)[0].trim().toLowerCase()});
-          if(blob.size<1 || blob.size>5242880) continue;
+          if(blob.size<1 || blob.size>26214400) continue;
           var localUrl=URL.createObjectURL(blob);
           var previous=largeUrls[cid];
           if(previous) revokeLarge(cid, previous);
