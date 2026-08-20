@@ -70,6 +70,48 @@ export interface WorkingDraftAttachmentContent {
   bytes: Blob;
 }
 
+export interface WorkingDraftOwnedAttachmentProjection {
+  attachmentId: string;
+  clientKey: string;
+  kind: WorkingDraftAttachmentKind;
+  filename: string;
+  mimeType: string;
+  size: number;
+  disposition?: string;
+  cid?: string;
+  hasBytes: boolean;
+}
+
+/**
+ * Add server-owned object ids only to the Draft-open projection. Provider
+ * references deliberately stay id-less in the authoritative optimistic
+ * payload, but once checkpoint/import has materialized their bytes the editor
+ * needs the private object id to hydrate the matching CID after a reopen.
+ */
+export function projectOwnedWorkingDraftAttachments(
+  record: WorkingDraftRecord,
+  ownedAttachments: readonly WorkingDraftOwnedAttachmentProjection[],
+): WorkingDraftRecord {
+  const byId = new Map(ownedAttachments.map((item) => [item.attachmentId, item]));
+  const byClientKey = new Map(ownedAttachments.map((item) => [item.clientKey, item]));
+  const attachments = record.payload.attachments.map((reference) => {
+    const owned = reference.attachmentId
+      ? byId.get(reference.attachmentId)
+      : byClientKey.get(reference.clientKey);
+    if (!owned?.hasBytes || owned.kind !== reference.kind) return reference;
+    return {
+      ...reference,
+      attachmentId: owned.attachmentId,
+      filename: owned.filename,
+      mimeType: owned.mimeType,
+      size: owned.size,
+      disposition: owned.disposition ?? reference.disposition,
+      cid: owned.cid ?? reference.cid,
+    };
+  });
+  return { ...record, payload: { ...record.payload, attachments } };
+}
+
 export function isWorkingDraftSourceDescriptor(value: unknown): value is WorkingDraftSourceDescriptor {
   if (!value || typeof value !== "object") return false;
   const source = value as Record<string, unknown>;

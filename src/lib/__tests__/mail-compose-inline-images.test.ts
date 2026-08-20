@@ -7,6 +7,7 @@ import {
   createInlineComposeImage,
   createSourceInlineComposeImage,
   dataUriToFile,
+  hydrateSourceInlineComposeImage,
   insertInlineImageNode,
   installInlineImageSelectionListener,
   isInlineImageToolTarget,
@@ -215,6 +216,25 @@ describe("composer inline images", () => {
     expect(image.file).toBe(file);
     expect(image.mimeType).toBe("image/jpeg");
     expect(validateInlineImageFile(file)).toEqual({ ok: false, reason: "size" });
+  });
+
+  it("reopens an owned provider image above 5 MiB with stable Draft metadata", () => {
+    const file = new File([new Uint8Array(6 * 1024 * 1024)], "provider.jpg", {
+      type: "image/jpeg",
+    });
+    const image = hydrateSourceInlineComposeImage(file, {
+      id: "stable-image-id",
+      cid: "provider-photo@example.com",
+      mimeType: "image/jpeg",
+      filename: "provider.jpg",
+      uploadFilename: "mm-inline-0123456789abcdef0123456789abcdef.jpg",
+      workingAttachmentId: "18c561d5-ffae-4ea7-b0f8-b3b6155d6d55",
+    });
+
+    expect(image.id).toBe("stable-image-id");
+    expect(image.cid).toBe("provider-photo@example.com");
+    expect(image.workingAttachmentId).toBe("18c561d5-ffae-4ea7-b0f8-b3b6155d6d55");
+    expect(image.file.size).toBe(6 * 1024 * 1024);
   });
 
   it("inserts exactly one node at the saved caret and falls back to the end", () => {

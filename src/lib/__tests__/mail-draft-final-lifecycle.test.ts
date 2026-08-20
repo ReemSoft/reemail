@@ -233,6 +233,12 @@ describe("Working Draft complete fields", () => {
     ]) {
       expect(fn).toContain(field);
     }
+    expect(src).toContain("hydrateSourceInlineComposeImage(file, metadata)");
+    const api = readFileSync(
+      new URL("../../routes/api/mail-working-draft.ts", import.meta.url),
+      "utf8",
+    );
+    expect(api).toContain("loadWorkingDraftForEditor(auth, draftId)");
   });
 });
 

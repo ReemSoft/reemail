@@ -1056,6 +1056,7 @@ import {
   INLINE_IMAGE_MAX_BYTES,
   dataUriToFile,
   hydrateInlineComposeImage,
+  hydrateSourceInlineComposeImage,
   insertInlineImageNode,
   serializeInlineImages,
   metadataToTransport,
@@ -9169,19 +9170,20 @@ function Composer({
             const bytes = await response.blob();
             if (bytes.size !== reference.size) continue;
             const file = new File([bytes], reference.filename, { type: reference.mimeType });
-            const valid = validateInlineImageFile(file);
-            if (!valid.ok) continue;
             const snapshotMetadata = (workingSnapshot.inlineImages ?? []).find(
               (item) => item.cid.trim().replace(/^<|>$/g, "").toLowerCase() === cid,
             );
-            const image = hydrateInlineComposeImage(file, {
+            const metadata = {
               id: snapshotMetadata?.id ?? reference.clientKey,
               cid: reference.cid,
-              mimeType: valid.mimeType,
+              mimeType: reference.mimeType as InlineImageMime,
               filename: reference.filename,
               uploadFilename: snapshotMetadata?.uploadFilename ?? reference.filename,
               workingAttachmentId: reference.attachmentId,
-            });
+            };
+            const image = reference.source
+              ? hydrateSourceInlineComposeImage(file, metadata)
+              : hydrateInlineComposeImage(file, metadata);
             workingAttachmentByInlineIdRef.current.set(image.id, reference);
             hydrated.push(image);
             await persistInlineImage(inlineScope, toInlineImageMetadata(image), image.file).catch(

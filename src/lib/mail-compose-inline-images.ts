@@ -164,6 +164,16 @@ export function hydrateInlineComposeImage(
   return { ...metadata, file, objectUrl: URL.createObjectURL(file) };
 }
 
+/** Hydrate a provider-sourced object that may legitimately exceed 5 MiB. */
+export function hydrateSourceInlineComposeImage(
+  file: File,
+  metadata: InlineImageMetadata,
+): InlineComposeImage {
+  const image = createSourceInlineComposeImage(file, metadata.cid);
+  if (image.mimeType !== metadata.mimeType) throw new Error("INLINE_IMAGE_TYPE");
+  return { ...image, ...metadata, file, objectUrl: image.objectUrl };
+}
+
 /** Merge delayed hydration into the live resource set without replacing images added by the user. */
 export function mergeHydratedInlineImages(
   current: readonly InlineComposeImage[],

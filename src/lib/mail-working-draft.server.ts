@@ -7,6 +7,7 @@ import {
   isWorkingDraftAttachmentReference,
   isWorkingDraftPayload,
   filterSentWorkingDraftRecords,
+  projectOwnedWorkingDraftAttachments,
   type WorkingDraftAttachmentReference,
   type WorkingDraftPayload,
   type WorkingDraftRecord,
@@ -188,6 +189,33 @@ export async function loadWorkingDraft(
     .maybeSingle();
   if (error) throw new Error("WORKING_DRAFT_LOAD_FAILED");
   return data ? recordFromRow(data as WorkingDraftRow) : null;
+}
+
+/** Draft-editor load: two parallel scoped reads, never used by mail/message open. */
+export async function loadWorkingDraftForEditor(
+  auth: WorkingDraftAuth,
+  draftId: string,
+): Promise<WorkingDraftRecord | null> {
+  if (!isUuid(draftId)) throw new Error("INVALID_DRAFT_ID");
+  const [record, rows] = await Promise.all([
+    loadWorkingDraft(auth, draftId),
+    attachmentRows(auth, draftId),
+  ]);
+  if (!record) return null;
+  return projectOwnedWorkingDraftAttachments(
+    record,
+    rows.map((row) => ({
+      attachmentId: row.id,
+      clientKey: row.client_key,
+      kind: row.kind,
+      filename: row.filename,
+      mimeType: row.mime_type,
+      size: Number(row.size_bytes),
+      disposition: row.disposition ?? undefined,
+      cid: row.cid ?? undefined,
+      hasBytes: Boolean(row.storage_path),
+    })),
+  );
 }
 
 async function finishDiscardedCleanup(

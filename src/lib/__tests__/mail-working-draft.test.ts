@@ -8,12 +8,102 @@ import {
   isStaleProviderDraftRow,
   isWorkingDraftAttachmentReference,
   isWorkingDraftPayload,
+  projectOwnedWorkingDraftAttachments,
   type WorkingDraftRecord,
 } from "../mail-working-draft";
 
 const attachmentId = "18c561d5-ffae-4ea7-b0f8-b3b6155d6d55";
 
 describe("Working Draft attachment references", () => {
+  it("projects a materialized provider inline object into a reopenable owned reference", () => {
+    const payload = emptyWorkingDraftPayload();
+    payload.attachments.push({
+      clientKey: "provider-inline:INBOX:42:7:2:photo@example.com",
+      kind: "inline-image",
+      filename: "mm-inline-photo.jpg",
+      mimeType: "image/jpeg",
+      size: 8 * 1024 * 1024,
+      disposition: "inline",
+      cid: "photo@example.com",
+      source: { folderPath: "INBOX", uidValidity: "42", uid: 7, part: "2" },
+    });
+    const record: WorkingDraftRecord = {
+      draftId: "draft-1",
+      revision: 2,
+      payload,
+      checkpoint: {
+        revision: 2,
+        committedRevision: 2,
+        state: "checkpointed",
+        serverRef: null,
+      },
+      updatedAt: "2026-08-20T00:00:00.000Z",
+    };
+    const projected = projectOwnedWorkingDraftAttachments(record, [
+      {
+        attachmentId,
+        clientKey: payload.attachments[0].clientKey,
+        kind: "inline-image",
+        filename: "mm-inline-photo.jpg",
+        mimeType: "image/jpeg",
+        size: 7_500_000,
+        disposition: "inline",
+        cid: "photo@example.com",
+        hasBytes: true,
+      },
+    ]);
+
+    expect(projected.payload.attachments[0]).toMatchObject({
+      attachmentId,
+      cid: "photo@example.com",
+      size: 7_500_000,
+    });
+    expect(projected.payload.attachments[0].source).toEqual(payload.attachments[0].source);
+    expect(record.payload.attachments[0].attachmentId).toBeUndefined();
+  });
+
+  it("does not expose an id before provider bytes exist or across a kind mismatch", () => {
+    const payload = emptyWorkingDraftPayload();
+    payload.attachments.push({
+      clientKey: "provider-inline:one",
+      kind: "inline-image",
+      filename: "photo.jpg",
+      mimeType: "image/jpeg",
+      size: 100,
+      cid: "photo@example.com",
+      source: { folderPath: "INBOX", uidValidity: "42", uid: 7, part: "2" },
+    });
+    const record: WorkingDraftRecord = {
+      draftId: "draft-1",
+      revision: 1,
+      payload,
+      checkpoint: {
+        revision: 0,
+        committedRevision: 0,
+        state: "pending",
+        serverRef: null,
+      },
+      updatedAt: "2026-08-20T00:00:00.000Z",
+    };
+    const base = {
+      attachmentId,
+      clientKey: "provider-inline:one",
+      filename: "photo.jpg",
+      mimeType: "image/jpeg",
+      size: 100,
+      cid: "photo@example.com",
+    };
+    expect(
+      projectOwnedWorkingDraftAttachments(record, [
+        { ...base, kind: "inline-image", hasBytes: false },
+      ]).payload.attachments[0].attachmentId,
+    ).toBeUndefined();
+    expect(
+      projectOwnedWorkingDraftAttachments(record, [{ ...base, kind: "attachment", hasBytes: true }])
+        .payload.attachments[0].attachmentId,
+    ).toBeUndefined();
+  });
+
   it("models a 13 MiB upload as a stable reference, not attachment bytes", () => {
     const payload = emptyWorkingDraftPayload();
     payload.attachments.push({

@@ -27,7 +27,7 @@ export const Route = createFileRoute("/api/mail-working-draft")({
             });
           }
           if (action === "load") {
-            const record = await working.loadWorkingDraft(auth, draftId);
+            const record = await working.loadWorkingDraftForEditor(auth, draftId);
             return json({ ok: true, record });
           }
           if (action === "save") {
