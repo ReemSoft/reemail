@@ -70,6 +70,7 @@ import {
 } from "@/lib/mail-composer-attachments";
 import { runEntireMessageSingleFlight, samePhysicalMessage } from "@/lib/mail-entire-message";
 import { releaseStagedHandles } from "@/lib/mail-staged-release.browser";
+import { deliveryProgressForElapsed } from "@/lib/mail-send-progress";
 
 // Kept as a thin wrapper — the heavy lifting (DOMPurify + CSS url()/@import
 // stripping + anchor hardening) lives in `@/lib/email-viewer-security` and is
@@ -10824,6 +10825,25 @@ function Composer({
     setSending(true);
     setSendProgress({ progress: 8, stage: "preparing" });
     let sendAccepted = false;
+    let deliveryProgressTimer: number | null = null;
+    const startDeliveryProgress = () => {
+      if (deliveryProgressTimer !== null) window.clearInterval(deliveryProgressTimer);
+      const startedAt = performance.now();
+      setSendProgress({ progress: 72, stage: "delivering" });
+      deliveryProgressTimer = window.setInterval(() => {
+        const progress = deliveryProgressForElapsed(performance.now() - startedAt);
+        setSendProgress((current) =>
+          current.stage === "delivering" && progress > current.progress
+            ? { progress, stage: "delivering" }
+            : current,
+        );
+      }, 500);
+    };
+    const stopDeliveryProgress = () => {
+      if (deliveryProgressTimer === null) return;
+      window.clearInterval(deliveryProgressTimer);
+      deliveryProgressTimer = null;
+    };
     try {
       console.info("[draft-send] phase=send-click");
       autosaveRef.current?.cancel();
@@ -10889,7 +10909,7 @@ function Composer({
           toast.error(tr("تعذّر تجهيز المسودة للإرسال. أعد المحاولة."));
           return;
         }
-        setSendProgress({ progress: 72, stage: "delivering" });
+        startDeliveryProgress();
         response = await fetch("/api/mail-working-draft-send", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -10941,7 +10961,7 @@ function Composer({
           inline: stagedInline,
           inlineMetadata: metadataToTransport(uploadInline),
         });
-        setSendProgress({ progress: 72, stage: "delivering" });
+        startDeliveryProgress();
         response = await fetch("/api/mail-send-v2", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -10961,6 +10981,7 @@ function Composer({
           }),
         });
       }
+      stopDeliveryProgress();
       setSendProgress({ progress: 90, stage: "confirming" });
       await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
       const result = (await response.json().catch(() => ({
@@ -11093,6 +11114,7 @@ function Composer({
     } catch (err: unknown) {
       toast.error(errorMessage(err, tr("فشل إرسال الرسالة")));
     } finally {
+      stopDeliveryProgress();
       sendInProgressRef.current = false;
       setSending(false);
       setSendProgress({ progress: 0, stage: "preparing" });

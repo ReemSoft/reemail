@@ -26,7 +26,9 @@ import {
   rebindServerSourcesToCanonicalDraft,
 } from "./server-attachment-sources.js";
 import { pipeline } from "node:stream/promises";
+import { Readable } from "node:stream";
 import { attachmentContentDisposition, sanitizeAttachmentFilename } from "./attachment-transfer.js";
+import { isAllowedRemoteAttachmentUrl } from "./remote-attachment-stage.js";
 import { DownloadByteCounter, parseDownloadChunkBytes } from "./download-performance.js";
 import { createSendGates } from "./concurrency.js";
 import {
@@ -266,6 +268,10 @@ const UploadTicketPayloadSchema = z.object({
     .max(25 * 1024 * 1024),
   mimeType: z.string().min(1).max(255),
   kind: z.enum(["attachment", "inline-image"]),
+});
+
+const RemoteAttachmentStagePayloadSchema = UploadTicketPayloadSchema.extend({
+  url: z.string().url().max(8 * 1024),
 });
 
 const StagedInlineSchema = z.object({
@@ -1061,6 +1067,48 @@ app.post("/api/direct/attachment-upload", async (req, res) => {
     return res.json({ ok: true, ...staged });
   } catch (error) {
     const code = error instanceof Error ? error.message : "UPLOAD_FAILED";
+    const status = code.includes("TOO_LARGE") || code.includes("QUOTA") ? 413 : 400;
+    return res.status(status).json({ ok: false, error: code });
+  } finally {
+    release();
+  }
+});
+
+app.post("/api/remote-attachment-stage", requireKey, async (req, res) => {
+  const release = directUploadGate.tryAcquire();
+  if (!release) return res.status(429).json({ ok: false, error: "UPLOAD_BUSY" });
+  try {
+    const payload = RemoteAttachmentStagePayloadSchema.parse(req.body);
+    if (!isAllowedRemoteAttachmentUrl(payload.url)) {
+      return res.status(400).json({ ok: false, error: "REMOTE_ATTACHMENT_URL_DENIED" });
+    }
+    if (payload.kind === "inline-image" && payload.size > 5 * 1024 * 1024) {
+      return res.status(413).json({ ok: false, error: "ATTACHMENT_TOO_LARGE" });
+    }
+    const upstream = await fetch(payload.url, {
+      redirect: "error",
+      signal: AbortSignal.timeout(120_000),
+    });
+    if (!upstream.ok || !upstream.body) {
+      return res.status(400).json({ ok: false, error: "REMOTE_ATTACHMENT_FETCH_FAILED" });
+    }
+    const contentLength = Number(upstream.headers.get("content-length") || 0);
+    if (contentLength && contentLength !== payload.size) {
+      await upstream.body.cancel().catch(() => undefined);
+      return res.status(400).json({ ok: false, error: "UPLOAD_SIZE_MISMATCH" });
+    }
+    const staged = await stageAttachmentStream({
+      secret: BRIDGE_API_KEY,
+      account: accountBinding(payload.account as MailAccount),
+      filename: payload.filename,
+      mimeType: payload.mimeType,
+      kind: payload.kind,
+      declaredSize: payload.size,
+      stream: Readable.fromWeb(upstream.body as never),
+    });
+    return res.json({ ok: true, ...staged });
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "REMOTE_ATTACHMENT_STAGE_FAILED";
     const status = code.includes("TOO_LARGE") || code.includes("QUOTA") ? 413 : 400;
     return res.status(status).json({ ok: false, error: code });
   } finally {

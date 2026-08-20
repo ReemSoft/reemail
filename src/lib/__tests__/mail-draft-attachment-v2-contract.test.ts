@@ -89,6 +89,9 @@ describe("draft attachment V2 contract", () => {
     expect(workingDraftServer).toContain("WORKING_DRAFT_STAGE_CONCURRENCY");
     expect(workingDraftServer).toContain("sourceAttachments: input.sourceAttachments ?? []");
     expect(workingDraftServer).toContain("sourceAttachments: plan.sources");
+    expect(workingDraftServer).toContain('/api/remote-attachment-stage');
+    expect(workingDraftServer).toContain("createSignedUrl(row.storage_path, 120)");
+    expect(workingDraftServer).toContain("Compatibility/reachability fallback");
   });
 
   it("uses a bilingual staged progress panel and visibly completes at 100%", () => {
@@ -107,6 +110,9 @@ describe("draft attachment V2 contract", () => {
     expect(composer).toContain("window.setTimeout(resolve, 360)");
     expect(composer).toContain('setSendProgress({ progress: 100, stage: "complete" })');
     expect(composer).toContain('stage: hasAttachmentsToTransfer ? "uploading" : "preparing"');
+    expect(composer).toContain("deliveryProgressForElapsed(performance.now() - startedAt)");
+    expect(composer).toContain("startDeliveryProgress();");
+    expect(composer).toContain("stopDeliveryProgress();");
   });
 
   it("releases transient Bridge staging without delaying the SMTP response", () => {

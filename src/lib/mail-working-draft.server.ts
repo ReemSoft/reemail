@@ -870,6 +870,35 @@ async function stageOwnedAttachment(
 ): Promise<string> {
   if (!row.storage_path) throw new Error("ATTACHMENT_NOT_IMPORTED");
   const { bridge, client } = context;
+  // Fast path: let the Bridge pull the private object through a short-lived
+  // signed URL. This removes the sequential Storage -> Worker -> Bridge byte
+  // relay at Send time. Older Bridge deployments safely fall through to the
+  // original upload-ticket path below.
+  const signed = await client.storage
+    .from(WORKING_DRAFT_ATTACHMENT_BUCKET)
+    .createSignedUrl(row.storage_path, 120);
+  if (!signed.error && signed.data?.signedUrl) {
+    try {
+      const remoteResponse = await fetch(`${bridge.bridgeUrl}/api/remote-attachment-stage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Bridge-Key": bridge.bridgeKey },
+        body: JSON.stringify({
+          account: bridge.bridgeAccount,
+          url: signed.data.signedUrl,
+          filename: row.filename,
+          size: Number(row.size_bytes) || 0,
+          mimeType: row.mime_type,
+          kind: row.kind,
+        }),
+      });
+      const remote = (await remoteResponse.json().catch(() => null)) as
+        | { ok?: boolean; handle?: string }
+        | null;
+      if (remoteResponse.ok && remote?.ok && remote.handle) return remote.handle;
+    } catch {
+      // Compatibility/reachability fallback below retains the proven path.
+    }
+  }
   const downloaded = await client.storage.from(WORKING_DRAFT_ATTACHMENT_BUCKET).download(row.storage_path);
   if (downloaded.error || !downloaded.data) throw new Error("ATTACHMENT_STORAGE_READ_FAILED");
   const bytes = downloaded.data as Blob;
