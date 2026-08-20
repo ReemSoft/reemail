@@ -309,10 +309,22 @@ export function exportPreparedQuotedDocument(doc: Document): string {
     }
     if (isImage) {
       if (Number.isFinite(renderedImageWidth) && renderedImageWidth >= 1) {
-        element.style.setProperty("width", `${Math.round(renderedImageWidth * 100) / 100}px`);
+        const roundedWidth = Math.round(renderedImageWidth * 100) / 100;
+        element.style.setProperty("width", `${roundedWidth}px`);
+        element.setAttribute("width", String(Math.round(roundedWidth)));
+        // The source HTML frequently carries a stale height attribute from
+        // the attachment's metadata. Once width is resolved from the actual
+        // sender layout, retaining that unrelated height distorts the image.
+        // Let the hydrated image keep its intrinsic aspect ratio.
+        element.style.setProperty("height", "auto");
+        element.removeAttribute("height");
       }
       element.style.setProperty("max-width", "100%");
-      if (!element.hasAttribute("height") && !matchedProperties.has("height")) {
+      if (
+        renderedImageWidth < 1 &&
+        !element.hasAttribute("height") &&
+        !matchedProperties.has("height")
+      ) {
         element.style.setProperty("height", "auto");
       }
     }

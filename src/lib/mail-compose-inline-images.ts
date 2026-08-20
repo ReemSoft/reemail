@@ -797,7 +797,15 @@ export function applyInlineImageToCidNodes(
     node.removeAttribute("aria-busy");
     node.style.removeProperty("visibility");
     node.draggable = false;
-    if (!quotedSource) {
+    if (quotedSource) {
+      // A quoted image may have received a measured sender width before its
+      // CID bytes existed. Never combine that width with a stale fixed height
+      // when the real image is hydrated.
+      if (node.style.width || node.hasAttribute("width")) {
+        node.style.height = "auto";
+        node.removeAttribute("height");
+      }
+    } else {
       node.style.maxWidth = "100%";
       node.style.height = "auto";
     }

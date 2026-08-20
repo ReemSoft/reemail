@@ -346,6 +346,25 @@ describe("quoted email preparation", () => {
     expect(prepared.hasAttribute("class")).toBe(false);
   });
 
+  it("never combines a measured quote width with a stale fixed height", () => {
+    document.body.innerHTML = `
+      <style>.photo { width: 360px; height: 24px; }</style>
+      <img class="photo" src="cid:photo@example" width="1200" height="24">`;
+    const image = document.querySelector<HTMLImageElement>("img")!;
+    image.getBoundingClientRect = () =>
+      ({ width: 360, height: 24, top: 0, left: 0, right: 360, bottom: 24, x: 0, y: 0, toJSON() {} }) as DOMRect;
+
+    const html = exportPreparedQuotedDocument(document);
+    const template = document.createElement("template");
+    template.innerHTML = html;
+    const prepared = template.content.querySelector<HTMLImageElement>("img")!;
+    expect(prepared.style.width).toBe("360px");
+    expect(prepared.style.height).toBe("auto");
+    expect(prepared.style.maxWidth).toBe("100%");
+    expect(prepared.getAttribute("width")).toBe("360");
+    expect(prepared.hasAttribute("height")).toBe(false);
+  });
+
   it("keeps explicitly sized quoted CID images sized after hydration and serialization", () => {
     const originalCreate = URL.createObjectURL;
     URL.createObjectURL = () => "blob:sized-photo";
@@ -362,6 +381,27 @@ describe("quoted email preparation", () => {
       const serialized = serializeInlineImages(editor.innerHTML, [image]);
       expect(serialized.html).toContain("width: 280px");
       expect(serialized.html).toContain("max-width: 100%");
+    } finally {
+      URL.createObjectURL = originalCreate;
+    }
+  });
+
+  it("repairs stale quoted height when the real CID image is hydrated", () => {
+    const originalCreate = URL.createObjectURL;
+    URL.createObjectURL = () => "blob:natural-photo";
+    try {
+      const editor = document.createElement("div");
+      editor.innerHTML = markQuotedCidImagesPending(
+        '<div data-mm-quoted-content><img src="cid:photo@example" width="360" height="24" style="width:360px;height:24px"></div>',
+      );
+      const image = createInlineComposeImage(
+        new File([new Uint8Array([1])], "photo.png", { type: "image/png" }),
+      );
+      expect(applyInlineImageToCidNodes(editor, "photo@example", image)).toBe(1);
+      const hydrated = editor.querySelector<HTMLImageElement>("img")!;
+      expect(hydrated.style.width).toBe("360px");
+      expect(hydrated.style.height).toBe("auto");
+      expect(hydrated.hasAttribute("height")).toBe(false);
     } finally {
       URL.createObjectURL = originalCreate;
     }
