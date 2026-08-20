@@ -1107,7 +1107,7 @@ async function invokeBridgeWithStagedAttachments(input: {
         previousRef: input.previousRef ?? undefined,
         attachmentHandles: normal,
         stagedInlineImages: inline,
-        sourceAttachments: [],
+        sourceAttachments: input.sourceAttachments ?? [],
         sourceInlineImages: [],
       }),
     });
