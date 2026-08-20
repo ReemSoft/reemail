@@ -519,8 +519,33 @@ async function syncAttachmentReferences(
     }
 
     const current = byClientKey.get(reference.clientKey);
-    if (current?.storage_path) throw new Error("ATTACHMENT_ID_REQUIRED");
+    if (current?.storage_path) {
+      // The row was already imported into its private object by an earlier
+      // checkpoint/send pass, while this client reference still only knows the
+      // stable clientKey (the browser never learns the generated attachmentId
+      // for a provider-sourced attachment). Ownership is already proven by the
+      // draft/company/account scoping of `existing`, so adopt the owned row
+      // instead of rejecting the save with ATTACHMENT_ID_REQUIRED.
+      if (current.kind !== reference.kind) throw new Error("ATTACHMENT_KIND_MISMATCH");
+      const { error } = await client
+        .from("mail_working_draft_attachments")
+        .update({
+          filename: reference.filename,
+          mime_type: reference.mimeType,
+          disposition: reference.disposition ?? null,
+          cid: reference.cid ?? null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", current.id)
+        .eq("draft_id", draftId)
+        .eq("company_id", auth.companyId)
+        .eq("account_id", auth.accountId);
+      if (error) throw new Error("ATTACHMENT_METADATA_UPDATE_FAILED");
+      retainedIds.add(current.id);
+      continue;
+    }
     if (!reference.source) throw new Error("ATTACHMENT_SOURCE_REQUIRED");
+
     const row = {
       id: current?.id ?? randomUUID(),
       draft_id: draftId,
