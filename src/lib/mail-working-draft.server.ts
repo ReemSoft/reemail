@@ -1054,6 +1054,8 @@ async function invokeBridgeWithStagedAttachments(input: {
   revisionId: string;
   payload: WorkingDraftPayload;
   rows: readonly AttachmentRow[];
+  /** Provider attachments streamed by the Bridge straight from IMAP. */
+  sourceAttachments?: readonly SendSourceAttachment[];
   endpoint: "/api/draft-save-v2" | "/api/send-v2";
   previousRef?: DraftServerRef | null;
   context: WorkingDraftTransferContext;
