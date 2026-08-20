@@ -772,6 +772,246 @@ export type Database = {
           },
         ]
       }
+      mail_working_draft_attachments: {
+        Row: {
+          account_id: string
+          cid: string | null
+          client_key: string
+          company_id: string
+          created_at: string
+          disposition: string | null
+          draft_id: string
+          filename: string
+          id: string
+          kind: string
+          mime_type: string
+          size_bytes: number
+          source_descriptor: Json | null
+          storage_path: string | null
+          updated_at: string
+        }
+        Insert: {
+          account_id: string
+          cid?: string | null
+          client_key: string
+          company_id: string
+          created_at?: string
+          disposition?: string | null
+          draft_id: string
+          filename: string
+          id?: string
+          kind: string
+          mime_type: string
+          size_bytes: number
+          source_descriptor?: Json | null
+          storage_path?: string | null
+          updated_at?: string
+        }
+        Update: {
+          account_id?: string
+          cid?: string | null
+          client_key?: string
+          company_id?: string
+          created_at?: string
+          disposition?: string | null
+          draft_id?: string
+          filename?: string
+          id?: string
+          kind?: string
+          mime_type?: string
+          size_bytes?: number
+          source_descriptor?: Json | null
+          storage_path?: string | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "mail_working_draft_attachments_company_id_fkey"
+            columns: ["company_id"]
+            isOneToOne: false
+            referencedRelation: "companies"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "mail_working_draft_attachments_draft_id_fkey"
+            columns: ["draft_id"]
+            isOneToOne: false
+            referencedRelation: "mail_working_drafts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "mail_working_draft_attachments_draft_owner_fk"
+            columns: ["draft_id", "company_id", "account_id"]
+            isOneToOne: false
+            referencedRelation: "mail_working_drafts"
+            referencedColumns: ["id", "company_id", "account_id"]
+          },
+        ]
+      }
+      mail_working_draft_discards: {
+        Row: {
+          account_id: string
+          cleanup_error: string | null
+          cleanup_state: string
+          company_id: string
+          created_at: string
+          draft_id: string
+          id: string
+          provider_refs: Json
+          updated_at: string
+        }
+        Insert: {
+          account_id: string
+          cleanup_error?: string | null
+          cleanup_state?: string
+          company_id: string
+          created_at?: string
+          draft_id: string
+          id?: string
+          provider_refs?: Json
+          updated_at?: string
+        }
+        Update: {
+          account_id?: string
+          cleanup_error?: string | null
+          cleanup_state?: string
+          company_id?: string
+          created_at?: string
+          draft_id?: string
+          id?: string
+          provider_refs?: Json
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "mail_working_draft_discards_company_id_fkey"
+            columns: ["company_id"]
+            isOneToOne: false
+            referencedRelation: "companies"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      mail_working_draft_sends: {
+        Row: {
+          account_id: string
+          company_id: string
+          created_at: string
+          draft_id: string
+          error: string | null
+          id: string
+          lease_until: string | null
+          smtp_result: Json | null
+          state: string
+          updated_at: string
+        }
+        Insert: {
+          account_id: string
+          company_id: string
+          created_at?: string
+          draft_id: string
+          error?: string | null
+          id?: string
+          lease_until?: string | null
+          smtp_result?: Json | null
+          state?: string
+          updated_at?: string
+        }
+        Update: {
+          account_id?: string
+          company_id?: string
+          created_at?: string
+          draft_id?: string
+          error?: string | null
+          id?: string
+          lease_until?: string | null
+          smtp_result?: Json | null
+          state?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "mail_working_draft_sends_account_company_fk"
+            columns: ["account_id", "company_id"]
+            isOneToOne: false
+            referencedRelation: "mail_accounts"
+            referencedColumns: ["id", "company_id"]
+          },
+          {
+            foreignKeyName: "mail_working_draft_sends_company_id_fkey"
+            columns: ["company_id"]
+            isOneToOne: false
+            referencedRelation: "companies"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      mail_working_drafts: {
+        Row: {
+          account_id: string
+          company_id: string
+          created_at: string
+          id: string
+          payload: Json
+          remote_checkpoint_error: string | null
+          remote_checkpoint_lease_until: string | null
+          remote_checkpoint_revision: number
+          remote_checkpoint_revision_id: string | null
+          remote_checkpoint_state: string
+          remote_checkpoint_target_revision: number | null
+          remote_server_ref: Json | null
+          revision: number
+          updated_at: string
+        }
+        Insert: {
+          account_id: string
+          company_id: string
+          created_at?: string
+          id: string
+          payload?: Json
+          remote_checkpoint_error?: string | null
+          remote_checkpoint_lease_until?: string | null
+          remote_checkpoint_revision?: number
+          remote_checkpoint_revision_id?: string | null
+          remote_checkpoint_state?: string
+          remote_checkpoint_target_revision?: number | null
+          remote_server_ref?: Json | null
+          revision?: number
+          updated_at?: string
+        }
+        Update: {
+          account_id?: string
+          company_id?: string
+          created_at?: string
+          id?: string
+          payload?: Json
+          remote_checkpoint_error?: string | null
+          remote_checkpoint_lease_until?: string | null
+          remote_checkpoint_revision?: number
+          remote_checkpoint_revision_id?: string | null
+          remote_checkpoint_state?: string
+          remote_checkpoint_target_revision?: number | null
+          remote_server_ref?: Json | null
+          revision?: number
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "mail_working_drafts_account_company_fk"
+            columns: ["account_id", "company_id"]
+            isOneToOne: false
+            referencedRelation: "mail_accounts"
+            referencedColumns: ["id", "company_id"]
+          },
+          {
+            foreignKeyName: "mail_working_drafts_company_id_fkey"
+            columns: ["company_id"]
+            isOneToOne: false
+            referencedRelation: "companies"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       profiles: {
         Row: {
           avatar_url: string | null
@@ -887,6 +1127,27 @@ export type Database = {
         }
         Returns: boolean
       }
+      claim_mail_working_draft_checkpoint: {
+        Args: {
+          p_account_id: string
+          p_company_id: string
+          p_draft_id: string
+          p_revision: number
+        }
+        Returns: {
+          claimed: boolean
+          revision_id: string
+        }[]
+      }
+      claim_mail_working_draft_send: {
+        Args: { p_account_id: string; p_company_id: string; p_draft_id: string }
+        Returns: {
+          claimed: boolean
+          error: string
+          smtp_result: Json
+          state: string
+        }[]
+      }
       cleanup_mail_sync_jobs: {
         Args: {
           p_completed_retention_days?: number
@@ -900,6 +1161,35 @@ export type Database = {
       complete_mail_sync_job: {
         Args: { p_msg_id: number; p_worker_id: string }
         Returns: boolean
+      }
+      create_mail_working_draft_attachment: {
+        Args: {
+          p_account_id: string
+          p_attachment_id: string
+          p_cid?: string
+          p_client_key: string
+          p_company_id: string
+          p_disposition?: string
+          p_draft_id: string
+          p_filename: string
+          p_kind: string
+          p_mime_type: string
+          p_payload?: Json
+          p_size_bytes: number
+          p_source_descriptor?: Json
+          p_storage_path: string
+        }
+        Returns: string
+      }
+      discard_mail_working_draft: {
+        Args: {
+          p_account_id: string
+          p_company_id: string
+          p_draft_id: string
+          p_previous_ref?: Json
+          p_server_ref?: Json
+        }
+        Returns: undefined
       }
       enqueue_due_mail_sync_jobs: {
         Args: never
@@ -934,6 +1224,43 @@ export type Database = {
           p_error_message: string
           p_msg_id: number
           p_worker_id: string
+        }
+        Returns: boolean
+      }
+      finish_mail_working_draft_checkpoint: {
+        Args: {
+          p_account_id: string
+          p_checkpoint_revision: number
+          p_company_id: string
+          p_draft_id: string
+          p_error?: string
+          p_server_ref?: Json
+          p_success: boolean
+        }
+        Returns: undefined
+      }
+      finish_mail_working_draft_checkpoint_if_active: {
+        Args: {
+          p_account_id: string
+          p_checkpoint_revision: number
+          p_company_id: string
+          p_draft_id: string
+          p_error?: string
+          p_server_ref?: Json
+          p_success: boolean
+        }
+        Returns: {
+          committed: boolean
+          fenced: boolean
+          send_state: string
+        }[]
+      }
+      finish_mail_working_draft_discard_cleanup: {
+        Args: {
+          p_account_id: string
+          p_company_id: string
+          p_draft_id: string
+          p_removed_ref?: Json
         }
         Returns: boolean
       }
@@ -976,6 +1303,10 @@ export type Database = {
           running: number
         }[]
       }
+      is_mail_working_draft_discarded: {
+        Args: { p_account_id: string; p_company_id: string; p_draft_id: string }
+        Returns: boolean
+      }
       list_mail_sender_messages: {
         Args: {
           _account_id: string
@@ -1015,6 +1346,37 @@ export type Database = {
         Args: { _account_id: string; _company_id: string; _message_id: string }
         Returns: boolean
       }
+      mark_mail_working_draft_send_failed: {
+        Args: {
+          p_account_id: string
+          p_company_id: string
+          p_draft_id: string
+          p_error: string
+        }
+        Returns: undefined
+      }
+      mark_mail_working_draft_send_in_flight: {
+        Args: { p_account_id: string; p_company_id: string; p_draft_id: string }
+        Returns: boolean
+      }
+      mark_mail_working_draft_send_sent: {
+        Args: {
+          p_account_id: string
+          p_company_id: string
+          p_draft_id: string
+          p_result: Json
+        }
+        Returns: undefined
+      }
+      merge_mail_working_draft_provider_ref: {
+        Args: {
+          p_account_id: string
+          p_company_id: string
+          p_draft_id: string
+          p_ref: Json
+        }
+        Returns: undefined
+      }
       normalize_mail_rfc_message_id: {
         Args: { _value: string }
         Returns: string
@@ -1042,6 +1404,19 @@ export type Database = {
       save_mail_signature: {
         Args: { p_account_id: string; p_html: string }
         Returns: undefined
+      }
+      save_mail_working_draft: {
+        Args: {
+          p_account_id: string
+          p_company_id: string
+          p_draft_id: string
+          p_expected_revision: number
+          p_payload: Json
+        }
+        Returns: {
+          conflict: boolean
+          revision: number
+        }[]
       }
       verify_mail_sync_tick_token: {
         Args: { p_token: string }
