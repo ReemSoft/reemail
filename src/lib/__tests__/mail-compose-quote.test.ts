@@ -327,6 +327,46 @@ describe("quoted email preparation", () => {
     ).toBeNull();
   });
 
+  it("freezes a sender-constrained image at its rendered quote width", () => {
+    document.body.innerHTML = `
+      <style>.mail-cell { width: 320px; } .mail-photo { width: 100%; }</style>
+      <table><tr><td class="mail-cell"><img class="mail-photo" src="cid:photo@example"></td></tr></table>`;
+    const image = document.querySelector<HTMLImageElement>("img")!;
+    image.getBoundingClientRect = () =>
+      ({ width: 320, height: 180, top: 0, left: 0, right: 320, bottom: 180, x: 0, y: 0, toJSON() {} }) as DOMRect;
+
+    const html = exportPreparedQuotedDocument(document);
+    const template = document.createElement("template");
+    template.innerHTML = html;
+    const prepared = template.content.querySelector<HTMLImageElement>("img")!;
+    expect(prepared.style.width).toBe("320px");
+    expect(prepared.style.maxWidth).toBe("100%");
+    expect(prepared.style.height).toBe("auto");
+    expect(prepared.dataset.mmSourceCid).toBe("photo@example");
+    expect(prepared.hasAttribute("class")).toBe(false);
+  });
+
+  it("keeps explicitly sized quoted CID images sized after hydration and serialization", () => {
+    const originalCreate = URL.createObjectURL;
+    URL.createObjectURL = () => "blob:sized-photo";
+    try {
+      const editor = document.createElement("div");
+      editor.innerHTML = markQuotedCidImagesPending(
+        '<div data-mm-quoted-content><img src="cid:photo@example" style="width:280px;max-width:100%;height:auto"></div>',
+      );
+      const image = createInlineComposeImage(
+        new File([new Uint8Array([1])], "photo.png", { type: "image/png" }),
+      );
+      expect(applyInlineImageToCidNodes(editor, "photo@example", image)).toBe(1);
+      expect(editor.querySelector<HTMLImageElement>("img")?.style.width).toBe("280px");
+      const serialized = serializeInlineImages(editor.innerHTML, [image]);
+      expect(serialized.html).toContain("width: 280px");
+      expect(serialized.html).toContain("max-width: 100%");
+    } finally {
+      URL.createObjectURL = originalCreate;
+    }
+  });
+
   it("blocks HTTPS and protocol-relative tracker images before live Composer insertion", () => {
     const html = markQuotedCidImagesPending(`
       <table><tr><td>

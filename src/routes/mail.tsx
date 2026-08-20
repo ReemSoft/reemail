@@ -9253,7 +9253,10 @@ function Composer({
         });
         if (cancelled) return;
         try {
-          const prepared = await prepareQuotedEmailForComposer(initial.quoteSourceHtml);
+          const prepared = await prepareQuotedEmailForComposer(
+            initial.quoteSourceHtml,
+            editor.clientWidth,
+          );
           if (!cancelled) {
             const quote = editor.querySelector<HTMLElement>("[data-mm-quoted-content]");
             if (quote) quote.innerHTML = prepared;

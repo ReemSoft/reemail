@@ -282,13 +282,39 @@ export function exportPreparedQuotedDocument(doc: Document): string {
     if (element.tagName === "STYLE") continue;
     const computed = doc.defaultView?.getComputedStyle(element);
     if (!computed) continue;
+    const matchedProperties = collectMatchingProperties(element, rules);
+    // The formatter document lives in an iframe; cross-realm `instanceof
+    // HTMLImageElement` is false even for a real IMG node.
+    const isImage = element.tagName === "IMG";
+    const hasDeclaredImageWidth =
+      isImage &&
+      (element.hasAttribute("width") ||
+        matchedProperties.has("width") ||
+        matchedProperties.has("min-width") ||
+        matchedProperties.has("max-width"));
+    // Read layout before removing the source classes/styles. This preserves a
+    // sender-defined image size that is inherited through a table/cell or a
+    // percentage rule instead of letting the hydrated image use its full
+    // intrinsic width inside Composer.
+    const renderedImageWidth = hasDeclaredImageWidth
+      ? element.getBoundingClientRect().width
+      : 0;
     const safeDeclarations = Array.from(
-      collectMatchingProperties(element, rules),
+      matchedProperties,
       (property) => [property, computed.getPropertyValue(property).trim()] as const,
     );
     element.removeAttribute("style");
     for (const [property, value] of safeDeclarations) {
       if (value && safeStyleValue(value)) element.style.setProperty(property, value);
+    }
+    if (isImage) {
+      if (Number.isFinite(renderedImageWidth) && renderedImageWidth >= 1) {
+        element.style.setProperty("width", `${Math.round(renderedImageWidth * 100) / 100}px`);
+      }
+      element.style.setProperty("max-width", "100%");
+      if (!element.hasAttribute("height") && !matchedProperties.has("height")) {
+        element.style.setProperty("height", "auto");
+      }
     }
     // The outgoing HTML builder must not apply the Composer's default table,
     // cell, paragraph or image rules to source-message elements.
@@ -321,14 +347,32 @@ const FORMATTER_CSP = [
  * Let sanitized email CSS compute in a short-lived, no-network document, then
  * return a self-contained fragment. Original style tags never enter Composer.
  */
-export async function prepareQuotedEmailForComposer(hardenedHtml: string): Promise<string> {
+export async function prepareQuotedEmailForComposer(
+  hardenedHtml: string,
+  viewportWidth?: number,
+): Promise<string> {
   if (typeof document === "undefined") return markQuotedCidImagesPending(hardenedHtml);
   const frame = document.createElement("iframe");
-  frame.hidden = true;
   frame.tabIndex = -1;
   frame.setAttribute("aria-hidden", "true");
   frame.setAttribute("sandbox", "allow-same-origin");
   frame.referrerPolicy = "no-referrer";
+  const measuredViewport = Number.isFinite(viewportWidth)
+    ? Math.max(320, Math.min(2_000, Number(viewportWidth)))
+    : Math.max(320, Math.min(1_200, document.documentElement.clientWidth || 800));
+  // `hidden` means display:none and makes percentage/table-constrained image
+  // widths unmeasurable. Keep the formatter fully invisible and off-screen,
+  // but allow one real layout pass at the Composer's width.
+  frame.style.cssText = [
+    "position:fixed",
+    "left:-100000px",
+    "top:0",
+    `width:${measuredViewport}px`,
+    "height:1px",
+    "visibility:hidden",
+    "pointer-events:none",
+    "border:0",
+  ].join(";");
   frame.srcdoc = `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="${FORMATTER_CSP}"></head><body>${hardenedHtml}</body></html>`;
   document.body.append(frame);
   try {
