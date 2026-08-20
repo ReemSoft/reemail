@@ -798,6 +798,19 @@ describe("composer inline images", () => {
     },
   );
 
+  it.each(["left", "center", "right"] as const)(
+    "keeps physical %s image alignment exact inside an RTL editor",
+    (alignment) => {
+      const { editor, image } = createDropEditor();
+      editor.dir = "rtl";
+      alignInlineImageNode(image, editor, alignment);
+      expect(image.parentElement?.style.direction).toBe("ltr");
+      expect(image.parentElement?.style.paddingLeft).toBe(
+        alignment === "left" ? "0px" : alignment === "center" ? "200px" : "400px",
+      );
+    },
+  );
+
   it("wires drag only from the overlay and never disables live image pointer events", () => {
     const source = readFileSync("src/routes/mail.tsx", "utf8");
     expect(source).toContain('data-mm-image-drag-surface="1"');
@@ -807,6 +820,8 @@ describe("composer inline images", () => {
     expect(source).toMatch(/e\.preventDefault\(\);\s+e\.stopPropagation\(\);/);
     expect(source.match(/data-mm-image-align=/g)).toHaveLength(1);
     expect(source).not.toContain("onClick={() => alignActiveImage(alignment)}");
+    expect(source).toContain('onMouseDown={() => alignEditorContent("left")}');
+    expect(source).toContain('onMouseDown={() => alignEditorContent("right")}');
     const helperSource = readFileSync("src/lib/mail-compose-inline-images.ts", "utf8");
     expect(helperSource).toContain('document.addEventListener("pointerdown", onPointerDown, true)');
     expect(helperSource).toContain('shield.addEventListener("pointermove", onPointerMove');

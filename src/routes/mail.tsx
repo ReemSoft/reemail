@@ -90,6 +90,12 @@ function sanitizeComposerHtml(html: string): string {
   });
 }
 
+function hydrateComposerDirection(editor: HTMLElement, direction: unknown): void {
+  if (direction !== "rtl" && direction !== "ltr") return;
+  editor.dir = direction;
+  editor.style.textAlign = direction === "rtl" ? "right" : "left";
+}
+
 function rotatingToken(identity: string, prefix = ""): string {
   return `${prefix}${randomToken(12)}${identity.length.toString(36)}`;
 }
@@ -1384,6 +1390,7 @@ type ComposeInitial = {
   bcc?: string;
   subject?: string;
   body?: string;
+  direction?: "rtl" | "ltr";
   showCc?: boolean;
   showBcc?: boolean;
   /**
@@ -1423,6 +1430,7 @@ function buildWorkingDraftInitial(record: WorkingDraftRecord): ComposeInitial {
     cc: addressText(snapshot.cc),
     bcc: addressText(snapshot.bcc),
     body: snapshot.html,
+    direction: snapshot.dir,
     subject: snapshot.subject || "",
     bodyIsHtml: true,
     showCc: Boolean(snapshot.showCc),
@@ -8161,7 +8169,10 @@ function Composer({
         setSubject(snapshot.subject ?? "");
         setShowCc(Boolean(snapshot.showCc));
         setShowBcc(Boolean(snapshot.showBcc));
-        if (editorRef.current) editorRef.current.innerHTML = snapshot.html ?? "";
+        if (editorRef.current) {
+          editorRef.current.innerHTML = snapshot.html ?? "";
+          hydrateComposerDirection(editorRef.current, snapshot.dir);
+        }
         const normal = record.payload.attachments.filter(
           (attachment) => attachment.kind === "attachment",
         );
@@ -9086,6 +9097,9 @@ function Composer({
     if (editorRef.current && initialHtml && editorRef.current.innerHTML === "") {
       editorRef.current.innerHTML = initialHtml;
     }
+    if (editorRef.current) {
+      hydrateComposerDirection(editorRef.current, restored?.dir ?? initial?.direction);
+    }
     let cancelled = false;
     const streamController = new AbortController();
     const hydrationKey = "composer-mount-hydration";
@@ -9142,7 +9156,10 @@ function Composer({
       if (cancelled) return;
       if (workingRecord) {
         const workingSnapshot = workingRecord.payload.snapshot;
-        if (!isDirtyRef.current) editor.innerHTML = workingSnapshot.html ?? "";
+        if (!isDirtyRef.current) {
+          editor.innerHTML = workingSnapshot.html ?? "";
+          hydrateComposerDirection(editor, workingSnapshot.dir);
+        }
         const refsByCid = new Map(
           workingRecord.payload.attachments
             .filter(
@@ -9961,6 +9978,7 @@ function Composer({
           bcc: s.bcc,
           subject: s.subject,
           html,
+          dir: currentEditorDirection(),
           showCc: s.showCc,
           showBcc: s.showBcc,
           ...threadingHeaders,
@@ -10374,6 +10392,33 @@ function Composer({
     } catch {
       /* noop */
     }
+  }
+
+  function alignEditorContent(alignment: InlineImageAlignment) {
+    const image = activeImgRef.current;
+    const editor = editorRef.current;
+    if (image && editor?.contains(image)) {
+      alignActiveImage(alignment);
+      return;
+    }
+    exec(
+      alignment === "left"
+        ? "justifyLeft"
+        : alignment === "center"
+          ? "justifyCenter"
+          : "justifyRight",
+    );
+  }
+
+  function currentEditorDirection(): "rtl" | "ltr" {
+    const editor = editorRef.current;
+    const explicit = editor?.getAttribute("dir");
+    if (explicit === "rtl" || explicit === "ltr") return explicit;
+    if (editor && typeof window !== "undefined") {
+      const computed = window.getComputedStyle(editor).direction;
+      if (computed === "rtl" || computed === "ltr") return computed;
+    }
+    return document.documentElement.dir === "ltr" ? "ltr" : "rtl";
   }
 
   function promptLink() {
@@ -10813,9 +10858,7 @@ function Composer({
       const fragment = sanitizeComposerHtml(serialized.html);
       // Recipients don't get the app stylesheet: carry every bit of spacing /
       // list / typography formatting inline in a standalone email document.
-      const editorDir =
-        (editorRef.current?.getAttribute("dir") as "rtl" | "ltr" | null) ??
-        (document?.documentElement?.dir === "ltr" ? "ltr" : "rtl");
+      const editorDir = currentEditorDirection();
       const bodyHtml = buildEmailHtmlDocument(fragment, { dir: editorDir });
       const bodyText = htmlToPlainText(fragment);
       setSendProgress({ progress: 42, stage: "preparing" });
@@ -11231,6 +11274,7 @@ function Composer({
         bcc,
         subject,
         html,
+        dir: currentEditorDirection(),
         showCc,
         showBcc,
         ...threadingHeaders,
@@ -11703,21 +11747,21 @@ function Composer({
                   <ToolbarButton
                     title={tr("محاذاة يمين")}
                     active={fmtState.justifyRight}
-                    onMouseDown={() => exec("justifyRight")}
+                    onMouseDown={() => alignEditorContent("right")}
                   >
                     <AlignRight className="h-3.5 w-3.5" />
                   </ToolbarButton>
                   <ToolbarButton
                     title={tr("توسيط")}
                     active={fmtState.justifyCenter}
-                    onMouseDown={() => exec("justifyCenter")}
+                    onMouseDown={() => alignEditorContent("center")}
                   >
                     <AlignCenter className="h-3.5 w-3.5" />
                   </ToolbarButton>
                   <ToolbarButton
                     title={tr("محاذاة يسار")}
                     active={fmtState.justifyLeft}
-                    onMouseDown={() => exec("justifyLeft")}
+                    onMouseDown={() => alignEditorContent("left")}
                   >
                     <AlignLeft className="h-3.5 w-3.5" />
                   </ToolbarButton>

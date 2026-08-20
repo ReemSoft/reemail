@@ -92,6 +92,25 @@ export interface BuildEmailHtmlOptions {
   dir?: "rtl" | "ltr";
 }
 
+/** Infer legacy Draft direction from its first strong text character. */
+export function inferEmailDirection(fragment: string): "rtl" | "ltr" {
+  const text = fragment.replace(/<[^>]*>/g, " ").replace(/&(?:#\d+|#x[\da-f]+|[a-z]+);/gi, " ");
+  for (const character of text) {
+    const code = character.codePointAt(0) ?? 0;
+    if (
+      (code >= 0x0590 && code <= 0x08ff) ||
+      (code >= 0xfb1d && code <= 0xfdff) ||
+      (code >= 0xfe70 && code <= 0xfeff)
+    ) {
+      return "rtl";
+    }
+    if ((code >= 0x0041 && code <= 0x005a) || (code >= 0x0061 && code <= 0x007a)) {
+      return "ltr";
+    }
+  }
+  return "rtl";
+}
+
 /**
  * Wrap a sanitized composer fragment into a standalone, client-safe email
  * document with all formatting carried inline.

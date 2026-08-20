@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildEmailHtmlDocument,
   htmlToPlainText,
+  inferEmailDirection,
   inlineBlockStyles,
 } from "@/lib/mail-compose-html";
 
@@ -68,6 +69,16 @@ describe("buildEmailHtmlDocument", () => {
 
   it("defaults to rtl", () => {
     expect(buildEmailHtmlDocument("<div>a</div>")).toContain('<html dir="rtl">');
+  });
+});
+
+describe("inferEmailDirection", () => {
+  it("detects Arabic after ignoring HTML tag names", () => {
+    expect(inferEmailDirection("<div><strong>مرحبا بكم</strong></div>")).toBe("rtl");
+  });
+
+  it("detects English after ignoring HTML tag names", () => {
+    expect(inferEmailDirection("<div><strong>Hello there</strong></div>")).toBe("ltr");
   });
 });
 

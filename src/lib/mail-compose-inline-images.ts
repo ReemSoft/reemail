@@ -671,6 +671,9 @@ function applyPositionStyles(wrapper: HTMLElement, offsetX: number, offsetY: num
   wrapper.style.display = "block";
   wrapper.style.width = "100%";
   wrapper.style.boxSizing = "border-box";
+  // Position offsets are physical left/center/right coordinates. Isolate the
+  // image-only wrapper from an RTL parent so the same controls remain exact.
+  wrapper.style.direction = "ltr";
   wrapper.style.paddingTop = `${y}px`;
   wrapper.style.paddingLeft = `${x}px`;
   wrapper.style.textAlign = "left";

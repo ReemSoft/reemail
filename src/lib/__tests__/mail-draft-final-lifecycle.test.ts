@@ -240,6 +240,16 @@ describe("Working Draft complete fields", () => {
     );
     expect(api).toContain("loadWorkingDraftForEditor(auth, draftId)");
   });
+
+  it("persists composer direction and wraps Working Draft HTML only for final Send", () => {
+    const src = mail();
+    expect(src).toContain("dir: currentEditorDirection()");
+    expect(src).toContain("direction: snapshot.dir");
+    const server = readFileSync(new URL("../mail-working-draft.server.ts", import.meta.url), "utf8");
+    expect(server).toContain('input.endpoint === "/api/send-v2"');
+    expect(server).toContain("buildEmailHtmlDocument(snapshot.html, { dir: sendDirection })");
+    expect(server).toContain("inferEmailDirection(snapshot.html)");
+  });
 });
 
 describe("Draft-edit identity", () => {

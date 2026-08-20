@@ -67,6 +67,8 @@ export interface DraftSnapshot {
   bcc: DraftRecipient[];
   subject: string;
   html: string;
+  /** Physical writing direction captured from the composer root. */
+  dir?: "rtl" | "ltr";
   showCc: boolean;
   showBcc: boolean;
   inReplyTo?: string;

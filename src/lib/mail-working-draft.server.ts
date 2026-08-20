@@ -23,6 +23,7 @@ import {
   WORKING_DRAFT_STAGE_CONCURRENCY,
 } from "@/lib/mail-working-draft-bounded";
 import { isDraftProviderCheckpointFenced } from "@/lib/mail-draft-provider-checkpoint";
+import { buildEmailHtmlDocument, inferEmailDirection } from "@/lib/mail-compose-html";
 
 type UntypedDb = {
   from(table: string): any;
@@ -1116,6 +1117,14 @@ async function invokeBridgeWithStagedAttachments(input: {
       }
     });
     const snapshot = input.payload.snapshot;
+    const sendDirection =
+      snapshot.dir === "ltr" || snapshot.dir === "rtl"
+        ? snapshot.dir
+        : inferEmailDirection(snapshot.html);
+    const bodyHtml =
+      input.endpoint === "/api/send-v2"
+        ? buildEmailHtmlDocument(snapshot.html, { dir: sendDirection })
+        : snapshot.html;
     const response = await fetch(`${bridge.bridgeUrl}${input.endpoint}`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Bridge-Key": bridge.bridgeKey },
@@ -1130,7 +1139,7 @@ async function invokeBridgeWithStagedAttachments(input: {
         subject: snapshot.subject || " ",
         inReplyTo: snapshot.inReplyTo,
         references: snapshot.references ?? [],
-        bodyHtml: snapshot.html,
+        bodyHtml,
         bodyText: stripHtml(snapshot.html),
         previousRef: input.previousRef ?? undefined,
         attachmentHandles: normal,
