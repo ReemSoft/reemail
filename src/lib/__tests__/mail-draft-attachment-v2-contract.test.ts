@@ -4,6 +4,10 @@ import { readDraftDoc, writeDraftDoc, type DraftDocV3 } from "../mail-draft-life
 
 describe("draft attachment V2 contract", () => {
   const composer = readFileSync(new URL("../../routes/mail.tsx", import.meta.url), "utf8");
+  const workingDraftServer = readFileSync(
+    new URL("../mail-working-draft.server.ts", import.meta.url),
+    "utf8",
+  );
 
   it("reuses one staged upload and sends no attachment bytes on autosave", () => {
     expect(composer).toContain("getOrCreateStagedUpload(stagedUploadsRef.current");
@@ -54,5 +58,44 @@ describe("draft attachment V2 contract", () => {
       doc.snapshot.stagedAttachments,
     );
     expect([...rows.values()].join()).not.toContain("base64");
+  });
+
+  it("adopts an imported clientKey row without weakening its ownership scope", () => {
+    expect(workingDraftServer).not.toContain(
+      'if (current?.storage_path) throw new Error("ATTACHMENT_ID_REQUIRED")',
+    );
+    const adoption = workingDraftServer.slice(
+      workingDraftServer.indexOf("if (current?.storage_path)"),
+      workingDraftServer.indexOf('if (!reference.source) throw new Error("ATTACHMENT_SOURCE_REQUIRED")'),
+    );
+    expect(adoption).toContain('if (current.kind !== reference.kind)');
+    expect(adoption).toContain('.eq("draft_id", draftId)');
+    expect(adoption).toContain('.eq("company_id", auth.companyId)');
+    expect(adoption).toContain('.eq("account_id", auth.accountId)');
+    expect(adoption).toContain("retainedIds.add(current.id)");
+  });
+
+  it("sends trustworthy provider attachments directly while preserving owned fallback", () => {
+    expect(workingDraftServer).toContain("async function resolveSendAttachments(");
+    expect(workingDraftServer).toContain(
+      'if (row.storage_path) return { owned: row, source: null }',
+    );
+    expect(workingDraftServer).toContain(
+      'if (row.kind === "attachment" && source)',
+    );
+    expect(workingDraftServer).toContain(
+      "owned: await importExternalAttachment(auth, row, context)",
+    );
+    expect(workingDraftServer).toContain("WORKING_DRAFT_STAGE_CONCURRENCY");
+    expect(workingDraftServer).toContain("sourceAttachments: input.sourceAttachments ?? []");
+    expect(workingDraftServer).toContain("sourceAttachments: plan.sources");
+  });
+
+  it("animates the existing Send icon without adding render-loop state", () => {
+    expect(composer).toContain("function startSendFlight(");
+    expect(composer).toContain('const plane = sourceIcon.cloneNode(true) as SVGElement');
+    expect(composer).toContain("const sendFlight = startSendFlight(sendButtonRef.current)");
+    expect(composer).toContain("sendFlight.finish(sendAccepted)");
+    expect(composer).toContain('prefers-reduced-motion: reduce');
   });
 });

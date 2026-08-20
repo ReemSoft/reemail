@@ -98,7 +98,11 @@ test("normal and entire message paths invoke the same one-pass decoder", () => {
 });
 
 test("charset correction changes no request, cache, MIME, attachment, or CID surface", () => {
-  const source = readFileSync(new URL("../src/imap.ts", import.meta.url), "utf8");
+  // Keep this source-boundary assertion portable across LF and CRLF checkouts.
+  const source = readFileSync(new URL("../src/imap.ts", import.meta.url), "utf8").replace(
+    /\r\n/g,
+    "\n",
+  );
   const helper = source.slice(
     source.indexOf("export function decodeDownloadedText("),
     source.indexOf("/**\n * Downloads one body part."),

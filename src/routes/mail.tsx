@@ -7715,6 +7715,84 @@ function ToolbarSelect({
   );
 }
 
+/**
+ * A compositor-only Send flourish. It clones the existing icon into a fixed
+ * layer, so it causes no React animation renders and survives the composer's
+ * immediate close long enough to complete the successful exit.
+ */
+function startSendFlight(anchor: HTMLButtonElement | null): { finish: (sent: boolean) => void } {
+  if (!anchor || typeof document === "undefined") return { finish: () => undefined };
+  const sourceIcon = anchor.querySelector("svg");
+  if (!sourceIcon) return { finish: () => undefined };
+
+  const start = sourceIcon.getBoundingClientRect();
+  const plane = sourceIcon.cloneNode(true) as SVGElement;
+  plane.removeAttribute("class");
+  Object.assign(plane.style, {
+    position: "fixed",
+    left: `${start.left}px`,
+    top: `${start.top}px`,
+    width: `${Math.max(20, start.width)}px`,
+    height: `${Math.max(20, start.height)}px`,
+    color: "#2563eb",
+    filter: "drop-shadow(0 5px 7px rgb(15 23 42 / 0.28))",
+    pointerEvents: "none",
+    zIndex: "2147483647",
+    willChange: "transform, opacity",
+  });
+  plane.setAttribute("aria-hidden", "true");
+  document.body.appendChild(plane);
+
+  const reduced = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true;
+  const right = Math.max(48, window.innerWidth - start.left - 64);
+  const left = -Math.max(48, start.left - 42);
+  const up = -Math.max(72, start.top - 52);
+  const flight = plane.animate(
+    reduced
+      ? [
+          { transform: "translate3d(0,0,0) scale(1)", opacity: 0.9 },
+          { transform: "translate3d(0,-8px,0) scale(1.08)", opacity: 1 },
+          { transform: "translate3d(0,0,0) scale(1)", opacity: 0.9 },
+        ]
+      : [
+          { transform: "translate3d(0,0,0) rotate(-8deg) scale(1)", offset: 0 },
+          { transform: `translate3d(${right * 0.58}px,${up * 0.72}px,0) rotate(18deg) scale(1.16)`, offset: 0.22 },
+          { transform: `translate3d(${right}px,${up * 0.18}px,0) rotate(112deg) scale(1)`, offset: 0.43 },
+          { transform: `translate3d(${left}px,${up * 0.48}px,0) rotate(218deg) scale(1.12)`, offset: 0.7 },
+          { transform: "translate3d(0,0,0) rotate(352deg) scale(1)", offset: 1 },
+        ],
+    { duration: reduced ? 900 : 2200, iterations: Infinity, easing: "ease-in-out" },
+  );
+
+  let finished = false;
+  return {
+    finish(sent: boolean) {
+      if (finished) return;
+      finished = true;
+      const current = plane.getBoundingClientRect();
+      flight.cancel();
+      plane.style.left = `${current.left}px`;
+      plane.style.top = `${current.top}px`;
+      plane.style.transform = "none";
+      const liveAnchor = sourceIcon.isConnected ? sourceIcon.getBoundingClientRect() : start;
+      const exit = sent
+        ? { x: window.innerWidth - current.left + 80, y: -Math.max(90, current.top + 70), rotate: 38 }
+        : { x: liveAnchor.left - current.left, y: liveAnchor.top - current.top, rotate: -8 };
+      const landing = plane.animate(
+        [
+          { transform: "translate3d(0,0,0) rotate(0deg) scale(1)", opacity: 1 },
+          {
+            transform: `translate3d(${exit.x}px,${exit.y}px,0) rotate(${exit.rotate}deg) scale(${sent ? 0.62 : 0.88})`,
+            opacity: sent ? 0 : 0.15,
+          },
+        ],
+        { duration: reduced ? 120 : sent ? 320 : 220, easing: sent ? "cubic-bezier(.22,.8,.35,1)" : "ease-in" },
+      );
+      void landing.finished.catch(() => undefined).finally(() => plane.remove());
+    },
+  };
+}
+
 function Composer({
   session,
   initial,
@@ -7901,6 +7979,7 @@ function Composer({
   >(new Map());
   const [sending, setSending] = useState(false);
   const [progress, setProgress] = useState(0);
+  const sendButtonRef = useRef<HTMLButtonElement>(null);
   // Composer runs inline inside the message-viewer pane (Superhuman-style).
   const [dragging, setDragging] = useState(false);
   const [savedAt, setSavedAt] = useState<number | null>(() => initialDoc?.updatedAt ?? null);
@@ -10694,6 +10773,7 @@ function Composer({
       return;
     }
     sendInProgressRef.current = true;
+    const sendFlight = startSendFlight(sendButtonRef.current);
     setSending(true);
     setProgress(0);
     let sendAccepted = false;
@@ -10942,6 +11022,7 @@ function Composer({
     } catch (err: unknown) {
       toast.error(errorMessage(err, tr("فشل إرسال الرسالة")));
     } finally {
+      sendFlight.finish(sendAccepted);
       sendInProgressRef.current = false;
       setSending(false);
       setProgress(0);
@@ -11871,6 +11952,7 @@ function Composer({
       <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-t border-border/70 bg-surface/80 px-3 py-2.5 backdrop-blur sm:gap-3 sm:px-6 sm:py-3">
         <div className="flex flex-wrap items-center gap-2">
           <button
+            ref={sendButtonRef}
             onClick={handleSend}
             disabled={sending || to.length === 0}
             className="inline-flex items-center gap-2 rounded-lg bg-brand-gradient px-4 py-2 text-xs font-semibold text-white shadow-brand transition hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-60"

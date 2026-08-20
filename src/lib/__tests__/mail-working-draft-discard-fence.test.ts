@@ -11,7 +11,10 @@ const migration = () =>
   );
 
 const serverSource = () =>
-  readFileSync(new URL("../mail-working-draft.server.ts", import.meta.url), "utf8");
+  readFileSync(new URL("../mail-working-draft.server.ts", import.meta.url), "utf8").replace(
+    /\r\n/g,
+    "\n",
+  );
 
 function bodyOf(sql: string, functionName: string): string {
   const match = sql.match(
