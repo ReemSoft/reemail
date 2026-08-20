@@ -5,6 +5,7 @@ export type InlineCidPart = NonNullable<MailMessage["inlineParts"]>[number];
 export const INLINE_CID_FAST_MAX_BYTES = 256 * 1024;
 export const INLINE_CID_FAST_TOTAL_BYTES = 1024 * 1024;
 export const INLINE_CID_MAX_COUNT = 20;
+export const INLINE_CID_METADATA_MAX_COUNT = 50;
 export const INLINE_CID_STREAM_MAX_BYTES = 5 * 1024 * 1024;
 
 const INLINE_IMAGE_MIMES = new Set([

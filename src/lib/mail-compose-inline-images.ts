@@ -713,13 +713,22 @@ export function alignInlineImageNode(
 }
 
 export function findInlineImageNodesByCid(editor: HTMLElement, cid: string): HTMLImageElement[] {
-  const wanted = cid.trim().replace(/^<|>$/g, "").toLowerCase();
+  const normalize = (value: string) => {
+    let decoded = value.trim();
+    try {
+      decoded = decodeURIComponent(decoded);
+    } catch {
+      /* literal percent in the source CID */
+    }
+    return decoded.replace(/^<|>$/g, "").trim().toLowerCase();
+  };
+  const wanted = normalize(cid);
   return Array.from(
     editor.querySelectorAll<HTMLImageElement>('img[src^="cid:" i],img[data-mm-source-cid]'),
   ).filter((image) => {
     const pending = image.dataset.mmSourceCid;
     const source = pending ?? image.getAttribute("src")?.slice(4) ?? "";
-    return source.trim().replace(/^<|>$/g, "").toLowerCase() === wanted;
+    return normalize(source) === wanted;
   });
 }
 
@@ -737,14 +746,17 @@ export function applyInlineImageToCidNodes(
 ): number {
   const nodes = findInlineImageNodesByCid(editor, sourceCid);
   for (const node of nodes) {
+    const quotedSource = Boolean(node.closest("[data-mm-quoted-content]"));
     node.src = image.objectUrl;
     node.dataset.mmInlineId = image.id;
     delete node.dataset.mmSourceCid;
     node.removeAttribute("aria-busy");
     node.style.removeProperty("visibility");
     node.draggable = false;
-    node.style.maxWidth = "100%";
-    node.style.height = "auto";
+    if (!quotedSource) {
+      node.style.maxWidth = "100%";
+      node.style.height = "auto";
+    }
   }
   return nodes.length;
 }
@@ -781,13 +793,16 @@ export function serializeInlineImages(
     delete img.dataset.mmSourceCid;
     img.removeAttribute("aria-busy");
     img.style.removeProperty("visibility");
-    const measured = Number.parseInt(img.style.width || img.getAttribute("width") || "", 10);
-    if (Number.isFinite(measured) && measured >= INLINE_IMAGE_MIN_WIDTH) {
-      img.width = measured;
-      img.style.width = `${measured}px`;
+    const quotedSource = Boolean(img.closest("[data-mm-quoted-content]"));
+    if (!quotedSource) {
+      const measured = Number.parseInt(img.style.width || img.getAttribute("width") || "", 10);
+      if (Number.isFinite(measured) && measured >= INLINE_IMAGE_MIN_WIDTH) {
+        img.width = measured;
+        img.style.width = `${measured}px`;
+      }
+      img.style.maxWidth = "100%";
+      img.style.height = "auto";
     }
-    img.style.maxWidth = "100%";
-    img.style.height = "auto";
     img.removeAttribute("draggable");
     img.style.removeProperty("touch-action");
     if (!options.keepEditorIds) delete img.dataset.mmInlineId;

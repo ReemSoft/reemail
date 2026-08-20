@@ -26,7 +26,6 @@ export interface SourceAttachmentTransport {
   handle?: string;
 }
 
-
 export interface AttachmentTransportPlan {
   attachmentHandles: string[];
   sourceAttachments: SourceAttachmentTransport[];
@@ -36,8 +35,8 @@ export interface AttachmentTransportPlan {
 
 export const COMPOSE_MAX_TOTAL_BYTES = 25 * 1024 * 1024;
 export const COMPOSE_MAX_NORMAL_ATTACHMENTS = 10;
-export const COMPOSE_MAX_INLINE_IMAGES = 20;
-export const COMPOSE_MAX_TOTAL_FILE_PARTS = 30;
+export const COMPOSE_MAX_INLINE_IMAGES = 50;
+export const COMPOSE_MAX_TOTAL_FILE_PARTS = 60;
 
 export type AttachmentLimitKind = "normal" | "inline" | "bytes";
 
@@ -193,7 +192,9 @@ export function buildAttachmentTransportPlan(input: {
     const handle =
       input.restoredHandles.get(attachment.id) ?? input.preservedHandles.get(attachment.id);
     const sourceUsable =
-      Boolean(input.sourceRef) && Boolean(attachment.part) && /^\d+(?:\.\d+)*$/.test(attachment.part ?? "");
+      Boolean(input.sourceRef) &&
+      Boolean(attachment.part) &&
+      /^\d+(?:\.\d+)*$/.test(attachment.part ?? "");
     if (handle && !(input.carryHandleWithSource && sourceUsable)) {
       attachmentHandles.push(handle);
       continue;
@@ -219,4 +220,3 @@ export function buildAttachmentTransportPlan(input: {
 
   return { attachmentHandles, sourceAttachments, sourceAttachmentIds, unresolvedAttachmentIds };
 }
-

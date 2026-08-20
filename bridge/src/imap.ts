@@ -35,6 +35,7 @@ function envInt(name: string, fallback: number): number {
 const INLINE_IMAGE_MAX_BYTES = envInt("INLINE_IMAGE_MAX_BYTES", 256 * 1024);
 const INLINE_IMAGE_TOTAL_BYTES = envInt("INLINE_IMAGE_TOTAL_BYTES", 1024 * 1024);
 const INLINE_IMAGE_MAX_COUNT = envInt("INLINE_IMAGE_MAX_COUNT", 20);
+const INLINE_IMAGE_METADATA_MAX_COUNT = envInt("INLINE_IMAGE_METADATA_MAX_COUNT", 50);
 // Transport-level cap on a single inline part's RAW encoded octets. Worst
 // valid RFC 2045 quoted-printable for a decoded D-byte part: every octet as
 // "=XX" (3 octets) plus a soft line break ("=\r\n") after each line, which RFC
@@ -463,7 +464,14 @@ function isAttachmentLike(node: MessageStructureObject): boolean {
 }
 
 function contentId(value: string | undefined): string | undefined {
-  const normalized = value?.trim().replace(/^<|>$/g, "").toLowerCase();
+  if (!value) return undefined;
+  let decoded = value.trim().replace(/&lt;/gi, "<").replace(/&gt;/gi, ">").replace(/&amp;/gi, "&");
+  try {
+    decoded = decodeURIComponent(decoded);
+  } catch {
+    // A literal '%' is valid in a Content-ID; keep the original form.
+  }
+  const normalized = decoded.replace(/^<|>$/g, "").trim().toLowerCase();
   return normalized || undefined;
 }
 
@@ -636,7 +644,7 @@ export function selectInlineMetadataCandidates(
       part.size <= INLINE_IMAGE_STREAM_MAX_BYTES &&
       INLINE_IMAGE_SAFE_MIME.test(part.mimeType),
   );
-  if (folder !== "drafts") return safe.slice(0, INLINE_IMAGE_MAX_COUNT);
+  if (folder !== "drafts") return safe.slice(0, INLINE_IMAGE_METADATA_MAX_COUNT);
   return safe.slice(0, 10).reduce<typeof safe>((selected, part) => {
     const total = selected.reduce((sum, item) => sum + item.size, 0);
     if (total + part.size <= 25 * 1024 * 1024) selected.push(part);
@@ -649,7 +657,7 @@ export function visibleMessageAttachments(
   referencedCids: ReadonlySet<string>,
 ): MailAttachment[] {
   return attachments.filter((attachment) => {
-    const cid = (attachment.contentId || "").replace(/^<|>$/g, "").toLowerCase();
+    const cid = contentId(attachment.contentId);
     if (cid && referencedCids.has(cid)) return false;
     if (attachment.disposition === "inline" && attachment.contentId) return false;
     return true;
@@ -661,9 +669,10 @@ export function findUniqueCidAttachment(
   attachments: readonly MailAttachment[],
   cid: string,
 ): MailAttachment | null {
-  const normalized = cid.replace(/^<|>$/g, "").toLowerCase();
+  const normalized = contentId(cid);
+  if (!normalized) return null;
   const matches = attachments.filter(
-    (attachment) => (attachment.contentId || "").replace(/^<|>$/g, "").toLowerCase() === normalized,
+    (attachment) => contentId(attachment.contentId) === normalized,
   );
   return matches.length === 1 ? matches[0] : null;
 }
@@ -892,7 +901,8 @@ export async function getMessageBody(
 
       if (html) {
         for (const m of html.matchAll(/cid:([^"'\s>)\\]+)/gi)) {
-          referencedCids.add(m[1].replace(/^<|>$/g, "").toLowerCase());
+          const cid = contentId(m[1]);
+          if (cid) referencedCids.add(cid);
         }
         const candidates: NonNullable<MailMessage["inlineParts"]> = [];
         for (const cid of referencedCids) {

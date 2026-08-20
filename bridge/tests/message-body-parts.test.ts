@@ -344,6 +344,20 @@ test("a duplicated Content-ID is ambiguous and never selects an arbitrary MIME p
   assert.equal(findUniqueCidAttachment(duplicated.slice(0, 1), "SAME@MM")?.part, "2");
 });
 
+test("URL-encoded CID references match the canonical BODYSTRUCTURE id", () => {
+  const attachments = [
+    {
+      id: "2",
+      part: "2",
+      filename: "photo.jpg",
+      size: 100,
+      mimeType: "image/jpeg",
+      contentId: "<photo@example.com>",
+    },
+  ];
+  assert.equal(findUniqueCidAttachment(attachments, "photo%40example.com")?.part, "2");
+});
+
 test("BODYSTRUCTURE attachment filenames are normalized without changing valid Arabic", () => {
   const validArabic = "\u062a\u0642\u0631\u064a\u0631.pdf";
   const mojibake = Buffer.from(validArabic, "utf8").toString("latin1");

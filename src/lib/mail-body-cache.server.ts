@@ -14,7 +14,10 @@
 // account identifier is ever printed.
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { MailAddress, MailAttachment, MailMessage } from "@/lib/mail-types";
-import { INLINE_CID_MAX_COUNT, partitionInlineCidParts } from "@/lib/mail-inline-cid-policy";
+import {
+  INLINE_CID_METADATA_MAX_COUNT,
+  partitionInlineCidParts,
+} from "@/lib/mail-inline-cid-policy";
 
 /** Bump when the HTML/body pipeline changes: invalidates every stored body. */
 export const BODY_CACHE_VERSION = 3;
@@ -124,7 +127,7 @@ function boundedInlineParts(
     ...partition.smallBatchParts,
     ...partition.largeStreamParts,
     ...partition.overflowStreamParts,
-  ].slice(0, INLINE_CID_MAX_COUNT);
+  ].slice(0, INLINE_CID_METADATA_MAX_COUNT);
 }
 
 function normalizeCid(value: unknown): string | null {
@@ -208,7 +211,7 @@ function normalizeCachedInlineMetadata(
   const recoveredInlineParts = boundedInlineParts(
     legacyCandidates,
     inlineParts.map((part) => part.cid),
-  ).slice(0, Math.max(0, INLINE_CID_MAX_COUNT - inlineParts.length));
+  ).slice(0, Math.max(0, INLINE_CID_METADATA_MAX_COUNT - inlineParts.length));
   const mergedInlineParts = boundedInlineParts([...inlineParts, ...recoveredInlineParts]);
   const acceptedCids = new Set(
     mergedInlineParts.map((part) => normalizeCid(part.cid)).filter((cid): cid is string => !!cid),
@@ -539,7 +542,7 @@ export async function storeCachedBody(
           mimeType: i.mimeType,
           size: i.size,
         })),
-      ].slice(0, 20);
+      ].slice(0, INLINE_CID_METADATA_MAX_COUNT);
 
   const { error } = await supabase.from("mail_message_body_cache").upsert(
     {

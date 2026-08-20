@@ -817,16 +817,16 @@ describe("composer inline images", () => {
     expect(JSON.stringify([safe])).not.toContain("base64");
   });
 
-  it("accepts exactly 20 distinct inline image entries and rejects 21", () => {
+  it("accepts exactly 50 distinct inline image entries and rejects 51", () => {
     const id = (n: number) => n.toString(16).padStart(32, "0");
     const entry = (n: number) => ({
       uploadFilename: `mm-inline-${id(n)}.png`,
       cid: `mm-inline-${id(n)}@mailmaestro`,
       contentType: "image/png",
     });
-    const twenty = Array.from({ length: 20 }, (_, i) => entry(i));
-    expect(InlineUploadMetadataSchema.safeParse(twenty).success).toBe(true);
-    const twentyOne = [...twenty, entry(20)];
-    expect(InlineUploadMetadataSchema.safeParse(twentyOne).success).toBe(false);
+    const fifty = Array.from({ length: 50 }, (_, i) => entry(i));
+    expect(InlineUploadMetadataSchema.safeParse(fifty).success).toBe(true);
+    const fiftyOne = [...fifty, entry(50)];
+    expect(InlineUploadMetadataSchema.safeParse(fiftyOne).success).toBe(false);
   });
 });

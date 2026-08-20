@@ -106,6 +106,13 @@ test("interactive metadata retains a 1.8 MiB referenced CID without downloading 
   });
 });
 
+test("interactive metadata retains up to fifty referenced images for post-paint batches", () => {
+  const many = parts(45);
+  const selected = selectInlineMetadataCandidates(many, "inbox");
+  assert.equal(selected.length, 45);
+  assert.deepEqual(selected, many);
+});
+
 test("referenced deferred CIDs are body resources while a normal PDF remains visible", () => {
   const cid = "mm-inline-large@mailmaestro";
   const smallCid = "logo-small@mailmaestro";
@@ -293,7 +300,9 @@ test("base64-encoded parts decode deterministically and bound after decode", asy
   const oversized = Buffer.alloc(300 * 1024, 0x61);
   const client = fetchOneClient(calls, {
     content: (key) =>
-      key === "4" ? Buffer.from(oversized.toString("base64")) : Buffer.from(PNG_BYTES.toString("base64")),
+      key === "4"
+        ? Buffer.from(oversized.toString("base64"))
+        : Buffer.from(PNG_BYTES.toString("base64")),
     mime: () => Buffer.from("Content-Type: image/png\r\nContent-Transfer-Encoding: base64\r\n"),
   });
 
@@ -313,7 +322,8 @@ test("quoted-printable parts decode deterministically", async () => {
   }> = [];
   const pngQp = "=89=50=4E=47=0D=0A=1A=0A";
   const client = fetchOneClient(calls, {
-    content: (key) => (key === "4" ? Buffer.from("=89=50=4E=47=\r\n=0D=0A=1A=0A") : Buffer.from(pngQp)),
+    content: (key) =>
+      key === "4" ? Buffer.from("=89=50=4E=47=\r\n=0D=0A=1A=0A") : Buffer.from(pngQp),
     mime: () =>
       Buffer.from("Content-Type: image/png\r\nContent-Transfer-Encoding: quoted-printable\r\n"),
   });

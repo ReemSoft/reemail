@@ -307,7 +307,7 @@ const SendV2PayloadSchema = SendPayloadSchema.extend({
     )
     .max(10)
     .default([]),
-  stagedInlineImages: z.array(StagedInlineSchema).max(20).default([]),
+  stagedInlineImages: z.array(StagedInlineSchema).max(50).default([]),
   sourceAttachments: z.array(ServerAttachmentSourceSchema).max(10).default([]),
 });
 
@@ -335,9 +335,9 @@ const DraftV2AttachmentSchema = z.object({
     )
     .max(10)
     .default([]),
-  stagedInlineImages: z.array(StagedInlineSchema).max(20).default([]),
+  stagedInlineImages: z.array(StagedInlineSchema).max(50).default([]),
   sourceAttachments: z.array(DraftServerAttachmentSourceSchema).max(10).default([]),
-  sourceInlineImages: z.array(DraftServerInlineSourceSchema).max(20).default([]),
+  sourceInlineImages: z.array(DraftServerInlineSourceSchema).max(50).default([]),
 });
 
 const DraftRevisionReconcilePayloadSchema = AuthPayloadSchema.extend({
@@ -955,11 +955,11 @@ const SEND_MAX_TOTAL_BYTES = Number(process.env.SEND_MAX_TOTAL_BYTES || 25 * 102
 const SEND_MAX_FILES = Number(process.env.SEND_MAX_FILES || 10);
 // Separate bounded resource classes: normal attachments (staged handles +
 // server-source attachments) cap at 10, MIME inline/CID images cap at 20, and
-// the absolute MIME file-part count caps at 30. Inline images never consume
+// the absolute MIME file-part count caps at 60. Inline images never consume
 // the user's normal-attachment quota and vice versa. Byte limits stay shared.
 const MAX_NORMAL_ATTACHMENTS = 10;
-const MAX_INLINE_IMAGES = 20;
-const MAX_TOTAL_FILE_PARTS = 30;
+const MAX_INLINE_IMAGES = 50;
+const MAX_TOTAL_FILE_PARTS = 60;
 
 const SEND_GLOBAL_MAX = Number(process.env.SEND_GLOBAL_MAX || 20);
 const SEND_PER_ACCOUNT_MAX = Number(process.env.SEND_PER_ACCOUNT_MAX || 3);
@@ -1478,7 +1478,7 @@ app.post("/api/draft-save-v2", requireKey, imapGate("interactive"), async (req, 
     ];
     // Same authoritative semantic counts as send-v2: normal 10-cap covers
     // staged client handles + server-source attachments combined, inline/CID
-    // images cap at 20, absolute file parts cap at 30, shared bytes unchanged.
+    // images cap at 50, absolute file parts cap at 60, shared bytes unchanged.
     const normalParts = resolvedNormal.length + preserved.length;
     const inlineParts = resolvedInline.length + preservedInlineSources.length;
     if (

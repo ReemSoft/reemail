@@ -30,15 +30,15 @@ const draftV2Handler = indexSource.slice(
 
 test("separate resource-class constants match the approved model", () => {
   assert.match(indexSource, /const MAX_NORMAL_ATTACHMENTS = 10;/);
-  assert.match(indexSource, /const MAX_INLINE_IMAGES = 20;/);
-  assert.match(indexSource, /const MAX_TOTAL_FILE_PARTS = 30;/);
+  assert.match(indexSource, /const MAX_INLINE_IMAGES = 50;/);
+  assert.match(indexSource, /const MAX_TOTAL_FILE_PARTS = 60;/);
   assert.match(indexSource, /SEND_MAX_TOTAL_BYTES \|\| 25 \* 1024 \* 1024/);
 });
 
-test("v2 payload schemas allow 20 staged inline images while normal/source stay at 10", () => {
+test("v2 payload schemas allow 50 staged inline images while normal/source stay at 10", () => {
   assert.match(
     schemas,
-    /stagedInlineImages: z\.array\(StagedInlineSchema\)\.max\(20\)\.default\(\[\]\),/,
+    /stagedInlineImages: z\.array\(StagedInlineSchema\)\.max\(50\)\.default\(\[\]\),/,
   );
   assert.match(schemas, /attachmentHandles:[\s\S]*?\.max\(10\)/);
   assert.match(schemas, /sourceAttachments: z\.array\(ServerAttachmentSourceSchema\)\.max\(10\)/);
@@ -57,7 +57,7 @@ test("draft-save-v2 combines staged normal handles + preserved server-source att
   );
 });
 
-test("send-v2 and draft-save-v2 enforce normal<=10, inline<=20, total<=30, bytes unchanged", () => {
+test("send-v2 and draft-save-v2 enforce normal<=10, inline<=50, total<=60, bytes unchanged", () => {
   const semantic =
     /normalParts > MAX_NORMAL_ATTACHMENTS\s*\|\|\s*inlineParts > MAX_INLINE_IMAGES\s*\|\|\s*normalParts \+ inlineParts > MAX_TOTAL_FILE_PARTS\s*\|\|\s*all\.reduce\(\(sum, item\) => sum \+ item\.size, 0\) > SEND_MAX_TOTAL_BYTES/;
   assert.match(sendV2, semantic);
@@ -79,8 +79,8 @@ test("per-inline 5 MiB limit is unchanged", () => {
   assert.match(inlineImagesSource, /export const INLINE_IMAGE_MAX_BYTES = 5 \* 1024 \* 1024;/);
 });
 
-test("InlineImageMetadataSchema keeps security validation at the higher 20-cap", () => {
-  assert.match(inlineImagesSource, /\.max\(20\)/);
+test("InlineImageMetadataSchema keeps security validation at the higher 50-cap", () => {
+  assert.match(inlineImagesSource, /\.max\(50\)/);
   assert.match(inlineImagesSource, /DUPLICATE_INLINE_IMAGE/);
   assert.match(inlineImagesSource, /sniffImageMime/);
   assert.match(inlineImagesSource, /INLINE_IMAGE_MIME_TYPES/);

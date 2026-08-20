@@ -36,6 +36,16 @@ describe("inlineBlockStyles", () => {
       '<img src="a.png" style="max-width:100%;height:auto"/>',
     );
   });
+
+  it("does not impose Composer defaults on preserved source-message layout", () => {
+    const out = inlineBlockStyles(
+      '<table data-mm-preserve-layout="1" style="border-spacing:7px"><tr data-mm-preserve-layout="1"><td data-mm-preserve-layout="1">x</td></tr></table>',
+    );
+    expect(out).toContain('style="border-spacing:7px"');
+    expect(out).not.toContain("border-collapse:collapse");
+    expect(out).not.toContain("padding:4px 8px");
+    expect(out).not.toContain("data-mm-preserve-layout");
+  });
 });
 
 describe("buildEmailHtmlDocument", () => {

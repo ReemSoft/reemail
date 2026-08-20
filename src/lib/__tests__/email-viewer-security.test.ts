@@ -173,6 +173,14 @@ describe("buildEmailSrcDoc — CSP + measurement contract", () => {
     expect(doc).toMatch(/<script nonce="abc123">/);
   });
 
+  it("does not impose generic image, table, link, blockquote or code styles on source mail", () => {
+    expect(doc).not.toContain("img,video{");
+    expect(doc).not.toContain("table{max-width");
+    expect(doc).not.toContain("a{color:");
+    expect(doc).not.toContain("blockquote{border");
+    expect(doc).not.toContain("pre,code{");
+  });
+
   it("never uses postMessage with '*' targetOrigin", () => {
     expect(doc).not.toMatch(/postMessage\([^,]+,\s*['"]\*['"]\)/);
     // Parent origin must be baked in — script uses `parent.postMessage(..., origin)`
@@ -204,6 +212,18 @@ describe("MAILMAESTRO_INSTANT_NAVIGATION_R1 stable CID iframe", () => {
     expect(out).toContain(`width="120"`);
     expect(out).toContain(`height="40"`);
     expect(out).not.toContain(`src="cid:`);
+  });
+
+  it("normalizes URL-encoded CID placeholders without moving the image node", () => {
+    const out = preparePendingCidImages(
+      `<table><tbody><tr><td><img src="cid:photo%40example.com"></td></tr></tbody></table>`,
+    );
+    const template = document.createElement("template");
+    template.innerHTML = out;
+    const cell = template.content.querySelector("td");
+    const image = template.content.querySelector("img");
+    expect(image?.getAttribute("data-mm-cid")).toBe("photo@example.com");
+    expect(cell?.firstElementChild).toBe(image);
   });
 
   it("keeps srcDoc stable before and after CID bytes become available", () => {

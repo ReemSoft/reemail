@@ -96,6 +96,9 @@ describe("draft attachment V2 contract", () => {
     expect(composer).toContain("function SendProgressPanel(");
     expect(composer).toContain('isArabic ? "left-4 slide-in-from-left-4"');
     expect(composer).toContain('"right-4 slide-in-from-right-4"');
+    expect(composer).toContain('"fixed bottom-4');
+    expect(composer).not.toContain("current >= 92");
+    expect(composer).toContain('tr("الوقت المنقضي")');
     expect(composer).toContain('dir={isArabic ? "rtl" : "ltr"}');
     expect(composer).toContain('role="progressbar"');
   });

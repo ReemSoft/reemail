@@ -589,7 +589,7 @@ describe("Reply, Reply All, Forward and Composer wiring", () => {
     expect(addFiles).not.toContain("inlineImageCount");
   });
 
-  it("inline image insertion is gated only by the inline 20-cap, never by normal attachments", () => {
+  it("inline image insertion is gated only by the inline 50-cap, never by normal attachments", () => {
     expect(route).toContain("inlineImageCount + added.length > COMPOSE_MAX_INLINE_IMAGES");
     expect(route).toContain('tr("تجاوزت الرسالة الحد المسموح للصور المضمنة")');
     expect(route).not.toContain("totalCount + added.length >= COMPOSE_MAX_FILES");
@@ -629,11 +629,11 @@ describe("classifyAttachmentLimitExceeded resource-class model", () => {
     ).toBeNull();
   });
 
-  it("allows exactly 10 normal + 20 inline images", () => {
+  it("allows exactly 10 normal + 50 inline images", () => {
     expect(
       classifyAttachmentLimitExceeded({
         normalAttachmentCount: 10,
-        inlineImageCount: 20,
+        inlineImageCount: 50,
         totalBytes: 1,
       }),
     ).toBeNull();
@@ -649,11 +649,11 @@ describe("classifyAttachmentLimitExceeded resource-class model", () => {
     ).toBe("normal");
   });
 
-  it("rejects 4 normal attachments + 21 inline images", () => {
+  it("rejects 4 normal attachments + 51 inline images", () => {
     expect(
       classifyAttachmentLimitExceeded({
         normalAttachmentCount: 4,
-        inlineImageCount: 21,
+        inlineImageCount: 51,
         totalBytes: 1,
       }),
     ).toBe("inline");
@@ -678,8 +678,8 @@ describe("classifyAttachmentLimitExceeded resource-class model", () => {
 
   it("pins the resource-class constants to the approved model", () => {
     expect(COMPOSE_MAX_NORMAL_ATTACHMENTS).toBe(10);
-    expect(COMPOSE_MAX_INLINE_IMAGES).toBe(20);
-    expect(COMPOSE_MAX_TOTAL_FILE_PARTS).toBe(30);
+    expect(COMPOSE_MAX_INLINE_IMAGES).toBe(50);
+    expect(COMPOSE_MAX_TOTAL_FILE_PARTS).toBe(60);
     expect(COMPOSE_MAX_TOTAL_BYTES).toBe(25 * 1024 * 1024);
   });
 });

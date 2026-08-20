@@ -44,25 +44,28 @@ describe("MAILMAESTRO_LIGHTNING_MESSAGE_OPEN", () => {
     expect(route).toContain("prefetchWindowFlightRef.current?.controller.abort()");
   });
 
-  it("batches five deferred CIDs through one browser and one Bridge request", () => {
+  it("streams deferred CIDs in sequential five-part requests after text paint", () => {
     const route = readFileSync("src/routes/mail.tsx", "utf8");
     const api = readFileSync("src/routes/api/mail-inline-part.ts", "utf8");
     const viewer = route.slice(
       route.indexOf("function useInlineImageMappings"),
       route.indexOf("function MessageBody"),
     );
-    expect(viewer).toContain("fetchInlineCidPartsBatch(cached.misses");
+    expect(viewer).toContain("for (let offset = 0; offset < cached.misses.length; offset += 5)");
+    expect(viewer).toContain("const batch = cached.misses.slice(offset, offset + 5)");
+    expect(viewer).toContain("fetchInlineCidPartsBatch(batch");
     expect(viewer.match(/fetch\("\/api\/mail-inline-part"/g)).toHaveLength(1);
-    expect(viewer).toContain("const resolved = [...cached.hits, ...mappings]");
-    expect(viewer).toContain("onLargeCid?.(resolved)");
+    expect(viewer).toContain("if (cached.hits.length) onLargeCid?.(cached.hits)");
+    expect(viewer).toContain("onLargeCid?.(mappings)");
     expect(api).toContain('"/api/message-inline-parts"');
   });
 
-  it("keeps text first, remote images blocked, and one atomic large-CID postMessage", () => {
+  it("keeps text first, HTTPS images enabled, and bounded large-CID postMessages", () => {
     const route = readFileSync("src/routes/mail.tsx", "utf8");
     const security = readFileSync("src/lib/email-viewer-security.ts", "utf8");
     expect(route).toContain("if (!largeReady || !messageKey) return");
     expect(route).toContain("setSelectedMessage(base)");
+    expect(route).toContain("const allowRemoteImages = true");
     expect(route).toContain("images.map((image) => image.bytes)");
     expect(security).toContain('"img-src data: blob:"');
     expect(security).toContain("data.images.length>20");

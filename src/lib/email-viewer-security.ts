@@ -281,7 +281,13 @@ export function preparePendingCidImages(html: string): string {
   doc.querySelectorAll<HTMLImageElement>("img[src]").forEach((image) => {
     const src = (image.getAttribute("src") || "").trim();
     if (!src.toLowerCase().startsWith("cid:")) return;
-    const cid = src.slice(4).trim().replace(/^<|>$/g, "");
+    let cid = src.slice(4).trim();
+    try {
+      cid = decodeURIComponent(cid);
+    } catch {
+      /* literal percent in the source CID */
+    }
+    cid = cid.replace(/^<|>$/g, "").trim();
     if (!cid || cid.length > 998) {
       image.removeAttribute("src");
       return;
@@ -577,14 +583,9 @@ export function buildEmailSrcDoc({
       font-family:'IBM Plex Sans Arabic',system-ui,-apple-system,Segoe UI,sans-serif;
       font-size:14px;line-height:1.6;word-wrap:break-word;overflow-wrap:anywhere;
       overflow:hidden;}
-    img,video{max-width:100%;height:auto;border-radius:6px;}
     img[data-mm-cid]{visibility:hidden;}
     img[data-mm-cid]:not([width]):not([height]){width:0;height:0;}
     img[data-mm-tracking]{display:none!important;width:0!important;height:0!important;}
-    table{max-width:100%;}
-    a{color:#2563eb;}
-    blockquote{border-inline-start:3px solid #e5e7eb;margin:8px 0;padding:4px 12px;color:#4b5563;}
-    pre,code{white-space:pre-wrap;word-break:break-word;}
   `;
 
   return (

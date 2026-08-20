@@ -1,12 +1,17 @@
 const QUOTED_CID_ATTR = "data-mm-source-cid";
 const BLOCKED_REMOTE_IMAGE_ATTR = "data-mm-remote-image-blocked";
 const REMOTE_IMAGE_URL_ATTR = "data-mm-remote-image-url";
+const PRESERVE_LAYOUT_ATTR = "data-mm-preserve-layout";
 
 const SAFE_STYLE_PROPERTIES = new Set([
   "display",
   "box-sizing",
   "width",
+  "min-width",
   "max-width",
+  "height",
+  "min-height",
+  "max-height",
   "margin",
   "margin-top",
   "margin-right",
@@ -37,43 +42,20 @@ const SAFE_STYLE_PROPERTIES = new Set([
   "text-align",
   "text-decoration",
   "vertical-align",
+  "float",
+  "clear",
   "white-space",
   "word-break",
   "overflow-wrap",
+  "text-indent",
+  "letter-spacing",
   "list-style",
   "list-style-type",
   "list-style-position",
   "table-layout",
   "direction",
-]);
-
-const STRUCTURAL_PARENTS = new Set([
-  "TABLE",
-  "THEAD",
-  "TBODY",
-  "TFOOT",
-  "TR",
-  "COLGROUP",
-  "UL",
-  "OL",
-]);
-const BLOCK_ELEMENTS = new Set([
-  "ADDRESS",
-  "BLOCKQUOTE",
-  "DIV",
-  "DL",
-  "H1",
-  "H2",
-  "H3",
-  "H4",
-  "H5",
-  "H6",
-  "HR",
-  "OL",
-  "P",
-  "PRE",
-  "TABLE",
-  "UL",
+  "caption-side",
+  "empty-cells",
 ]);
 
 const QUOTED_BIDI_BLOCK_SELECTOR = [
@@ -93,7 +75,13 @@ const QUOTED_BIDI_BLOCK_SELECTOR = [
 ].join(",");
 
 function normalizedCid(value: string): string {
-  return value.trim().replace(/^<|>$/g, "").toLowerCase();
+  let decoded = value.trim().replace(/&lt;/gi, "<").replace(/&gt;/gi, ">").replace(/&amp;/gi, "&");
+  try {
+    decoded = decodeURIComponent(decoded);
+  } catch {
+    // Preserve a literal percent sign rather than losing the source image.
+  }
+  return decoded.replace(/^<|>$/g, "").trim().toLowerCase();
 }
 
 function safeStyleValue(value: string): boolean {
@@ -130,7 +118,7 @@ function markCidImagesPending(root: ParentNode): void {
   }
 }
 
-function blockRemoteImageSources(root: ParentNode): void {
+function blockRemoteImageSources(root: ParentNode, revealRemoteImages = false): void {
   for (const source of root.querySelectorAll<HTMLElement>("source[srcset]")) {
     source.removeAttribute("srcset");
   }
@@ -142,6 +130,12 @@ function blockRemoteImageSources(root: ParentNode): void {
     // `src`), so detached outgoing serialization can restore it for recipients
     // without the live Composer ever fetching it.
     image.setAttribute(REMOTE_IMAGE_URL_ATTR, src);
+    if (revealRemoteImages && !/^http:\/\//i.test(src)) {
+      image.removeAttribute(BLOCKED_REMOTE_IMAGE_ATTR);
+      image.removeAttribute("aria-hidden");
+      image.style.removeProperty("visibility");
+      continue;
+    }
     image.removeAttribute("src");
     image.setAttribute(BLOCKED_REMOTE_IMAGE_ATTR, "1");
     image.style.visibility = "hidden";
@@ -209,33 +203,6 @@ function collectMatchingProperties(element: HTMLElement, rules: readonly CSSRule
   return properties;
 }
 
-function removeStructuralIndentation(root: ParentNode): void {
-  const owner = root instanceof Document ? root : (root.ownerDocument ?? document);
-  const walker = owner.createTreeWalker(root, 4);
-  const removable: Text[] = [];
-  let current = walker.nextNode();
-  while (current) {
-    const text = current as Text;
-    if (!text.data.trim()) {
-      const parent = text.parentElement;
-      const previous = text.previousElementSibling;
-      const next = text.nextElementSibling;
-      if (
-        parent &&
-        (STRUCTURAL_PARENTS.has(parent.tagName) ||
-          (previous &&
-            next &&
-            BLOCK_ELEMENTS.has(previous.tagName) &&
-            BLOCK_ELEMENTS.has(next.tagName)))
-      ) {
-        removable.push(text);
-      }
-    }
-    current = walker.nextNode();
-  }
-  for (const text of removable) text.remove();
-}
-
 function hasExplicitSourceDirection(
   element: HTMLElement,
   fallbackElements?: ReadonlySet<HTMLElement>,
@@ -279,9 +246,18 @@ function wrapDocumentDirection(doc: Document, html: string): string {
   const textAlign =
     body.style.getPropertyValue("text-align").trim() ||
     documentElement.style.getPropertyValue("text-align").trim();
-  if (!dir && !direction && !textAlign) return html;
+  const inheritedStyles = new Map<string, string>();
+  for (const source of [documentElement, body]) {
+    for (const property of Array.from(source.style)) {
+      if (!SAFE_STYLE_PROPERTIES.has(property)) continue;
+      const value = source.style.getPropertyValue(property).trim();
+      if (value && safeStyleValue(value)) inheritedStyles.set(property, value);
+    }
+  }
+  if (!dir && !direction && !textAlign && inheritedStyles.size === 0) return html;
   const wrapper = doc.createElement("div");
   if (dir) wrapper.setAttribute("dir", dir);
+  for (const [property, value] of inheritedStyles) wrapper.style.setProperty(property, value);
   if (direction && safeStyleValue(direction)) wrapper.style.setProperty("direction", direction);
   if (textAlign && safeStyleValue(textAlign)) wrapper.style.setProperty("text-align", textAlign);
   wrapper.innerHTML = html;
@@ -314,13 +290,18 @@ export function exportPreparedQuotedDocument(doc: Document): string {
     for (const [property, value] of safeDeclarations) {
       if (value && safeStyleValue(value)) element.style.setProperty(property, value);
     }
+    // The outgoing HTML builder must not apply the Composer's default table,
+    // cell, paragraph or image rules to source-message elements.
+    if (element !== doc.documentElement && element !== doc.body) {
+      element.setAttribute(PRESERVE_LAYOUT_ATTR, "1");
+    }
   }
   for (const unsafe of doc.body.querySelectorAll("style,script,link,object,embed,iframe"))
     unsafe.remove();
   isolateSourceSelectors(doc.body);
-  removeStructuralIndentation(doc.body);
-  applyQuotedDirectionFallback(doc.body, hasExplicitSourceDirection(doc.documentElement));
-  blockRemoteImageSources(doc.body);
+  // Keep the source DOM order and whitespace without structural cleanup or
+  // reordering. The outer `dir=auto` isolates bidi without rewriting blocks.
+  blockRemoteImageSources(doc.body, true);
   markCidImagesPending(doc.body);
   return wrapDocumentDirection(doc, doc.body.innerHTML.trim());
 }
@@ -388,3 +369,4 @@ export function removeUnresolvedQuotedCidImage(image: HTMLImageElement): boolean
 export const QUOTED_SOURCE_CID_ATTR = QUOTED_CID_ATTR;
 export const QUOTED_BLOCKED_REMOTE_IMAGE_ATTR = BLOCKED_REMOTE_IMAGE_ATTR;
 export const QUOTED_REMOTE_IMAGE_URL_ATTR = REMOTE_IMAGE_URL_ATTR;
+export const QUOTED_PRESERVE_LAYOUT_ATTR = PRESERVE_LAYOUT_ATTR;

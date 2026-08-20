@@ -16,9 +16,6 @@ import {
   isValidLargeCidApplyPayload,
   isValidHeightPayload,
   randomToken,
-  hasRemoteImages,
-  getAlwaysShowRemoteImages,
-  setAlwaysShowRemoteImages,
 } from "@/lib/email-viewer-security";
 import type { CidImageMapping, LargeCidByteMapping } from "@/lib/email-viewer-security";
 import {
@@ -88,6 +85,7 @@ function sanitizeComposerHtml(html: string): string {
     FORBID_TAGS: ["script", "iframe", "object", "embed", "form", "link", "meta", "base", "style"],
     FORBID_ATTR: ["srcdoc", "formaction", "onerror", "onload", "onclick", "onmouseover", "onfocus"],
     ALLOW_DATA_ATTR: false,
+    ADD_ATTR: ["data-mm-preserve-layout", "data-mm-quoted-content"],
   });
 }
 
@@ -137,7 +135,10 @@ function EmailBodyFrame({
     [html, messageIdentity],
   );
   const [height, setHeight] = useState<number>(60);
-  const [allowRemoteImages, setAllowRemoteImages] = useState(false);
+  // HTTPS images load in the sandbox from the first render. This matches the
+  // expected mail-client behaviour while text still paints independently;
+  // HTTP, scripts, forms and every other remote resource remain blocked.
+  const allowRemoteImages = true;
   const [frameReady, setFrameReady] = useState(false);
   const appliedCidSignatureRef = useRef("");
   const cidRafRef = useRef<number | null>(null);
@@ -147,21 +148,13 @@ function EmailBodyFrame({
     mailPerf("iframe-created", { count: 1 });
   }, []);
 
-  // Remembered preference ("always show images"). Read after mount so SSR and
-  // the first client render stay identical; costs nothing at open time.
   useEffect(() => {
-    setAllowRemoteImages(getAlwaysShowRemoteImages());
     setHeight(60);
   }, [html]);
 
   const parentOrigin = useMemo(
     () => (typeof window !== "undefined" ? window.location.origin : "null"),
     [],
-  );
-
-  const showBanner = useMemo(
-    () => !allowRemoteImages && hasRemoteImages(html),
-    [html, allowRemoteImages],
   );
 
   const srcDoc = useMemo(
@@ -263,34 +256,6 @@ function EmailBodyFrame({
 
   return (
     <div className={className}>
-      {showBanner && (
-        <div
-          role="status"
-          className="mb-2 flex flex-wrap items-center justify-between gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900"
-        >
-          <span>{tr("تم حظر الصور الخارجية لحماية خصوصيتك")}</span>
-          <span className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setAllowRemoteImages(true)}
-              className="rounded border border-amber-300 bg-white px-2 py-1 text-xs font-medium text-amber-900 hover:bg-amber-100"
-            >
-              {tr("عرض الصور")}
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setAlwaysShowRemoteImages(true);
-                setAllowRemoteImages(true);
-              }}
-              className="rounded border border-amber-300 bg-white px-2 py-1 text-xs font-medium text-amber-900 hover:bg-amber-100"
-            >
-              {tr("عرض الصور دائماً")}
-            </button>
-          </span>
-        </div>
-      )}
-
       <iframe
         ref={ref}
         title="email-body"
@@ -609,38 +574,42 @@ function useInlineImageMappings(
     }
 
     const controller = new AbortController();
-    void fetchInlineCidPartsBatch(cached.misses, {
-      signal: controller.signal,
-      fetchBatch: (batch, signal) =>
-        fetch("/api/mail-inline-part", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            mailSessionToken: session.mailSessionToken,
-            password: session.password,
-            folder: parsed.folder,
-            uid: parsed.uid,
-            uidValidity,
-            parts: batch,
-          }),
-          signal,
-        }),
-    })
-      .then((mappings) => {
+    if (cached.hits.length) onLargeCid?.(cached.hits);
+    // Five 5-MiB parts is the authenticated endpoint's 25-MiB ceiling. Fetch
+    // batches sequentially after text paint so a message with 20-50 images is
+    // progressive, bounded and never delays opening or competes in parallel.
+    void (async () => {
+      for (let offset = 0; offset < cached.misses.length; offset += 5) {
+        if (controller.signal.aborted) return;
+        const batch = cached.misses.slice(offset, offset + 5);
+        const mappings = await fetchInlineCidPartsBatch(batch, {
+          signal: controller.signal,
+          fetchBatch: (requested, signal) =>
+            fetch("/api/mail-inline-part", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                mailSessionToken: session.mailSessionToken,
+                password: session.password,
+                folder: parsed.folder,
+                uid: parsed.uid,
+                uidValidity,
+                parts: requested,
+              }),
+              signal,
+            }),
+        });
         if (controller.signal.aborted) return;
         if (mappings.length) {
-          storeLargeInlineCidSessionCache(messageKey, cached.misses, mappings);
-        }
-        const resolved = [...cached.hits, ...mappings];
-        if (resolved.length) {
-          onLargeCid?.(resolved);
+          storeLargeInlineCidSessionCache(messageKey, batch, mappings);
+          onLargeCid?.(mappings);
           mailPerf("large-cid-applied", {
-            count: resolved.length,
-            bytes: resolved.reduce((total, mapping) => total + mapping.bytes.byteLength, 0),
+            count: mappings.length,
+            bytes: mappings.reduce((total, mapping) => total + mapping.bytes.byteLength, 0),
           });
         }
-      })
-      .catch(() => undefined);
+      }
+    })().catch(() => undefined);
 
     return () => {
       controller.abort();
@@ -7716,13 +7685,31 @@ function SendProgressPanel({ progress }: { progress: number }) {
   const isArabic = getCurrentLang() === "ar";
   const rounded = Math.min(100, Math.max(0, Math.round(progress)));
   const formatted = new Intl.NumberFormat(isArabic ? "ar-SA" : "en-US").format(rounded);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  useEffect(() => {
+    const startedAt = Date.now();
+    const timer = window.setInterval(
+      () => setElapsedSeconds(Math.max(0, Math.floor((Date.now() - startedAt) / 1000))),
+      1000,
+    );
+    return () => window.clearInterval(timer);
+  }, []);
+  const elapsed = new Intl.NumberFormat(isArabic ? "ar-SA" : "en-US").format(elapsedSeconds);
+  const phase =
+    rounded >= 88
+      ? tr("جاري تأكيد التسليم من خادم البريد")
+      : rounded >= 62
+        ? tr("جاري تسليم الرسالة إلى خادم البريد")
+        : rounded >= 38
+          ? tr("جاري تجهيز الرسالة للإرسال")
+          : tr("جاري حفظ محتويات الرسالة بأمان");
   return (
     <aside
       role="status"
       aria-live="polite"
       dir={isArabic ? "rtl" : "ltr"}
       className={cn(
-        "fixed top-20 z-[100] w-[min(21rem,calc(100vw-2rem))] animate-in rounded-2xl border border-border/70 bg-background/95 p-4 shadow-2xl backdrop-blur-md duration-300",
+        "fixed bottom-4 z-[100] w-[min(21rem,calc(100vw-2rem))] animate-in rounded-2xl border border-border/70 bg-background/95 p-4 shadow-2xl backdrop-blur-md duration-300",
         isArabic ? "left-4 slide-in-from-left-4" : "right-4 slide-in-from-right-4",
       )}
     >
@@ -7737,9 +7724,7 @@ function SendProgressPanel({ progress }: { progress: number }) {
               {formatted}%
             </span>
           </div>
-          <p className="mt-0.5 text-xs text-muted-foreground">
-            {tr("يرجى الانتظار، يتم إرسال رسالتك بأمان.")}
-          </p>
+          <p className="mt-0.5 text-xs text-muted-foreground">{phase}</p>
         </div>
       </div>
       <div
@@ -7750,9 +7735,20 @@ function SendProgressPanel({ progress }: { progress: number }) {
         aria-valuenow={rounded}
       >
         <div
-          className="h-full rounded-full bg-brand-gradient transition-[width] duration-500 ease-out"
+          className="relative h-full transition-[width] duration-500 ease-out"
           style={{ width: `${rounded}%` }}
-        />
+        >
+          <div className="absolute inset-0 rounded-full bg-brand-gradient" />
+          {rounded < 100 && (
+            <div className="absolute inset-y-0 end-0 w-10 animate-pulse rounded-full bg-white/45 blur-[1px]" />
+          )}
+        </div>
+      </div>
+      <div className="mt-2 flex items-center justify-between text-[11px] text-muted-foreground">
+        <span>{tr("الوقت المنقضي")}</span>
+        <span className="font-mono tabular-nums" dir="ltr">
+          {elapsed} {tr("ثانية")}
+        </span>
       </div>
     </aside>
   );
@@ -7936,17 +7932,6 @@ function Composer({
   >(new Map());
   const [sending, setSending] = useState(false);
   const [progress, setProgress] = useState(0);
-  useEffect(() => {
-    if (!sending) return;
-    const timer = window.setInterval(() => {
-      setProgress((current) => {
-        if (current >= 92) return current;
-        const step = current < 55 ? 4 : current < 80 ? 2 : 1;
-        return Math.min(92, current + step);
-      });
-    }, 400);
-    return () => window.clearInterval(timer);
-  }, [sending]);
   // Composer runs inline inside the message-viewer pane (Superhuman-style).
   const [dragging, setDragging] = useState(false);
   const [savedAt, setSavedAt] = useState<number | null>(() => initialDoc?.updatedAt ?? null);
@@ -10823,6 +10808,7 @@ function Composer({
           toast.error(tr("تعذّر تجهيز المسودة للإرسال. أعد المحاولة."));
           return;
         }
+        setProgress(62);
         response = await fetch("/api/mail-working-draft-send", {
           method: "POST",
           headers: { "Content-Type": "application/json" },

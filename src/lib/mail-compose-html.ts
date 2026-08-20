@@ -59,6 +59,7 @@ const TAG_STYLES: Record<string, string> = {
 
 const TAG_RE = /<([a-zA-Z][a-zA-Z0-9]*)((?:"[^"]*"|'[^']*'|[^>"'])*?)(\/?)>/g;
 const STYLE_ATTR_RE = /(\sstyle\s*=\s*)("([^"]*)"|'([^']*)')/i;
+const PRESERVE_LAYOUT_ATTR_RE = /\sdata-mm-preserve-layout(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+))?/i;
 
 /**
  * Merge our per-tag defaults into every matching opening tag. Author styles
@@ -66,6 +67,9 @@ const STYLE_ATTR_RE = /(\sstyle\s*=\s*)("([^"]*)"|'([^']*)')/i;
  */
 export function inlineBlockStyles(fragment: string): string {
   return fragment.replace(TAG_RE, (full, rawName: string, attrs: string, selfClose: string) => {
+    if (PRESERVE_LAYOUT_ATTR_RE.test(attrs)) {
+      return `<${rawName}${attrs.replace(PRESERVE_LAYOUT_ATTR_RE, "")}${selfClose}>`;
+    }
     const name = rawName.toLowerCase();
     const base = TAG_STYLES[name];
     if (!base) return full;

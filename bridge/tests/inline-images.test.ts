@@ -196,16 +196,16 @@ test("remote draft MIME preserves the CID attachment for later edit/send", async
   assert.doesNotMatch(mime, /Content-Disposition: attachment/i);
 });
 
-test("InlineImageMetadataSchema accepts exactly 20 distinct entries and rejects 21", () => {
+test("InlineImageMetadataSchema accepts exactly 50 distinct entries and rejects 51", () => {
   const hex = (n: number) => n.toString(16).padStart(32, "0");
   const entry = (n: number) => ({
     uploadFilename: `mm-inline-${hex(n)}.png`,
     cid: `mm-inline-${hex(n)}@mailmaestro`,
     contentType: "image/png",
   });
-  const twenty = Array.from({ length: 20 }, (_, i) => entry(i));
-  assert.equal(InlineImageMetadataSchema.safeParse(twenty).success, true);
-  assert.equal(InlineImageMetadataSchema.safeParse([...twenty, entry(20)]).success, false);
+  const fifty = Array.from({ length: 50 }, (_, i) => entry(i));
+  assert.equal(InlineImageMetadataSchema.safeParse(fifty).success, true);
+  assert.equal(InlineImageMetadataSchema.safeParse([...fifty, entry(50)]).success, false);
 });
 
 test("declared image/png with JPEG bytes stays rejected (actual bytes win)", async () => {

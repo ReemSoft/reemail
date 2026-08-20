@@ -122,7 +122,7 @@ describe("quoted email preparation", () => {
     expect(template.content.querySelectorAll('table[dir="rtl"]')).toHaveLength(1);
     expect(
       Array.from(template.content.querySelectorAll("li")).every(
-        (element) => element.getAttribute("dir") === "auto",
+        (element) => !element.hasAttribute("dir"),
       ),
     ).toBe(true);
     expect(
@@ -132,7 +132,7 @@ describe("quoted email preparation", () => {
     ).toBe(true);
   });
 
-  it("preserves source CSS direction and alignment while adding missing fallback", () => {
+  it("preserves source CSS direction and alignment without rewriting neutral blocks", () => {
     document.body.innerHTML = `
       <style>
         .ltr { direction:ltr; text-align:right; }
@@ -151,7 +151,7 @@ describe("quoted email preparation", () => {
     expect(paragraphs[1]?.style.direction).toBe("rtl");
     expect(paragraphs[1]?.style.textAlign).toBe("left");
     expect(paragraphs[1]?.hasAttribute("dir")).toBe(false);
-    expect(paragraphs[2]?.getAttribute("dir")).toBe("auto");
+    expect(paragraphs[2]?.hasAttribute("dir")).toBe(false);
     expect(template.content.querySelector("[class],[id]")).toBeNull();
   });
 
@@ -167,6 +167,23 @@ describe("quoted email preparation", () => {
     expect(wrapper?.style.textAlign).toBe("right");
     expect(wrapper?.querySelector("p")?.hasAttribute("dir")).toBe(false);
     document.body.removeAttribute("dir");
+    document.body.removeAttribute("style");
+  });
+
+  it("carries source body typography and spacing instead of inheriting composer defaults", () => {
+    document.body.style.fontFamily = "Arial";
+    document.body.style.fontSize = "16px";
+    document.body.style.lineHeight = "1.25";
+    document.body.style.backgroundColor = "rgb(240, 240, 240)";
+    document.body.innerHTML = "<table><tbody><tr><td>Original layout</td></tr></tbody></table>";
+    const html = exportPreparedQuotedDocument(document);
+    const template = document.createElement("template");
+    template.innerHTML = html;
+    const wrapper = template.content.firstElementChild as HTMLElement | null;
+    expect(wrapper?.style.fontFamily).toBe("Arial");
+    expect(wrapper?.style.fontSize).toBe("16px");
+    expect(wrapper?.style.lineHeight).toBe("1.25");
+    expect(wrapper?.style.backgroundColor).toBe("rgb(240, 240, 240)");
     document.body.removeAttribute("style");
   });
 
@@ -247,7 +264,7 @@ describe("quoted email preparation", () => {
     expect(outgoing).toContain("English governed by source RTL");
   });
 
-  it("inlines safe Outlook presentation, preserves order, and removes structural indentation", () => {
+  it("inlines safe Outlook presentation while preserving order and source whitespace", () => {
     document.body.innerHTML = OUTLOOK_QUOTED_MAIL;
     const html = exportPreparedQuotedDocument(document);
     const template = document.createElement("template");
@@ -273,7 +290,7 @@ describe("quoted email preparation", () => {
           (child) => child.nodeType === Node.TEXT_NODE && !child.textContent?.trim(),
         ),
       ),
-    ).toHaveLength(0);
+    ).not.toHaveLength(0);
   });
 
   it("strips hostile app-colliding classes and source ids after preserving safe presentation", () => {
@@ -539,9 +556,9 @@ describe("quoted email preparation", () => {
       expect(applyInlineImageToCidNodes(editor, "small@example", small)).toBe(2);
       expect(applyInlineImageToCidNodes(editor, "large@example", large)).toBe(1);
       expect(editor.querySelector("[class],[id]")).toBeNull();
-      expect(editor.querySelector<HTMLImageElement>("[data-mm-remote-image-blocked]")?.src).toBe(
-        "",
-      );
+      expect(
+        editor.querySelector<HTMLImageElement>('img[src^="https://tracker.example/"]'),
+      ).not.toBeNull();
       const serialized = serializeInlineImages(editor.innerHTML, [small, large]);
       expect(serialized.inlineImages).toHaveLength(2);
       expect(serialized.html.match(new RegExp(`cid:${small.cid}`, "g"))).toHaveLength(2);

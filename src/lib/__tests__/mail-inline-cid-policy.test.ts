@@ -164,7 +164,8 @@ describe("large inline CID receive policy", () => {
     expect(viewer).toContain("...inlinePartition.overflowStreamParts");
     expect(viewer).toContain("const parts = deferredStreamParts");
     expect(viewer).toContain("fetchInlineCidPartsBatch");
-    expect(viewer).toContain("parts: batch");
+    expect(viewer).toContain("parts: requested");
+    expect(viewer).toContain("offset += 5");
     expect(viewer).not.toContain("streamInlineCidPartsSequential(parts");
     expect(viewer).toContain('fetch("/api/mail-inline-part"');
     expect(viewer).not.toContain('fetch("/api/mail-attachment"');
