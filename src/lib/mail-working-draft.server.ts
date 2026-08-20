@@ -1161,11 +1161,14 @@ async function invokeBridgeWithStagedAttachments(input: {
     // The durable Supabase object stays authoritative for the next checkpoint
     // or send, so a successful checkpoint must not retain a 24-hour copy.
     if (stagedHandles.length > 0) {
-      await fetch(`${bridge.bridgeUrl}/api/staged-release`, {
+      const release = fetch(`${bridge.bridgeUrl}/api/staged-release`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-Bridge-Key": bridge.bridgeKey },
         body: JSON.stringify({ account: bridge.bridgeAccount, handles: stagedHandles }),
       }).catch(() => undefined);
+      // SMTP has already completed. Keep cleanup alive on Cloudflare without
+      // delaying the Send response; Bridge expiry remains the safety net.
+      trackCloudflareWork(release);
     }
   }
 }

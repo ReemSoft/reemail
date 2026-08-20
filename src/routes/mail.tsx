@@ -7689,70 +7689,66 @@ function SendProgressPanel({ progress }: { progress: number }) {
   const isArabic = getCurrentLang() === "ar";
   const rounded = Math.min(100, Math.max(0, Math.round(progress)));
   const formatted = new Intl.NumberFormat(isArabic ? "ar-SA" : "en-US").format(rounded);
-  const [elapsedSeconds, setElapsedSeconds] = useState(0);
-  useEffect(() => {
-    const startedAt = Date.now();
-    const timer = window.setInterval(
-      () => setElapsedSeconds(Math.max(0, Math.floor((Date.now() - startedAt) / 1000))),
-      1000,
-    );
-    return () => window.clearInterval(timer);
-  }, []);
-  const elapsed = new Intl.NumberFormat(isArabic ? "ar-SA" : "en-US").format(elapsedSeconds);
-  const phase =
-    rounded >= 88
-      ? tr("جاري تأكيد التسليم من خادم البريد")
-      : rounded >= 62
-        ? tr("جاري تسليم الرسالة إلى خادم البريد")
-        : rounded >= 38
-          ? tr("جاري تجهيز الرسالة للإرسال")
-          : tr("جاري حفظ محتويات الرسالة بأمان");
+  const complete = rounded >= 100;
   return (
     <aside
       role="status"
       aria-live="polite"
       dir={isArabic ? "rtl" : "ltr"}
       className={cn(
-        "fixed bottom-4 z-[100] w-[min(21rem,calc(100vw-2rem))] animate-in rounded-2xl border border-border/70 bg-background/95 p-4 shadow-2xl backdrop-blur-md duration-300",
+        "fixed bottom-4 z-[100] w-[min(20rem,calc(100vw-2rem))] animate-in rounded-[1.35rem] border border-primary/10 bg-background/90 p-3.5 shadow-[0_18px_50px_-20px_hsl(var(--foreground)/0.28)] backdrop-blur-xl duration-300",
         isArabic ? "left-4 slide-in-from-left-4" : "right-4 slide-in-from-right-4",
       )}
     >
       <div className="flex items-center gap-3">
-        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-brand-gradient text-white shadow-brand">
-          <Loader2 className="h-5 w-5 animate-spin" />
+        <span
+          className={cn(
+            "relative flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition-colors duration-300",
+            complete ? "bg-emerald-500/12 text-emerald-600" : "bg-primary/10 text-primary",
+          )}
+        >
+          {complete ? <Check className="h-4 w-4" /> : <Send className="h-4 w-4" />}
+          {!complete && (
+            <span className="absolute -end-0.5 -top-0.5 h-2.5 w-2.5 animate-pulse rounded-full border-2 border-background bg-primary" />
+          )}
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex items-center justify-between gap-3">
-            <p className="text-sm font-semibold text-foreground">{tr("جاري إرسال الرسالة")}</p>
-            <span className="font-mono text-xs font-bold tabular-nums text-primary" dir="ltr">
+            <p className="text-sm font-medium text-foreground">
+              {tr(complete ? "تم إرسال الرسالة" : "جاري إرسال الرسالة")}
+            </p>
+            <span className="text-xs font-semibold tabular-nums text-primary" dir="ltr">
               {formatted}%
             </span>
           </div>
-          <p className="mt-0.5 text-xs text-muted-foreground">{phase}</p>
+          {!complete && (
+            <p className="mt-0.5 text-[11px] text-muted-foreground">
+              {tr("يرجى الانتظار، يتم إرسال رسالتك بأمان.")}
+            </p>
+          )}
         </div>
       </div>
       <div
-        className="mt-3 h-2 overflow-hidden rounded-full bg-muted"
+        className="mt-3 h-1.5 overflow-hidden rounded-full bg-muted/80"
         role="progressbar"
         aria-valuemin={0}
         aria-valuemax={100}
         aria-valuenow={rounded}
       >
         <div
-          className="relative h-full transition-[width] duration-500 ease-out"
+          className="relative h-full transition-[width] duration-300 ease-out"
           style={{ width: `${rounded}%` }}
         >
-          <div className="absolute inset-0 rounded-full bg-brand-gradient" />
+          <div
+            className={cn(
+              "absolute inset-0 rounded-full transition-colors duration-300",
+              complete ? "bg-emerald-500" : "bg-brand-gradient",
+            )}
+          />
           {rounded < 100 && (
-            <div className="absolute inset-y-0 end-0 w-10 animate-pulse rounded-full bg-white/45 blur-[1px]" />
+            <div className="absolute inset-y-0 end-0 w-8 animate-pulse rounded-full bg-white/40" />
           )}
         </div>
-      </div>
-      <div className="mt-2 flex items-center justify-between text-[11px] text-muted-foreground">
-        <span>{tr("الوقت المنقضي")}</span>
-        <span className="font-mono tabular-nums" dir="ltr">
-          {elapsed} {tr("ثانية")}
-        </span>
       </div>
     </aside>
   );
@@ -10754,7 +10750,7 @@ function Composer({
     }
     sendInProgressRef.current = true;
     setSending(true);
-    setProgress(6);
+    setProgress(8);
     let sendAccepted = false;
     try {
       console.info("[draft-send] phase=send-click");
@@ -10771,12 +10767,12 @@ function Composer({
       pendingRemoteSaveRef.current = null;
       console.info("[draft-send] phase=provider-checkpoint-not-awaited");
       await inlineReadinessRef.current;
-      setProgress(18);
+      setProgress(20);
       // Settle any currently-running Draft autosave before deciding whether a
       // send-time Working Draft persistence pass is required. This never lets
       // an autosave rejection leak into the Send flow.
       await saverRef.current?.cancelPendingAndAwaitRunning();
-      setProgress(28);
+      setProgress(30);
       syncDraftEngineRefs();
       const serialized = serializeInlineImages(
         editorRef.current?.innerHTML ?? "",
@@ -10794,7 +10790,7 @@ function Composer({
         (document?.documentElement?.dir === "ltr" ? "ltr" : "rtl");
       const bodyHtml = buildEmailHtmlDocument(fragment, { dir: editorDir });
       const bodyText = htmlToPlainText(fragment);
-      setProgress(38);
+      setProgress(42);
 
       // A normal, never-saved Compose continues through the existing SMTP
       // path unchanged. An actual Draft (server Working Draft or provider
@@ -10802,7 +10798,7 @@ function Composer({
       const draftOrigin = isEditMode || workingRevisionRef.current > 0;
       let response: Response;
       if (draftOrigin) {
-        setProgress(48);
+        setProgress(52);
         // isEditMode alone must never authorize /api/mail-working-draft-send.
         // A clean provider/legacy Draft is promoted into a real Working Draft
         // row here, without fabricating a user edit, before SMTP is allowed.
@@ -10822,7 +10818,7 @@ function Composer({
           toast.error(tr("تعذّر تجهيز المسودة للإرسال. أعد المحاولة."));
           return;
         }
-        setProgress(62);
+        setProgress(72);
         response = await fetch("/api/mail-working-draft-send", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -10832,7 +10828,7 @@ function Composer({
           }),
         });
       } else {
-        setProgress(48);
+        setProgress(52);
         const attachmentPlan = buildAttachmentTransportPlan({
           attachments: existingKeptRef.current,
           restoredHandles: restoredHandleByAttachmentIdRef.current,
@@ -10866,7 +10862,7 @@ function Composer({
           inline: stagedInline,
           inlineMetadata: metadataToTransport(uploadInline),
         });
-        setProgress(62);
+        setProgress(72);
         response = await fetch("/api/mail-send-v2", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -10886,7 +10882,7 @@ function Composer({
           }),
         });
       }
-      setProgress(88);
+      setProgress(90);
       const result = (await response.json().catch(() => ({
         ok: false,
         error: `HTTP ${response.status}`,
@@ -10911,7 +10907,11 @@ function Composer({
       }
       sendAccepted = true;
       sendCompletedRef.current = true;
+      setProgress(96);
       setProgress(100);
+      // Let the browser visibly complete the real 100% state before the
+      // successful composer close unmounts this panel.
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 360));
       console.info("[draft-send] phase=smtp-accepted");
       // Clear draft on successful send: local wipe + best-effort server delete,
       // with any failure re-queued so the next composer mount can retry it.

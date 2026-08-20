@@ -91,15 +91,27 @@ describe("draft attachment V2 contract", () => {
     expect(workingDraftServer).toContain("sourceAttachments: plan.sources");
   });
 
-  it("uses a bilingual side progress panel and no flying plane", () => {
+  it("uses a quiet bilingual side progress panel and visibly completes at 100%", () => {
     expect(composer).not.toContain("startSendFlight");
     expect(composer).toContain("function SendProgressPanel(");
     expect(composer).toContain('isArabic ? "left-4 slide-in-from-left-4"');
     expect(composer).toContain('"right-4 slide-in-from-right-4"');
     expect(composer).toContain('"fixed bottom-4');
     expect(composer).not.toContain("current >= 92");
-    expect(composer).toContain('tr("الوقت المنقضي")');
+    expect(composer).not.toContain('tr("الوقت المنقضي")');
+    expect(composer).not.toContain('tr("جاري تسليم الرسالة إلى خادم البريد")');
     expect(composer).toContain('dir={isArabic ? "rtl" : "ltr"}');
     expect(composer).toContain('role="progressbar"');
+    expect(composer).toContain("window.setTimeout(resolve, 360)");
+    expect(composer).toContain("setProgress(100)");
+  });
+
+  it("releases transient Bridge staging without delaying the SMTP response", () => {
+    const release = workingDraftServer.slice(
+      workingDraftServer.indexOf('const release = fetch(`${bridge.bridgeUrl}/api/staged-release`'),
+      workingDraftServer.indexOf("export async function checkpointWorkingDraft"),
+    );
+    expect(release).toContain("trackCloudflareWork(release)");
+    expect(release).not.toContain("await fetch");
   });
 });
