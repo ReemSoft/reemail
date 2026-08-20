@@ -519,8 +519,33 @@ async function syncAttachmentReferences(
     }
 
     const current = byClientKey.get(reference.clientKey);
-    if (current?.storage_path) throw new Error("ATTACHMENT_ID_REQUIRED");
+    if (current?.storage_path) {
+      // The row was already imported into its private object by an earlier
+      // checkpoint/send pass, while this client reference still only knows the
+      // stable clientKey (the browser never learns the generated attachmentId
+      // for a provider-sourced attachment). Ownership is already proven by the
+      // draft/company/account scoping of `existing`, so adopt the owned row
+      // instead of rejecting the save with ATTACHMENT_ID_REQUIRED.
+      if (current.kind !== reference.kind) throw new Error("ATTACHMENT_KIND_MISMATCH");
+      const { error } = await client
+        .from("mail_working_draft_attachments")
+        .update({
+          filename: reference.filename,
+          mime_type: reference.mimeType,
+          disposition: reference.disposition ?? null,
+          cid: reference.cid ?? null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", current.id)
+        .eq("draft_id", draftId)
+        .eq("company_id", auth.companyId)
+        .eq("account_id", auth.accountId);
+      if (error) throw new Error("ATTACHMENT_METADATA_UPDATE_FAILED");
+      retainedIds.add(current.id);
+      continue;
+    }
     if (!reference.source) throw new Error("ATTACHMENT_SOURCE_REQUIRED");
+
     const row = {
       id: current?.id ?? randomUUID(),
       draft_id: draftId,
@@ -871,6 +896,65 @@ async function materializePayloadAttachments(
   );
 }
 
+export interface SendSourceAttachment {
+  folderPath: string;
+  uid: number;
+  uidValidity: string;
+  part: string;
+  filename: string;
+  size: number;
+  mimeType: string;
+}
+
+/**
+ * Send-time attachment plan.
+ *
+ * A kept provider attachment that was never imported is handed to the Bridge
+ * as an IMAP source descriptor instead of being pulled through the App server
+ * (IMAP -> Worker -> Storage -> Worker -> Bridge). The Bridge streams those
+ * bytes straight from IMAP into the outgoing MIME, so Send drops two full
+ * byte hops per attachment. Owned objects and inline images keep the existing
+ * staged-object path unchanged.
+ */
+async function resolveSendAttachments(
+  auth: WorkingDraftAuth,
+  draftId: string,
+  payload: WorkingDraftPayload,
+  context: WorkingDraftTransferContext,
+): Promise<{ rows: AttachmentRow[]; sources: SendSourceAttachment[] }> {
+  await syncAttachmentReferences(auth, draftId, payload.attachments);
+  const rows = await attachmentRows(auth, draftId);
+  const byClientKey = new Map(rows.map((row) => [row.client_key, row]));
+  const resolved = await mapWithBoundedConcurrency(
+    payload.attachments,
+    WORKING_DRAFT_STAGE_CONCURRENCY,
+    async (reference) => {
+      const row = reference.attachmentId
+        ? rows.find((candidate) => candidate.id === reference.attachmentId)
+        : byClientKey.get(reference.clientKey);
+      if (!row) throw new Error("ATTACHMENT_REFERENCE_MISSING");
+      if (row.storage_path) return { owned: row, source: null };
+      const source = sourceOf(row);
+      if (row.kind === "attachment" && source) {
+        return {
+          owned: null,
+          source: {
+            ...source,
+            filename: row.filename,
+            size: Number(row.size_bytes) || 0,
+            mimeType: row.mime_type,
+          } satisfies SendSourceAttachment,
+        };
+      }
+      return { owned: await importExternalAttachment(auth, row, context), source: null };
+    },
+  );
+  return {
+    rows: resolved.flatMap((item) => (item.owned ? [item.owned] : [])),
+    sources: resolved.flatMap((item) => (item.source ? [item.source] : [])),
+  };
+}
+
 async function getWorkingDraftSendState(
   auth: WorkingDraftAuth,
   draftId: string,
@@ -970,6 +1054,8 @@ async function invokeBridgeWithStagedAttachments(input: {
   revisionId: string;
   payload: WorkingDraftPayload;
   rows: readonly AttachmentRow[];
+  /** Provider attachments streamed by the Bridge straight from IMAP. */
+  sourceAttachments?: readonly SendSourceAttachment[];
   endpoint: "/api/draft-save-v2" | "/api/send-v2";
   previousRef?: DraftServerRef | null;
   context: WorkingDraftTransferContext;
@@ -1021,7 +1107,7 @@ async function invokeBridgeWithStagedAttachments(input: {
         previousRef: input.previousRef ?? undefined,
         attachmentHandles: normal,
         stagedInlineImages: inline,
-        sourceAttachments: [],
+        sourceAttachments: input.sourceAttachments ?? [],
         sourceInlineImages: [],
       }),
     });
@@ -1431,11 +1517,11 @@ export async function sendWorkingDraft(input: {
     throw new Error("WORKING_DRAFT_NOT_FOUND");
   }
 
-  let rows: Awaited<ReturnType<typeof materializePayloadAttachments>>;
+  let plan: Awaited<ReturnType<typeof resolveSendAttachments>>;
   let transferContext: WorkingDraftTransferContext | null = null;
   try {
     transferContext = await createWorkingDraftTransferContext(input.auth);
-    rows = await materializePayloadAttachments(
+    plan = await resolveSendAttachments(
       input.auth,
       input.draftId,
       record.payload,
@@ -1459,7 +1545,8 @@ export async function sendWorkingDraft(input: {
       draftId: input.draftId,
       revisionId: randomUUID(),
       payload: record.payload,
-      rows,
+      rows: plan.rows,
+      sourceAttachments: plan.sources,
       endpoint: "/api/send-v2",
       context: transferContext!,
     });
