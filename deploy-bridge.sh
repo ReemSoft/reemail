@@ -24,6 +24,7 @@ PM2_NAME="mailmaestro-bridge"
 BRIDGE_PORT="${BRIDGE_PORT:-3001}"
 LOCAL_HEALTH="${LOCAL_HEALTH:-http://127.0.0.1:${BRIDGE_PORT}/health}"
 PUBLIC_HEALTH="https://mailmaestro.reemsoft.com/health"
+AUTH_GUARD_URL="${AUTH_GUARD_URL:-https://mailmaestro.reemsoft.com/api/metrics/imap-gates}"
 TARGET_SHA="${TARGET_SHA:-}"   # optional; if set, deploy aborts unless HEAD matches after pull
 ROLLBACK_ARMED=0
 
@@ -97,9 +98,9 @@ curl -fsS --max-time 5 "$LOCAL_HEALTH" >/dev/null || die "local health failed"
 log "public health"
 curl -fsS --max-time 8 "$PUBLIC_HEALTH" >/dev/null || die "public health failed"
 
-log "auth guard (expect HTTP 401 without key)"
-CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "https://mailmaestro.reemsoft.com/api/health-auth" || true)
-[ "$CODE" = "401" ] || log "warning: auth guard returned $CODE (endpoint may differ)"
+log "auth guard ($AUTH_GUARD_URL; expect HTTP 401 without key)"
+CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "$AUTH_GUARD_URL" || true)
+[ "$CODE" = "401" ] || die "auth guard returned $CODE (expected 401)"
 
 ROLLBACK_ARMED=0
 trap - ERR
