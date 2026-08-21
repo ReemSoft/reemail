@@ -246,6 +246,27 @@ describe("working draft server discard wiring", () => {
     expect(src).toContain("if (existing) return existing;");
   });
 
+  it("tombstones the Local Draft Index after provider delete and before Working Draft removal", () => {
+    const start = src.indexOf("export async function deleteWorkingDraftExplicit(");
+    const end = src.indexOf("async function claimWorkingDraftSend(", start);
+    const body = src.slice(start, end);
+    expectInOrder(body, [
+      'if (!providerDelete.ok) throw new Error("PROVIDER_DRAFT_DELETE_FAILED");',
+      "await tombstoneDeletedWorkingDraftProjection(input.auth, providerRef);",
+      '.from("mail_working_drafts")',
+      ".delete()",
+    ]);
+  });
+
+  it("keeps Local Draft Index cleanup best-effort after authoritative provider delete", () => {
+    const start = src.indexOf("async function tombstoneDeletedWorkingDraftProjection(");
+    const end = src.indexOf("export async function deleteWorkingDraftExplicit(", start);
+    const body = src.slice(start, end);
+    expect(body).toContain('await import("@/lib/mail-draft-writer.server")');
+    expect(body).toContain("await tombstoneDraftProjection(supabaseAdmin, {");
+    expect(body).toContain("} catch {");
+  });
+
   it("does not change send, checkpoint, inline, or non-Draft runtime wiring", () => {
     expect(src).toContain("export async function sendWorkingDraft(");
     expect(src).toContain("finish_mail_working_draft_checkpoint_if_active");

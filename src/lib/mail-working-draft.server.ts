@@ -1561,6 +1561,26 @@ export async function discardWorkingDraft(input: {
   return { ok: true };
 }
 
+async function tombstoneDeletedWorkingDraftProjection(
+  auth: WorkingDraftAuth,
+  providerRef: DraftServerRef | null,
+): Promise<void> {
+  if (!providerRef) return;
+  try {
+    const { tombstoneDraftProjection } = await import("@/lib/mail-draft-writer.server");
+    await tombstoneDraftProjection(supabaseAdmin, {
+      accountId: auth.accountId,
+      companyId: auth.companyId,
+      folderPath: providerRef.folderPath,
+      uid: providerRef.uid,
+      uidValidity: providerRef.uidValidity,
+    });
+  } catch {
+    // IMAP provider deletion is authoritative. A Local Index projection failure
+    // is reconciled by normal Draft sync and must never resurrect/fail the send.
+  }
+}
+
 /**
  * Explicit-user-delete path. Provider deletion is AWAITED and verified before
  * the durable Working Draft row/objects are removed, so a failed provider
@@ -1582,6 +1602,10 @@ export async function deleteWorkingDraftExplicit(input: {
     previousRef: providerRef,
   });
   if (!providerDelete.ok) throw new Error("PROVIDER_DRAFT_DELETE_FAILED");
+
+  // Keep the Local Mail Index/count in lock-step with the authoritative provider
+  // delete before the Working Draft row (and its serverRef) is removed.
+  await tombstoneDeletedWorkingDraftProjection(input.auth, providerRef);
 
   if (!record) {
     // Provider-only/legacy Draft: no Working Draft row exists, but the
