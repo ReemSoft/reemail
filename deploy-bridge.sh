@@ -21,7 +21,8 @@ set -Eeuo pipefail
 REPO_DIR="/home/reemsoft/mailmaestro"
 BRIDGE_DIR="$REPO_DIR/bridge"
 PM2_NAME="mailmaestro-bridge"
-LOCAL_HEALTH="http://127.0.0.1:8787/health"
+BRIDGE_PORT="${BRIDGE_PORT:-3001}"
+LOCAL_HEALTH="${LOCAL_HEALTH:-http://127.0.0.1:${BRIDGE_PORT}/health}"
 PUBLIC_HEALTH="https://mailmaestro.reemsoft.com/health"
 TARGET_SHA="${TARGET_SHA:-}"   # optional; if set, deploy aborts unless HEAD matches after pull
 
@@ -37,7 +38,7 @@ log "OLD_SHA=$OLD_SHA"
 rollback() {
   log "rolling back to $OLD_SHA"
   git reset --hard "$OLD_SHA" || log "git reset failed — inspect manually"
-  ( cd "$BRIDGE_DIR" && npm ci && npm run build ) || log "rollback rebuild failed"
+  ( cd "$BRIDGE_DIR" && npm ci --include=dev && npm run build ) || log "rollback rebuild failed"
   pm2 restart "$PM2_NAME" --update-env || log "pm2 rollback restart failed"
   exit 1
 }
@@ -59,7 +60,7 @@ fi
 
 cd "$BRIDGE_DIR"
 log "npm ci"
-npm ci --omit=dev=false
+npm ci --include=dev
 log "npm run build"
 npm run build
 
@@ -74,7 +75,7 @@ R2="$(pm2 jlist | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()
 log "pm2 restart_time: before=$R1 after=$R2"
 [ "$R1" = "$R2" ] || die "restart loop detected ($R1 → $R2)"
 
-log "local health"
+log "local health ($LOCAL_HEALTH)"
 curl -fsS --max-time 5 "$LOCAL_HEALTH" >/dev/null || die "local health failed"
 log "public health"
 curl -fsS --max-time 8 "$PUBLIC_HEALTH" >/dev/null || die "public health failed"
