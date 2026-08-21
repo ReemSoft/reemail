@@ -1,0 +1,494 @@
+name: Apply working draft revision fence
+
+on:
+  push:
+    branches:
+      - fix/working-draft-send-revision-fence
+    paths:
+      - .github/workflows/mm-apply-working-draft-revision-fence.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply-fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/working-draft-send-revision-fence
+          fetch-depth: 0
+
+      - name: Apply exact revision-fence patch
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              p = Path(path)
+              text = p.read_text()
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected exactly one match, found {count}")
+              p.write_text(text.replace(old, new, 1))
+
+          replace_once(
+              "src/routes/mail.tsx",
+              '''          body: JSON.stringify({
+            mailSessionToken: session.mailSessionToken ?? "",
+            draftId,
+          }),''',
+              '''          body: JSON.stringify({
+            mailSessionToken: session.mailSessionToken ?? "",
+            draftId,
+            expectedRevision: workingRevisionRef.current,
+          }),''',
+          )
+
+          replace_once(
+              "src/routes/mail.tsx",
+              '''        toast.error(
+          isAttachmentSizeLimitError(result.error)
+            ? tr("تجاوزت حدود المرفقات المسموحة")
+            : isAttachmentPreparationProtocolError(result.error)
+              ? tr(ATTACHMENT_PREPARATION_MESSAGE_KEY)
+              : result.error || tr("فشل إرسال الرسالة"),
+        );''',
+              '''        toast.error(
+          result.error === "WORKING_DRAFT_REVISION_CONFLICT"
+            ? tr("تم تعديل المسودة في نافذة أخرى. راجع أحدث نسخة قبل الإرسال.")
+            : isAttachmentSizeLimitError(result.error)
+              ? tr("تجاوزت حدود المرفقات المسموحة")
+              : isAttachmentPreparationProtocolError(result.error)
+                ? tr(ATTACHMENT_PREPARATION_MESSAGE_KEY)
+                : result.error || tr("فشل إرسال الرسالة"),
+        );''',
+          )
+
+          replace_once(
+              "src/routes/api/mail-working-draft-send.ts",
+              '''          const token = typeof body.mailSessionToken === "string" ? body.mailSessionToken : "";
+          const draftId = typeof body.draftId === "string" ? body.draftId : "";
+          if (!token || !draftId) return json({ ok: false, error: "SESSION_REQUIRED" }, 401);''',
+              '''          const token = typeof body.mailSessionToken === "string" ? body.mailSessionToken : "";
+          const draftId = typeof body.draftId === "string" ? body.draftId : "";
+          const expectedRevision = Number(body.expectedRevision);
+          if (!token || !draftId) return json({ ok: false, error: "SESSION_REQUIRED" }, 401);
+          if (!Number.isSafeInteger(expectedRevision) || expectedRevision <= 0) {
+            return json({ ok: false, error: "EXPECTED_REVISION_REQUIRED" }, 400);
+          }''',
+          )
+
+          replace_once(
+              "src/routes/api/mail-working-draft-send.ts",
+              '''          const result = await working.sendWorkingDraft({ auth, draftId });''',
+              '''          const result = await working.sendWorkingDraft({ auth, draftId, expectedRevision });''',
+          )
+
+          replace_once(
+              "src/routes/api/mail-working-draft-send.ts",
+              '''          const code = error instanceof Error ? error.message : "SEND_FAILED";
+          return json({ ok: false, error: code }, 500);''',
+              '''          const code = error instanceof Error ? error.message : "SEND_FAILED";
+          const status = code === "WORKING_DRAFT_REVISION_CONFLICT" ? 409 : 500;
+          return json({ ok: false, error: code }, status);''',
+          )
+
+          replace_once(
+              "src/lib/mail-working-draft.server.ts",
+              '''async function claimWorkingDraftSend(
+  auth: WorkingDraftAuth,
+  draftId: string,
+): Promise<WorkingDraftSendClaim> {
+  if (!isUuid(draftId)) throw new Error("INVALID_DRAFT_ID");
+  const { data, error } = await db().rpc("claim_mail_working_draft_send", {
+    p_draft_id: draftId,
+    p_company_id: auth.companyId,
+    p_account_id: auth.accountId,
+  });''',
+              '''async function claimWorkingDraftSend(
+  auth: WorkingDraftAuth,
+  draftId: string,
+  expectedRevision: number,
+): Promise<WorkingDraftSendClaim> {
+  if (!isUuid(draftId)) throw new Error("INVALID_DRAFT_ID");
+  if (!Number.isSafeInteger(expectedRevision) || expectedRevision <= 0) {
+    throw new Error("EXPECTED_REVISION_REQUIRED");
+  }
+  const { data, error } = await db().rpc("claim_mail_working_draft_send", {
+    p_draft_id: draftId,
+    p_company_id: auth.companyId,
+    p_account_id: auth.accountId,
+    p_expected_revision: expectedRevision,
+  });''',
+          )
+
+          replace_once(
+              "src/lib/mail-working-draft.server.ts",
+              '''export async function sendWorkingDraft(input: {
+  auth: WorkingDraftAuth;
+  draftId: string;
+}): Promise<Record<string, unknown>> {
+  const claim = await claimWorkingDraftSend(input.auth, input.draftId);''',
+              '''export async function sendWorkingDraft(input: {
+  auth: WorkingDraftAuth;
+  draftId: string;
+  expectedRevision: number;
+}): Promise<Record<string, unknown>> {
+  const claim = await claimWorkingDraftSend(
+    input.auth,
+    input.draftId,
+    input.expectedRevision,
+  );''',
+          )
+
+          replace_once(
+              "src/lib/mail-working-draft.server.ts",
+              '''  if (!claim.claimed) {
+    throw new Error("SEND_IN_PROGRESS");
+  }
+
+  const record = await loadWorkingDraft(input.auth, input.draftId);''',
+              '''  if (!claim.claimed) {
+    if (claim.error) throw new Error(claim.error);
+    throw new Error("SEND_IN_PROGRESS");
+  }
+
+  const record = await loadWorkingDraft(input.auth, input.draftId);''',
+          )
+
+          replace_once(
+              "src/lib/mail-working-draft.server.ts",
+              '''  if (!record) {
+    await markWorkingDraftSendFailed(input.auth, input.draftId, "WORKING_DRAFT_NOT_FOUND").catch(
+      () => undefined,
+    );
+    throw new Error("WORKING_DRAFT_NOT_FOUND");
+  }
+
+  let plan:''',
+              '''  if (!record) {
+    await markWorkingDraftSendFailed(input.auth, input.draftId, "WORKING_DRAFT_NOT_FOUND").catch(
+      () => undefined,
+    );
+    throw new Error("WORKING_DRAFT_NOT_FOUND");
+  }
+  // Defense in depth: the SQL claim atomically binds Send to this revision and
+  // save_mail_working_draft fences later saves. Re-check the already-loaded row
+  // without an extra query so schema/deployment drift fails closed.
+  if (record.revision !== input.expectedRevision) {
+    await markWorkingDraftSendFailed(
+      input.auth,
+      input.draftId,
+      "WORKING_DRAFT_REVISION_CONFLICT",
+    ).catch(() => undefined);
+    throw new Error("WORKING_DRAFT_REVISION_CONFLICT");
+  }
+
+  let plan:''',
+          )
+
+          migration = r'''-- MAILMAESTRO_WORKING_DRAFT_SEND_REVISION_FENCE
+--
+-- Bind a logical Draft Send to the exact Working Draft revision the browser
+-- approved. The existing per-Draft advisory lock makes the claim and saves
+-- mutually exclusive without adding polling, background work, or read-path
+-- queries. Once Send is preparing/sending/sent, saves fail closed so a newer
+-- revision cannot be sent accidentally or deleted by post-SMTP cleanup.
+
+CREATE OR REPLACE FUNCTION public.save_mail_working_draft(
+  p_draft_id uuid,
+  p_company_id uuid,
+  p_account_id uuid,
+  p_expected_revision bigint,
+  p_payload jsonb
+)
+RETURNS TABLE(revision bigint, conflict boolean)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  current_row public.mail_working_drafts%ROWTYPE;
+  current_send_state text;
+BEGIN
+  PERFORM pg_advisory_xact_lock(
+    hashtextextended(
+      'mailmaestro-working-draft:' ||
+      p_company_id::text || ':' ||
+      p_account_id::text || ':' ||
+      p_draft_id::text,
+      0
+    )
+  );
+
+  IF public.is_mail_working_draft_discarded(p_draft_id, p_company_id, p_account_id) THEN
+    RAISE EXCEPTION 'DRAFT_DISCARDED' USING ERRCODE = '23514';
+  END IF;
+
+  IF p_expected_revision < 0 OR p_payload IS NULL THEN
+    RAISE EXCEPTION 'invalid working draft mutation' USING ERRCODE = '22023';
+  END IF;
+
+  SELECT * INTO current_row
+  FROM public.mail_working_drafts
+  WHERE id = p_draft_id
+  FOR UPDATE;
+
+  SELECT state INTO current_send_state
+  FROM public.mail_working_draft_sends
+  WHERE draft_id = p_draft_id
+    AND company_id = p_company_id
+    AND account_id = p_account_id
+  FOR UPDATE;
+
+  IF current_send_state IN ('preparing', 'sending', 'sent') THEN
+    RETURN QUERY SELECT COALESCE(current_row.revision, 0)::bigint, true;
+    RETURN;
+  END IF;
+
+  IF current_row.id IS NULL THEN
+    IF p_expected_revision <> 0 THEN
+      RETURN QUERY SELECT 0::bigint, true;
+      RETURN;
+    END IF;
+
+    INSERT INTO public.mail_working_drafts (
+      id, company_id, account_id, payload, revision,
+      remote_checkpoint_state, remote_checkpoint_revision
+    ) VALUES (
+      p_draft_id, p_company_id, p_account_id, p_payload, 1,
+      'pending', 0
+    );
+    RETURN QUERY SELECT 1::bigint, false;
+    RETURN;
+  END IF;
+
+  IF current_row.company_id <> p_company_id OR current_row.account_id <> p_account_id THEN
+    RAISE EXCEPTION 'working draft ownership mismatch' USING ERRCODE = '42501';
+  END IF;
+
+  IF current_row.revision <> p_expected_revision THEN
+    RETURN QUERY SELECT current_row.revision, true;
+    RETURN;
+  END IF;
+
+  UPDATE public.mail_working_drafts
+  SET payload = p_payload,
+      revision = current_row.revision + 1,
+      remote_checkpoint_state = CASE
+        WHEN current_row.remote_checkpoint_state = 'running'
+          AND current_row.remote_checkpoint_lease_until IS NOT NULL
+          AND current_row.remote_checkpoint_lease_until >= now()
+        THEN 'running'
+        ELSE 'pending'
+      END,
+      remote_checkpoint_error = NULL,
+      updated_at = now()
+  WHERE id = p_draft_id;
+
+  RETURN QUERY SELECT current_row.revision + 1, false;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.save_mail_working_draft(uuid, uuid, uuid, bigint, jsonb)
+  FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.save_mail_working_draft(uuid, uuid, uuid, bigint, jsonb)
+  TO service_role;
+
+-- Fail closed for any stale application instance that still calls the legacy
+-- three-argument claim. This prevents an old server from bypassing the fence.
+CREATE OR REPLACE FUNCTION public.claim_mail_working_draft_send(
+  p_draft_id uuid,
+  p_company_id uuid,
+  p_account_id uuid
+)
+RETURNS TABLE(claimed boolean, state text, smtp_result jsonb, error text)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+BEGIN
+  RETURN QUERY
+    SELECT false, 'failed'::text, NULL::jsonb, 'EXPECTED_REVISION_REQUIRED'::text;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.claim_mail_working_draft_send(uuid, uuid, uuid)
+  FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.claim_mail_working_draft_send(uuid, uuid, uuid)
+  TO service_role;
+
+CREATE OR REPLACE FUNCTION public.claim_mail_working_draft_send(
+  p_draft_id uuid,
+  p_company_id uuid,
+  p_account_id uuid,
+  p_expected_revision bigint
+)
+RETURNS TABLE(claimed boolean, state text, smtp_result jsonb, error text)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  current_send public.mail_working_draft_sends%ROWTYPE;
+  current_revision bigint;
+  inserted_id uuid;
+BEGIN
+  PERFORM pg_advisory_xact_lock(
+    hashtextextended(
+      'mailmaestro-working-draft:' ||
+      p_company_id::text || ':' ||
+      p_account_id::text || ':' ||
+      p_draft_id::text,
+      0
+    )
+  );
+
+  IF p_expected_revision IS NULL OR p_expected_revision <= 0 THEN
+    RETURN QUERY SELECT false, 'failed'::text, NULL::jsonb, 'EXPECTED_REVISION_REQUIRED'::text;
+    RETURN;
+  END IF;
+
+  IF public.is_mail_working_draft_discarded(p_draft_id, p_company_id, p_account_id) THEN
+    RETURN QUERY SELECT false, 'discarded'::text, NULL::jsonb, 'DRAFT_DISCARDED'::text;
+    RETURN;
+  END IF;
+
+  SELECT * INTO current_send
+  FROM public.mail_working_draft_sends
+  WHERE draft_id = p_draft_id
+    AND company_id = p_company_id
+    AND account_id = p_account_id
+  FOR UPDATE;
+
+  -- Once SMTP may have been touched, idempotency outranks a repeated caller's
+  -- revision value. Never reopen or rebind an in-flight/sent logical Send.
+  IF current_send.id IS NOT NULL AND current_send.state = 'sent' THEN
+    RETURN QUERY SELECT false, current_send.state, current_send.smtp_result, current_send.error;
+    RETURN;
+  END IF;
+
+  IF current_send.id IS NOT NULL AND current_send.state = 'sending' THEN
+    RETURN QUERY SELECT false, current_send.state, current_send.smtp_result, current_send.error;
+    RETURN;
+  END IF;
+
+  IF current_send.id IS NOT NULL
+     AND current_send.state = 'preparing'
+     AND current_send.lease_until IS NOT NULL
+     AND current_send.lease_until >= now() THEN
+    RETURN QUERY SELECT false, current_send.state, current_send.smtp_result, current_send.error;
+    RETURN;
+  END IF;
+
+  SELECT revision INTO current_revision
+  FROM public.mail_working_drafts
+  WHERE id = p_draft_id
+    AND company_id = p_company_id
+    AND account_id = p_account_id
+  FOR UPDATE;
+
+  IF current_revision IS NULL THEN
+    RETURN QUERY SELECT false, 'failed'::text, NULL::jsonb, 'WORKING_DRAFT_NOT_FOUND'::text;
+    RETURN;
+  END IF;
+
+  IF current_revision <> p_expected_revision THEN
+    RETURN QUERY SELECT false, 'failed'::text, NULL::jsonb, 'WORKING_DRAFT_REVISION_CONFLICT'::text;
+    RETURN;
+  END IF;
+
+  IF current_send.id IS NULL THEN
+    INSERT INTO public.mail_working_draft_sends (
+      draft_id, company_id, account_id, state, lease_until
+    ) VALUES (
+      p_draft_id, p_company_id, p_account_id, 'preparing', now() + interval '10 minutes'
+    )
+    RETURNING id INTO inserted_id;
+
+    IF inserted_id IS NULL THEN
+      RETURN QUERY SELECT false, 'failed'::text, NULL::jsonb, 'SEND_IDEMPOTENCY_CLAIM_FAILED'::text;
+      RETURN;
+    END IF;
+
+    RETURN QUERY SELECT true, 'preparing'::text, NULL::jsonb, NULL::text;
+    RETURN;
+  END IF;
+
+  IF current_send.state = 'failed'
+     OR (current_send.state = 'preparing'
+         AND (current_send.lease_until IS NULL OR current_send.lease_until < now())) THEN
+    UPDATE public.mail_working_draft_sends
+    SET state = 'preparing',
+        error = NULL,
+        smtp_result = NULL,
+        lease_until = now() + interval '10 minutes',
+        updated_at = now()
+    WHERE id = current_send.id;
+    RETURN QUERY SELECT true, 'preparing'::text, NULL::jsonb, NULL::text;
+    RETURN;
+  END IF;
+
+  RETURN QUERY SELECT false, current_send.state, current_send.smtp_result, current_send.error;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.claim_mail_working_draft_send(uuid, uuid, uuid, bigint)
+  FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.claim_mail_working_draft_send(uuid, uuid, uuid, bigint)
+  TO service_role;
+'''
+          Path("supabase/migrations/20260821152000_working_draft_send_revision_fence.sql").write_text(migration)
+
+          # Static regression guard: keep the client, route, server and SQL fence
+          # contract coupled so a future refactor cannot silently remove one leg.
+          test = r'''import { describe, expect, it } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
+
+const root = process.cwd();
+const read = (file: string) => fs.readFileSync(path.join(root, file), "utf8");
+
+describe("working draft Send revision fence", () => {
+  it("passes the browser-approved revision through every send boundary", () => {
+    const mail = read("src/routes/mail.tsx");
+    const route = read("src/routes/api/mail-working-draft-send.ts");
+    const server = read("src/lib/mail-working-draft.server.ts");
+    expect(mail).toContain("expectedRevision: workingRevisionRef.current");
+    expect(route).toContain("working.sendWorkingDraft({ auth, draftId, expectedRevision })");
+    expect(server).toContain("p_expected_revision: expectedRevision");
+    expect(server).toContain("record.revision !== input.expectedRevision");
+  });
+
+  it("atomically rejects stale sends and fences saves after Send claims", () => {
+    const sql = read("supabase/migrations/20260821152000_working_draft_send_revision_fence.sql");
+    expect(sql).toContain("current_revision <> p_expected_revision");
+    expect(sql).toContain("WORKING_DRAFT_REVISION_CONFLICT");
+    expect(sql).toContain("current_send_state IN ('preparing', 'sending', 'sent')");
+    expect(sql).toContain("EXPECTED_REVISION_REQUIRED");
+  });
+});
+'''
+          Path("src/lib/__tests__/mail-working-draft-send-revision-fence.test.ts").write_text(test)
+          PY
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Run targeted regression test
+        run: npx vitest run src/lib/__tests__/mail-working-draft-send-revision-fence.test.ts
+
+      - name: Build production bundle
+        run: npm run build
+
+      - name: Commit verified fix and remove temporary workflow
+        shell: bash
+        run: |
+          git config user.name "MailMaestro Fix Bot"
+          git config user.email "actions@users.noreply.github.com"
+          git rm .github/workflows/mm-apply-working-draft-revision-fence.yml
+          git add -- src/routes/mail.tsx src/routes/api/mail-working-draft-send.ts src/lib/mail-working-draft.server.ts supabase/migrations/20260821152000_working_draft_send_revision_fence.sql src/lib/__tests__/mail-working-draft-send-revision-fence.test.ts
+          git commit -m "fix: bind working draft send to approved revision"
+          git push origin HEAD:fix/working-draft-send-revision-fence
