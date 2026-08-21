@@ -321,6 +321,7 @@ const ServerInlineSourceSchema = ServerAttachmentSourceSchema.extend({
 
 const SendV2PayloadSchema = SendPayloadSchema.extend({
   messageId: MessageIdSchema.optional(),
+  retainClientHandlesOnSuccess: z.boolean().optional().default(false),
   attachmentHandles: z
     .array(
       z
@@ -1140,8 +1141,10 @@ app.post("/api/send-v2", requireKey, async (req, res) => {
   let clientHandles: string[] = [];
   let sourceHandles: string[] = [];
   let sendSucceeded = false;
+  let retainClientHandlesOnSuccess = false;
   try {
     const payload = SendV2PayloadSchema.parse(req.body);
+    retainClientHandlesOnSuccess = payload.retainClientHandlesOnSuccess;
     // Raw-payload fail-fast: both arrays are schema-capped individually (10
     // each), so a combined normal count above MAX_NORMAL_ATTACHMENTS must be
     // rejected before resolving handles or staging server sources — otherwise
@@ -1308,7 +1311,7 @@ app.post("/api/send-v2", requireKey, async (req, res) => {
         account: stagedAccount,
         clientHandles,
         sourceHandles,
-        sendSucceeded,
+        sendSucceeded: sendSucceeded && !retainClientHandlesOnSuccess,
       }).catch(() => undefined);
     }
     if (gateAcquired && gateKey) sendGates.release(gateKey);

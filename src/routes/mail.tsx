@@ -10891,6 +10891,7 @@ function Composer({
       // Draft being edited) sends from the durable Working Draft objects.
       const draftOrigin = isEditMode || workingRevisionRef.current > 0;
       let response: Response;
+      let normalSendRequestBody: Record<string, unknown> | null = null;
       if (draftOrigin) {
         setSendProgress({ progress: 52, stage: "saving" });
         // isEditMode alone must never authorize /api/mail-working-draft-send.
@@ -10965,24 +10966,26 @@ function Composer({
           inline: stagedInline,
           inlineMetadata: metadataToTransport(uploadInline),
         });
+        normalSendRequestBody = {
+          mailSessionToken: session.mailSessionToken ?? "",
+          password: session.password,
+          sendId: draftId,
+          to: to.filter((r) => r.valid).map((r) => ({ name: r.name ?? "", email: r.email })),
+          cc: cc.filter((r) => r.valid).map((r) => ({ name: r.name ?? "", email: r.email })),
+          bcc: bcc.filter((r) => r.valid).map((r) => ({ name: r.name ?? "", email: r.email })),
+          subject,
+          inReplyTo: threadingHeaders.inReplyTo,
+          references: threadingHeaders.references,
+          bodyHtml,
+          bodyText,
+          sourceInlineImages,
+          ...attachmentTransport,
+        };
         startDeliveryProgress();
         response = await fetch("/api/mail-send-v2", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            mailSessionToken: session.mailSessionToken ?? "",
-            password: session.password,
-            to: to.filter((r) => r.valid).map((r) => ({ name: r.name ?? "", email: r.email })),
-            cc: cc.filter((r) => r.valid).map((r) => ({ name: r.name ?? "", email: r.email })),
-            bcc: bcc.filter((r) => r.valid).map((r) => ({ name: r.name ?? "", email: r.email })),
-            subject,
-            inReplyTo: threadingHeaders.inReplyTo,
-            references: threadingHeaders.references,
-            bodyHtml,
-            bodyText,
-            sourceInlineImages,
-            ...attachmentTransport,
-          }),
+          body: JSON.stringify(normalSendRequestBody),
         });
       }
       stopDeliveryProgress();
@@ -11002,7 +11005,7 @@ function Composer({
         sentCopyState?: SentCopyState;
       };
 
-      if (!result.ok && draftOrigin && result.code === "SEND_OUTCOME_UNKNOWN") {
+      if (!result.ok && result.code === "SEND_OUTCOME_UNKNOWN") {
         stopDeliveryProgress();
         const confirmed = window.confirm(
           tr(
@@ -11015,16 +11018,32 @@ function Composer({
         }
 
         startDeliveryProgress();
-        response = await fetch("/api/mail-working-draft-send", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            mailSessionToken: session.mailSessionToken ?? "",
-            draftId,
-            expectedRevision: workingRevisionRef.current,
-            confirmResendUnknown: true,
-          }),
-        });
+        if (draftOrigin) {
+          response = await fetch("/api/mail-working-draft-send", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              mailSessionToken: session.mailSessionToken ?? "",
+              draftId,
+              expectedRevision: workingRevisionRef.current,
+              confirmResendUnknown: true,
+            }),
+          });
+        } else {
+          if (!normalSendRequestBody) {
+            stopDeliveryProgress();
+            toast.error(tr("فشل إرسال الرسالة"));
+            return;
+          }
+          response = await fetch("/api/mail-send-v2", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              ...normalSendRequestBody,
+              confirmResendUnknown: true,
+            }),
+          });
+        }
         stopDeliveryProgress();
         result = (await response.json().catch(() => ({
           ok: false,
