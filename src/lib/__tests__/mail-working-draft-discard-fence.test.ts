@@ -155,7 +155,9 @@ describe("working draft server discard wiring", () => {
   });
 
   it("checks the discard tombstone again immediately before preparing->sending", () => {
-    const markCall = src.indexOf("await markWorkingDraftSendInFlight(input.auth, input.draftId);");
+    const markCall = src.indexOf(
+      "await markWorkingDraftSendInFlight(input.auth, input.draftId, messageId);",
+    );
     const ensureCall = src.indexOf("await ensureDraftNotDiscarded(input.auth, input.draftId);");
     expect(markCall).toBeGreaterThan(ensureCall);
   });
