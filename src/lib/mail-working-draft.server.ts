@@ -1787,7 +1787,199 @@ export async function deleteProviderDraftCheckpoint(input: {
   }
 }
 
-/** Draft-origin send only. Normal compose send continues to use /api/mail-send-v2 unchanged. */
+type PriorNormalSend = {
+  state: "preparing" | "sending" | "sent" | "failed";
+  messageId: string;
+  smtpResult: Record<string, unknown> | null;
+  error: string | null;
+  leaseUntil: string | null;
+};
+
+type PriorNormalSendGuard =
+  | { kind: "proceed" }
+  | { kind: "sent"; result: Record<string, unknown> }
+  | { kind: "unknown" }
+  | { kind: "in-progress" };
+
+async function loadPriorNormalSend(
+  auth: WorkingDraftAuth,
+  draftId: string,
+): Promise<PriorNormalSend | null> {
+  const { data, error } = await db()
+    .from("mail_normal_sends")
+    .select("state, message_id, smtp_result, error, lease_until")
+    .eq("send_id", draftId)
+    .eq("company_id", auth.companyId)
+    .eq("account_id", auth.accountId)
+    .maybeSingle();
+  if (error) throw new Error("NORMAL_SEND_LOOKUP_FAILED");
+  if (!data) return null;
+  const row = data as Record<string, unknown>;
+  if (
+    !["preparing", "sending", "sent", "failed"].includes(String(row.state)) ||
+    typeof row.message_id !== "string"
+  ) {
+    throw new Error("NORMAL_SEND_LOOKUP_INVALID");
+  }
+  return {
+    state: row.state as PriorNormalSend["state"],
+    messageId: row.message_id,
+    smtpResult:
+      row.smtp_result && typeof row.smtp_result === "object"
+        ? (row.smtp_result as Record<string, unknown>)
+        : null,
+    error: typeof row.error === "string" ? row.error : null,
+    leaseUntil: typeof row.lease_until === "string" ? row.lease_until : null,
+  };
+}
+
+function priorNormalSendLeaseExpired(row: PriorNormalSend): boolean {
+  if (!row.leaseUntil) return true;
+  const until = Date.parse(row.leaseUntil);
+  return Number.isFinite(until) ? until <= Date.now() : false;
+}
+
+async function handoffPriorNormalSendToWorkingDraft(
+  auth: WorkingDraftAuth,
+  draftId: string,
+  messageId: string,
+): Promise<boolean> {
+  const { data, error } = await db().rpc("handoff_mail_normal_send_to_working_draft", {
+    p_send_id: draftId,
+    p_company_id: auth.companyId,
+    p_account_id: auth.accountId,
+    p_message_id: messageId,
+  });
+  if (error) throw new Error("NORMAL_SEND_HANDOFF_FAILED");
+  return data === true;
+}
+
+async function markPriorNormalSendSent(
+  auth: WorkingDraftAuth,
+  draftId: string,
+  messageId: string,
+  result: Record<string, unknown>,
+): Promise<boolean> {
+  const { data, error } = await db().rpc("mark_mail_normal_send_sent", {
+    p_send_id: draftId,
+    p_company_id: auth.companyId,
+    p_account_id: auth.accountId,
+    p_message_id: messageId,
+    p_result: result,
+  });
+  if (error) throw new Error("NORMAL_SEND_RECOVERY_COMMIT_FAILED");
+  return data === true;
+}
+
+async function markPriorNormalHandoffSent(
+  auth: WorkingDraftAuth,
+  draftId: string,
+  result: Record<string, unknown>,
+): Promise<void> {
+  const { error } = await db().rpc("mark_mail_normal_send_handoff_sent", {
+    p_send_id: draftId,
+    p_company_id: auth.companyId,
+    p_account_id: auth.accountId,
+    p_result: result,
+  });
+  if (error) throw new Error("NORMAL_SEND_HANDOFF_FINALIZE_FAILED");
+}
+
+async function guardWorkingDraftAgainstPriorNormalSend(input: {
+  auth: WorkingDraftAuth;
+  draftId: string;
+  confirmResendUnknown?: boolean;
+}): Promise<PriorNormalSendGuard> {
+  let row = await loadPriorNormalSend(input.auth, input.draftId);
+  if (!row || row.error === "HANDOFF_TO_WORKING_DRAFT") return { kind: "proceed" };
+
+  if (row.state === "sent") {
+    return {
+      kind: "sent",
+      result:
+        row.smtpResult ?? {
+          ok: true,
+          messageId: row.messageId,
+          recoveredFromIdempotency: true,
+        },
+    };
+  }
+
+  if (row.state === "sending") {
+    const reconciliation = await reconcileAmbiguousWorkingDraftSend(input.auth, row.messageId);
+    if (reconciliation === "found") {
+      const recovered = {
+        ok: true,
+        messageId: row.messageId,
+        sentCopySaved: true,
+        recoveredFromSent: true,
+      };
+      const committed = await markPriorNormalSendSent(
+        input.auth,
+        input.draftId,
+        row.messageId,
+        recovered,
+      ).catch(() => false);
+      if (committed) return { kind: "sent", result: recovered };
+      row = (await loadPriorNormalSend(input.auth, input.draftId)) ?? row;
+      if (row.state === "sent") {
+        return { kind: "sent", result: row.smtpResult ?? recovered };
+      }
+    }
+    if (!input.confirmResendUnknown) return { kind: "unknown" };
+  } else if (row.state === "preparing" && !priorNormalSendLeaseExpired(row)) {
+    return { kind: "in-progress" };
+  }
+
+  // failed, expired preparing, or explicitly confirmed ambiguous sending:
+  // move ownership permanently to the Working Draft idempotency domain.
+  const handedOff = await handoffPriorNormalSendToWorkingDraft(
+    input.auth,
+    input.draftId,
+    row.messageId,
+  );
+  if (handedOff) return { kind: "proceed" };
+
+  const refreshed = await loadPriorNormalSend(input.auth, input.draftId);
+  if (!refreshed) return { kind: "proceed" };
+  if (refreshed.state === "sent") {
+    return {
+      kind: "sent",
+      result:
+        refreshed.smtpResult ?? {
+          ok: true,
+          messageId: refreshed.messageId,
+          recoveredFromIdempotency: true,
+        },
+    };
+  }
+  if (refreshed.error === "HANDOFF_TO_WORKING_DRAFT") return { kind: "proceed" };
+  return refreshed.state === "sending" ? { kind: "unknown" } : { kind: "in-progress" };
+}
+
+async function finishCrossPathSent(
+  auth: WorkingDraftAuth,
+  draftId: string,
+  result: Record<string, unknown>,
+): Promise<void> {
+  await markPriorNormalHandoffSent(auth, draftId, result).catch(() => undefined);
+}
+
+async function returnCrossPathSentAndCleanup(
+  auth: WorkingDraftAuth,
+  draftId: string,
+  result: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  await finishCrossPathSent(auth, draftId, result);
+  const record = await loadWorkingDraft(auth, draftId).catch(() => null);
+  if (record) {
+    scheduleSentWorkingDraftCleanup(auth, draftId, record.checkpoint.serverRef ?? null);
+  }
+  return result;
+}
+
+/** Draft-origin send. A prior normal-Compose attempt with the same logical
+ * draftId is reconciled/handed off before this idempotency domain may touch SMTP. */
 export async function sendWorkingDraft(input: {
   auth: WorkingDraftAuth;
   draftId: string;
@@ -1795,16 +1987,45 @@ export async function sendWorkingDraft(input: {
   /** Explicit user confirmation only; never inferred or retried automatically. */
   confirmResendUnknown?: boolean;
 }): Promise<Record<string, unknown>> {
+  const resolvePriorNormal = async (): Promise<"proceed" | Record<string, unknown>> => {
+    const guard = await guardWorkingDraftAgainstPriorNormalSend(input);
+    if (guard.kind === "sent") {
+      return returnCrossPathSentAndCleanup(input.auth, input.draftId, guard.result);
+    }
+    if (guard.kind === "unknown") throw new Error("SEND_OUTCOME_UNKNOWN");
+    if (guard.kind === "in-progress") throw new Error("SEND_IN_PROGRESS");
+    return "proceed";
+  };
+
+  const prior = await resolvePriorNormal();
+  if (prior !== "proceed") return prior;
+
   let claim = await claimWorkingDraftSend(
     input.auth,
     input.draftId,
     input.expectedRevision,
   );
 
+  // SQL closes the cross-instance race between the preflight above and this
+  // claim. If a normal request won that race, resolve it once and retry only
+  // after it is durably handed off or proven sent.
+  if (!claim.claimed && claim.error === "NORMAL_SEND_ACTIVE") {
+    const raced = await resolvePriorNormal();
+    if (raced !== "proceed") return raced;
+    claim = await claimWorkingDraftSend(
+      input.auth,
+      input.draftId,
+      input.expectedRevision,
+    );
+  }
+
   if (claim.state === "sent") {
-    // SMTP already accepted this logical Draft. Return the stored result
-    // without touching SMTP, attachments, or provider cleanup again.
-    return claim.smtpResult ?? { ok: true };
+    // SMTP already accepted this logical send in either durable domain.
+    return returnCrossPathSentAndCleanup(
+      input.auth,
+      input.draftId,
+      claim.smtpResult ?? { ok: true },
+    );
   }
   if (claim.state === "discarded") {
     throw new Error("DRAFT_DISCARDED");
@@ -1825,6 +2046,7 @@ export async function sendWorkingDraft(input: {
           recoveredFromSent: true,
         };
         await markWorkingDraftSendSent(input.auth, input.draftId, recovered);
+        await finishCrossPathSent(input.auth, input.draftId, recovered);
         const recoveredRecord = await loadWorkingDraft(input.auth, input.draftId).catch(
           () => null,
         );
@@ -1860,7 +2082,13 @@ export async function sendWorkingDraft(input: {
         input.draftId,
         input.expectedRevision,
       );
-      if (refreshed.state === "sent") return refreshed.smtpResult ?? { ok: true };
+      if (refreshed.state === "sent") {
+        return returnCrossPathSentAndCleanup(
+          input.auth,
+          input.draftId,
+          refreshed.smtpResult ?? { ok: true },
+        );
+      }
       if (refreshed.state === "sending") throw new Error("SEND_OUTCOME_UNKNOWN");
       throw new Error("SEND_IN_PROGRESS");
     }
@@ -1937,6 +2165,7 @@ export async function sendWorkingDraft(input: {
       context: transferContext!,
     });
     await markWorkingDraftSendSent(input.auth, input.draftId, result);
+    await finishCrossPathSent(input.auth, input.draftId, result);
   } catch (error) {
     if (error instanceof DraftSendRejectedError) {
       await markWorkingDraftSendFailed(
