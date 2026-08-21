@@ -12,7 +12,7 @@ describe("working draft Send revision fence", () => {
     const server = read("src/lib/mail-working-draft.server.ts");
 
     expect(mail).toContain("expectedRevision: workingRevisionRef.current");
-    expect(route).toContain("working.sendWorkingDraft({ auth, draftId, expectedRevision })");
+    expect(route).toMatch(/working\.sendWorkingDraft\(\{\s*auth,\s*draftId,\s*expectedRevision,/);
     expect(server).toContain("p_expected_revision: expectedRevision");
     expect(server).toContain("record.revision !== input.expectedRevision");
   });

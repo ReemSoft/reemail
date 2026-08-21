@@ -10988,11 +10988,12 @@ function Composer({
       stopDeliveryProgress();
       setSendProgress({ progress: 90, stage: "confirming" });
       await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
-      const result = (await response.json().catch(() => ({
+      let result = (await response.json().catch(() => ({
         ok: false,
         error: `HTTP ${response.status}`,
       }))) as {
         ok: boolean;
+        code?: string;
         error?: string;
         messageId?: string;
         sentCopySaved?: boolean;
@@ -11000,6 +11001,37 @@ function Composer({
         sentCopyJobId?: string;
         sentCopyState?: SentCopyState;
       };
+
+      if (!result.ok && draftOrigin && result.code === "SEND_OUTCOME_UNKNOWN") {
+        stopDeliveryProgress();
+        const confirmed = window.confirm(
+          tr(
+            "تعذّر التأكد هل تم إرسال الرسالة. اضغط إلغاء وتحقق أولاً من مجلد المرسلة. إذا تحققت ولم تجد الرسالة، اضغط موافق لإعادة الإرسال.",
+          ),
+        );
+        if (!confirmed) {
+          toast.info(tr("لم تتم إعادة الإرسال. تحقق من مجلد المرسلة."));
+          return;
+        }
+
+        startDeliveryProgress();
+        response = await fetch("/api/mail-working-draft-send", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            mailSessionToken: session.mailSessionToken ?? "",
+            draftId,
+            expectedRevision: workingRevisionRef.current,
+            confirmResendUnknown: true,
+          }),
+        });
+        stopDeliveryProgress();
+        result = (await response.json().catch(() => ({
+          ok: false,
+          error: `HTTP ${response.status}`,
+        }))) as typeof result;
+      }
+
       if (!result.ok) {
         toast.error(
           isAttachmentSizeLimitError(result.error)

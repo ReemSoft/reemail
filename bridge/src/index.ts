@@ -74,7 +74,12 @@ import {
   TIMING_ENABLED,
   withAccountMailbox,
 } from "./imap-connection.js";
-import { sendMessage, sendMessageFast, sentCopyAccountKey } from "./smtp.js";
+import {
+  reconcileSentMessage,
+  sendMessage,
+  sendMessageFast,
+  sentCopyAccountKey,
+} from "./smtp.js";
 import { classifyAttachmentValidationFailure } from "./attachment-validation.js";
 import { postSendFinalizers } from "./post-send-finalizer.js";
 import { mapUploadedAttachments } from "./inline-images.js";
@@ -150,6 +155,16 @@ const AuthPayloadSchema = z.object({
 const SendStatusPayloadSchema = z.object({
   account: AccountSchema,
   jobId: z.string().min(32).max(128),
+});
+
+const MessageIdSchema = z
+  .string()
+  .min(3)
+  .max(998)
+  .regex(/^<[^<>\r\n]+>$/);
+
+const SendReconcilePayloadSchema = AuthPayloadSchema.extend({
+  messageId: MessageIdSchema,
 });
 
 const FolderSchema = z.enum([
@@ -305,6 +320,7 @@ const ServerInlineSourceSchema = ServerAttachmentSourceSchema.extend({
 });
 
 const SendV2PayloadSchema = SendPayloadSchema.extend({
+  messageId: MessageIdSchema.optional(),
   attachmentHandles: z
     .array(
       z
@@ -1256,6 +1272,7 @@ app.post("/api/send-v2", requireKey, async (req, res) => {
       cc: payload.cc.map((item) => ({ name: item.name, email: item.email })),
       bcc: payload.bcc.map((item) => ({ name: item.name, email: item.email })),
       subject: payload.subject,
+      messageId: payload.messageId,
       inReplyTo: payload.inReplyTo,
       references: payload.references,
       bodyHtml: payload.bodyHtml,
@@ -1295,6 +1312,24 @@ app.post("/api/send-v2", requireKey, async (req, res) => {
       }).catch(() => undefined);
     }
     if (gateAcquired && gateKey) sendGates.release(gateKey);
+  }
+});
+
+app.post("/api/send-reconcile", requireKey, imapGate("background"), async (req, res) => {
+  try {
+    const payload = SendReconcilePayloadSchema.parse(req.body);
+    const result = await reconcileSentMessage(
+      payload.account as MailAccount,
+      payload.password,
+      payload.messageId,
+    );
+    if (result.ok === false) {
+      return res.status(503).json({ ok: false, error: result.error });
+    }
+    return res.json({ ok: true, found: result.found });
+  } catch (error) {
+    const code = error instanceof z.ZodError ? "INVALID_PAYLOAD" : "SEND_RECONCILE_FAILED";
+    return res.status(400).json({ ok: false, error: code });
   }
 });
 

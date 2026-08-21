@@ -105,6 +105,7 @@ function composerOptions(
     ...(payload.cc?.length ? { cc: payload.cc.map(address).join(", ") } : {}),
     ...(payload.bcc?.length ? { bcc: payload.bcc.map(address).join(", ") } : {}),
     subject: payload.subject,
+    ...(payload.messageId ? { messageId: payload.messageId } : {}),
     ...threading,
     text: payload.bodyText || "",
     html: payload.bodyHtml || "",
