@@ -1468,12 +1468,17 @@ export async function deleteWorkingDraftExplicit(input: {
 async function claimWorkingDraftSend(
   auth: WorkingDraftAuth,
   draftId: string,
+  expectedRevision: number,
 ): Promise<WorkingDraftSendClaim> {
   if (!isUuid(draftId)) throw new Error("INVALID_DRAFT_ID");
+  if (!Number.isSafeInteger(expectedRevision) || expectedRevision <= 0) {
+    throw new Error("EXPECTED_REVISION_REQUIRED");
+  }
   const { data, error } = await db().rpc("claim_mail_working_draft_send", {
     p_draft_id: draftId,
     p_company_id: auth.companyId,
     p_account_id: auth.accountId,
+    p_expected_revision: expectedRevision,
   });
   if (error) throw new Error("SEND_IDEMPOTENCY_CLAIM_FAILED");
   const claim = sendClaimFromRpc(data);
@@ -1564,8 +1569,13 @@ export async function deleteProviderDraftCheckpoint(input: {
 export async function sendWorkingDraft(input: {
   auth: WorkingDraftAuth;
   draftId: string;
+  expectedRevision: number;
 }): Promise<Record<string, unknown>> {
-  const claim = await claimWorkingDraftSend(input.auth, input.draftId);
+  const claim = await claimWorkingDraftSend(
+    input.auth,
+    input.draftId,
+    input.expectedRevision,
+  );
   if (claim.state === "sent") {
     // SMTP already accepted this logical Draft. Return the stored result
     // without touching SMTP, attachments, or provider cleanup again.
@@ -1575,6 +1585,7 @@ export async function sendWorkingDraft(input: {
     throw new Error("DRAFT_DISCARDED");
   }
   if (!claim.claimed) {
+    if (claim.error) throw new Error(claim.error);
     throw new Error("SEND_IN_PROGRESS");
   }
 
@@ -1584,6 +1595,17 @@ export async function sendWorkingDraft(input: {
       () => undefined,
     );
     throw new Error("WORKING_DRAFT_NOT_FOUND");
+  }
+  // Defense in depth: the SQL claim atomically binds Send to this revision and
+  // save_mail_working_draft fences later saves. Re-check the already-loaded row
+  // without an extra query so schema/deployment drift fails closed.
+  if (record.revision !== input.expectedRevision) {
+    await markWorkingDraftSendFailed(
+      input.auth,
+      input.draftId,
+      "WORKING_DRAFT_REVISION_CONFLICT",
+    ).catch(() => undefined);
+    throw new Error("WORKING_DRAFT_REVISION_CONFLICT");
   }
 
   let plan: Awaited<ReturnType<typeof resolveSendAttachments>>;

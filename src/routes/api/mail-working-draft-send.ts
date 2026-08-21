@@ -9,14 +9,24 @@ export const Route = createFileRoute("/api/mail-working-draft-send")({
           const body = (await request.json()) as Record<string, unknown>;
           const token = typeof body.mailSessionToken === "string" ? body.mailSessionToken : "";
           const draftId = typeof body.draftId === "string" ? body.draftId : "";
+          const expectedRevision = Number(body.expectedRevision);
           if (!token || !draftId) return json({ ok: false, error: "SESSION_REQUIRED" }, 401);
+          if (!Number.isSafeInteger(expectedRevision) || expectedRevision <= 0) {
+            return json({ ok: false, error: "EXPECTED_REVISION_REQUIRED" }, 400);
+          }
           const working = await import("@/lib/mail-working-draft.server");
           const auth = await working.resolveWorkingDraftAuth(token);
           if (working.isAuthError(auth)) return json({ ok: false, error: auth.code }, auth.status);
-          const result = await working.sendWorkingDraft({ auth, draftId });
+          const result = await working.sendWorkingDraft({ auth, draftId, expectedRevision });
           return json(result);
         } catch (error) {
           const code = error instanceof Error ? error.message : "SEND_FAILED";
+          if (code === "WORKING_DRAFT_REVISION_CONFLICT") {
+            return json(
+              { ok: false, error: "تم تعديل المسودة في نافذة أخرى. راجع أحدث نسخة قبل الإرسال." },
+              409,
+            );
+          }
           return json({ ok: false, error: code }, 500);
         }
       },

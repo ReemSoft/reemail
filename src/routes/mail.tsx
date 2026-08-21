@@ -10919,6 +10919,7 @@ function Composer({
           body: JSON.stringify({
             mailSessionToken: session.mailSessionToken ?? "",
             draftId,
+            expectedRevision: workingRevisionRef.current,
           }),
         });
       } else {
