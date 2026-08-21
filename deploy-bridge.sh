@@ -10,12 +10,12 @@
 # Behaviour:
 #   1. Record OLD_SHA (current HEAD) — used for rollback.
 #   2. git pull --ff-only origin main.
-#   3. Verify HEAD equals the SHA the operator expects (TARGET_SHA env var).
+#   3. If HEAD changed, arm rollback and verify TARGET_SHA when provided.
 #   4. npm ci  +  npm run build   inside bridge/.
 #   5. pm2 restart mailmaestro-bridge --update-env.
 #   6. Health-check local + public + confirm no restart loop.
-#   7. On any failure: git reset --hard OLD_SHA, npm ci, npm run build,
-#      pm2 restart. .env is never touched.
+#   7. On any armed deployment failure: git reset --hard OLD_SHA, npm ci,
+#      npm run build, pm2 restart. .env is never touched.
 set -Eeuo pipefail
 
 REPO_DIR="/home/reemsoft/mailmaestro"
@@ -25,9 +25,30 @@ BRIDGE_PORT="${BRIDGE_PORT:-3001}"
 LOCAL_HEALTH="${LOCAL_HEALTH:-http://127.0.0.1:${BRIDGE_PORT}/health}"
 PUBLIC_HEALTH="https://mailmaestro.reemsoft.com/health"
 TARGET_SHA="${TARGET_SHA:-}"   # optional; if set, deploy aborts unless HEAD matches after pull
+ROLLBACK_ARMED=0
 
 log() { printf '[deploy] %s\n' "$*"; }
-die() { printf '[deploy][FATAL] %s\n' "$*" >&2; exit 1; }
+
+rollback() {
+  trap - ERR
+  if [ "$ROLLBACK_ARMED" != "1" ]; then
+    exit 1
+  fi
+  ROLLBACK_ARMED=0
+  log "rolling back to $OLD_SHA"
+  git reset --hard "$OLD_SHA" || log "git reset failed — inspect manually"
+  ( cd "$BRIDGE_DIR" && npm ci --include=dev && npm run build ) || log "rollback rebuild failed"
+  pm2 restart "$PM2_NAME" --update-env || log "pm2 rollback restart failed"
+  exit 1
+}
+
+die() {
+  printf '[deploy][FATAL] %s\n' "$*" >&2
+  if [ "$ROLLBACK_ARMED" = "1" ]; then
+    rollback
+  fi
+  exit 1
+}
 
 cd "$REPO_DIR" || die "repo missing: $REPO_DIR"
 [ -d "$BRIDGE_DIR" ] || die "bridge dir missing: $BRIDGE_DIR"
@@ -35,27 +56,23 @@ cd "$REPO_DIR" || die "repo missing: $REPO_DIR"
 OLD_SHA="$(git rev-parse HEAD)"
 log "OLD_SHA=$OLD_SHA"
 
-rollback() {
-  log "rolling back to $OLD_SHA"
-  git reset --hard "$OLD_SHA" || log "git reset failed — inspect manually"
-  ( cd "$BRIDGE_DIR" && npm ci --include=dev && npm run build ) || log "rollback rebuild failed"
-  pm2 restart "$PM2_NAME" --update-env || log "pm2 rollback restart failed"
-  exit 1
-}
-trap 'rollback' ERR
-
 log "git pull --ff-only"
 git pull --ff-only origin main
 
 NEW_SHA="$(git rev-parse HEAD)"
 log "NEW_SHA=$NEW_SHA"
-if [ -n "$TARGET_SHA" ] && [ "$NEW_SHA" != "$TARGET_SHA" ]; then
-  die "HEAD ($NEW_SHA) does not match TARGET_SHA ($TARGET_SHA)"
-fi
 if [ "$NEW_SHA" = "$OLD_SHA" ]; then
   log "no changes to deploy; exiting cleanly"
-  trap - ERR
   exit 0
+fi
+
+# From this point HEAD has changed. Any explicit failure path (die) and any
+# unexpected errexit failure must restore the previously-running revision.
+ROLLBACK_ARMED=1
+trap 'rollback' ERR
+
+if [ -n "$TARGET_SHA" ] && [ "$NEW_SHA" != "$TARGET_SHA" ]; then
+  die "HEAD ($NEW_SHA) does not match TARGET_SHA ($TARGET_SHA)"
 fi
 
 cd "$BRIDGE_DIR"
@@ -84,5 +101,6 @@ log "auth guard (expect HTTP 401 without key)"
 CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "https://mailmaestro.reemsoft.com/api/health-auth" || true)
 [ "$CODE" = "401" ] || log "warning: auth guard returned $CODE (endpoint may differ)"
 
+ROLLBACK_ARMED=0
 trap - ERR
 log "DEPLOY OK  old=$OLD_SHA  new=$NEW_SHA"
