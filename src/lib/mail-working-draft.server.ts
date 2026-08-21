@@ -60,6 +60,8 @@ type AttachmentRow = {
   cid: string | null;
   storage_path: string | null;
   source_descriptor: unknown;
+  import_claim_token?: string | null;
+  import_lease_until?: string | null;
 };
 
 export type WorkingDraftAuth = {
@@ -219,60 +221,95 @@ export async function loadWorkingDraftForEditor(
   );
 }
 
-async function finishDiscardedCleanup(
+type DiscardCleanupClaim = {
+  claimToken: string;
+  providerRefs: DraftServerRef[];
+};
+
+async function claimDiscardedCleanup(
   auth: WorkingDraftAuth,
   draftId: string,
+): Promise<DiscardCleanupClaim | null> {
+  const { data, error } = await db().rpc("claim_mail_working_draft_discard_cleanup", {
+    p_draft_id: draftId,
+    p_company_id: auth.companyId,
+    p_account_id: auth.accountId,
+  });
+  if (error) throw new Error("DISCARD_CLEANUP_CLAIM_FAILED");
+  const row = Array.isArray(data) ? (data[0] as Record<string, unknown> | undefined) : undefined;
+  if (!row?.claimed || !isUuid(row.claim_token)) return null;
+  const refs = Array.isArray(row.provider_refs) ? row.provider_refs : [];
+  return {
+    claimToken: row.claim_token,
+    providerRefs: refs.flatMap((ref) => {
+      const parsed = asServerRef(ref);
+      return parsed ? [parsed] : [];
+    }),
+  };
+}
+
+async function advanceDiscardedCleanupClaim(
+  auth: WorkingDraftAuth,
+  draftId: string,
+  claimToken: string,
   removedRef: DraftServerRef | null,
-): Promise<boolean> {
-  const { data, error } = await db().rpc(
-    "finish_mail_working_draft_discard_cleanup",
-    {
-      p_draft_id: draftId,
-      p_company_id: auth.companyId,
-      p_account_id: auth.accountId,
-      p_removed_ref: removedRef ?? null,
-    },
-  );
+): Promise<{ accepted: boolean; cleaned: boolean }> {
+  const { data, error } = await db().rpc("advance_mail_working_draft_discard_cleanup", {
+    p_draft_id: draftId,
+    p_company_id: auth.companyId,
+    p_account_id: auth.accountId,
+    p_claim_token: claimToken,
+    p_removed_ref: removedRef ?? null,
+  });
   if (error) throw new Error("DISCARD_CLEANUP_ADVANCE_FAILED");
-  return data === true;
+  const row = Array.isArray(data) ? (data[0] as Record<string, unknown> | undefined) : undefined;
+  return { accepted: row?.accepted === true, cleaned: row?.cleaned === true };
+}
+
+async function failDiscardedCleanupClaim(
+  auth: WorkingDraftAuth,
+  draftId: string,
+  claimToken: string,
+  reason: string,
+): Promise<void> {
+  await db().rpc("fail_mail_working_draft_discard_cleanup", {
+    p_draft_id: draftId,
+    p_company_id: auth.companyId,
+    p_account_id: auth.accountId,
+    p_claim_token: claimToken,
+    p_error: reason.slice(0, 120),
+  });
 }
 
 async function cleanupDiscardedWorkingDraft(
   auth: WorkingDraftAuth,
   draftId: string,
 ): Promise<void> {
-  const tombstone = await db()
-    .from("mail_working_draft_discards")
-    .select("provider_refs, cleanup_state")
-    .eq("draft_id", draftId)
-    .eq("company_id", auth.companyId)
-    .eq("account_id", auth.accountId)
-    .maybeSingle();
-  if (!tombstone.data) return;
-
-  const rawRefs: unknown[] = Array.isArray(tombstone.data.provider_refs)
-    ? tombstone.data.provider_refs
-    : [];
-  const providerRefs = rawRefs.flatMap((ref: unknown) => {
-    const parsed = asServerRef(ref);
-    return parsed ? [parsed] : [];
-  });
+  const claim = await claimDiscardedCleanup(auth, draftId);
+  if (!claim) return;
+  const providerRefs = claim.providerRefs;
 
   let storagePaths: string[] = [];
   try {
     const rows = await attachmentRows(auth, draftId);
-    storagePaths = rows.flatMap((row) =>
-      row.storage_path ? [row.storage_path] : [],
-    );
-  } catch {
-    // Storage cleanup is best-effort and cannot block the durable tombstone.
-  }
+    storagePaths = rows.flatMap((row) => row.storage_path ? [row.storage_path] : []);
+  } catch {}
 
   let allProviderDeletesSucceeded = true;
+  let claimLost = false;
   const advance = async (ref: DraftServerRef | null): Promise<boolean> => {
     try {
-      return await finishDiscardedCleanup(auth, draftId, ref);
+      const result = await advanceDiscardedCleanupClaim(auth, draftId, claim.claimToken, ref);
+      if (!result.accepted) claimLost = true;
+      return result.cleaned;
     } catch {
+      claimLost = true;
+      await failDiscardedCleanupClaim(
+        auth,
+        draftId,
+        claim.claimToken,
+        "DISCARD_CLEANUP_ADVANCE_FAILED",
+      ).catch(() => undefined);
       return false;
     }
   };
@@ -295,6 +332,7 @@ async function cleanupDiscardedWorkingDraft(
         continue;
       }
       await advance(ref);
+      if (claimLost) return;
     }
   } else {
     let deleted = false;
@@ -308,22 +346,25 @@ async function cleanupDiscardedWorkingDraft(
     } catch {
       deleted = false;
     }
-    if (!deleted) {
-      allProviderDeletesSucceeded = false;
-    }
+    if (!deleted) allProviderDeletesSucceeded = false;
   }
 
+  if (!allProviderDeletesSucceeded) {
+    await failDiscardedCleanupClaim(
+      auth,
+      draftId,
+      claim.claimToken,
+      "PROVIDER_DRAFT_DELETE_FAILED",
+    ).catch(() => undefined);
+  }
   if (!allProviderDeletesSucceeded) return;
 
   const purged = await advance(null);
+  if (claimLost) return;
   if (purged && storagePaths.length > 0) {
     try {
-      await db()
-        .storage.from(WORKING_DRAFT_ATTACHMENT_BUCKET)
-        .remove(storagePaths);
-    } catch {
-      // Owned storage removal is best-effort after the durable row is gone.
-    }
+      await db().storage.from(WORKING_DRAFT_ATTACHMENT_BUCKET).remove(storagePaths);
+    } catch {}
   }
 }
 
@@ -804,7 +845,89 @@ function sourceOf(row: AttachmentRow): WorkingDraftSourceDescriptor | null {
     : null;
 }
 
-/** Imports an external provider attachment exactly once per process flight, into its stable object path. */
+async function attachmentRowByIdentity(
+  auth: WorkingDraftAuth,
+  row: AttachmentRow,
+): Promise<AttachmentRow | null> {
+  const { data, error } = await db()
+    .from("mail_working_draft_attachments")
+    .select("*")
+    .eq("id", row.id)
+    .eq("draft_id", row.draft_id)
+    .eq("company_id", auth.companyId)
+    .eq("account_id", auth.accountId)
+    .maybeSingle();
+  if (error) throw new Error("ATTACHMENT_LOOKUP_FAILED");
+  return data ? (data as AttachmentRow) : null;
+}
+
+async function claimExternalAttachmentImport(
+  auth: WorkingDraftAuth,
+  row: AttachmentRow,
+): Promise<string | null> {
+  const { data, error } = await db().rpc("claim_mail_working_draft_attachment_import", {
+    p_attachment_id: row.id,
+    p_draft_id: row.draft_id,
+    p_company_id: auth.companyId,
+    p_account_id: auth.accountId,
+  });
+  if (error) throw new Error("SOURCE_ATTACHMENT_IMPORT_CLAIM_FAILED");
+  const claimed = Array.isArray(data) ? (data[0] as Record<string, unknown> | undefined) : undefined;
+  return claimed?.claimed === true && isUuid(claimed.claim_token) ? claimed.claim_token : null;
+}
+
+async function finishExternalAttachmentImport(
+  auth: WorkingDraftAuth,
+  row: AttachmentRow,
+  claimToken: string,
+  storagePath: string,
+  sizeBytes: number,
+): Promise<boolean> {
+  const { data, error } = await db().rpc("finish_mail_working_draft_attachment_import", {
+    p_attachment_id: row.id,
+    p_draft_id: row.draft_id,
+    p_company_id: auth.companyId,
+    p_account_id: auth.accountId,
+    p_claim_token: claimToken,
+    p_storage_path: storagePath,
+    p_size_bytes: sizeBytes,
+  });
+  if (error) throw new Error("SOURCE_ATTACHMENT_IMPORT_COMMIT_FAILED");
+  return data === true;
+}
+
+async function releaseExternalAttachmentImport(
+  auth: WorkingDraftAuth,
+  row: AttachmentRow,
+  claimToken: string,
+): Promise<void> {
+  await db().rpc("release_mail_working_draft_attachment_import", {
+    p_attachment_id: row.id,
+    p_draft_id: row.draft_id,
+    p_company_id: auth.companyId,
+    p_account_id: auth.accountId,
+    p_claim_token: claimToken,
+  });
+}
+
+async function waitForExternalAttachmentImport(
+  auth: WorkingDraftAuth,
+  row: AttachmentRow,
+): Promise<AttachmentRow | null> {
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    const current = await attachmentRowByIdentity(auth, row);
+    if (!current) throw new Error("ATTACHMENT_REFERENCE_MISSING");
+    if (current.storage_path) return current;
+    if (!current.import_claim_token) return null;
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  return null;
+}
+
+/**
+ * Process-local single-flight remains a zero-query optimization. The database
+ * lease below is the cross-instance authority.
+ */
 async function importExternalAttachment(
   auth: WorkingDraftAuth,
   row: AttachmentRow,
@@ -817,48 +940,59 @@ async function importExternalAttachment(
   const flight = (async () => {
     const source = sourceOf(row);
     if (!source) throw new Error("SOURCE_DESCRIPTOR_INVALID");
-    const transfer = context ?? (await createWorkingDraftTransferContext(auth));
-    const { bridge, password, client } = transfer;
-    const response = await fetch(`${bridge.bridgeUrl}/api/draft-source-attachment`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Bridge-Key": bridge.bridgeKey },
-      body: JSON.stringify({
-        account: bridge.bridgeAccount,
-        password,
-        ...source,
-        filename: row.filename,
-        mimeType: row.mime_type,
-        size: row.size_bytes,
-        kind: row.kind,
-      }),
-    });
-    if (!response.ok) throw new Error("SOURCE_ATTACHMENT_IMPORT_FAILED");
-    const bytes = await response.blob();
-    if (bytes.size > WORKING_DRAFT_MAX_ATTACHMENT_BYTES) throw new Error("ATTACHMENT_LIMIT_EXCEEDED");
-    const storagePath = attachmentStoragePath(auth, row.draft_id, row.id);
-    const uploaded = await client.storage.from(WORKING_DRAFT_ATTACHMENT_BUCKET).upload(storagePath, bytes, {
-      contentType: row.mime_type,
-      upsert: false,
-    });
-    if (uploaded.error && !/exists|duplicate/i.test(String(uploaded.error.message ?? ""))) {
-      throw new Error("SOURCE_ATTACHMENT_STORE_FAILED");
+
+    let claimToken = await claimExternalAttachmentImport(auth, row);
+    if (!claimToken) {
+      const completed = await waitForExternalAttachmentImport(auth, row);
+      if (completed?.storage_path) return completed;
+      claimToken = await claimExternalAttachmentImport(auth, row);
+      if (!claimToken) throw new Error("SOURCE_ATTACHMENT_IMPORT_IN_PROGRESS");
     }
-    const { data, error } = await client
-      .from("mail_working_draft_attachments")
-      .update({
-        storage_path: storagePath,
-        source_descriptor: null,
-        size_bytes: bytes.size,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", row.id)
-      .eq("draft_id", row.draft_id)
-      .eq("company_id", auth.companyId)
-      .eq("account_id", auth.accountId)
-      .select("*")
-      .maybeSingle();
-    if (error || !data) throw new Error("SOURCE_ATTACHMENT_IMPORT_COMMIT_FAILED");
-    return data as AttachmentRow;
+
+    try {
+      const transfer = context ?? (await createWorkingDraftTransferContext(auth));
+      const { bridge, password, client } = transfer;
+      const response = await fetch(`${bridge.bridgeUrl}/api/draft-source-attachment`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Bridge-Key": bridge.bridgeKey },
+        body: JSON.stringify({
+          account: bridge.bridgeAccount,
+          password,
+          ...source,
+          filename: row.filename,
+          mimeType: row.mime_type,
+          size: row.size_bytes,
+          kind: row.kind,
+        }),
+      });
+      if (!response.ok) throw new Error("SOURCE_ATTACHMENT_IMPORT_FAILED");
+      const bytes = await response.blob();
+      if (bytes.size > WORKING_DRAFT_MAX_ATTACHMENT_BYTES) {
+        throw new Error("ATTACHMENT_LIMIT_EXCEEDED");
+      }
+      const storagePath = attachmentStoragePath(auth, row.draft_id, row.id);
+      const uploaded = await client.storage
+        .from(WORKING_DRAFT_ATTACHMENT_BUCKET)
+        .upload(storagePath, bytes, { contentType: row.mime_type, upsert: false });
+      if (uploaded.error && !/exists|duplicate/i.test(String(uploaded.error.message ?? ""))) {
+        throw new Error("SOURCE_ATTACHMENT_STORE_FAILED");
+      }
+
+      const committed = await finishExternalAttachmentImport(
+        auth,
+        row,
+        claimToken,
+        storagePath,
+        bytes.size,
+      );
+      const current = await attachmentRowByIdentity(auth, row);
+      if (current?.storage_path) return current;
+      if (!committed) throw new Error("SOURCE_ATTACHMENT_IMPORT_COMMIT_LOST");
+      throw new Error("SOURCE_ATTACHMENT_IMPORT_COMMIT_FAILED");
+    } catch (error) {
+      await releaseExternalAttachmentImport(auth, row, claimToken).catch(() => undefined);
+      throw error;
+    }
   })().finally(() => externalImportFlights.delete(key));
   externalImportFlights.set(key, flight);
   return flight;
