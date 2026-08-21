@@ -41,6 +41,8 @@ export interface SendMessagePayload {
   cc?: { name: string; email: string }[];
   bcc?: { name: string; email: string }[];
   subject: string;
+  /** Stable Message-ID supplied by the caller for ambiguous-send reconciliation. */
+  messageId?: string;
   inReplyTo?: string;
   references?: string[];
   bodyHtml?: string;
@@ -365,6 +367,39 @@ async function openSentClient(
     return { ok: true, client, sentPath };
   } catch (error) {
     return { ok: false, client, code: classifyImapFailure(error).code };
+  }
+}
+
+export type SentMessageReconciliation =
+  | { ok: true; found: boolean }
+  | { ok: false; error: SafeImapFailureCode | "SENT_FOLDER_NOT_FOUND" };
+
+/**
+ * Read-only recovery probe for an ambiguous SMTP outcome.
+ *
+ * It resolves the real Sent mailbox and searches only by the caller-provided
+ * Message-ID. It NEVER sends SMTP and NEVER APPENDs a Sent copy.
+ */
+export async function reconcileSentMessage(
+  account: MailAccount,
+  password: string,
+  messageId: string,
+  deps: SendMessageDeps = defaultDeps(),
+): Promise<SentMessageReconciliation> {
+  const sleep = deps.sleep ?? ((ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const opened = await openSentClient(account, password, deps);
+  if (opened.ok === false) {
+    await closeSentClient(opened.client);
+    return { ok: false, error: opened.code };
+  }
+
+  const { client, sentPath } = opened;
+  try {
+    const search = await searchSentBounded(client, sentPath, messageId, sleep);
+    if (search.state === "failed") return { ok: false, error: search.failure.code };
+    return { ok: true, found: search.state === "found" };
+  } finally {
+    await closeSentClient(client);
   }
 }
 

@@ -124,6 +124,7 @@ test("resolveSentPath rejects a lone \\Noselect Sent mailbox", () => {
 // reuse, retry timing, or Sent-folder resolution ever regress.
 // ============================================================================
 import {
+  reconcileSentMessage,
   sendMessage,
   sendMessageFast,
   sentCopyAccountKey,
@@ -249,6 +250,41 @@ const BASE_PAYLOAD = {
   subject: "hello",
   bodyText: "hi",
 };
+
+test("sendMessageFast preserves an explicit stable Message-ID in SMTP MIME and result", async () => {
+  const { deps, rec } = mkDeps({ mailboxes: [{ path: "Sent" }] });
+  deps.postSendQueue = { enqueue: () => false };
+  const stableMessageId = "<mailmaestro.fixed-attempt@example.com>";
+  const result = await sendMessageFast(
+    ACCT,
+    "pw",
+    { ...BASE_PAYLOAD, messageId: stableMessageId },
+    deps,
+  );
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.messageId, stableMessageId);
+  assert.equal(rec.sendMailCalls, 1);
+  assert.ok(
+    rec.lastRaw
+      ?.toString("utf8")
+      .toLowerCase()
+      .includes(`message-id: ${stableMessageId.toLowerCase()}`),
+  );
+});
+
+test("ambiguous-send reconciliation searches Sent by exact Message-ID and never touches SMTP", async () => {
+  const { deps, rec } = mkDeps({
+    mailboxes: [{ path: "Sent" }],
+    searchAttempts: [true],
+  });
+  const messageId = "<mailmaestro.reconcile@example.com>";
+  const result = await reconcileSentMessage(ACCT, "pw", messageId, deps);
+  assert.deepEqual(result, { ok: true, found: true });
+  assert.equal(rec.sendMailCalls, 0);
+  assert.deepEqual(rec.searchCalls, [{ folder: "Sent", messageId }]);
+  assert.equal(rec.appendCalls.length, 0);
+});
 
 test("SMTP failure → no IMAP contact and ok:false", async () => {
   const { deps, rec } = mkDeps({

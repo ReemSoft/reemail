@@ -1110,6 +1110,8 @@ async function invokeBridgeWithStagedAttachments(input: {
   auth: WorkingDraftAuth;
   draftId: string;
   revisionId: string;
+  /** Stable Message-ID for Draft-origin SMTP idempotency/reconciliation. */
+  messageId?: string;
   payload: WorkingDraftPayload;
   rows: readonly AttachmentRow[];
   /** Provider attachments streamed by the Bridge straight from IMAP. */
@@ -1162,6 +1164,7 @@ async function invokeBridgeWithStagedAttachments(input: {
         password,
         draftId: input.draftId,
         revisionId: input.revisionId,
+        messageId: input.messageId,
         to: recipients(snapshot.to),
         cc: recipients(snapshot.cc),
         bcc: recipients(snapshot.bcc),
@@ -1503,11 +1506,13 @@ async function markWorkingDraftSendSent(
 async function markWorkingDraftSendInFlight(
   auth: WorkingDraftAuth,
   draftId: string,
+  messageId: string,
 ): Promise<void> {
   const { data, error } = await db().rpc("mark_mail_working_draft_send_in_flight", {
     p_draft_id: draftId,
     p_company_id: auth.companyId,
     p_account_id: auth.accountId,
+    p_message_id: messageId,
   });
   if (error || data !== true) throw new Error("SEND_CLAIM_LOST");
 }
@@ -1524,6 +1529,89 @@ async function markWorkingDraftSendFailed(
     p_error: reason.slice(0, 120),
   });
   if (error) throw new Error("SEND_IDEMPOTENCY_FAILURE_COMMIT_FAILED");
+}
+
+function claimMessageId(claim: WorkingDraftSendClaim): string | null {
+  const value = claim.smtpResult?.messageId;
+  return typeof value === "string" && /^<[^<>\r\n]+>$/.test(value) && value.length <= 998
+    ? value
+    : null;
+}
+
+function createWorkingDraftMessageId(emailAddress: string): string {
+  const at = emailAddress.lastIndexOf("@");
+  const candidate = at >= 0 ? emailAddress.slice(at + 1).trim().toLowerCase() : "";
+  const domain =
+    candidate.length > 0 &&
+    candidate.length <= 253 &&
+    /^[a-z0-9.-]+$/i.test(candidate) &&
+    !candidate.startsWith(".") &&
+    !candidate.endsWith(".")
+      ? candidate
+      : "mailmaestro.local";
+  return `<mailmaestro.${randomUUID()}@${domain}>`;
+}
+
+type AmbiguousSendReconciliation = "found" | "not-found" | "unavailable";
+
+async function reconcileAmbiguousWorkingDraftSend(
+  auth: WorkingDraftAuth,
+  messageId: string,
+): Promise<AmbiguousSendReconciliation> {
+  try {
+    const { bridge, password } = await resolveBridgeForWorkingDraft(auth);
+    const response = await fetch(`${bridge.bridgeUrl}/api/send-reconcile`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Bridge-Key": bridge.bridgeKey },
+      body: JSON.stringify({
+        account: bridge.bridgeAccount,
+        password,
+        messageId,
+      }),
+    });
+    const result = (await response.json().catch(() => null)) as
+      | { ok?: boolean; found?: boolean }
+      | null;
+    if (!response.ok || !result?.ok || typeof result.found !== "boolean") {
+      return "unavailable";
+    }
+    return result.found ? "found" : "not-found";
+  } catch {
+    return "unavailable";
+  }
+}
+
+async function reclaimAmbiguousWorkingDraftSend(
+  auth: WorkingDraftAuth,
+  draftId: string,
+  expectedRevision: number,
+  messageId: string | null,
+): Promise<boolean> {
+  const { data, error } = await db().rpc("reclaim_mail_working_draft_send_after_unknown", {
+    p_draft_id: draftId,
+    p_company_id: auth.companyId,
+    p_account_id: auth.accountId,
+    p_expected_revision: expectedRevision,
+    p_message_id: messageId,
+  });
+  if (error) throw new Error("SEND_UNKNOWN_RECLAIM_FAILED");
+  return data === true;
+}
+
+function scheduleSentWorkingDraftCleanup(
+  auth: WorkingDraftAuth,
+  draftId: string,
+  previousRef: DraftServerRef | null,
+): void {
+  const cleanup = (async () => {
+    try {
+      await deleteWorkingDraftExplicit({ auth, draftId, previousRef });
+    } catch {
+      // The sent-state row remains authoritative; never reopen SMTP because
+      // provider cleanup was delayed or failed.
+    }
+  })();
+  trackCloudflareWork(cleanup);
 }
 
 async function deleteProviderDraftExplicit(input: {
@@ -1570,12 +1658,15 @@ export async function sendWorkingDraft(input: {
   auth: WorkingDraftAuth;
   draftId: string;
   expectedRevision: number;
+  /** Explicit user confirmation only; never inferred or retried automatically. */
+  confirmResendUnknown?: boolean;
 }): Promise<Record<string, unknown>> {
-  const claim = await claimWorkingDraftSend(
+  let claim = await claimWorkingDraftSend(
     input.auth,
     input.draftId,
     input.expectedRevision,
   );
+
   if (claim.state === "sent") {
     // SMTP already accepted this logical Draft. Return the stored result
     // without touching SMTP, attachments, or provider cleanup again.
@@ -1584,6 +1675,70 @@ export async function sendWorkingDraft(input: {
   if (claim.state === "discarded") {
     throw new Error("DRAFT_DISCARDED");
   }
+
+  if (claim.state === "sending") {
+    const messageId = claimMessageId(claim);
+
+    // Modern attempts persist a stable Message-ID before touching SMTP. A
+    // retry can therefore search Sent without risking a duplicate SMTP send.
+    if (messageId) {
+      const reconciliation = await reconcileAmbiguousWorkingDraftSend(input.auth, messageId);
+      if (reconciliation === "found") {
+        const recovered = {
+          ok: true,
+          messageId,
+          sentCopySaved: true,
+          recoveredFromSent: true,
+        };
+        await markWorkingDraftSendSent(input.auth, input.draftId, recovered);
+        const recoveredRecord = await loadWorkingDraft(input.auth, input.draftId).catch(
+          () => null,
+        );
+        if (recoveredRecord) {
+          scheduleSentWorkingDraftCleanup(
+            input.auth,
+            input.draftId,
+            recoveredRecord.checkpoint.serverRef ?? null,
+          );
+        }
+        return recovered;
+      }
+    }
+
+    // Never infer a resend from "not found" or an unavailable Sent mailbox.
+    // The user must explicitly confirm after checking Sent. Legacy ambiguous
+    // rows have no Message-ID, so they follow the same explicit-only path.
+    if (!input.confirmResendUnknown) {
+      throw new Error("SEND_OUTCOME_UNKNOWN");
+    }
+
+    const reclaimed = await reclaimAmbiguousWorkingDraftSend(
+      input.auth,
+      input.draftId,
+      input.expectedRevision,
+      messageId,
+    );
+    if (!reclaimed) {
+      // Close the narrow race where another request durably finalized the send
+      // while the user was confirming. Never overwrite a newly-sent state.
+      const refreshed = await claimWorkingDraftSend(
+        input.auth,
+        input.draftId,
+        input.expectedRevision,
+      );
+      if (refreshed.state === "sent") return refreshed.smtpResult ?? { ok: true };
+      if (refreshed.state === "sending") throw new Error("SEND_OUTCOME_UNKNOWN");
+      throw new Error("SEND_IN_PROGRESS");
+    }
+
+    claim = {
+      claimed: true,
+      state: "preparing",
+      smtpResult: null,
+      error: null,
+    };
+  }
+
   if (!claim.claimed) {
     if (claim.error) throw new Error(claim.error);
     throw new Error("SEND_IN_PROGRESS");
@@ -1628,13 +1783,19 @@ export async function sendWorkingDraft(input: {
   }
 
   let result: Record<string, unknown>;
+  let smtpMayHaveBeenTouched = false;
   try {
     await ensureDraftNotDiscarded(input.auth, input.draftId);
-    await markWorkingDraftSendInFlight(input.auth, input.draftId);
+    const messageId = createWorkingDraftMessageId(
+      transferContext!.bridge.bridgeAccount.email_address,
+    );
+    await markWorkingDraftSendInFlight(input.auth, input.draftId, messageId);
+    smtpMayHaveBeenTouched = true;
     result = await invokeBridgeWithStagedAttachments({
       auth: input.auth,
       draftId: input.draftId,
       revisionId: randomUUID(),
+      messageId,
       payload: record.payload,
       rows: plan.rows,
       sourceAttachments: plan.sources,
@@ -1649,6 +1810,10 @@ export async function sendWorkingDraft(input: {
         input.draftId,
         error instanceof Error ? error.message : "SEND_FAILED",
       ).catch(() => undefined);
+      throw error;
+    }
+    if (smtpMayHaveBeenTouched) {
+      throw new Error("SEND_OUTCOME_UNKNOWN");
     }
     throw error;
   }
@@ -1657,18 +1822,11 @@ export async function sendWorkingDraft(input: {
   // The Working Draft row remains durable until cleanup succeeds, and the
   // Draft list query hides sent rows, so a delayed/failed cleanup cannot
   // resurrect the Draft or block the UI.
-  const cleanup = (async () => {
-    try {
-      await deleteWorkingDraftExplicit({
-        auth: input.auth,
-        draftId: input.draftId,
-        previousRef: record.checkpoint.serverRef ?? null,
-      });
-    } catch {
-      // The row remains for later reconciliation; do not reopen SMTP.
-    }
-  })();
-  trackCloudflareWork(cleanup);
+  scheduleSentWorkingDraftCleanup(
+    input.auth,
+    input.draftId,
+    record.checkpoint.serverRef ?? null,
+  );
   return result;
 }
 
