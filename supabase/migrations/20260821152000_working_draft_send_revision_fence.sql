@@ -3,6 +3,10 @@
 -- Bind a logical Draft Send to the exact Working Draft revision approved by the
 -- browser. This reuses the existing per-Draft advisory lock, so it adds no
 -- polling, background work, or read-path queries.
+--
+-- Rollout note: the existing three-argument claim function is intentionally
+-- left unchanged so this migration can be applied before the application
+-- release without interrupting older instances during a rolling deploy.
 
 CREATE OR REPLACE FUNCTION public.save_mail_working_draft(
   p_draft_id uuid,
@@ -104,29 +108,6 @@ REVOKE ALL ON FUNCTION public.save_mail_working_draft(uuid, uuid, uuid, bigint, 
 GRANT EXECUTE ON FUNCTION public.save_mail_working_draft(uuid, uuid, uuid, bigint, jsonb)
   TO service_role;
 
--- Fail closed for stale application instances that still call the legacy
--- three-argument claim after this migration is applied.
-CREATE OR REPLACE FUNCTION public.claim_mail_working_draft_send(
-  p_draft_id uuid,
-  p_company_id uuid,
-  p_account_id uuid
-)
-RETURNS TABLE(claimed boolean, state text, smtp_result jsonb, error text)
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = public, pg_temp
-AS $$
-BEGIN
-  RETURN QUERY
-    SELECT false, 'failed'::text, NULL::jsonb, 'EXPECTED_REVISION_REQUIRED'::text;
-END;
-$$;
-
-REVOKE ALL ON FUNCTION public.claim_mail_working_draft_send(uuid, uuid, uuid)
-  FROM PUBLIC, anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.claim_mail_working_draft_send(uuid, uuid, uuid)
-  TO service_role;
-
 CREATE OR REPLACE FUNCTION public.claim_mail_working_draft_send(
   p_draft_id uuid,
   p_company_id uuid,
@@ -171,7 +152,7 @@ BEGIN
   FOR UPDATE;
 
   -- Once SMTP may have been touched, idempotency outranks a repeated caller's
-  -- revision. Never reopen or rebind an in-flight/sent logical Send.
+  -- revision value. Never reopen or rebind an in-flight/sent logical Send.
   IF current_send.id IS NOT NULL AND current_send.state = 'sent' THEN
     RETURN QUERY SELECT false, current_send.state, current_send.smtp_result, current_send.error;
     RETURN;
