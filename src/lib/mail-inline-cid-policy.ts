@@ -89,7 +89,7 @@ export function partitionInlineCidParts(
     const cid = typeof part.cid === "string" ? part.cid.toLowerCase() : "";
     if (!cid) continue;
     const mime = typeof part.mimeType === "string" ? normalizeInlineImageMime(part.mimeType) : "";
-    const owner = `${String(part.part)}\u0000${mime}\u0000${String(part.size)}`;
+    const owner = `${mime}\u0000${String(part.size)}`;
     const existing = cidOwners.get(cid);
     if (existing !== undefined && existing !== owner) ambiguousCids.add(cid);
     else cidOwners.set(cid, owner);

@@ -721,7 +721,7 @@ describe("quoted email preparation", () => {
 });
 
 describe("reply/forward source hydration wiring", () => {
-  it("propagates CID metadata and streams large parts through the dedicated endpoint", () => {
+  it("propagates CID metadata and batches deferred parts through the dedicated endpoint", () => {
     const route = readFileSync("src/routes/mail.tsx", "utf8");
     const replyForward = route.slice(
       route.indexOf("function buildReply"),
@@ -733,12 +733,14 @@ describe("reply/forward source hydration wiring", () => {
 
     const hydration = route.slice(
       route.indexOf("const hydrate = async () =>"),
-      route.indexOf("inlineReadinessRef.current = hydrate()"),
+      route.indexOf("// Poll extension registry occasionally"),
     );
     // Working Drafts hydrate only their owned inline objects, while the
     // provider-Draft compatibility path retains protected CID-part streaming.
     expect(hydration).toContain('fetch("/api/mail-working-draft-attachment-content"');
-    expect(hydration).toContain("streamInlineCidPartsSequential");
+    expect(hydration).toContain("chunkInlineCidParts(cached.misses)");
+    expect(hydration).toContain("fetchInlineCidPartsBatch(batch");
+    expect(hydration).not.toContain("streamInlineCidPartsSequential");
     expect(hydration).toContain('fetch("/api/mail-inline-part"');
     expect(hydration).toContain("signal,");
     expect(hydration).not.toContain("/api/mail-attachment");

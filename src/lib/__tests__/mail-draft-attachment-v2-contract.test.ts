@@ -77,12 +77,16 @@ describe("draft attachment V2 contract", () => {
     expect(adoption).toContain("retainedIds.add(current.id)");
   });
 
-  it("sends trustworthy provider attachments directly while preserving owned fallback", () => {
+  it("sends trustworthy provider attachments and quoted inline sources directly", () => {
     expect(workingDraftServer).toContain("async function resolveSendAttachments(");
     expect(workingDraftServer).toContain(
-      "if (row.storage_path) return { owned: row, source: null }",
+      "if (row.storage_path) return { owned: row, source: null, inlineSource: null }",
     );
     expect(workingDraftServer).toContain('if (row.kind === "attachment" && source)');
+    expect(workingDraftServer).toContain('if (row.kind === "inline-image" && source && row.cid)');
+    expect(workingDraftServer).toContain("workingDraftInlineUploadFilename(row)");
+    expect(workingDraftServer).toContain("sourceInlineImages: input.sourceInlineImages ?? []");
+    expect(workingDraftServer).toContain("sourceInlineImages: plan.inlineSources");
     expect(workingDraftServer).toContain(
       "owned: await importExternalAttachment(auth, row, context)",
     );
