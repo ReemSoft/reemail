@@ -3,6 +3,7 @@ import type { DraftServerRef } from "@/lib/mail-draft-lifecycle";
 export type ParsedDraftSaveResponse =
   | {
       kind: "success";
+      code?: never;
       reconciled: boolean;
       serverRef?: DraftServerRef;
       sourceAttachmentHandles: unknown[] | null;
@@ -11,6 +12,10 @@ export type ParsedDraftSaveResponse =
   | {
       kind: "failure";
       code: string;
+      reconciled?: never;
+      serverRef?: never;
+      sourceAttachmentHandles?: never;
+      inlineSourceHandles?: never;
     };
 
 export function parseDraftSaveResponse(
