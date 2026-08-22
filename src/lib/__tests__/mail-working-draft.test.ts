@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   WORKING_DRAFT_MAX_ATTACHMENT_BYTES,
+  WORKING_DRAFT_MAX_ATTACHMENTS,
   emptyWorkingDraftPayload,
   filterSentWorkingDraftRecords,
   findWorkingDraftIdByServerRef,
@@ -191,6 +192,62 @@ describe("Working Draft attachment references", () => {
     expect(
       isWorkingDraftPayload({ ...emptyWorkingDraftPayload(), attachments: [first, second] }),
     ).toBe(true);
+  });
+
+  it("accepts the full 10-normal plus 50-inline transport envelope and rejects 61", () => {
+    expect(WORKING_DRAFT_MAX_ATTACHMENTS).toBe(60);
+
+    const normal = Array.from({ length: 10 }, (_, index) => ({
+      clientKey: `provider-normal:${index}`,
+      kind: "attachment" as const,
+      filename: `file-${index}.pdf`,
+      mimeType: "application/pdf",
+      size: 1024,
+      disposition: "attachment",
+      source: {
+        folderPath: "INBOX",
+        uidValidity: "42",
+        uid: 7,
+        part: String(index + 1),
+      },
+    }));
+
+    const inline = Array.from({ length: 50 }, (_, index) => ({
+      clientKey: `provider-inline:${index}`,
+      kind: "inline-image" as const,
+      filename: `image-${index}.png`,
+      mimeType: "image/png",
+      size: 1024,
+      disposition: "inline",
+      cid: `image-${index}@example.test`,
+      source: {
+        folderPath: "INBOX",
+        uidValidity: "42",
+        uid: 7,
+        part: `20.${index + 1}`,
+      },
+    }));
+
+    const full = {
+      ...emptyWorkingDraftPayload(),
+      attachments: [...normal, ...inline],
+    };
+    expect(full.attachments).toHaveLength(60);
+    expect(isWorkingDraftPayload(full)).toBe(true);
+
+    expect(
+      isWorkingDraftPayload({
+        ...full,
+        attachments: [
+          ...full.attachments,
+          {
+            ...normal[0],
+            clientKey: "provider-normal:overflow",
+            source: { ...normal[0].source, part: "99" },
+          },
+        ],
+      }),
+    ).toBe(false);
   });
 
   it("enforces the private-object size ceiling before an upload can be referenced", () => {

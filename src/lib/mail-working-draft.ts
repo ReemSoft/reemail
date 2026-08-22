@@ -8,7 +8,8 @@ import type { DraftServerRef, DraftSnapshot } from "@/lib/mail-draft-lifecycle";
 
 export const WORKING_DRAFT_ATTACHMENT_BUCKET = "mail-draft-attachments";
 export const WORKING_DRAFT_MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
-export const WORKING_DRAFT_MAX_ATTACHMENTS = 30;
+// Transport contract: at most 10 normal attachments + 50 inline images.
+export const WORKING_DRAFT_MAX_ATTACHMENTS = 60;
 
 export type WorkingDraftAttachmentKind = "attachment" | "inline-image";
 
