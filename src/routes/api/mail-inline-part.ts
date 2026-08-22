@@ -115,8 +115,13 @@ export const Route = createFileRoute("/api/mail-inline-part")({
           return json({ error: "Inline image unavailable" }, 502);
         }
         if (!upstream.ok) {
+          const retryAfter = upstream.status === 503 ? upstream.headers.get("Retry-After") : null;
           await upstream.body?.cancel().catch(() => undefined);
-          return json({ error: "Inline image unavailable" }, upstream.status);
+          return json(
+            { error: upstream.status === 503 ? "IMAP_BUSY" : "Inline image unavailable" },
+            upstream.status,
+            retryAfter ? { "Retry-After": retryAfter } : undefined,
+          );
         }
 
         const rawContentType = upstream.headers.get("Content-Type") ?? "";
@@ -174,9 +179,9 @@ export const Route = createFileRoute("/api/mail-inline-part")({
   },
 });
 
-function json(body: unknown, status: number) {
+function json(body: unknown, status: number, extraHeaders?: Record<string, string>) {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...extraHeaders },
   });
 }

@@ -21,13 +21,19 @@ import type { CidImageMapping, LargeCidByteMapping } from "@/lib/email-viewer-se
 import {
   extractReferencedInlineCids,
   partitionInlineCidParts,
+  nextVisibleInlineCidBatch,
   chunkInlineCidParts,
   fetchInlineCidPartsBatch,
+  isInlineMediaBusyResponseError,
   readLargeInlineCidSessionCache,
   storeLargeInlineCidSessionCache,
   clearLargeInlineCidSessionCache,
 } from "@/lib/mail-inline-cid-policy";
-import { runInlineMediaQueued } from "@/lib/mail-inline-media-queue";
+import {
+  runInlineMediaQueued,
+  runInlineMediaWithBoundedRetry,
+} from "@/lib/mail-inline-media-queue";
+import { abortInlineCidFlights, acquireInlineCidFlight } from "@/lib/mail-inline-cid-flight";
 import { mergeResolvedCidImagesStable } from "@/lib/mail-inline-cid-state";
 import { parseDraftSaveResponse } from "@/lib/mail-draft-save-response";
 
@@ -431,17 +437,6 @@ function ThreadedEmailBody({
   );
 }
 
-type InlineImageFlight = {
-  promise: Promise<Awaited<ReturnType<typeof resolveMessageInlineImages>>>;
-  controller: AbortController;
-};
-const inlineImageFlights = new Map<string, InlineImageFlight>();
-
-function abortInlineImageFlights(): void {
-  for (const flight of inlineImageFlights.values()) flight.controller.abort();
-  inlineImageFlights.clear();
-}
-
 async function decodeInlineMappings(images: CidImageMapping[]): Promise<CidImageMapping[]> {
   const decoded = await Promise.all(
     images.map(async (image) => {
@@ -470,8 +465,9 @@ async function decodeInlineMappings(images: CidImageMapping[]): Promise<CidImage
 }
 
 /**
- * Renders cached CID bytes immediately. Missing small bytes use one protected
- * batch; large CID streams start only after the body iframe reports ready.
+ * Renders cached CID bytes immediately. Missing visible bytes use small,
+ * latency-first protected batches; deferred CID streams start only after the
+ * body iframe reports ready.
  */
 function useInlineImageMappings(
   message: MailMessage,
@@ -488,17 +484,13 @@ function useInlineImageMappings(
   const messageKey = uidValidity
     ? `${activeSession?.company?.id ?? "none"}|${activeSession?.account.id ?? "none"}|${identity?.folder ?? message.folder}|${identity?.uid ?? message.id}|${uidValidity}`
     : "";
-  const normalizeCid = (cid: string) =>
-    cid.trim().replace(/^<|>$/g, "").trim().toLowerCase();
+  const normalizeCid = (cid: string) => cid.trim().replace(/^<|>$/g, "").trim().toLowerCase();
   const visibleCidSet = useMemo(
     () => new Set(visibleCids.map(normalizeCid).filter(Boolean)),
     [visibleCids],
   );
   const visibleInlineParts = useMemo(
-    () =>
-      (message.inlineParts ?? []).filter((part) =>
-        visibleCidSet.has(normalizeCid(part.cid)),
-      ),
+    () => (message.inlineParts ?? []).filter((part) => visibleCidSet.has(normalizeCid(part.cid))),
     [message.inlineParts, visibleCidSet],
   );
   const embedded = useMemo(
@@ -518,20 +510,15 @@ function useInlineImageMappings(
   });
   const resolvedCids = useMemo(
     () =>
-      resolved.key === messageKey
-        ? resolved.images.map((image) => normalizeCid(image.cid))
-        : [],
+      resolved.key === messageKey ? resolved.images.map((image) => normalizeCid(image.cid)) : [],
     [messageKey, resolved],
   );
   const inlinePartition = useMemo(
     () =>
-      partitionInlineCidParts(
-        visibleInlineParts,
-        [
-          ...(message.inlineImages ?? []).map((image) => image.cid),
-          ...resolvedCids,
-        ],
-      ),
+      partitionInlineCidParts(visibleInlineParts, [
+        ...(message.inlineImages ?? []).map((image) => image.cid),
+        ...resolvedCids,
+      ]),
     [message.inlineImages, resolvedCids, visibleInlineParts],
   );
   const deferredStreamParts = useMemo(
@@ -545,18 +532,17 @@ function useInlineImageMappings(
 
   useEffect(() => {
     let cancelled = false;
+    let releaseFlight: (() => void) | undefined;
     setResolved((current) =>
       current.key === messageKey ? current : { key: messageKey, images: [] },
     );
 
     void decodeInlineMappings(embedded).then((decoded) => {
       if (cancelled) return;
-      setResolved((current) =>
-        mergeResolvedCidImagesStable(current, messageKey, decoded),
-      );
+      setResolved((current) => mergeResolvedCidImagesStable(current, messageKey, decoded));
     });
 
-    const parts = inlinePartition.smallBatchParts;
+    const parts = nextVisibleInlineCidBatch(inlinePartition.smallBatchParts);
     if (!parts.length || !messageKey) {
       return () => {
         cancelled = true;
@@ -567,42 +553,39 @@ function useInlineImageMappings(
       const parsed = parseMessageId(message.id);
       if (!session || !parsed) return;
 
-      let entry = inlineImageFlights.get(messageKey);
-      if (!entry) {
-        mailPerf("cid-request-start", { count: parts.length });
-        const controller = new AbortController();
-        const promise = runInlineMediaQueued(
-          session.account.id,
-          controller.signal,
-          () => {
-            // Keep the existing interactive-viewer contract literal intact:
-            // this is still the persist:true resolver; the queue only controls
-            // when its separate media request is allowed to start.
-            const promise = resolveInlineImages({
-          data: {
-            mailSessionToken: session.mailSessionToken ?? "",
-            password: session.password,
-            folder: parsed.folder,
-            uid: parsed.uid,
-            uidValidity: uidValidity!,
-            parts,
-            persist: true,
-          },
-          signal: controller.signal,
-            });
-            return promise;
-          },
-        ).finally(() => {
-          if (inlineImageFlights.get(messageKey)?.promise === promise) {
-            inlineImageFlights.delete(messageKey);
-          }
-        });
-        entry = { promise, controller };
-        inlineImageFlights.set(messageKey, entry);
-      }
+      const physicalBatchKey = parts
+        .map((part) => `${part.part}:${normalizeCid(part.cid)}`)
+        .sort()
+        .join(",");
+      const flight = acquireInlineCidFlight(
+        `${messageKey}|visible|${physicalBatchKey}`,
+        (flightSignal) => {
+          mailPerf("cid-request-start", { count: parts.length });
+          return runInlineMediaWithBoundedRetry(
+            flightSignal,
+            () =>
+              runInlineMediaQueued(session.account.id, flightSignal, "visible", (attemptSignal) =>
+                resolveInlineImages({
+                  data: {
+                    mailSessionToken: session.mailSessionToken ?? "",
+                    password: session.password,
+                    folder: parsed.folder,
+                    uid: parsed.uid,
+                    uidValidity: uidValidity!,
+                    parts,
+                    persist: true,
+                  },
+                  signal: attemptSignal,
+                }),
+              ),
+            ({ result }) => Boolean(result && !result.ok && result.retryable),
+          );
+        },
+      );
+      releaseFlight = flight.release;
       let result: Awaited<ReturnType<typeof resolveMessageInlineImages>>;
       try {
-        result = await entry.promise;
+        result = await flight.promise;
       } catch {
         return;
       }
@@ -614,14 +597,13 @@ function useInlineImageMappings(
       mailPerf("cid-decoded", { count: decoded.length, failed: result.failedCids.length });
       const decodedCids = new Set(decoded.map((image) => image.cid.toLowerCase()));
       const stored = result.images.filter((image) => decodedCids.has(image.cid.toLowerCase()));
-      setResolved((current) =>
-        mergeResolvedCidImagesStable(current, messageKey, decoded),
-      );
+      setResolved((current) => mergeResolvedCidImagesStable(current, messageKey, decoded));
       onResolvedRef.current?.(stored);
     })();
 
     return () => {
       cancelled = true;
+      releaseFlight?.();
     };
   }, [
     embedded,
@@ -655,25 +637,35 @@ function useInlineImageMappings(
     void (async () => {
       for (const batch of chunkInlineCidParts(cached.misses)) {
         if (controller.signal.aborted) return;
-        const mappings = await fetchInlineCidPartsBatch(batch, {
-          signal: controller.signal,
-          fetchBatch: (requested, signal) =>
-            runInlineMediaQueued(session.account.id, signal, () =>
-              fetch("/api/mail-inline-part", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                mailSessionToken: session.mailSessionToken,
-                password: session.password,
-                folder: parsed.folder,
-                uid: parsed.uid,
-                uidValidity,
-                parts: requested,
-              }),
-                signal,
-              }),
+        const mappings = await runInlineMediaWithBoundedRetry(
+          controller.signal,
+          () =>
+            runInlineMediaQueued(
+              session.account.id,
+              controller.signal,
+              "deferred",
+              (attemptSignal) =>
+                fetchInlineCidPartsBatch(batch, {
+                  signal: attemptSignal,
+                  fetchBatch: (requested, signal) =>
+                    fetch("/api/mail-inline-part", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({
+                        mailSessionToken: session.mailSessionToken,
+                        password: session.password,
+                        folder: parsed.folder,
+                        uid: parsed.uid,
+                        uidValidity,
+                        parts: requested,
+                      }),
+                      signal,
+                    }),
+                }),
             ),
-        });
+          ({ error }) =>
+            isInlineMediaBusyResponseError(error) ? error.retryAfterMs : false,
+        );
         if (controller.signal.aborted) return;
         if (mappings.length) {
           storeLargeInlineCidSessionCache(messageKey, batch, mappings);
@@ -700,13 +692,7 @@ function useInlineImageMappings(
     if (parts.length === 0) return;
     const cached = readLargeInlineCidSessionCache(messageKey, parts);
     if (cached.hits.length) onLargeCid?.(cached.hits);
-  }, [
-    deferredStreamParts,
-    largeReady,
-    largeReplayVersion,
-    messageKey,
-    onLargeCid,
-  ]);
+  }, [deferredStreamParts, largeReady, largeReplayVersion, messageKey, onLargeCid]);
 
   return resolved.key === messageKey
     ? resolved.images.filter((image) => visibleCidSet.has(normalizeCid(image.cid)))
@@ -4107,31 +4093,34 @@ function MailApp() {
         accountId: session.account.id,
       };
       const key = `${scope.companyId}|${scope.accountId}|${parsed.folder}|${parsed.uid}|${uidValidity}`;
-      let entry = inlineImageFlights.get(key);
-      if (!entry) {
-        mailPerf("cid-request-start", { count: parts.length, background: true });
-        const controller = new AbortController();
-        const abortFromQueue = () => controller.abort();
-        signal?.addEventListener("abort", abortFromQueue, { once: true });
-        const promise = resolveInlineImagesBackground({
-          data: {
-            mailSessionToken: session.mailSessionToken ?? "",
-            password: session.password,
-            folder: parsed.folder,
-            uid: parsed.uid,
-            uidValidity,
-            parts,
-            persist: false,
-          },
-          signal: controller.signal,
-        }).finally(() => {
-          signal?.removeEventListener("abort", abortFromQueue);
-          if (inlineImageFlights.get(key)?.promise === promise) inlineImageFlights.delete(key);
-        });
-        entry = { promise, controller };
-        inlineImageFlights.set(key, entry);
-      }
-      const result = await entry.promise;
+      const physicalBatchKey = parts
+        .map((part) => `${part.part}:${part.cid.toLowerCase()}`)
+        .sort()
+        .join(",");
+      const flight = acquireInlineCidFlight(
+        `${key}|background|${physicalBatchKey}`,
+        (flightSignal) => {
+          mailPerf("cid-request-start", { count: parts.length, background: true });
+          return resolveInlineImagesBackground({
+            data: {
+              mailSessionToken: session.mailSessionToken ?? "",
+              password: session.password,
+              folder: parsed.folder,
+              uid: parsed.uid,
+              uidValidity,
+              parts,
+              persist: false,
+            },
+            signal: flightSignal,
+          });
+        },
+      );
+      const releaseOnAbort = () => flight.release();
+      signal?.addEventListener("abort", releaseOnAbort, { once: true });
+      const result = await flight.promise.finally(() => {
+        signal?.removeEventListener("abort", releaseOnAbort);
+        flight.release();
+      });
       if (!result.ok || signal?.aborted || scopeGeneration !== activeScopeGenerationRef.current)
         return;
       const decoded = await decodeInlineMappings(
@@ -4297,7 +4286,7 @@ function MailApp() {
     );
     cancelIdlePrefetchRef.current = null;
     abortInflightControllers(inflight.current);
-    abortInlineImageFlights();
+    abortInlineCidFlights();
     if (clearMemory) clearLargeInlineCidSessionCache();
     prefetchWindowFlightRef.current?.controller.abort();
     prefetchWindowFlightRef.current = null;

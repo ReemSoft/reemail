@@ -53,6 +53,8 @@ describe("dedicated large inline CID route", () => {
     expect(source).toContain("expectedUidValidity: payload.uidValidity");
     expect(source).toContain("/api/message-inline-part");
     expect(source).toContain("new Response(upstream.body");
+    expect(source).toContain('upstream.headers.get("Retry-After")');
+    expect(source).toContain('{ "Retry-After": retryAfter }');
     expect(source).not.toContain("base64");
   });
 });

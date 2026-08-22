@@ -479,7 +479,16 @@ export type ResolveInlineImagesResult =
       failedCids: string[];
       source: "cache" | "bridge" | "none";
     }
-  | { ok: false; images: []; failedCids: string[]; error: string };
+  | { ok: false; images: []; failedCids: string[]; error: string; retryable: boolean };
+
+class InlineImageBridgeError extends Error {
+  readonly retryable: boolean;
+
+  constructor(retryable: boolean) {
+    super("INLINE_BATCH_FAILED");
+    this.retryable = retryable;
+  }
+}
 
 /** Protected cache-first server batch, invoked only after the body paints. */
 export const resolveMessageInlineImages = createServerFn({ method: "POST" })
@@ -493,6 +502,7 @@ export const resolveMessageInlineImages = createServerFn({ method: "POST" })
         images: [],
         failedCids: data.parts.map((part) => part.cid),
         error: "INLINE_BATCH_PART_OUT_OF_BOUNDS",
+        retryable: false,
       };
     }
     const { resolveBridgeAuth } = await import("@/lib/mail-bridge-auth.server");
@@ -502,7 +512,8 @@ export const resolveMessageInlineImages = createServerFn({ method: "POST" })
     const resolver = await import("@/lib/mail-inline-images.server");
 
     const auth = await resolveBridgeAuth(data.mailSessionToken);
-    if (!auth.ok) return { ok: false, images: [], failedCids: [], error: auth.error };
+    if (!auth.ok)
+      return { ok: false, images: [], failedCids: [], error: auth.error, retryable: false };
 
     const key = {
       companyId: auth.companyId,
@@ -533,7 +544,7 @@ export const resolveMessageInlineImages = createServerFn({ method: "POST" })
               },
               data.password,
             );
-            if (!response.ok) throw new Error("INLINE_BATCH_FAILED");
+            if (!response.ok) throw new InlineImageBridgeError(response.status === 503);
             return {
               images: (response.json.images ?? []) as NonNullable<MailMessage["inlineImages"]>,
               failedCids: (response.json.failedCids ?? []) as string[],
@@ -557,8 +568,14 @@ export const resolveMessageInlineImages = createServerFn({ method: "POST" })
         }),
       );
       return { ok: true, ...result };
-    } catch {
-      return { ok: false, images: [], failedCids: [], error: "INLINE_BATCH_FAILED" };
+    } catch (error) {
+      return {
+        ok: false,
+        images: [],
+        failedCids: [],
+        error: "INLINE_BATCH_FAILED",
+        retryable: error instanceof InlineImageBridgeError && error.retryable,
+      };
     }
   });
 

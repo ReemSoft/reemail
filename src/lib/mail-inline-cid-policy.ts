@@ -7,6 +7,8 @@ export const INLINE_CID_FAST_TOTAL_BYTES = 1024 * 1024;
 export const INLINE_CID_MAX_COUNT = 20;
 export const INLINE_CID_METADATA_MAX_COUNT = 50;
 export const INLINE_CID_STREAM_MAX_BYTES = 25 * 1024 * 1024;
+export const INLINE_CID_VISIBLE_BATCH_MAX_COUNT = 4;
+export const INLINE_CID_VISIBLE_BATCH_MAX_BYTES = 64 * 1024;
 
 const INLINE_IMAGE_MIMES = new Set([
   "image/png",
@@ -171,6 +173,40 @@ export function partitionInlineCidParts(
   return result;
 }
 
+/**
+ * Select the next latency-first visible batch. Known tiny parts are ordered
+ * ahead of larger parts and an atomic response is capped at 64 KiB whenever
+ * possible, so a signature/logo is not held behind the rest of the 1 MiB
+ * small-image window. Unknown (zero) sizes remain eligible but sort last.
+ */
+export function nextVisibleInlineCidBatch(parts: readonly InlineCidPart[]): InlineCidPart[] {
+  const ordered = parts
+    .map((part, index) => ({ part, index }))
+    .sort((a, b) => {
+      const aSize = a.part.size > 0 ? a.part.size : Number.MAX_SAFE_INTEGER;
+      const bSize = b.part.size > 0 ? b.part.size : Number.MAX_SAFE_INTEGER;
+      return aSize - bSize || a.index - b.index;
+    })
+    .map(({ part }) => part);
+  if (!ordered.length) return [];
+
+  const first = ordered[0];
+  const maxBytes = Math.max(INLINE_CID_VISIBLE_BATCH_MAX_BYTES, first.size);
+  const batch: InlineCidPart[] = [];
+  let bytes = 0;
+  for (const part of ordered) {
+    if (
+      batch.length >= INLINE_CID_VISIBLE_BATCH_MAX_COUNT ||
+      (batch.length > 0 && bytes + part.size > maxBytes)
+    ) {
+      break;
+    }
+    batch.push(part);
+    bytes += part.size;
+  }
+  return batch;
+}
+
 export interface InlineCidBytesMapping {
   cid: string;
   mimeType: string;
@@ -264,6 +300,22 @@ export interface BatchInlineCidDependencies {
   fetchBatch: (parts: readonly InlineCidPart[], signal: AbortSignal) => Promise<Response>;
 }
 
+export class InlineMediaBusyResponseError extends Error {
+  readonly retryAfterMs: number;
+
+  constructor(retryAfterMs: number) {
+    super("IMAP_BUSY");
+    this.name = "InlineMediaBusyResponseError";
+    this.retryAfterMs = retryAfterMs;
+  }
+}
+
+export function isInlineMediaBusyResponseError(
+  error: unknown,
+): error is InlineMediaBusyResponseError {
+  return error instanceof InlineMediaBusyResponseError;
+}
+
 /** Parse one authenticated multipart response into one atomic render mapping. */
 export async function fetchInlineCidPartsBatch(
   parts: readonly InlineCidPart[],
@@ -271,6 +323,14 @@ export async function fetchInlineCidPartsBatch(
 ): Promise<InlineCidBytesMapping[]> {
   if (!parts.length || dependencies.signal.aborted) return [];
   const response = await dependencies.fetchBatch(parts, dependencies.signal);
+  if (response.status === 503) {
+    const retryAfterSeconds = Number(response.headers.get("Retry-After"));
+    throw new InlineMediaBusyResponseError(
+      Number.isFinite(retryAfterSeconds) && retryAfterSeconds >= 0
+        ? Math.min(2_000, retryAfterSeconds * 1_000)
+        : 250,
+    );
+  }
   if (!response.ok || dependencies.signal.aborted) return [];
   const form = await response.formData();
   const rawMetadata = form.get("metadata");
