@@ -44,9 +44,13 @@ const MessagePayloadSchema = AuthSchema.extend({
   uid: z.number().int().positive(),
 });
 
-const MarkReadPayloadSchema = MessagePayloadSchema.extend({ read: z.boolean() });
-const StarPayloadSchema = MessagePayloadSchema.extend({ starred: z.boolean() });
-const MovePayloadSchema = MessagePayloadSchema.extend({ toFolder: FolderSchema });
+const MutationMessagePayloadSchema = MessagePayloadSchema.extend({
+  uidValidity: z.string().regex(/^[1-9]\d*$/).max(64),
+});
+
+const MarkReadPayloadSchema = MutationMessagePayloadSchema.extend({ read: z.boolean() });
+const StarPayloadSchema = MutationMessagePayloadSchema.extend({ starred: z.boolean() });
+const MovePayloadSchema = MutationMessagePayloadSchema.extend({ toFolder: FolderSchema });
 
 const AddressSchema = z.object({
   name: z.string().max(256),
@@ -223,7 +227,12 @@ export const bridgeMarkRead = createServerFn({ method: "POST" })
     const r = await bridgeCall(
       data.mailSessionToken,
       "/api/mark-read",
-      { folder: data.folder, uid: data.uid, read: data.read },
+      {
+        folder: data.folder,
+        uid: data.uid,
+        read: data.read,
+        expectedUidValidity: data.uidValidity,
+      },
       data.password,
     );
     if (!r.ok) throw new Error(r.error || "فشل تحديث حالة القراءة على الخادم");
@@ -236,7 +245,12 @@ export const bridgeStar = createServerFn({ method: "POST" })
     const r = await bridgeCall(
       data.mailSessionToken,
       "/api/star",
-      { folder: data.folder, uid: data.uid, starred: data.starred },
+      {
+        folder: data.folder,
+        uid: data.uid,
+        starred: data.starred,
+        expectedUidValidity: data.uidValidity,
+      },
       data.password,
     );
     if (!r.ok) throw new Error(r.error || "فشل تحديث المميّز على الخادم");
@@ -262,7 +276,12 @@ export const bridgeMove = createServerFn({ method: "POST" })
     const r = await bridgeCall(
       data.mailSessionToken,
       "/api/move",
-      { folder: data.folder, uid: data.uid, toFolder: data.toFolder },
+      {
+        folder: data.folder,
+        uid: data.uid,
+        toFolder: data.toFolder,
+        expectedUidValidity: data.uidValidity,
+      },
       data.password,
     );
     if (!r.ok) throw new Error(r.error || "فشل نقل الرسالة");
@@ -274,13 +293,19 @@ export const bridgeMove = createServerFn({ method: "POST" })
   });
 
 export const bridgeDelete = createServerFn({ method: "POST" })
-  .inputValidator((v: z.input<typeof MessagePayloadSchema>) => MessagePayloadSchema.parse(v))
+  .inputValidator((v: z.input<typeof MutationMessagePayloadSchema>) =>
+    MutationMessagePayloadSchema.parse(v),
+  )
   .handler(
     async ({ data }): Promise<{ ok: true; kind: "moved-to-trash"; move: BridgeMoveResult }> => {
       const r = await bridgeCall(
         data.mailSessionToken,
         "/api/delete",
-        { folder: data.folder, uid: data.uid },
+        {
+          folder: data.folder,
+          uid: data.uid,
+          expectedUidValidity: data.uidValidity,
+        },
         data.password,
       );
       if (!r.ok) throw new Error(r.error || "فشل حذف الرسالة");

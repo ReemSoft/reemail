@@ -37,6 +37,7 @@ const InputSchema = z
     sourceCanonical: CanonicalSchema,
     destCanonical: CanonicalSchema,
     uid: z.number().int().positive(),
+    uidValidity: z.string().regex(/^[1-9]\d*$/).max(64),
   })
   .strict();
 
@@ -122,19 +123,25 @@ export const indexMoveMessage = createServerFn({ method: "POST" })
           companyId,
           data.sourceCanonical,
         );
-        if (!folder || folder.uidvalidity == null || !folder.path) return null;
+        if (!folder || !folder.path) return null;
+        const expectedUidValidity = Number(data.uidValidity);
+        if (!Number.isSafeInteger(expectedUidValidity) || expectedUidValidity <= 0) return null;
+        const sameGeneration =
+          folder.uidvalidity != null && String(folder.uidvalidity) === data.uidValidity;
         const [cursor, fingerprint] = await Promise.all([
-          readSyncCursor(supabaseAdmin, { accountId, folderId: folder.id }),
+          sameGeneration
+            ? readSyncCursor(supabaseAdmin, { accountId, folderId: folder.id })
+            : Promise.resolve(null),
           captureSourceFingerprint(supabaseAdmin, {
             accountId,
             folderId: folder.id,
-            uidvalidity: folder.uidvalidity,
+            uidvalidity: expectedUidValidity,
             uid: data.uid,
           }),
         ]);
         return {
           folderId: folder.id,
-          uidvalidity: folder.uidvalidity,
+          uidvalidity: expectedUidValidity,
           path: folder.path,
           canonical: physicalSourceCanonical,
           cursorNewestSyncedUid: cursor?.newest_synced_uid ?? null,
@@ -169,6 +176,7 @@ export const indexMoveMessage = createServerFn({ method: "POST" })
               folder: data.sourceCanonical,
               uid: data.uid,
               toFolder: data.destCanonical,
+              expectedUidValidity: data.uidValidity,
             }),
           });
           const text = await res.text();
@@ -205,6 +213,7 @@ export const indexMoveMessage = createServerFn({ method: "POST" })
             sourceCanonical: data.sourceCanonical,
             destCanonical: data.destCanonical,
             sourceUid: data.uid,
+            sourceUidValidity: Number(data.uidValidity),
             destinationPath: move.destinationPath,
             destinationUid: move.destinationUid,
             destinationUidValidity: move.destinationUidValidity,

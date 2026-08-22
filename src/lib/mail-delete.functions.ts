@@ -27,6 +27,7 @@ const InputSchema = z
     // Locked to "trash": permanent delete outside Trash is not a supported flow.
     canonical: z.literal("trash"),
     uid: z.number().int().positive(),
+    uidValidity: z.string().regex(/^[1-9]\d*$/).max(64),
   })
   .strict();
 
@@ -99,6 +100,7 @@ export const indexDeleteMessage = createServerFn({ method: "POST" })
       password: data.password,
       folder: data.canonical, // "trash" — Bridge decider maps to messageDelete
       uid: data.uid,
+      expectedUidValidity: data.uidValidity,
     };
 
     let sourceUid: number;
@@ -151,6 +153,7 @@ export const indexDeleteMessage = createServerFn({ method: "POST" })
         companyId,
         sourceCanonical: data.canonical,
         sourceUid,
+        sourceUidValidity: Number(data.uidValidity),
       });
       indexStatus = outcome.ok ? outcome.applied : "partial";
     } catch (e) {

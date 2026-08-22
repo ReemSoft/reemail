@@ -33,6 +33,7 @@ const InputSchema = z
     password: z.string().min(1).max(1024),
     canonical: CanonicalSchema,
     uid: z.number().int().positive(),
+    uidValidity: z.string().regex(/^[1-9]\d*$/).max(64),
     kind: z.enum(["seen", "flagged"]),
     value: z.boolean(),
   })
@@ -102,6 +103,7 @@ export const indexUpdateFlag = createServerFn({ method: "POST" })
       password: data.password,
       folder: data.canonical,
       uid: data.uid,
+      expectedUidValidity: data.uidValidity,
     };
     if (data.kind === "seen") bridgeBody.read = data.value;
     else bridgeBody.starred = data.value;
@@ -157,6 +159,17 @@ export const indexUpdateFlag = createServerFn({ method: "POST" })
         return { ok: true, imap: true, index: "no-folder" };
       }
       folderId = folder.id;
+      // The provider mutation was fenced by the row's UIDVALIDITY. If the
+      // Local Index folder has already advanced to another generation, never
+      // apply the old UID to that newer generation; let reconcile converge.
+      if (folder.uidvalidity == null || String(folder.uidvalidity) !== data.uidValidity) {
+        try {
+          await markFolderNeedsFlagReconcile(supabaseAdmin, { accountId, folderId: folder.id });
+        } catch (e) {
+          console.error("[indexUpdateFlag] failed to mark stale-generation reconcile", e);
+        }
+        return { ok: true, imap: true, index: "partial" };
+      }
       await updateMessageFlag(supabaseAdmin, {
         accountId,
         folderId: folder.id,

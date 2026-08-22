@@ -411,6 +411,8 @@ export interface MoveWriteThroughInput {
   sourceCanonical: string;
   destCanonical: string;
   sourceUid: number;
+  /** Exact source generation accepted by Bridge; optional for legacy tests/callers. */
+  sourceUidValidity?: number;
   destinationPath?: string;
   destinationUid?: number;
   destinationUidValidity?: string;
@@ -454,11 +456,13 @@ export async function applyMoveWriteThrough(
     };
   }
 
-  // 2) Tombstone source row atomically (idempotent on retry / double-move).
+  // 2) Tombstone exactly the generation Bridge accepted. A mailbox reset may
+  // update mail_folders.uidvalidity between provider success and this write.
+  const sourceUidValidity = input.sourceUidValidity ?? src.uidvalidity;
   const tomb = await tombstoneSourceRow(supabase, {
     accountId: input.accountId,
     folderId: src.id,
-    uidvalidity: src.uidvalidity,
+    uidvalidity: sourceUidValidity,
     uid: input.sourceUid,
   });
   const sourceTombstoned = tomb.changed;
@@ -506,7 +510,7 @@ export async function applyMoveWriteThrough(
         accountId: input.accountId,
         companyId: input.companyId,
         sourceFolderId: src.id,
-        sourceUidvalidity: src.uidvalidity,
+        sourceUidvalidity: sourceUidValidity,
         sourceUid: input.sourceUid,
         destinationFolderId: dst.id,
         destinationUidvalidity: Number(destUvStr),

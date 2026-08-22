@@ -3209,6 +3209,13 @@ function MailApp() {
   const mutateFlag = useCallback(
     async (canonical: MailFolder, uid: number, kind: "seen" | "flagged", value: boolean) => {
       if (!session) throw new Error(tr("لا توجد جلسة بريد"));
+      const sourceId = `${canonical}:${uid}`;
+      const expectedUidValidity = validUidValidity(
+        messagesRef.current.find((message) => message.id === sourceId)?.uidValidity,
+      );
+      if (!expectedUidValidity) {
+        throw new Error(tr("هوية الرسالة قديمة. حدّث المجلد ثم حاول مجدداً."));
+      }
       if (session.mailSessionToken) {
         const res = await updateFlag({
           data: {
@@ -3216,6 +3223,7 @@ function MailApp() {
             password: session.password,
             canonical,
             uid,
+            uidValidity: expectedUidValidity,
             kind,
             value,
           },
@@ -3230,6 +3238,7 @@ function MailApp() {
             password: session.password,
             folder: canonical,
             uid,
+            uidValidity: expectedUidValidity,
             read: value,
           },
         });
@@ -3240,6 +3249,7 @@ function MailApp() {
             password: session.password,
             folder: canonical,
             uid,
+            uidValidity: expectedUidValidity,
             starred: value,
           },
         });
@@ -3262,6 +3272,13 @@ function MailApp() {
       toFolder?: MailFolder;
     }): Promise<IndexMoveResult | null> => {
       if (!session) throw new Error(tr("لا توجد جلسة بريد"));
+      const sourceId = `${params.sourceCanonical}:${params.uid}`;
+      const expectedUidValidity = validUidValidity(
+        messagesRef.current.find((message) => message.id === sourceId)?.uidValidity,
+      );
+      if (!expectedUidValidity) {
+        throw new Error(tr("هوية الرسالة قديمة. حدّث المجلد ثم حاول مجدداً."));
+      }
       const dest = params.toFolder;
       // Permanent-delete branch — MUST use indexDeleteMessage (Blocker 1).
       if (dest === undefined) {
@@ -3275,6 +3292,7 @@ function MailApp() {
               password: session.password,
               canonical: "trash",
               uid: params.uid,
+              uidValidity: expectedUidValidity,
             },
           });
           if (!res.ok) throw new Error(res.error);
@@ -3286,6 +3304,7 @@ function MailApp() {
             password: session.password,
             folder: params.sourceCanonical,
             uid: params.uid,
+            uidValidity: expectedUidValidity,
           },
         });
         return null;
@@ -3299,6 +3318,7 @@ function MailApp() {
             sourceCanonical: params.sourceCanonical,
             destCanonical: dest,
             uid: params.uid,
+            uidValidity: expectedUidValidity,
           },
         });
         if (!res.ok) throw new Error(res.error);
@@ -3315,6 +3335,7 @@ function MailApp() {
           password: session.password,
           folder: params.sourceCanonical,
           uid: params.uid,
+          uidValidity: expectedUidValidity,
           toFolder: dest,
         },
       });
