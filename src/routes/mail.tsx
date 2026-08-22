@@ -28,6 +28,8 @@ import {
   clearLargeInlineCidSessionCache,
 } from "@/lib/mail-inline-cid-policy";
 import { runInlineMediaQueued } from "@/lib/mail-inline-media-queue";
+import { mergeResolvedCidImagesStable } from "@/lib/mail-inline-cid-state";
+import { parseDraftSaveResponse } from "@/lib/mail-draft-save-response";
 
 import { buildReplyQuoteHtml, buildForwardQuoteHtml } from "@/lib/mail-quote";
 import {
@@ -549,12 +551,9 @@ function useInlineImageMappings(
 
     void decodeInlineMappings(embedded).then((decoded) => {
       if (cancelled) return;
-      setResolved((current) => {
-        if (current.key !== messageKey) return current;
-        const byCid = new Map(current.images.map((image) => [image.cid.toLowerCase(), image]));
-        for (const image of decoded) byCid.set(image.cid.toLowerCase(), image);
-        return { key: messageKey, images: [...byCid.values()] };
-      });
+      setResolved((current) =>
+        mergeResolvedCidImagesStable(current, messageKey, decoded),
+      );
     });
 
     const parts = inlinePartition.smallBatchParts;
@@ -615,12 +614,9 @@ function useInlineImageMappings(
       mailPerf("cid-decoded", { count: decoded.length, failed: result.failedCids.length });
       const decodedCids = new Set(decoded.map((image) => image.cid.toLowerCase()));
       const stored = result.images.filter((image) => decodedCids.has(image.cid.toLowerCase()));
-      setResolved((current) => {
-        if (current.key !== messageKey) return current;
-        const byCid = new Map(current.images.map((image) => [image.cid.toLowerCase(), image]));
-        for (const image of decoded) byCid.set(image.cid.toLowerCase(), image);
-        return { key: messageKey, images: [...byCid.values()] };
-      });
+      setResolved((current) =>
+        mergeResolvedCidImagesStable(current, messageKey, decoded),
+      );
       onResolvedRef.current?.(stored);
     })();
 
@@ -9158,37 +9154,38 @@ function Composer({
               return { ok: false, code: "NETWORK" };
             }
           }
-          if (res?.ok) {
+          const parsedResult = parseDraftSaveResponse(res, response.ok);
+          if (parsedResult.kind === "success") {
             if (
-              res.reconciled !== true &&
+              parsedResult.reconciled !== true &&
               attachmentPlan.sourceAttachmentIds.length &&
-              (!Array.isArray(res.sourceAttachmentHandles) ||
-                res.sourceAttachmentHandles.length !== attachmentPlan.sourceAttachmentIds.length)
+              (!Array.isArray(parsedResult.sourceAttachmentHandles) ||
+                parsedResult.sourceAttachmentHandles?.length !== attachmentPlan.sourceAttachmentIds.length)
             ) {
               return { ok: false, code: "SOURCE_ATTACHMENT_HANDLE_MISMATCH" };
             }
             if (
               attachmentPlan.sourceAttachmentIds.length &&
-              Array.isArray(res.sourceAttachmentHandles)
+              Array.isArray(parsedResult.sourceAttachmentHandles)
             ) {
               attachmentPlan.sourceAttachmentIds.forEach((attachmentId, index) => {
-                const handle = (res.sourceAttachmentHandles as unknown[])[index];
+                const handle = (parsedResult.sourceAttachmentHandles as unknown[])[index];
                 if (typeof handle === "string") {
                   preservedSourceHandlesRef.current.set(attachmentId, handle);
                 }
               });
             }
             if (
-              res.reconciled !== true &&
+              parsedResult.reconciled !== true &&
               restoredInlineSources.length &&
-              (!Array.isArray(res.inlineSourceHandles) ||
-                res.inlineSourceHandles.length !== restoredInlineSources.length)
+              (!Array.isArray(parsedResult.inlineSourceHandles) ||
+                parsedResult.inlineSourceHandles?.length !== restoredInlineSources.length)
             ) {
               return { ok: false, code: "SOURCE_INLINE_HANDLE_MISMATCH" };
             }
-            if (restoredInlineSources.length && Array.isArray(res.inlineSourceHandles)) {
+            if (restoredInlineSources.length && Array.isArray(parsedResult.inlineSourceHandles)) {
               restoredInlineSources.forEach((source, index) => {
-                const handle = (res.inlineSourceHandles as unknown[])[index];
+                const handle = (parsedResult.inlineSourceHandles as unknown[])[index];
                 if (typeof handle !== "string") return;
                 const image = inlineImagesRef.current.find(
                   (candidate) => candidate.uploadFilename === source.uploadFilename,
@@ -9200,18 +9197,8 @@ function Composer({
                 }
               });
             }
-            const nextServerRef: DraftServerRef | null =
-              typeof res.uid === "number" &&
-              res.uid > 0 &&
-              typeof res.uidValidity === "string" &&
-              typeof res.folderPath === "string"
-                ? {
-                    folderPath: res.folderPath,
-                    uid: res.uid,
-                    uidValidity: res.uidValidity,
-                  }
-                : null;
-            if (res.reconciled === true && nextServerRef) {
+            const nextServerRef: DraftServerRef | null = parsedResult.serverRef ?? null;
+            if (parsedResult.reconciled === true && nextServerRef) {
               if (attachmentSourceRef.current) attachmentSourceRef.current = nextServerRef;
               for (const image of inlineImagesRef.current) {
                 if (!image.sourceDescriptor) continue;
@@ -9235,12 +9222,17 @@ function Composer({
               return {
                 ok: true,
                 serverRef: nextServerRef ?? undefined,
-                reconciled: res.reconciled === true,
+                reconciled: parsedResult.reconciled === true,
               };
             }
-            return { ok: true, reconciled: res.reconciled === true };
+            return { ok: true, reconciled: parsedResult.reconciled === true };
           }
-          const code = String(res?.code ?? res?.error ?? (response.ok ? "UNKNOWN" : "NETWORK"));
+          const code =
+            parsedResult.kind === "failure"
+              ? parsedResult.code
+              : response.ok
+                ? "UNKNOWN"
+                : "NETWORK";
           if (code === "INVALID_STAGE_HANDLE" || code === "STAGED_ATTACHMENT_NOT_FOUND") {
             restoredHandleByAttachmentIdRef.current.clear();
             preservedSourceHandlesRef.current.clear();
