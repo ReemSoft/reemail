@@ -3795,9 +3795,26 @@ function MailApp() {
                 } as ClientMessageResult;
               }
 
-              // Provider-only/legacy physical Draft disappeared. Reconcile only
-              // the physical row, never a logical Draft, and never decrement the
-              // logical Draft count.
+              // Provider-only/legacy physical Draft disappeared and there is
+              // no logical Working Draft record. The exact physical Local Index
+              // row is therefore proven stale: tombstone it with the same
+              // UIDVALIDITY-fenced ghost cleanup used for other folders, then
+              // refresh the indexed Draft count. This rare NOT_FOUND recovery
+              // path adds zero work to normal Draft opens.
+              try {
+                await cleanupGhost({
+                  data: {
+                    mailSessionToken: session.mailSessionToken ?? "",
+                    canonical: "drafts",
+                    uid: fetchUid,
+                    uidvalidity: uidValidity ? Number(uidValidity) : undefined,
+                  },
+                });
+                await loadCountsFast({ draftIndexSyncSettled: true });
+              } catch {
+                // Provider absence remains authoritative. A later Draft sync
+                // can retry Local Index convergence after a transient DB error.
+              }
               messageCache.current.delete(id);
               setMessages((prev) => prev.filter((m) => m.id !== id));
               hideRow(id);
@@ -3845,6 +3862,7 @@ function MailApp() {
       applyPendingOne,
       currentAccountId,
       cleanupGhost,
+      loadCountsFast,
       recoverJustSavedDraft,
       openDraftByIdentity,
       resolveDraftWorkingRecord,

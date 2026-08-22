@@ -137,14 +137,23 @@ describe("logical Working Draft resolution", () => {
 });
 
 describe("Draft NOT_FOUND authority", () => {
-  it("Draft NOT_FOUND branch never calls generic cleanupGhost", () => {
+  it("protects logical Working Drafts and cleans only a proven provider-only projection", () => {
     const src = mail();
     const idx = src.indexOf('if (parsed.folder === "drafts") {');
     const end = src.indexOf('return { message: null, source: "draft-provider-gone" } as ClientMessageResult;', idx);
     const slice = src.slice(idx, end + 120);
     expect(slice).toContain("draft-working-record");
     expect(slice).toContain("draft-provider-gone");
-    expect(slice).not.toContain("cleanupGhost({");
+
+    const logicalLookup = slice.indexOf("const logicalRecord = await resolveDraftWorkingRecord");
+    const logicalReturn = slice.indexOf('source: "draft-working-record"');
+    const physicalCleanup = slice.indexOf("await cleanupGhost({");
+
+    expect(logicalLookup).toBeGreaterThanOrEqual(0);
+    expect(logicalReturn).toBeGreaterThan(logicalLookup);
+    expect(physicalCleanup).toBeGreaterThan(logicalReturn);
+    expect(slice).toContain('canonical: "drafts"');
+    expect(slice).toContain("uidvalidity: uidValidity ? Number(uidValidity) : undefined");
   });
 });
 
