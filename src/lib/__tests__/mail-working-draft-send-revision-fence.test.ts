@@ -17,6 +17,18 @@ describe("working draft Send revision fence", () => {
     expect(server).toContain("record.revision !== input.expectedRevision");
   });
 
+  it("seeds the authoritative revision before async Working Draft hydration", () => {
+    const mail = read("src/routes/mail.tsx");
+
+    expect(mail).toContain("workingDraftRevision?: number;");
+    expect(mail).toContain("workingDraftRevision: record.revision");
+    expect(mail).toContain("useRef(initial?.workingDraftRevision ?? 0)");
+
+    // The server record load remains as freshness/hydration support, but a
+    // direct Working Draft open no longer starts from revision zero.
+    expect(mail).toContain("workingRevisionRef.current = record.revision");
+  });
+
   it("atomically rejects stale sends and fences saves after Send claims", () => {
     const sql = read(
       "supabase/migrations/20260821152000_working_draft_send_revision_fence.sql",
