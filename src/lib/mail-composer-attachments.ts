@@ -1,6 +1,11 @@
 import type { MailAttachment, MailFolder, MailMessage } from "@/lib/mail-types";
 import type { DraftAttachmentSourceRef, DraftSourceAttachment } from "@/lib/mail-draft-lifecycle";
 import type { StagedAttachmentResult } from "@/lib/mail-attachment-staging";
+import {
+  normalizeInlineImageMime,
+  partitionInlineCidParts,
+  type InlineCidPart,
+} from "@/lib/mail-inline-cid-policy";
 
 export interface AttachmentSourceRef {
   folderPath: string;
@@ -120,6 +125,75 @@ export function selectNormalComposerAttachments(message: MailMessage): MailAttac
     if (cid && bodyCids.has(cid)) return false;
     if (attachment.disposition === "inline" && cid) return false;
     return true;
+  });
+}
+
+
+export interface ProviderInlineSource extends AttachmentSourceRef {
+  part: string;
+  filename: string;
+  size: number;
+  mimeType: "image/png" | "image/jpeg" | "image/gif" | "image/webp";
+  cid: string;
+}
+
+function quotedCidReferences(html: string): Set<string> {
+  const result = new Set<string>();
+  const add = (value: string) => {
+    const cid = normalizeCid(value.replace(/&lt;/gi, "<").replace(/&gt;/gi, ">"));
+    if (cid) result.add(cid);
+  };
+  for (const match of html.matchAll(/\bdata-mm-source-cid\s*=\s*(["'])(.*?)\1/gi)) {
+    add(match[2] ?? "");
+  }
+  for (const match of html.matchAll(/\bsrc\s*=\s*(["'])cid:([^"']+)\1/gi)) {
+    add(match[2] ?? "");
+  }
+  return result;
+}
+
+function inlineSourceExtension(mimeType: string): "png" | "jpg" | "gif" | "webp" | null {
+  switch (normalizeInlineImageMime(mimeType)) {
+    case "image/png": return "png";
+    case "image/jpeg": return "jpg";
+    case "image/gif": return "gif";
+    case "image/webp": return "webp";
+    default: return null;
+  }
+}
+
+/**
+ * Metadata-only provider CID resolution. Saving a Reply/Forward never needs
+ * to download these bytes; the exact fenced IMAP part can be streamed later.
+ */
+export function selectProviderInlineSources(input: {
+  html: string;
+  inlineParts: readonly InlineCidPart[];
+  sourceRef: AttachmentSourceRef | null;
+}): ProviderInlineSource[] {
+  if (!input.sourceRef || !input.html || input.inlineParts.length === 0) return [];
+  const wanted = quotedCidReferences(input.html);
+  if (wanted.size === 0) return [];
+  const partition = partitionInlineCidParts(input.inlineParts);
+  const candidates = [
+    ...partition.smallBatchParts,
+    ...partition.largeStreamParts,
+    ...partition.overflowStreamParts,
+  ];
+  return candidates.flatMap((part) => {
+    const cid = normalizeCid(part.cid);
+    if (!wanted.has(cid)) return [];
+    const mimeType = normalizeInlineImageMime(part.mimeType);
+    const extension = inlineSourceExtension(mimeType);
+    if (!extension) return [];
+    return [{
+      ...input.sourceRef!,
+      part: part.part,
+      filename: `provider-inline-${part.part.replace(/\./g, "-").slice(0, 120)}.${extension}`,
+      size: part.size,
+      mimeType: mimeType as ProviderInlineSource["mimeType"],
+      cid: part.cid.replace(/^<|>$/g, "").trim(),
+    }];
   });
 }
 

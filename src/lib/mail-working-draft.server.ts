@@ -1098,6 +1098,23 @@ export interface SendSourceAttachment {
   mimeType: string;
 }
 
+export interface SendSourceInlineImage extends SendSourceAttachment {
+  uploadFilename: string;
+  cid: string;
+}
+
+function workingDraftInlineUploadFilename(row: AttachmentRow): string {
+  const ext =
+    row.mime_type === "image/png" ? "png" :
+    row.mime_type === "image/jpeg" || row.mime_type === "image/jpg" ? "jpg" :
+    row.mime_type === "image/gif" ? "gif" :
+    row.mime_type === "image/webp" ? "webp" : "";
+  if (!ext || !row.cid) throw new Error("INLINE_SOURCE_INVALID");
+  const hex = row.id.replace(/-/g, "").toLowerCase();
+  if (!/^[a-f0-9]{32}$/.test(hex)) throw new Error("INLINE_SOURCE_INVALID");
+  return `mm-inline-${hex}.${ext}`;
+}
+
 /**
  * Send-time attachment plan.
  *
@@ -1113,7 +1130,11 @@ async function resolveSendAttachments(
   draftId: string,
   payload: WorkingDraftPayload,
   context: WorkingDraftTransferContext,
-): Promise<{ rows: AttachmentRow[]; sources: SendSourceAttachment[] }> {
+): Promise<{
+  rows: AttachmentRow[];
+  sources: SendSourceAttachment[];
+  inlineSources: SendSourceInlineImage[];
+}> {
   await syncAttachmentReferences(auth, draftId, payload.attachments);
   const rows = await attachmentRows(auth, draftId);
   const byClientKey = new Map(rows.map((row) => [row.client_key, row]));
@@ -1125,7 +1146,7 @@ async function resolveSendAttachments(
         ? rows.find((candidate) => candidate.id === reference.attachmentId)
         : byClientKey.get(reference.clientKey);
       if (!row) throw new Error("ATTACHMENT_REFERENCE_MISSING");
-      if (row.storage_path) return { owned: row, source: null };
+      if (row.storage_path) return { owned: row, source: null, inlineSource: null };
       const source = sourceOf(row);
       if (row.kind === "attachment" && source) {
         return {
@@ -1136,14 +1157,34 @@ async function resolveSendAttachments(
             size: Number(row.size_bytes) || 0,
             mimeType: row.mime_type,
           } satisfies SendSourceAttachment,
+          inlineSource: null,
         };
       }
-      return { owned: await importExternalAttachment(auth, row, context), source: null };
+      if (row.kind === "inline-image" && source && row.cid) {
+        return {
+          owned: null,
+          source: null,
+          inlineSource: {
+            ...source,
+            filename: row.filename,
+            uploadFilename: workingDraftInlineUploadFilename(row),
+            cid: row.cid,
+            size: Number(row.size_bytes) || 0,
+            mimeType: row.mime_type,
+          } satisfies SendSourceInlineImage,
+        };
+      }
+      return {
+        owned: await importExternalAttachment(auth, row, context),
+        source: null,
+        inlineSource: null,
+      };
     },
   );
   return {
     rows: resolved.flatMap((item) => (item.owned ? [item.owned] : [])),
     sources: resolved.flatMap((item) => (item.source ? [item.source] : [])),
+    inlineSources: resolved.flatMap((item) => (item.inlineSource ? [item.inlineSource] : [])),
   };
 }
 
@@ -1250,6 +1291,8 @@ async function invokeBridgeWithStagedAttachments(input: {
   rows: readonly AttachmentRow[];
   /** Provider attachments streamed by the Bridge straight from IMAP. */
   sourceAttachments?: readonly SendSourceAttachment[];
+  /** Provider quoted inline images streamed straight from IMAP at Send time. */
+  sourceInlineImages?: readonly SendSourceInlineImage[];
   endpoint: "/api/draft-save-v2" | "/api/send-v2";
   previousRef?: DraftServerRef | null;
   context: WorkingDraftTransferContext;
@@ -1311,7 +1354,7 @@ async function invokeBridgeWithStagedAttachments(input: {
         attachmentHandles: normal,
         stagedInlineImages: inline,
         sourceAttachments: input.sourceAttachments ?? [],
-        sourceInlineImages: [],
+        sourceInlineImages: input.sourceInlineImages ?? [],
       }),
     });
     const result = (await response.json().catch(() => null)) as Record<string, unknown> | null;
@@ -2185,6 +2228,7 @@ export async function sendWorkingDraft(input: {
       payload: record.payload,
       rows: plan.rows,
       sourceAttachments: plan.sources,
+      sourceInlineImages: plan.inlineSources,
       endpoint: "/api/send-v2",
       context: transferContext!,
     });

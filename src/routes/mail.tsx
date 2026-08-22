@@ -22,7 +22,6 @@ import {
   partitionInlineCidParts,
   chunkInlineCidParts,
   fetchInlineCidPartsBatch,
-  streamInlineCidPartsSequential,
   readLargeInlineCidSessionCache,
   storeLargeInlineCidSessionCache,
   clearLargeInlineCidSessionCache,
@@ -62,6 +61,7 @@ import {
   buildAttachmentTransportPlan,
   deriveAttachmentSourceRef,
   selectNormalComposerAttachments,
+  selectProviderInlineSources,
   classifyAttachmentLimitExceeded,
   COMPOSE_MAX_TOTAL_BYTES,
   COMPOSE_MAX_NORMAL_ATTACHMENTS,
@@ -8687,7 +8687,51 @@ function Composer({
       workingAttachmentByInlineIdRef.current.set(image.id, reference);
       return reference;
     });
-    return { version: 1, snapshot, attachments: [...normal, ...added, ...inline] };
+    const representedCids = new Set(
+      inline.flatMap((reference) =>
+        reference.cid ? [reference.cid.trim().replace(/^<|>$/g, "").toLowerCase()] : [],
+      ),
+    );
+    const providerInline = selectProviderInlineSources({
+      html: snapshot.html,
+      inlineParts: initial?.inlineParts ?? [],
+      sourceRef: initial?.attachmentSourceRef ?? initial?.previousRef ?? attachmentSourceRef.current,
+    })
+      .filter(
+        (source) =>
+          !representedCids.has(source.cid.trim().replace(/^<|>$/g, "").toLowerCase()),
+      )
+      .map((source): WorkingDraftAttachmentReference => ({
+        clientKey: `provider-inline:${source.uid}:${source.uidValidity.slice(0, 64)}:${source.part}`.slice(0, 255),
+        kind: "inline-image",
+        filename: source.filename,
+        mimeType: source.mimeType,
+        size: source.size,
+        disposition: "inline",
+        cid: source.cid,
+        source: {
+          folderPath: source.folderPath,
+          uid: source.uid,
+          uidValidity: source.uidValidity,
+          part: source.part,
+        },
+      }));
+    const attachments = [...normal, ...added, ...inline, ...providerInline];
+    const transportNormalCount = attachments.filter(
+      (attachment) => attachment.kind === "attachment",
+    ).length;
+    const transportInlineCount = attachments.length - transportNormalCount;
+    if (
+      transportNormalCount > COMPOSE_MAX_NORMAL_ATTACHMENTS ||
+      transportInlineCount > COMPOSE_MAX_INLINE_IMAGES
+    ) {
+      throw new Error("ATTACHMENT_LIMIT_EXCEEDED");
+    }
+    return {
+      version: 1,
+      snapshot,
+      attachments,
+    };
   }
 
   if (!saverRef.current) {
@@ -9127,7 +9171,9 @@ function Composer({
     [companyId, accountId, draftId],
   );
   const inlineHydratedRef = useRef(false);
+  // Save/Send waits only for metadata authority, never visual CID bytes.
   const inlineReadinessRef = useRef<Promise<void>>(Promise.resolve());
+  const inlineHydrationAbortRef = useRef<AbortController | null>(null);
   const resolveSourceInlineImages = useMailServerFn(resolveMessageInlineImages);
 
   // Set initial editor HTML once, then hydrate durable/local or IMAP CID bytes
@@ -9141,8 +9187,25 @@ function Composer({
     }
     let cancelled = false;
     const streamController = new AbortController();
+    inlineHydrationAbortRef.current = streamController;
     const hydrationKey = "composer-mount-hydration";
     draftEngineRef.current?.registerHydrationDependency(hydrationKey);
+    let metadataReadyDone = false;
+    let resolveMetadataReady!: () => void;
+    const metadataReady = new Promise<void>((resolve) => {
+      resolveMetadataReady = resolve;
+    });
+    const markMetadataReady = () => {
+      if (metadataReadyDone) return;
+      metadataReadyDone = true;
+      inlineHydratedRef.current = true;
+      draftEngineRef.current?.settleHydrationDependency(hydrationKey);
+      draftEngineRef.current?.completeHydrationWhenReady();
+      syncDraftEngineRefs();
+      if (!cancelled && isDirtyRef.current) autosaveRef.current?.schedule();
+      resolveMetadataReady();
+    };
+    inlineReadinessRef.current = metadataReady;
     const hydrate = async () => {
       const editor = editorRef.current;
       if (!editor) return;
@@ -9152,27 +9215,46 @@ function Composer({
           for (const image of hydrated) URL.revokeObjectURL(image.objectUrl);
           return;
         }
+        if (streamController.signal.aborted) {
+          // Send aborts only cosmetic hydration. Preserve already-created
+          // object URLs in React state so a failed Send can keep the composer
+          // usable, but do not mutate CID nodes or schedule another autosave.
+          setInlineImages((current) => mergeHydratedInlineImages(current, hydrated));
+          hydratedInlineImageIdsRef.current = new Set([
+            ...hydratedInlineImageIdsRef.current,
+            ...hydrated.map((image) => image.id),
+          ]);
+          return;
+        }
         // Local rows already have durable cid/src. Rebind those nodes to fresh object URLs.
         for (const image of hydrated) {
           applyInlineImageToCidNodes(editor, image.cid, image);
         }
-        // Any external provider inline resource that has not yet been safely
-        // imported remains visible as cid: and blocks a save. It is never
-        // silently removed or rebound by filename/MIME.
+        const providerSourceCids = new Set(
+          selectProviderInlineSources({
+            html: editor.innerHTML,
+            inlineParts: initial?.inlineParts ?? [],
+            sourceRef: initial?.attachmentSourceRef ?? initial?.previousRef ?? attachmentSourceRef.current,
+          }).map((source) => source.cid.trim().replace(/^<|>$/g, "").toLowerCase()),
+        );
         for (const unresolved of editor.querySelectorAll<HTMLImageElement>(
           'img[src^="cid:" i],img[data-mm-source-cid]',
         )) {
-          if (removeUnresolvedQuotedCidImage(unresolved)) continue;
           const cid = (
             unresolved.dataset.mmSourceCid ??
             unresolved.getAttribute("src")?.slice(4) ??
             ""
-          )
-            .trim()
-            .replace(/^<|>$/g, "")
-            .toLowerCase();
-          if (!cid) continue;
+          ).trim().replace(/^<|>$/g, "").toLowerCase();
+          if (!cid) {
+            if (removeUnresolvedQuotedCidImage(unresolved)) continue;
+            continue;
+          }
           unresolved.dataset.mmSourceCid = cid;
+          if (providerSourceCids.has(cid)) {
+            unresolved.removeAttribute("aria-busy");
+            continue;
+          }
+          if (removeUnresolvedQuotedCidImage(unresolved)) continue;
           const key = `unresolved-restored-inline:${cid}`;
           unresolvedInlineDependenciesRef.current.set(cid, key);
           draftEngineRef.current?.registerResourceDependency(key);
@@ -9192,7 +9274,10 @@ function Composer({
       // open from eagerly FETCHing a provider attachment that MailMaestro
       // already owns durably.
       const workingRecord = await (workingDraftLoadPromiseRef.current ?? Promise.resolve(null));
-      if (cancelled) return;
+      if (cancelled) {
+        markMetadataReady();
+        return;
+      }
       if (workingRecord) {
         const workingSnapshot = workingRecord.payload.snapshot;
         if (!isDirtyRef.current) {
@@ -9212,6 +9297,7 @@ function Composer({
               attachment,
             ]),
         );
+        markMetadataReady();
         const loadedCids = new Set<string>();
         // IndexedDB blobs are accepted only when they are pinned to the same
         // immutable durable attachment id. A reused CID can never surface a
@@ -9276,6 +9362,7 @@ function Composer({
         finishHydration();
         return;
       }
+      markMetadataReady();
       if (initial?.quoteSourceHtml) {
         await new Promise<void>((resolve) => {
           let settled = false;
@@ -9365,6 +9452,7 @@ function Composer({
         }
       }
       const attachRemoteFile = async (sourceCid: string, file: File) => {
+        if (streamController.signal.aborted) return;
         const canonicalSourceCid = sourceCid.trim().replace(/^<|>$/g, "");
         const sourcePart = sourcePartByCid.get(sourceCid.toLowerCase());
         const trustedSource = initial?.attachmentSourceRef ?? initial?.previousRef;
@@ -9405,6 +9493,7 @@ function Composer({
         }
       };
       for (const source of remote) {
+        if (streamController.signal.aborted) break;
         if (
           !(["image/png", "image/jpeg", "image/gif", "image/webp"] as string[]).includes(
             source.mimeType,
@@ -9422,46 +9511,58 @@ function Composer({
           /* Ignore malformed cached bytes. */
         }
       }
-      if (parsed && initial?.inlineUidValidity && session.mailSessionToken) {
-        const attachmentTasks: Promise<void>[] = [];
-        await streamInlineCidPartsSequential(streamedParts, {
-          signal: streamController.signal,
-          fetchPart: (part, signal) =>
-            fetch("/api/mail-inline-part", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              signal,
-              body: JSON.stringify({
-                mailSessionToken: session.mailSessionToken,
-                password: session.password,
-                folder: parsed.folder,
-                uid: parsed.uid,
-                uidValidity: initial.inlineUidValidity,
-                part: part.part,
+      if (parsed && initial?.inlineUidValidity && session.mailSessionToken && streamedParts.length) {
+        const messageKey =
+          `${companyId}|${accountId}|${parsed.folder}|${parsed.uid}|${initial.inlineUidValidity}`;
+        const cached = readLargeInlineCidSessionCache(messageKey, streamedParts);
+        for (const mapping of cached.hits) {
+          if (streamController.signal.aborted) break;
+          await attachRemoteFile(
+            mapping.cid,
+            new File([mapping.bytes], "inline-image", { type: mapping.mimeType.split(";", 1)[0] }),
+          );
+        }
+        for (const batch of chunkInlineCidParts(cached.misses)) {
+          if (streamController.signal.aborted) break;
+          const mappings = await fetchInlineCidPartsBatch(batch, {
+            signal: streamController.signal,
+            fetchBatch: (requested, signal) =>
+              fetch("/api/mail-inline-part", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                signal,
+                body: JSON.stringify({
+                  mailSessionToken: session.mailSessionToken,
+                  password: session.password,
+                  folder: parsed.folder,
+                  uid: parsed.uid,
+                  uidValidity: initial.inlineUidValidity,
+                  parts: requested,
+                }),
               }),
-            }),
-          onMapping: ({ cid, mimeType, bytes }) => {
-            attachmentTasks.push(
-              attachRemoteFile(
-                cid,
-                new File([bytes], "inline-image", { type: mimeType.split(";", 1)[0] }),
-              ),
-            );
-          },
-        });
-        await Promise.all(attachmentTasks);
+          });
+          if (streamController.signal.aborted) break;
+          if (mappings.length) {
+            storeLargeInlineCidSessionCache(messageKey, batch, mappings);
+            for (const mapping of mappings) {
+              if (streamController.signal.aborted) break;
+              await attachRemoteFile(
+                mapping.cid,
+                new File([mapping.bytes], "inline-image", { type: mapping.mimeType.split(";", 1)[0] }),
+              );
+            }
+          }
+        }
       }
       finishHydration();
     };
-    inlineReadinessRef.current = hydrate().finally(() => {
-      draftEngineRef.current?.settleHydrationDependency(hydrationKey);
-      draftEngineRef.current?.completeHydrationWhenReady();
-      syncDraftEngineRefs();
-    });
-    void inlineReadinessRef.current;
+    void hydrate().finally(markMetadataReady);
     return () => {
       cancelled = true;
       streamController.abort();
+      if (inlineHydrationAbortRef.current === streamController) {
+        inlineHydrationAbortRef.current = null;
+      }
       for (const image of inlineImagesRef.current) URL.revokeObjectURL(image.objectUrl);
     };
     // Intentional mount-only hydration: Composer is keyed by draft identity.
@@ -10887,6 +10988,9 @@ function Composer({
     };
     try {
       console.info("[draft-send] phase=send-click");
+      // Preview hydration is cosmetic: free the IMAP media lane before Send.
+      inlineHydrationAbortRef.current?.abort();
+      inlineHydrationAbortRef.current = null;
       autosaveRef.current?.cancel();
       if (remoteAutosaveTimerRef.current !== null) {
         window.clearTimeout(remoteAutosaveTimerRef.current);
@@ -10924,10 +11028,15 @@ function Composer({
       const bodyText = htmlToPlainText(fragment);
       setSendProgress({ progress: 42, stage: "preparing" });
 
-      // A normal, never-saved Compose continues through the existing SMTP
-      // path unchanged. An actual Draft (server Working Draft or provider
-      // Draft being edited) sends from the durable Working Draft objects.
-      const draftOrigin = isEditMode || workingRevisionRef.current > 0;
+      // Provider-backed quoted CIDs use the Working Draft domain so their
+      // exact source parts can be streamed without waiting for preview bytes.
+      const providerInlineSourcesAtSend = selectProviderInlineSources({
+        html: editorRef.current?.innerHTML ?? "",
+        inlineParts: initial?.inlineParts ?? [],
+        sourceRef: initial?.attachmentSourceRef ?? initial?.previousRef ?? attachmentSourceRef.current,
+      });
+      const draftOrigin =
+        isEditMode || workingRevisionRef.current > 0 || providerInlineSourcesAtSend.length > 0;
       let response: Response;
       let normalSendRequestBody: Record<string, unknown> | null = null;
       if (draftOrigin) {

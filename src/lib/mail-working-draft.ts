@@ -8,7 +8,10 @@ import type { DraftServerRef, DraftSnapshot } from "@/lib/mail-draft-lifecycle";
 
 export const WORKING_DRAFT_ATTACHMENT_BUCKET = "mail-draft-attachments";
 export const WORKING_DRAFT_MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
-export const WORKING_DRAFT_MAX_ATTACHMENTS = 30;
+export const WORKING_DRAFT_MAX_NORMAL_ATTACHMENTS = 10;
+export const WORKING_DRAFT_MAX_INLINE_IMAGES = 50;
+export const WORKING_DRAFT_MAX_ATTACHMENTS =
+  WORKING_DRAFT_MAX_NORMAL_ATTACHMENTS + WORKING_DRAFT_MAX_INLINE_IMAGES;
 
 export type WorkingDraftAttachmentKind = "attachment" | "inline-image";
 
@@ -166,10 +169,20 @@ export function isWorkingDraftPayload(value: unknown): value is WorkingDraftPayl
   if (payload.version !== 1 || !payload.snapshot || !Array.isArray(payload.attachments)) return false;
   if (payload.attachments.length > WORKING_DRAFT_MAX_ATTACHMENTS) return false;
   const keys = new Set<string>();
+  let normalAttachmentCount = 0;
+  let inlineImageCount = 0;
   for (const attachment of payload.attachments) {
     if (!isWorkingDraftAttachmentReference(attachment)) return false;
     if (keys.has(attachment.clientKey)) return false;
     keys.add(attachment.clientKey);
+
+    if (attachment.kind === "attachment") {
+      normalAttachmentCount += 1;
+      if (normalAttachmentCount > WORKING_DRAFT_MAX_NORMAL_ATTACHMENTS) return false;
+    } else {
+      inlineImageCount += 1;
+      if (inlineImageCount > WORKING_DRAFT_MAX_INLINE_IMAGES) return false;
+    }
   }
   return true;
 }

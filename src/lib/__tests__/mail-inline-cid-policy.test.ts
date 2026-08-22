@@ -45,6 +45,16 @@ describe("large inline CID receive policy", () => {
     expect(partitionInlineCidParts([first, { ...first }]).smallBatchParts).toEqual([first]);
   });
 
+  it("fails closed when one CID is reused by a different part even with matching MIME and size", () => {
+    const first = { ...part("signature-logo", 4096, "image/png"), part: "2.1" };
+    const repeated = { ...first, cid: "SIGNATURE-LOGO", part: "7.4.2" };
+    const result = partitionInlineCidParts([first, repeated]);
+    expect(result.smallBatchParts).toEqual([]);
+    expect(result.largeStreamParts).toEqual([]);
+    expect(result.overflowStreamParts).toEqual([]);
+    expect(result.oversizedUnsafeParts).toEqual([]);
+  });
+
   it("enforces 20 parts, 256 KiB each and 1 MiB aggregate for the fast batch", () => {
     const candidates = Array.from({ length: 25 }, (_, index) => part(`small-${index}`, 52 * 1024));
     const result = partitionInlineCidParts(candidates);
@@ -188,6 +198,17 @@ describe("large inline CID receive policy", () => {
     expect(viewer).toContain("parts: requested");
     expect(viewer).toContain("chunkInlineCidParts(cached.misses)");
     expect(viewer).not.toContain("streamInlineCidPartsSequential(parts");
+    const composerHydration = source.slice(
+      source.indexOf("// Set initial editor HTML once"),
+      source.indexOf("// Poll extension registry occasionally"),
+    );
+    expect(composerHydration).toContain("const metadataReady = new Promise<void>");
+    expect(composerHydration).toContain("markMetadataReady();");
+    expect(composerHydration).toContain("chunkInlineCidParts(cached.misses)");
+    expect(composerHydration).toContain("fetchInlineCidPartsBatch(batch");
+    expect(composerHydration).not.toContain("streamInlineCidPartsSequential(");
+    expect(source).toContain("inlineHydrationAbortRef.current?.abort()");
+    expect(source).toContain("providerInlineSourcesAtSend.length > 0");
     expect(viewer).toContain('fetch("/api/mail-inline-part"');
     expect(viewer).not.toContain('fetch("/api/mail-attachment"');
     expect(viewer).not.toContain("URL.createObjectURL");
