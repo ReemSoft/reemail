@@ -1,5 +1,6 @@
 import "dotenv/config";
 import express from "express";
+import { configuredBridgeApiKeys, isBridgeApiKeyAuthorized } from "./bridge-api-key.js";
 import cors from "cors";
 import multer from "multer";
 import { uploadStorage, cleanupFiles, startupCleanup } from "./uploads.js";
@@ -105,7 +106,15 @@ import {
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
+
+// Keep the primary key as the existing signing authority for transfer tickets
+// and staged handles. BRIDGE_API_KEY_NEXT is auth-only during the rollover;
+// this avoids changing every opaque token format or breaking in-flight work.
 const BRIDGE_API_KEY = process.env.BRIDGE_API_KEY || "";
+const BRIDGE_API_KEYS = configuredBridgeApiKeys({
+  BRIDGE_API_KEY,
+  BRIDGE_API_KEY_NEXT: process.env.BRIDGE_API_KEY_NEXT,
+});
 
 if (!BRIDGE_API_KEY) {
   console.warn("[bridge] Warning: BRIDGE_API_KEY is not set. Server will reject all requests.");
@@ -395,7 +404,7 @@ function requireKey(req: express.Request, res: express.Response, next: express.N
   if (!BRIDGE_API_KEY) {
     return res.status(503).json({ error: "Bridge not configured: missing BRIDGE_API_KEY" });
   }
-  if (key !== BRIDGE_API_KEY) {
+  if (!isBridgeApiKeyAuthorized(key, BRIDGE_API_KEYS)) {
     return res.status(401).json({ error: "Unauthorized" });
   }
   next();

@@ -106,12 +106,13 @@
 
 - تُخزّن في ملف `.env` على السيرفر:
   ```bash
-  MAIL_BRIDGE_SECRET=662c76cd4f76aab1ce312cf07fee34705dcd5f6c2944db3d1bfd75875dd0a46d
+  MAIL_BRIDGE_SECRET=<server-managed-secret>
   HOST=127.0.0.1
   PORT=3001
   ```
-- **لا تُضمّن في GitHub.**
-- تُدار يدويًا على السيرفر.
+- **لا تُضمّن أي قيمة سرية في GitHub أو التوثيق.**
+- تُدار القيم السرية يدويًا في بيئة Lovable Secrets وعلى السيرفر.
+- لتدوير مفتاح الـ Bridge بدون قطع الطلبات الحالية: أضف المفتاح الجديد مؤقتًا على السيرفر كـ `BRIDGE_API_KEY_NEXT`، انقل `MAIL_BRIDGE_SECRET` في Lovable إلى المفتاح الجديد، ثم بعد التأكد من الانتقال اجعل الجديد هو `BRIDGE_API_KEY` واحذف قيمة rollover.
 
 ---
 
