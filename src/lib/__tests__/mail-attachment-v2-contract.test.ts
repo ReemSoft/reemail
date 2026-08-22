@@ -40,8 +40,9 @@ describe("active attachment V2 contract", () => {
       new URL("../../routes/api/mail-send-v2.ts", import.meta.url),
       "utf8",
     );
-    expect(sendApi).toContain('upstream.headers.get("Server-Timing")');
-    expect(sendApi).toContain("sourceInlineImages: Array.isArray(body?.sourceInlineImages)");
+    expect(sendApi).toContain("sent.serverTiming");
+    expect(sendApi).toContain('"Server-Timing": serverTiming');
+    expect(sendApi).toContain("sourceInlineImages: Array.isArray(body.sourceInlineImages)");
     expect(composer).toContain("const sourceInlineImages = transportImages");
     expect(composer).toContain("sourceInlineImages,");
     expect(sendApi).not.toContain("attachmentBytes");

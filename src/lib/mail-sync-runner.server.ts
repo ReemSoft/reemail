@@ -192,8 +192,89 @@ export async function runMailSyncCore(
     let mailboxLiveTotal: number | null = null;
     let singleUidPresence: { uid: number; present: boolean } | undefined;
 
+    // A UIDVALIDITY reset invalidates every UID identity in this folder. Older
+    // production code correctly wiped the stale index but left newest_synced_uid
+    // NULL, while callers kept requesting incremental/reconcile forever. Treat
+    // any incomplete post-bootstrap cursor as an initial round so already-stuck
+    // folders self-heal on their very next sync without a special client path.
+    const effectiveMode: RunMailSyncCoreInput["mode"] =
+      input.mode !== "initial" &&
+      (!cursor || cursor.uidvalidity == null || cursor.newest_synced_uid == null)
+        ? "initial"
+        : input.mode;
 
-    if (input.mode === "initial") {
+    // When IMAP reports resetRequired during incremental/reconcile, rebuild a
+    // fresh initial window under THIS SAME folder lock. Never expose an empty
+    // index + NULL cursor between rounds; old UIDs are wiped before fresh UIDs
+    // are inserted, and the cursor is restored before the lock is released.
+    const rebootstrapAfterUidValidityReset = async (): Promise<void> => {
+      const fresh = (await bridgePost("/api/sync/initial", {
+        account: input.bridgeAccount,
+        password: input.password,
+        folderPath: input.folderPath,
+        limit: input.limit ?? 300,
+        countExcludeDeleted: isDrafts,
+      })) as {
+        mailbox: {
+          path: string;
+          exists: number;
+          uidValidity: string;
+          uidNext: number | null;
+          highestModseq: string | null;
+          liveTotal: number | null;
+        };
+        messages: Array<Parameters<typeof upsertMessagesInBatches>[2][number]>;
+        oldestReturnedUid: number | null;
+        newestReturnedUid: number | null;
+      };
+
+      mailboxUidValidity = fresh.mailbox.uidValidity;
+      mailboxUidNext = fresh.mailbox.uidNext;
+      mailboxHighestModseq = fresh.mailbox.highestModseq;
+      mailboxExists = fresh.mailbox.exists;
+      mailboxLiveTotal = fresh.mailbox.liveTotal ?? null;
+
+      await wipeFolderForUidValidityReset(admin, {
+        accountId: input.accountId,
+        companyId: input.companyId,
+        folderId,
+        newUidValidity: mailboxUidValidity,
+      });
+      wipedForUidValidity = true;
+      appliedFlagChanges = 0;
+      tombstoned = 0;
+      hasMore = false;
+      flagsSync = "not-requested";
+      singleUidPresence = undefined;
+
+      const freshMessages = isDrafts
+        ? fresh.messages.filter((m) => !m.flagDeleted)
+        : fresh.messages;
+      wroteMessages = await upsertMessagesInBatches(
+        admin,
+        {
+          accountId: input.accountId,
+          companyId: input.companyId,
+          folderId,
+          uidValidity: mailboxUidValidity,
+        },
+        freshMessages,
+      );
+
+      await updateSyncCursor(admin, {
+        accountId: input.accountId,
+        folderId,
+        uidValidity: mailboxUidValidity,
+        uidNext: mailboxUidNext,
+        highestModseq: mailboxHighestModseq,
+        oldestSyncedUid: fresh.oldestReturnedUid,
+        newestSyncedUid: fresh.newestReturnedUid,
+        flagsNeedReconcile: false,
+      });
+    };
+
+
+    if (effectiveMode === "initial") {
       const result = (await bridgePost("/api/sync/initial", {
         account: input.bridgeAccount,
         password: input.password,
@@ -253,9 +334,9 @@ export async function runMailSyncCore(
         newestSyncedUid: result.newestReturnedUid,
         flagsNeedReconcile: false,
       });
-    } else if (input.mode === "incremental") {
+    } else if (effectiveMode === "incremental") {
       if (!cursor || cursor.newest_synced_uid == null || cursor.uidvalidity == null) {
-        return { ok: false, error: "لم يتم إجراء مزامنة أولية بعد.", code: "NO_CURSOR" };
+        throw new Error("CURSOR_RECOVERY_INVARIANT");
       }
 
       const flagsFrom = input.flagsFromUid ?? Math.max(1, cursor.newest_synced_uid - 500);
@@ -296,23 +377,7 @@ export async function runMailSyncCore(
       mailboxLiveTotal = result.mailbox.liveTotal ?? null;
 
       if (result.resetRequired) {
-        await wipeFolderForUidValidityReset(admin, {
-          accountId: input.accountId,
-          companyId: input.companyId,
-          folderId,
-          newUidValidity: mailboxUidValidity,
-        });
-        wipedForUidValidity = true;
-        await updateSyncCursor(admin, {
-          accountId: input.accountId,
-          folderId,
-          uidValidity: mailboxUidValidity,
-          uidNext: mailboxUidNext,
-          highestModseq: mailboxHighestModseq,
-          oldestSyncedUid: null,
-          newestSyncedUid: null,
-          flagsNeedReconcile: false,
-        });
+        await rebootstrapAfterUidValidityReset();
       } else {
         const rawMessages = result.newMessages ?? [];
         const messages = isDrafts ? rawMessages.filter((m) => !m.flagDeleted) : rawMessages;
@@ -373,12 +438,8 @@ export async function runMailSyncCore(
       }
     } else {
       // reconcile
-      if (!cursor || cursor.uidvalidity == null) {
-        return {
-          ok: false,
-          error: "لا توجد حالة مزامنة سابقة لهذا المجلد.",
-          code: "NO_CURSOR",
-        };
+      if (!cursor || cursor.uidvalidity == null || cursor.newest_synced_uid == null) {
+        throw new Error("CURSOR_RECOVERY_INVARIANT");
       }
       const RECONCILE_MAX_RANGE = 1000;
       const requestedFrom = input.fromUid ?? cursor.oldest_synced_uid ?? 1;
@@ -416,23 +477,7 @@ export async function runMailSyncCore(
       mailboxLiveTotal = result.mailbox.liveTotal ?? null;
 
       if (result.resetRequired) {
-        await wipeFolderForUidValidityReset(admin, {
-          accountId: input.accountId,
-          companyId: input.companyId,
-          folderId,
-          newUidValidity: mailboxUidValidity,
-        });
-        wipedForUidValidity = true;
-        await updateSyncCursor(admin, {
-          accountId: input.accountId,
-          folderId,
-          uidValidity: mailboxUidValidity,
-          uidNext: mailboxUidNext,
-          highestModseq: mailboxHighestModseq,
-          oldestSyncedUid: null,
-          newestSyncedUid: null,
-          flagsNeedReconcile: false,
-        });
+        await rebootstrapAfterUidValidityReset();
       } else {
         const rawStates = result.states ?? [];
         if (isDrafts) {
