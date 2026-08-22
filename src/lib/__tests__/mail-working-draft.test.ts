@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   WORKING_DRAFT_MAX_ATTACHMENT_BYTES,
   WORKING_DRAFT_MAX_ATTACHMENTS,
+  WORKING_DRAFT_MAX_INLINE_IMAGES,
+  WORKING_DRAFT_MAX_NORMAL_ATTACHMENTS,
   emptyWorkingDraftPayload,
   filterSentWorkingDraftRecords,
   findWorkingDraftIdByServerRef,
@@ -194,7 +196,9 @@ describe("Working Draft attachment references", () => {
     ).toBe(true);
   });
 
-  it("accepts the full 10-normal plus 50-inline transport envelope and rejects 61", () => {
+  it("enforces the exact 10-normal plus 50-inline transport envelope", () => {
+    expect(WORKING_DRAFT_MAX_NORMAL_ATTACHMENTS).toBe(10);
+    expect(WORKING_DRAFT_MAX_INLINE_IMAGES).toBe(50);
     expect(WORKING_DRAFT_MAX_ATTACHMENTS).toBe(60);
 
     const normal = Array.from({ length: 10 }, (_, index) => ({
@@ -232,20 +236,44 @@ describe("Working Draft attachment references", () => {
       ...emptyWorkingDraftPayload(),
       attachments: [...normal, ...inline],
     };
+
     expect(full.attachments).toHaveLength(60);
     expect(isWorkingDraftPayload(full)).toBe(true);
 
+    const normalOverflow = {
+      ...normal[0],
+      clientKey: "provider-normal:overflow",
+      source: { ...normal[0].source, part: "99" },
+    };
+
+    // Still only 60 total, but 11 normal is outside the Bridge contract.
     expect(
       isWorkingDraftPayload({
         ...full,
-        attachments: [
-          ...full.attachments,
-          {
-            ...normal[0],
-            clientKey: "provider-normal:overflow",
-            source: { ...normal[0].source, part: "99" },
-          },
-        ],
+        attachments: [...normal, normalOverflow, ...inline.slice(0, 49)],
+      }),
+    ).toBe(false);
+
+    const inlineOverflow = {
+      ...inline[0],
+      clientKey: "provider-inline:overflow",
+      cid: "overflow@example.test",
+      source: { ...inline[0].source, part: "20.99" },
+    };
+
+    // Still only 60 total, but 51 inline is outside the Bridge contract.
+    expect(
+      isWorkingDraftPayload({
+        ...full,
+        attachments: [...normal.slice(0, 9), ...inline, inlineOverflow],
+      }),
+    ).toBe(false);
+
+    // Aggregate hard ceiling remains enforced too.
+    expect(
+      isWorkingDraftPayload({
+        ...full,
+        attachments: [...full.attachments, normalOverflow],
       }),
     ).toBe(false);
   });

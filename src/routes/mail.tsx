@@ -8716,10 +8716,21 @@ function Composer({
           part: source.part,
         },
       }));
+    const attachments = [...normal, ...added, ...inline, ...providerInline];
+    const transportNormalCount = attachments.filter(
+      (attachment) => attachment.kind === "attachment",
+    ).length;
+    const transportInlineCount = attachments.length - transportNormalCount;
+    if (
+      transportNormalCount > COMPOSE_MAX_NORMAL_ATTACHMENTS ||
+      transportInlineCount > COMPOSE_MAX_INLINE_IMAGES
+    ) {
+      throw new Error("ATTACHMENT_LIMIT_EXCEEDED");
+    }
     return {
       version: 1,
       snapshot,
-      attachments: [...normal, ...added, ...inline, ...providerInline],
+      attachments,
     };
   }
 
@@ -9204,6 +9215,17 @@ function Composer({
           for (const image of hydrated) URL.revokeObjectURL(image.objectUrl);
           return;
         }
+        if (streamController.signal.aborted) {
+          // Send aborts only cosmetic hydration. Preserve already-created
+          // object URLs in React state so a failed Send can keep the composer
+          // usable, but do not mutate CID nodes or schedule another autosave.
+          setInlineImages((current) => mergeHydratedInlineImages(current, hydrated));
+          hydratedInlineImageIdsRef.current = new Set([
+            ...hydratedInlineImageIdsRef.current,
+            ...hydrated.map((image) => image.id),
+          ]);
+          return;
+        }
         // Local rows already have durable cid/src. Rebind those nodes to fresh object URLs.
         for (const image of hydrated) {
           applyInlineImageToCidNodes(editor, image.cid, image);
@@ -9430,6 +9452,7 @@ function Composer({
         }
       }
       const attachRemoteFile = async (sourceCid: string, file: File) => {
+        if (streamController.signal.aborted) return;
         const canonicalSourceCid = sourceCid.trim().replace(/^<|>$/g, "");
         const sourcePart = sourcePartByCid.get(sourceCid.toLowerCase());
         const trustedSource = initial?.attachmentSourceRef ?? initial?.previousRef;
@@ -9470,6 +9493,7 @@ function Composer({
         }
       };
       for (const source of remote) {
+        if (streamController.signal.aborted) break;
         if (
           !(["image/png", "image/jpeg", "image/gif", "image/webp"] as string[]).includes(
             source.mimeType,
@@ -9521,6 +9545,7 @@ function Composer({
           if (mappings.length) {
             storeLargeInlineCidSessionCache(messageKey, batch, mappings);
             for (const mapping of mappings) {
+              if (streamController.signal.aborted) break;
               await attachRemoteFile(
                 mapping.cid,
                 new File([mapping.bytes], "inline-image", { type: mapping.mimeType.split(";", 1)[0] }),

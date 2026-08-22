@@ -745,6 +745,22 @@ describe("reply/forward source hydration wiring", () => {
     expect(hydration).toContain("signal,");
     expect(hydration).not.toContain("/api/mail-attachment");
 
+    const abortedHydration = hydration.slice(
+      hydration.indexOf("if (streamController.signal.aborted) {"),
+      hydration.indexOf("// Local rows already have durable cid/src."),
+    );
+    expect(abortedHydration).toContain("mergeHydratedInlineImages(current, hydrated)");
+    expect(abortedHydration).not.toContain("applyInlineImageToCidNodes");
+    expect(abortedHydration).not.toContain("autosaveRef.current?.schedule()");
+    expect(hydration).toContain("if (streamController.signal.aborted) break;");
+    expect(hydration).toContain("if (streamController.signal.aborted) return;");
+
+    expect(route).toContain("const transportNormalCount = attachments.filter(");
+    expect(route).toContain("const transportInlineCount = attachments.length - transportNormalCount");
+    expect(route).toContain("transportNormalCount > COMPOSE_MAX_NORMAL_ATTACHMENTS");
+    expect(route).toContain("transportInlineCount > COMPOSE_MAX_INLINE_IMAGES");
+    expect(route).toContain('throw new Error("ATTACHMENT_LIMIT_EXCEEDED")');
+
     const formatter = readFileSync("src/lib/mail-compose-quote.ts", "utf8");
     expect(formatter).toContain("\"img-src 'none'\"");
     expect(formatter).toContain("\"connect-src 'none'\"");

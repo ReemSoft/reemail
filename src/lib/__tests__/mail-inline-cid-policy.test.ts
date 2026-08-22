@@ -45,13 +45,14 @@ describe("large inline CID receive policy", () => {
     expect(partitionInlineCidParts([first, { ...first }]).smallBatchParts).toEqual([first]);
   });
 
-  it("deduplicates repeated long-thread CID copies when MIME and size agree", () => {
+  it("fails closed when one CID is reused by a different part even with matching MIME and size", () => {
     const first = { ...part("signature-logo", 4096, "image/png"), part: "2.1" };
     const repeated = { ...first, cid: "SIGNATURE-LOGO", part: "7.4.2" };
     const result = partitionInlineCidParts([first, repeated]);
-    expect(result.smallBatchParts).toEqual([first]);
+    expect(result.smallBatchParts).toEqual([]);
     expect(result.largeStreamParts).toEqual([]);
     expect(result.overflowStreamParts).toEqual([]);
+    expect(result.oversizedUnsafeParts).toEqual([]);
   });
 
   it("enforces 20 parts, 256 KiB each and 1 MiB aggregate for the fast batch", () => {
