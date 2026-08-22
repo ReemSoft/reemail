@@ -100,6 +100,13 @@ export const tombstoneGhostMessage = createServerFn({ method: "POST" })
         companyId,
         sourceCanonical: data.canonical,
         sourceUid: data.uid,
+        // Carry the exact generation proven by the caller through the final
+        // tombstone. The precheck above is not a race fence by itself: the
+        // folder row can advance to a new UIDVALIDITY between that SELECT and
+        // this write-through re-resolution. Binding the source generation here
+        // makes a reset in that window a safe no-op instead of reusing the same
+        // numeric UID against the new generation.
+        sourceUidValidity: data.uidvalidity,
       });
       if (!outcome.ok) {
         return { ok: false, error: outcome.error, code: "GHOST_CLEANUP_WRITE_FAILED" };
