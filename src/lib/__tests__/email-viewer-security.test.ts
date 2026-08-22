@@ -75,18 +75,18 @@ describe("sanitizeAndHardenEmailHtml — CSS hardening", () => {
     expect(out).toMatch(/color:\s*red/i);
   });
 
-  it("neutralises external url() in <style> to `none`", () => {
-    const dirty = `<style>.a{background:url(https://evil/x.png)}</style><div class="a">x</div>`;
+  it("preserves HTTPS image url() in <style>", () => {
+    const dirty = '<style>.a{background:url(https://cdn.example/x.png)}</style><div class="a">x</div>';
     const out = sanitizeAndHardenEmailHtml(dirty);
-    expect(out).not.toMatch(/https:\/\/evil/);
-    expect(out).toMatch(/background:\s*none/i);
+    expect(out).toContain("https://cdn.example/x.png");
+    expect(out).not.toContain("background: none");
   });
 
-  it("neutralises external url() in inline style", () => {
-    const dirty = `<div style="background-image:url('https://evil/x.png')">x</div>`;
+  it("preserves HTTPS image url() in inline style", () => {
+    const dirty = '<div style="background-image:url(\'https://cdn.example/x.png\')">x</div>';
     const out = sanitizeAndHardenEmailHtml(dirty);
-    expect(out).not.toMatch(/https:\/\/evil/);
-    expect(out).toMatch(/background-image:\s*none/i);
+    expect(out).toContain("https://cdn.example/x.png");
+    expect(out).not.toContain("background-image: none");
   });
 
   it("keeps data: url() references (inline images)", () => {
@@ -95,11 +95,12 @@ describe("sanitizeAndHardenEmailHtml — CSS hardening", () => {
     expect(out).toMatch(/url\(data:image\/png/);
   });
 
-  it("blocks protocol-relative and blob: url() in CSS", () => {
-    const dirty = `<div style="background:url(//evil/x.png)"></div><div style="background:url(blob:https://x)"></div>`;
+  it("preserves protocol-relative images but blocks cleartext and unsafe CSS URLs", () => {
+    const dirty = '<div style="background:url(//cdn.example/x.png)"></div><div style="background:url(blob:https://x)"></div><div style="background:url(http://legacy.example/x.png)"></div>';
     const out = sanitizeAndHardenEmailHtml(dirty);
-    expect(out).not.toMatch(/evil/);
-    expect(out).not.toMatch(/blob:/);
+    expect(out).toContain("//cdn.example/x.png");
+    expect(out).not.toContain("blob:https://x");
+    expect(out).not.toContain("http://legacy.example/x.png");
   });
 });
 
