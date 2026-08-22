@@ -1659,3 +1659,49 @@ test("UIDPLUS path is unchanged: Map-based capability makes replace-mode succeed
   assert.equal(rec.appends.length, 1);
   assert.deepEqual(rec.deletes[0], [42]);
 });
+
+test("save: UIDVALIDITY reset between probe/APPEND and cleanup never deletes pre-reset UIDs", async () => {
+  const { client, rec } = mkClient({
+    mailboxes: [box("Drafts")],
+    uidValidity: "1000",
+    hasUidPlus: true,
+    appendUid: 100,
+    searchResults: [[42]],
+  });
+
+  let openCount = 0;
+  client.openWithLock = async (path) => {
+    rec.opens.push(path);
+    openCount += 1;
+    return {
+      uidValidity: openCount === 1 ? "1000" : "2000",
+      release: () => {
+        rec.releases += 1;
+      },
+    };
+  };
+
+  const originalAppend = client.append.bind(client);
+  client.append = async (path, raw, flags) => {
+    const result = await originalAppend(path, raw, flags);
+    return { ...result, uidValidity: "1000" };
+  };
+
+  const result = await executeDraftSave(client, {
+    ...BASE_INPUT,
+    previousRef: {
+      folderPath: "Drafts",
+      uid: 41,
+      uidValidity: "1000",
+    },
+  });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(
+    rec.deletes,
+    [],
+    "pre-reset probe/previousRef UIDs must never be expunged in the new UIDVALIDITY",
+  );
+  assert.deepEqual(rec.softDeletes, []);
+  assert.deepEqual(rec.moves, []);
+});
