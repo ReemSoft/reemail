@@ -47,20 +47,36 @@ test("Download EML is lazy-loaded only by the explicit click handler", () => {
 test("message-open and body-cache remain completely EML-unaware", () => {
   assert.doesNotMatch(
     open,
-    /eml-download|mail-eml-ticket|downloadEmlSource/,
+    /eml-download|mail-eml-ticket|withEmlSourceStream|downloadEmlSource/,
   );
   assert.doesNotMatch(
     cache,
-    /eml-download|mail-eml-ticket|downloadEmlSource/,
+    /eml-download|mail-eml-ticket|withEmlSourceStream|downloadEmlSource/,
   );
 });
 
-test("RFC822 bytes remain on the isolated Bridge transfer data plane", () => {
+test("RFC822 bytes stream on the isolated Bridge transfer data plane", () => {
   assert.match(browser, /\/api\/mail-eml-ticket/);
   assert.match(bridge, /purpose:\s*"eml-download"/);
   assert.match(bridge, /\/api\/direct\/eml-download/);
+
   assert.match(
     eml,
     /getMailboxesCached\(\s*account,\s*password,\s*"transfer"/,
+  );
+
+  assert.match(
+    eml,
+    /client\.download\(/,
+  );
+
+  assert.doesNotMatch(
+    eml,
+    /source:\s*true/,
+  );
+
+  assert.match(
+    bridge,
+    /pipeline\(\s*content,\s*guard,\s*res/s,
   );
 });

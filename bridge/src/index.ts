@@ -30,8 +30,10 @@ import { pipeline } from "node:stream/promises";
 import { Readable } from "node:stream";
 import { attachmentContentDisposition, sanitizeAttachmentFilename } from "./attachment-transfer.js";
 import {
-  downloadEmlSource,
+  EML_DOWNLOAD_MAX_BYTES,
   EmlDownloadTooLargeError,
+  EmlSourceIncompleteError,
+  withEmlSourceStream,
 } from "./eml-download.js";
 import { isAllowedRemoteAttachmentUrl } from "./remote-attachment-stage.js";
 import { DownloadByteCounter, parseDownloadChunkBytes } from "./download-performance.js";
@@ -1955,6 +1957,7 @@ app.post("/api/eml-download-ticket", requireKey, (req, res) => {
 app.get("/api/direct/eml-download", async (req, res) => {
   let gateKey = "";
   let acquired = false;
+  let transferAccount: MailAccount | null = null;
 
   try {
     const token =
@@ -1972,6 +1975,7 @@ app.get("/api/direct/eml-download", async (req, res) => {
 
     const payload = EmlDownloadPayloadSchema.parse(ticket.data);
     const account = payload.account as MailAccount;
+    transferAccount = account;
     gateKey = accountBinding(account);
 
     if (ticket.account !== gateKey) {
@@ -1984,48 +1988,171 @@ app.get("/api/direct/eml-download", async (req, res) => {
 
     acquired = true;
 
-    const source = await downloadEmlSource(
+    const filename = sanitizeAttachmentFilename(
+      payload.filename,
+    );
+
+    const streamed = await withEmlSourceStream(
       account,
       payload.password,
       payload.folder,
       payload.uid,
       payload.expectedUidValidity,
+      async ({
+        content,
+        declaredSize,
+        guard,
+      }) => {
+        res.setHeader(
+          "Content-Type",
+          "message/rfc822",
+        );
+        res.setHeader(
+          "Content-Disposition",
+          attachmentContentDisposition(
+            filename,
+            "message/rfc822",
+            "download",
+          ),
+        );
+        res.setHeader(
+          "Content-Length",
+          String(declaredSize),
+        );
+        res.setHeader(
+          "X-Content-Type-Options",
+          "nosniff",
+        );
+        res.setHeader(
+          "Cache-Control",
+          "private, no-store",
+        );
+        res.setHeader(
+          "Referrer-Policy",
+          "no-referrer",
+        );
+
+        let completed = false;
+
+        const abort = () => {
+          if (
+            completed ||
+            res.writableEnded
+          ) {
+            return;
+          }
+
+          content.destroy();
+
+          dropAccountConnection(
+            account,
+            "transfer",
+          );
+        };
+
+        res.once("close", abort);
+
+        try {
+          // Holds the transfer mailbox operation through the ENTIRE
+          // RFC822 stream. No full-message Buffer enters Bridge heap.
+          await pipeline(
+            content,
+            guard,
+            res,
+          );
+
+          completed = true;
+          return true;
+        } finally {
+          res.off("close", abort);
+        }
+      },
+      EML_DOWNLOAD_MAX_BYTES,
+      DOWNLOAD_CHUNK_BYTES,
     );
 
-    if (!source) {
-      return res.status(404).end("Message not found");
+    if (streamed === null) {
+      if (!res.headersSent) {
+        return res
+          .status(404)
+          .end("Message not found");
+      }
+
+      return;
     }
 
-    const filename = sanitizeAttachmentFilename(payload.filename);
-
-    res.setHeader("Content-Type", "message/rfc822");
-    res.setHeader(
-      "Content-Disposition",
-      attachmentContentDisposition(
-        filename,
-        "message/rfc822",
-        "download",
-      ),
-    );
-    res.setHeader("Content-Length", String(source.length));
-    res.setHeader("X-Content-Type-Options", "nosniff");
-    res.setHeader("Cache-Control", "private, no-store");
-
-    return res.end(source);
+    return;
   } catch (error) {
-    if (error instanceof UidValidityMismatchError) {
-      return res.status(409).end("Message identity changed");
+    if (
+      acquired &&
+      transferAccount &&
+      !res.writableEnded
+    ) {
+      // A destroyed/truncated IMAP literal must never be reused by the next
+      // transfer request on this shared lane.
+      dropAccountConnection(
+        transferAccount,
+        "transfer",
+      );
     }
 
-    if (error instanceof EmlDownloadTooLargeError) {
-      return res.status(413).end("Message too large");
+    if (res.headersSent) {
+      // Once RFC822 bytes started, fail by terminating the response rather
+      // than pretending a partial EML was successful.
+      if (!res.writableEnded) {
+        res.destroy();
+      }
+
+      return;
     }
 
-    // Do not log raw provider errors: they can contain mailbox data.
-    console.error("[bridge] EML download failed");
-    return res.status(400).end("Invalid or expired download request");
+    if (
+      error instanceof
+      UidValidityMismatchError
+    ) {
+      return res
+        .status(409)
+        .end(
+          "Message identity changed",
+        );
+    }
+
+    if (
+      error instanceof
+      EmlDownloadTooLargeError
+    ) {
+      return res
+        .status(413)
+        .end("Message too large");
+    }
+
+    if (
+      error instanceof
+      EmlSourceIncompleteError
+    ) {
+      return res
+        .status(502)
+        .end(
+          "Message source incomplete",
+        );
+    }
+
+    // Never log raw provider/IMAP error text: it can contain mailbox data.
+    console.error(
+      "[bridge] EML download failed",
+    );
+
+    return res
+      .status(400)
+      .end(
+        "Invalid or expired download request",
+      );
   } finally {
-    if (acquired) downloadGates.release(gateKey);
+    if (acquired) {
+      downloadGates.release(
+        gateKey,
+      );
+    }
   }
 });
 
