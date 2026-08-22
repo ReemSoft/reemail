@@ -3798,9 +3798,10 @@ function MailApp() {
               // Provider-only/legacy physical Draft disappeared and there is
               // no logical Working Draft record. The exact physical Local Index
               // row is therefore proven stale: tombstone it with the same
-              // UIDVALIDITY-fenced ghost cleanup used for other folders, then
-              // refresh the indexed Draft count. This rare NOT_FOUND recovery
-              // path adds zero work to normal Draft opens.
+              // UIDVALIDITY-fenced ghost cleanup used for other folders. That
+              // server cleanup atomically updates the Local Index counter; do
+              // not call later-declared UI refresh callbacks from this render
+              // path. This rare NOT_FOUND recovery adds zero work normally.
               try {
                 await cleanupGhost({
                   data: {
@@ -3810,7 +3811,6 @@ function MailApp() {
                     uidvalidity: uidValidity ? Number(uidValidity) : undefined,
                   },
                 });
-                await loadCountsFast({ draftIndexSyncSettled: true });
               } catch {
                 // Provider absence remains authoritative. A later Draft sync
                 // can retry Local Index convergence after a transient DB error.
@@ -3862,7 +3862,6 @@ function MailApp() {
       applyPendingOne,
       currentAccountId,
       cleanupGhost,
-      loadCountsFast,
       recoverJustSavedDraft,
       openDraftByIdentity,
       resolveDraftWorkingRecord,
