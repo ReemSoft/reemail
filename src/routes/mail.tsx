@@ -1452,6 +1452,8 @@ type ComposeInitial = {
    * bridge can atomically APPEND-then-delete the legacy copy — M4-A).
    */
   editDraftId?: string;
+  /** Authoritative revision already known when opening a server Working Draft. */
+  workingDraftRevision?: number;
   previousRef?: DraftServerRef;
   /** Physical source of kept IMAP attachments; never implies Draft replacement. */
   attachmentSourceRef?: AttachmentSourceRef;
@@ -1488,6 +1490,7 @@ function buildWorkingDraftInitial(record: WorkingDraftRecord): ComposeInitial {
     showCc: Boolean(snapshot.showCc),
     showBcc: Boolean(snapshot.showBcc),
     editDraftId: record.draftId,
+    workingDraftRevision: record.revision,
     inReplyTo: snapshot.inReplyTo,
     references: snapshot.references,
   };
@@ -8205,7 +8208,7 @@ function Composer({
   const inlineImagesRef = useRef<InlineComposeImage[]>([]);
   // Server Working Draft revision is the cross-session authority. The local
   // DraftEngine still governs rendering, dirty state, and close fencing.
-  const workingRevisionRef = useRef(0);
+  const workingRevisionRef = useRef(initial?.workingDraftRevision ?? 0);
   const workingAttachmentByFileRef = useRef<WeakMap<File, WorkingDraftAttachmentReference>>(
     new WeakMap(),
   );
