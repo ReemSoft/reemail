@@ -489,14 +489,25 @@ export async function executeDraftSave(
     //    so acting on a UID that no longer exists is a harmless no-op.
     const opened = await client.openWithLock(folderPath);
     try {
-      const uidValidity = appendUidValidity || opened.uidValidity || priorUidValidity;
+      // Any UID used for cleanup must belong to the mailbox generation that
+      // is open RIGHT NOW. UIDVALIDITY can change between the pre-APPEND
+      // probe and this post-APPEND cleanup lock; if it did, the same numeric
+      // UID may now identify unrelated mail.
+      const currentUidValidity = opened.uidValidity || "";
+      const uidValidity = appendUidValidity || currentUidValidity || priorUidValidity;
+      const preAppendUidsStillValid =
+        priorUidValidity !== "" &&
+        currentUidValidity !== "" &&
+        priorUidValidity === currentUidValidity;
 
       let canonical: number | null;
       let stale: number[];
 
       if (uidPlus && typeof appendUid === "number") {
         canonical = appendUid;
-        stale = priorCopies.filter((u) => u !== canonical);
+        stale = preAppendUidsStillValid
+          ? priorCopies.filter((u) => u !== canonical)
+          : [];
       } else {
         let matched: number[] = [];
         try {
@@ -522,7 +533,8 @@ export async function executeDraftSave(
       const canCleanupPrevious =
         !!prev &&
         prev.folderPath === folderPath &&
-        String(prev.uidValidity) === uidValidity &&
+        currentUidValidity !== "" &&
+        String(prev.uidValidity) === currentUidValidity &&
         typeof canonical === "number" &&
         prev.uid !== canonical;
       if (canCleanupPrevious && prev) toCleanup.add(prev.uid);
