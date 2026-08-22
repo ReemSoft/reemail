@@ -488,6 +488,63 @@ export type Database = {
           },
         ]
       }
+      mail_normal_sends: {
+        Row: {
+          account_id: string
+          company_id: string
+          created_at: string
+          error: string | null
+          id: string
+          lease_until: string | null
+          message_id: string
+          send_id: string
+          smtp_result: Json | null
+          state: string
+          updated_at: string
+        }
+        Insert: {
+          account_id: string
+          company_id: string
+          created_at?: string
+          error?: string | null
+          id?: string
+          lease_until?: string | null
+          message_id: string
+          send_id: string
+          smtp_result?: Json | null
+          state?: string
+          updated_at?: string
+        }
+        Update: {
+          account_id?: string
+          company_id?: string
+          created_at?: string
+          error?: string | null
+          id?: string
+          lease_until?: string | null
+          message_id?: string
+          send_id?: string
+          smtp_result?: Json | null
+          state?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "mail_normal_sends_account_company_fk"
+            columns: ["account_id", "company_id"]
+            isOneToOne: false
+            referencedRelation: "mail_accounts"
+            referencedColumns: ["id", "company_id"]
+          },
+          {
+            foreignKeyName: "mail_normal_sends_company_id_fkey"
+            columns: ["company_id"]
+            isOneToOne: false
+            referencedRelation: "companies"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       mail_sender_folders: {
         Row: {
           account_id: string
@@ -783,6 +840,8 @@ export type Database = {
           draft_id: string
           filename: string
           id: string
+          import_claim_token: string | null
+          import_lease_until: string | null
           kind: string
           mime_type: string
           size_bytes: number
@@ -800,6 +859,8 @@ export type Database = {
           draft_id: string
           filename: string
           id?: string
+          import_claim_token?: string | null
+          import_lease_until?: string | null
           kind: string
           mime_type: string
           size_bytes: number
@@ -817,6 +878,8 @@ export type Database = {
           draft_id?: string
           filename?: string
           id?: string
+          import_claim_token?: string | null
+          import_lease_until?: string | null
           kind?: string
           mime_type?: string
           size_bytes?: number
@@ -851,7 +914,9 @@ export type Database = {
       mail_working_draft_discards: {
         Row: {
           account_id: string
+          cleanup_claim_token: string | null
           cleanup_error: string | null
+          cleanup_lease_until: string | null
           cleanup_state: string
           company_id: string
           created_at: string
@@ -862,7 +927,9 @@ export type Database = {
         }
         Insert: {
           account_id: string
+          cleanup_claim_token?: string | null
           cleanup_error?: string | null
+          cleanup_lease_until?: string | null
           cleanup_state?: string
           company_id: string
           created_at?: string
@@ -873,7 +940,9 @@ export type Database = {
         }
         Update: {
           account_id?: string
+          cleanup_claim_token?: string | null
           cleanup_error?: string | null
+          cleanup_lease_until?: string | null
           cleanup_state?: string
           company_id?: string
           created_at?: string
@@ -1100,6 +1169,34 @@ export type Database = {
           unread: number
         }[]
       }
+      advance_mail_working_draft_discard_cleanup: {
+        Args: {
+          p_account_id: string
+          p_claim_token: string
+          p_company_id: string
+          p_draft_id: string
+          p_removed_ref?: Json
+        }
+        Returns: {
+          accepted: boolean
+          cleaned: boolean
+        }[]
+      }
+      claim_mail_normal_send: {
+        Args: {
+          p_account_id: string
+          p_company_id: string
+          p_message_id: string
+          p_send_id: string
+        }
+        Returns: {
+          claimed: boolean
+          error: string
+          message_id: string
+          smtp_result: Json
+          state: string
+        }[]
+      }
       claim_mail_sync_jobs: {
         Args: {
           p_batch_size?: number
@@ -1127,6 +1224,18 @@ export type Database = {
         }
         Returns: boolean
       }
+      claim_mail_working_draft_attachment_import: {
+        Args: {
+          p_account_id: string
+          p_attachment_id: string
+          p_company_id: string
+          p_draft_id: string
+        }
+        Returns: {
+          claim_token: string
+          claimed: boolean
+        }[]
+      }
       claim_mail_working_draft_checkpoint: {
         Args: {
           p_account_id: string
@@ -1139,15 +1248,42 @@ export type Database = {
           revision_id: string
         }[]
       }
-      claim_mail_working_draft_send: {
+      claim_mail_working_draft_discard_cleanup: {
         Args: { p_account_id: string; p_company_id: string; p_draft_id: string }
         Returns: {
+          claim_token: string
           claimed: boolean
-          error: string
-          smtp_result: Json
-          state: string
+          provider_refs: Json
         }[]
       }
+      claim_mail_working_draft_send:
+        | {
+            Args: {
+              p_account_id: string
+              p_company_id: string
+              p_draft_id: string
+            }
+            Returns: {
+              claimed: boolean
+              error: string
+              smtp_result: Json
+              state: string
+            }[]
+          }
+        | {
+            Args: {
+              p_account_id: string
+              p_company_id: string
+              p_draft_id: string
+              p_expected_revision: number
+            }
+            Returns: {
+              claimed: boolean
+              error: string
+              smtp_result: Json
+              state: string
+            }[]
+          }
       cleanup_mail_sync_jobs: {
         Args: {
           p_completed_retention_days?: number
@@ -1227,6 +1363,28 @@ export type Database = {
         }
         Returns: boolean
       }
+      fail_mail_working_draft_discard_cleanup: {
+        Args: {
+          p_account_id: string
+          p_claim_token: string
+          p_company_id: string
+          p_draft_id: string
+          p_error?: string
+        }
+        Returns: boolean
+      }
+      finish_mail_working_draft_attachment_import: {
+        Args: {
+          p_account_id: string
+          p_attachment_id: string
+          p_claim_token: string
+          p_company_id: string
+          p_draft_id: string
+          p_size_bytes: number
+          p_storage_path: string
+        }
+        Returns: boolean
+      }
       finish_mail_working_draft_checkpoint: {
         Args: {
           p_account_id: string
@@ -1303,6 +1461,15 @@ export type Database = {
           running: number
         }[]
       }
+      handoff_mail_normal_send_to_working_draft: {
+        Args: {
+          p_account_id: string
+          p_company_id: string
+          p_message_id: string
+          p_send_id: string
+        }
+        Returns: boolean
+      }
       is_mail_working_draft_discarded: {
         Args: { p_account_id: string; p_company_id: string; p_draft_id: string }
         Returns: boolean
@@ -1346,6 +1513,44 @@ export type Database = {
         Args: { _account_id: string; _company_id: string; _message_id: string }
         Returns: boolean
       }
+      mark_mail_normal_send_failed: {
+        Args: {
+          p_account_id: string
+          p_company_id: string
+          p_error: string
+          p_message_id: string
+          p_send_id: string
+        }
+        Returns: boolean
+      }
+      mark_mail_normal_send_handoff_sent: {
+        Args: {
+          p_account_id: string
+          p_company_id: string
+          p_result: Json
+          p_send_id: string
+        }
+        Returns: boolean
+      }
+      mark_mail_normal_send_in_flight: {
+        Args: {
+          p_account_id: string
+          p_company_id: string
+          p_message_id: string
+          p_send_id: string
+        }
+        Returns: boolean
+      }
+      mark_mail_normal_send_sent: {
+        Args: {
+          p_account_id: string
+          p_company_id: string
+          p_message_id: string
+          p_result: Json
+          p_send_id: string
+        }
+        Returns: boolean
+      }
       mark_mail_working_draft_send_failed: {
         Args: {
           p_account_id: string
@@ -1355,10 +1560,24 @@ export type Database = {
         }
         Returns: undefined
       }
-      mark_mail_working_draft_send_in_flight: {
-        Args: { p_account_id: string; p_company_id: string; p_draft_id: string }
-        Returns: boolean
-      }
+      mark_mail_working_draft_send_in_flight:
+        | {
+            Args: {
+              p_account_id: string
+              p_company_id: string
+              p_draft_id: string
+            }
+            Returns: boolean
+          }
+        | {
+            Args: {
+              p_account_id: string
+              p_company_id: string
+              p_draft_id: string
+              p_message_id: string
+            }
+            Returns: boolean
+          }
       mark_mail_working_draft_send_sent: {
         Args: {
           p_account_id: string
@@ -1385,6 +1604,25 @@ export type Database = {
         Args: { _values: string[] }
         Returns: string[]
       }
+      reclaim_mail_normal_send_after_unknown: {
+        Args: {
+          p_account_id: string
+          p_company_id: string
+          p_message_id: string
+          p_send_id: string
+        }
+        Returns: boolean
+      }
+      reclaim_mail_working_draft_send_after_unknown: {
+        Args: {
+          p_account_id: string
+          p_company_id: string
+          p_draft_id: string
+          p_expected_revision: number
+          p_message_id: string
+        }
+        Returns: boolean
+      }
       record_mail_contact_suggestions: {
         Args: { p_account_id: string; p_company_id: string; p_items: Json }
         Returns: number
@@ -1398,6 +1636,16 @@ export type Database = {
           p_folder_id: string
           p_locked_by: string
           p_status: string
+        }
+        Returns: boolean
+      }
+      release_mail_working_draft_attachment_import: {
+        Args: {
+          p_account_id: string
+          p_attachment_id: string
+          p_claim_token: string
+          p_company_id: string
+          p_draft_id: string
         }
         Returns: boolean
       }
