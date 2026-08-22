@@ -27,6 +27,7 @@ import {
   storeLargeInlineCidSessionCache,
   clearLargeInlineCidSessionCache,
 } from "@/lib/mail-inline-cid-policy";
+import { runInlineMediaQueued } from "@/lib/mail-inline-media-queue";
 
 import { buildReplyQuoteHtml, buildForwardQuoteHtml } from "@/lib/mail-quote";
 import {
@@ -571,7 +572,14 @@ function useInlineImageMappings(
       if (!entry) {
         mailPerf("cid-request-start", { count: parts.length });
         const controller = new AbortController();
-        const promise = resolveInlineImages({
+        const promise = runInlineMediaQueued(
+          session.account.id,
+          controller.signal,
+          () => {
+            // Keep the existing interactive-viewer contract literal intact:
+            // this is still the persist:true resolver; the queue only controls
+            // when its separate media request is allowed to start.
+            const promise = resolveInlineImages({
           data: {
             mailSessionToken: session.mailSessionToken ?? "",
             password: session.password,
@@ -582,7 +590,10 @@ function useInlineImageMappings(
             persist: true,
           },
           signal: controller.signal,
-        }).finally(() => {
+            });
+            return promise;
+          },
+        ).finally(() => {
           if (inlineImageFlights.get(messageKey)?.promise === promise) {
             inlineImageFlights.delete(messageKey);
           }
@@ -651,7 +662,8 @@ function useInlineImageMappings(
         const mappings = await fetchInlineCidPartsBatch(batch, {
           signal: controller.signal,
           fetchBatch: (requested, signal) =>
-            fetch("/api/mail-inline-part", {
+            runInlineMediaQueued(session.account.id, signal, () =>
+              fetch("/api/mail-inline-part", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
@@ -662,8 +674,9 @@ function useInlineImageMappings(
                 uidValidity,
                 parts: requested,
               }),
-              signal,
-            }),
+                signal,
+              }),
+            ),
         });
         if (controller.signal.aborted) return;
         if (mappings.length) {
