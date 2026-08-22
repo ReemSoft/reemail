@@ -19,12 +19,9 @@ describe("provider-only Draft NOT_FOUND Local Index convergence", () => {
     expect(branch).toContain('canonical: "drafts"');
     expect(branch).toContain("uid: fetchUid");
     expect(branch).toContain("uidvalidity: uidValidity ? Number(uidValidity) : undefined");
-    expect(branch).toContain("await loadCountsFast({ draftIndexSyncSettled: true })");
+    expect(branch).not.toContain("loadCountsFast");
 
     expect(branch.indexOf("await cleanupGhost({")).toBeLessThan(
-      branch.indexOf("messageCache.current.delete(id)")
-    );
-    expect(branch.indexOf("await loadCountsFast")).toBeLessThan(
       branch.indexOf("messageCache.current.delete(id)")
     );
   });
@@ -44,7 +41,7 @@ describe("provider-only Draft NOT_FOUND Local Index convergence", () => {
     expect(branch).toContain('source: "draft-working-record"');
   });
 
-  it("keeps cleanup dependencies inside the fetchMessage callback fence", () => {
+  it("keeps ghost cleanup wired without a runtime reference to loadCountsFast", () => {
     const src = source();
     const start = src.indexOf("const fetchMessage = useCallback");
     expect(start).toBeGreaterThanOrEqual(0);
@@ -52,6 +49,6 @@ describe("provider-only Draft NOT_FOUND Local Index convergence", () => {
     expect(end).toBeGreaterThan(start);
     const body = src.slice(start, end);
     expect(body).toContain("cleanupGhost");
-    expect(body).toContain("loadCountsFast");
+    expect(body).not.toContain("loadCountsFast");
   });
 });
