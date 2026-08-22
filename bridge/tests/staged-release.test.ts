@@ -40,8 +40,8 @@ after(async () => {
 });
 
 test("endpoint validates every handle before releasing any (no partial release)", () => {
-  const validateIndex = endpoint.indexOf("validateStagedHandle(BRIDGE_API_KEY, handle, account)");
-  const releaseIndex = endpoint.indexOf("releaseStagedAttachments(BRIDGE_API_KEY");
+  const validateIndex = endpoint.indexOf("validateStagedHandle(BRIDGE_TICKET_VERIFY_KEYS, handle, account)");
+  const releaseIndex = endpoint.indexOf("releaseStagedAttachments(BRIDGE_TICKET_VERIFY_KEYS");
   assert.ok(validateIndex !== -1, "must pre-validate every handle");
   assert.ok(releaseIndex !== -1, "must release after validation");
   assert.ok(validateIndex < releaseIndex, "validation must precede release");

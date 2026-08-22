@@ -88,7 +88,7 @@ function safePath(id: string): string {
 }
 
 function readStagedTicket(
-  secret: string,
+  secret: string | readonly string[],
   handle: string,
   account: string,
   now: number,
@@ -226,7 +226,7 @@ export async function stageAttachmentStream(input: {
 }
 
 export async function resolveStagedAttachment(
-  secret: string,
+  secret: string | readonly string[],
   handle: string,
   account: string,
   now = Date.now(),
@@ -246,7 +246,7 @@ export async function resolveStagedAttachment(
 }
 
 export async function releaseStagedAttachment(
-  secret: string,
+  secret: string | readonly string[],
   handle: string,
   account: string,
   now = Date.now(),
@@ -275,7 +275,7 @@ export async function releaseStagedAttachment(
 }
 
 export async function releaseStagedAttachments(
-  secret: string,
+  secret: string | readonly string[],
   handles: string[],
   account: string,
 ): Promise<number> {
@@ -287,7 +287,7 @@ export async function releaseStagedAttachments(
 }
 
 export async function cleanupSendStagedAttachments(input: {
-  secret: string;
+  secret: string | readonly string[];
   account: string;
   clientHandles: string[];
   sourceHandles: string[];
@@ -346,7 +346,7 @@ export async function cleanupStagedAttachments(
 }
 
 export function validateStagedHandle(
-  secret: string,
+  secret: string | readonly string[],
   handle: string,
   account: string,
   now = Date.now(),

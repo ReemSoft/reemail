@@ -77,6 +77,35 @@ test("staged attachment round-trips metadata without exposing a path", async () 
   assert.equal(await releaseStagedAttachment(secret, staged.handle, account), true);
 });
 
+test("staged handle rotation resolves and releases both current and legacy signatures", async () => {
+  const currentSecret = "current-stage-secret";
+  const legacySecret = "legacy-stage-secret";
+  const current = await stageAttachmentStream({
+    secret: currentSecret,
+    account,
+    filename: "current.bin",
+    mimeType: "application/octet-stream",
+    kind: "attachment",
+    declaredSize: 1,
+    stream: Readable.from(Buffer.from("c")),
+  });
+  const legacy = await stageAttachmentStream({
+    secret: legacySecret,
+    account,
+    filename: "legacy.bin",
+    mimeType: "application/octet-stream",
+    kind: "attachment",
+    declaredSize: 1,
+    stream: Readable.from(Buffer.from("l")),
+  });
+  const keys = [currentSecret, legacySecret] as const;
+
+  assert.equal((await resolveStagedAttachment(keys, current.handle, account)).filename, "current.bin");
+  assert.equal((await resolveStagedAttachment(keys, legacy.handle, account)).filename, "legacy.bin");
+  assert.equal(await releaseStagedAttachment(keys, current.handle, account), true);
+  assert.equal(await releaseStagedAttachment(keys, legacy.handle, account), true);
+});
+
 test("staging removes declared-size mismatches", async () => {
   await assert.rejects(
     stageAttachmentStream({
