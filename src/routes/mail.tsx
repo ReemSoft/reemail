@@ -6954,6 +6954,37 @@ function MessageView({
     }
   }
 
+  async function downloadEml() {
+    const parsed = parseMessageId(message.id);
+    const uidValidity = validUidValidity(message.uidValidity);
+
+    const errorLabel =
+      uiDir === "rtl"
+        ? "تعذّر تنزيل ملف EML"
+        : "Could not download EML file";
+
+    if (!parsed || !uidValidity) {
+      toast.error(errorLabel);
+      return;
+    }
+
+    try {
+      // Dynamic import is deliberate: zero EML implementation work/code
+      // is added to normal message opening.
+      const { downloadMessageEml } = await import(
+        "@/lib/mail-eml-download.browser"
+      );
+
+      await downloadMessageEml({
+        folder: parsed.folder,
+        uid: parsed.uid,
+        uidValidity,
+      });
+    } catch {
+      toast.error(errorLabel);
+    }
+  }
+
   function printMessage() {
     const win = window.open("", "_blank", "width=800,height=900");
     if (!win) {
@@ -7105,6 +7136,14 @@ function MessageView({
             </DropdownMenuItem>
             <DropdownMenuItem onClick={printMessage}>
               <Printer className="h-4 w-4" /> {tr("طباعة")}
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onClick={downloadEml}
+              dir={uiDir}
+              className="text-start"
+            >
+              <Download className="h-4 w-4" />
+              {uiDir === "rtl" ? "تنزيل EML" : "Download EML"}
             </DropdownMenuItem>
             <DropdownMenuItem onClick={copyEmail}>
               <Copy className="h-4 w-4" /> {tr("نسخ عنوان المرسل")}
