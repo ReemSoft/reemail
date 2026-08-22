@@ -117,20 +117,25 @@ function errorMessage(error: unknown, fallback: string): string {
  * the exact parent origin and a per-render channelId, both verified on
  * receive. Links open in a new top-level tab and never leak referrer.
  */
+type LargeCidDispatcher = (images: LargeCidByteMapping[]) => void;
+type LargeCidDispatcherRegistry = {
+  current: Set<LargeCidDispatcher>;
+};
+
 function EmailBodyFrame({
   html,
   cidImages,
   messageIdentity,
   className,
   onReady,
-  largeCidDispatcherRef,
+  largeCidDispatchersRef,
 }: {
   html: string;
   cidImages: CidImageMapping[];
   messageIdentity: string;
   className?: string;
   onReady?: () => void;
-  largeCidDispatcherRef?: { current: ((images: LargeCidByteMapping[]) => void) | null };
+  largeCidDispatchersRef?: LargeCidDispatcherRegistry;
 }) {
   const ref = useRef<HTMLIFrameElement | null>(null);
   const nonce = useMemo(() => rotatingToken(`${messageIdentity}|${html}`), [html, messageIdentity]);
@@ -224,8 +229,8 @@ function EmailBodyFrame({
   }, [cidImages, channelId, frameReady, generation, messageIdentity]);
 
   useEffect(() => {
-    if (!largeCidDispatcherRef) return;
-    const dispatch = (images: LargeCidByteMapping[]) => {
+    if (!largeCidDispatchersRef) return;
+    const dispatch: LargeCidDispatcher = (images: LargeCidByteMapping[]) => {
       const target = ref.current?.contentWindow;
       if (!target || !frameReady || images.length === 0) return;
       const payload = {
@@ -244,11 +249,11 @@ function EmailBodyFrame({
       );
       mailPerf("large-cid-applied", { count: images.length, bytes: byteLength });
     };
-    largeCidDispatcherRef.current = dispatch;
+    largeCidDispatchersRef.current.add(dispatch);
     return () => {
-      if (largeCidDispatcherRef.current === dispatch) largeCidDispatcherRef.current = null;
+      largeCidDispatchersRef.current.delete(dispatch);
     };
-  }, [channelId, frameReady, generation, largeCidDispatcherRef, messageIdentity]);
+  }, [channelId, frameReady, generation, largeCidDispatchersRef, messageIdentity]);
 
   useEffect(() => {
     function onMsg(e: MessageEvent) {
@@ -296,7 +301,7 @@ function ThreadedEmailBody({
   messageIdentity,
   className,
   onReady,
-  largeCidDispatcherRef,
+  largeCidDispatchersRef,
   afterLatest,
   renderHistory,
   suppressQuoted,
@@ -306,7 +311,7 @@ function ThreadedEmailBody({
   messageIdentity: string;
   className?: string;
   onReady?: () => void;
-  largeCidDispatcherRef?: { current: ((images: LargeCidByteMapping[]) => void) | null };
+  largeCidDispatchersRef?: LargeCidDispatcherRegistry;
   /** Rendered directly under the newest turn (e.g. its own attachments). */
   afterLatest?: React.ReactNode;
   /**
@@ -335,7 +340,7 @@ function ThreadedEmailBody({
           cidImages={cidImages}
           messageIdentity={messageIdentity}
           onReady={onReady}
-          largeCidDispatcherRef={largeCidDispatcherRef}
+          largeCidDispatchersRef={largeCidDispatchersRef}
         />
         {afterLatest}
       </div>
@@ -349,7 +354,7 @@ function ThreadedEmailBody({
           cidImages={cidImages}
           messageIdentity={`${messageIdentity}:latest`}
           onReady={onReady}
-          largeCidDispatcherRef={largeCidDispatcherRef}
+          largeCidDispatchersRef={largeCidDispatchersRef}
         />
         {afterLatest}
       </div>
@@ -362,7 +367,7 @@ function ThreadedEmailBody({
         cidImages={cidImages}
         messageIdentity={`${messageIdentity}:latest`}
         onReady={onReady}
-        largeCidDispatcherRef={largeCidDispatcherRef}
+        largeCidDispatchersRef={largeCidDispatchersRef}
       />
 
       {afterLatest}
@@ -384,6 +389,8 @@ function ThreadedEmailBody({
                   html={quoted}
                   cidImages={cidImages}
                   messageIdentity={`${messageIdentity}:quoted`}
+                  onReady={onReady}
+                  largeCidDispatchersRef={largeCidDispatchersRef}
                 />
               </div>,
             )
@@ -393,6 +400,8 @@ function ThreadedEmailBody({
                 html={quoted}
                 cidImages={cidImages}
                 messageIdentity={`${messageIdentity}:quoted`}
+                onReady={onReady}
+                largeCidDispatchersRef={largeCidDispatchersRef}
               />
             </div>
           ))}
@@ -446,6 +455,7 @@ async function decodeInlineMappings(images: CidImageMapping[]): Promise<CidImage
 function useInlineImageMappings(
   message: MailMessage,
   largeReady: boolean,
+  largeReplayVersion: number,
   onResolved?: (images: NonNullable<MailMessage["inlineImages"]>) => void,
   onLargeCid?: (images: LargeCidByteMapping[]) => void,
 ): CidImageMapping[] {
@@ -624,6 +634,23 @@ function useInlineImageMappings(
     };
   }, [deferredStreamParts, largeReady, message.id, messageKey, onLargeCid, uidValidity]);
 
+  // A later-mounted quoted/history iframe may appear after the large CID bytes
+  // were already fetched for this physical message. Replay ONLY from the
+  // bounded session cache; this effect performs zero network/Bridge work.
+  useEffect(() => {
+    if (!largeReady || largeReplayVersion <= 1 || !messageKey) return;
+    const parts = deferredStreamParts;
+    if (parts.length === 0) return;
+    const cached = readLargeInlineCidSessionCache(messageKey, parts);
+    if (cached.hits.length) onLargeCid?.(cached.hits);
+  }, [
+    deferredStreamParts,
+    largeReady,
+    largeReplayVersion,
+    messageKey,
+    onLargeCid,
+  ]);
+
   return resolved.key === messageKey ? resolved.images : [];
 }
 
@@ -652,14 +679,38 @@ function MessageBody({
     void bodyIdentity;
     return sanitizeEmailHtml(html);
   }, [bodyIdentity, html]);
-  const [readyIdentity, setReadyIdentity] = useState("");
-  const largeCidDispatcherRef = useRef<((images: LargeCidByteMapping[]) => void) | null>(null);
+  const [frameReadyState, setFrameReadyState] = useState({
+    identity: bodyIdentity,
+    version: 0,
+  });
+  const largeReplayVersion =
+    frameReadyState.identity === bodyIdentity ? frameReadyState.version : 0;
+  const markFrameReady = useCallback(() => {
+    setFrameReadyState((current) =>
+      current.identity === bodyIdentity
+        ? { identity: bodyIdentity, version: current.version + 1 }
+        : { identity: bodyIdentity, version: 1 },
+    );
+  }, [bodyIdentity]);
+  const largeCidDispatchersRef = useRef<Set<LargeCidDispatcher>>(new Set());
   const dispatchLargeCid = useCallback((images: LargeCidByteMapping[]) => {
-    largeCidDispatcherRef.current?.(images);
+    if (images.length === 0) return;
+    for (const dispatcher of largeCidDispatchersRef.current) {
+      // postMessage transfers ArrayBuffers and detaches them. Give every iframe
+      // its own clone so one frame can never consume another frame's mapping or
+      // detach the session-cache/network result still owned by the caller.
+      dispatcher(
+        images.map((image) => ({
+          ...image,
+          bytes: image.bytes.slice(0),
+        })),
+      );
+    }
   }, []);
   const cidImages = useInlineImageMappings(
     message,
-    readyIdentity === bodyIdentity,
+    largeReplayVersion > 0,
+    largeReplayVersion,
     onInlineImages,
     dispatchLargeCid,
   );
@@ -673,8 +724,8 @@ function MessageBody({
         cidImages={cidImages}
         messageIdentity={bodyIdentity}
         className={message.bodyTruncated ? undefined : className}
-        onReady={() => setReadyIdentity(bodyIdentity)}
-        largeCidDispatcherRef={largeCidDispatcherRef}
+        onReady={markFrameReady}
+        largeCidDispatchersRef={largeCidDispatchersRef}
         afterLatest={afterLatest}
         renderHistory={renderHistory}
         suppressQuoted={suppressQuoted}

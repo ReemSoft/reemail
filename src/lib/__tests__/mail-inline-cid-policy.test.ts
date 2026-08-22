@@ -227,3 +227,48 @@ describe("large inline CID receive policy", () => {
     expect(inlinePartRoute).toContain("/api/message-inline-part");
   });
 });
+
+
+it("fans large CID mappings to every ready viewer frame without duplicate network hydration", () => {
+  const mail = readFileSync("src/routes/mail.tsx", "utf8");
+
+  expect(mail).toContain(
+    "type LargeCidDispatcher = (images: LargeCidByteMapping[]) => void",
+  );
+  expect(mail).toContain(
+    "useRef<Set<LargeCidDispatcher>>(new Set())",
+  );
+  expect(mail).toContain(
+    "largeCidDispatchersRef.current.add(dispatch)",
+  );
+  expect(mail).toContain(
+    "largeCidDispatchersRef.current.delete(dispatch)",
+  );
+  expect(mail).toContain("bytes: image.bytes.slice(0)");
+  expect(mail).toContain("largeReplayVersion");
+  expect(mail).toContain(
+    "if (!largeReady || largeReplayVersion <= 1 || !messageKey) return;",
+  );
+
+  // Replay uses the already-bounded session cache only.
+  expect(mail).toContain(
+    "const cached = readLargeInlineCidSessionCache(messageKey, parts);",
+  );
+  expect(mail).toContain(
+    "if (cached.hits.length) onLargeCid?.(cached.hits);",
+  );
+
+  // Both quoted fallback render paths must register with the same dispatcher
+  // registry and trigger a replay once their iframe is actually ready.
+  const quotedFrames =
+    mail.match(
+      /html=\{quoted\}[\s\S]{0,260}onReady=\{onReady\}[\s\S]{0,260}largeCidDispatchersRef=\{largeCidDispatchersRef\}/g,
+    ) ?? [];
+  expect(quotedFrames).toHaveLength(2);
+
+  // The network fetch effect remains keyed only by largeReady/message identity;
+  // replay generation must not be able to trigger another Bridge download.
+  expect(mail).toContain(
+    "}, [deferredStreamParts, largeReady, message.id, messageKey, onLargeCid, uidValidity]);",
+  );
+});
