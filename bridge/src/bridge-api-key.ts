@@ -14,12 +14,18 @@ function normalizedKey(value: string | undefined): string | null {
  * Active HTTP-auth keyring.
  *
  * The primary key remains the signing authority for existing opaque Bridge
- * tokens; NEXT is accepted only at the request-auth boundary during rotation.
+ * tokens. Once NEXT is configured, HTTP auth switches exclusively to NEXT so
+ * the exposed old primary is revoked from the network boundary while legacy
+ * transfer tickets and staged handles can finish under the old signing key.
+ *
+ * After the legacy-token TTL drains, NEXT can be promoted to BRIDGE_API_KEY
+ * and removed; HTTP auth then naturally falls back to the new primary.
  */
 export function configuredBridgeApiKeys(env: BridgeKeyEnv = process.env): string[] {
   const primary = normalizedKey(env.BRIDGE_API_KEY);
   const next = normalizedKey(env.BRIDGE_API_KEY_NEXT);
-  return [...new Set([primary, next].filter((value): value is string => value !== null))];
+  if (next) return [next];
+  return primary ? [primary] : [];
 }
 
 function constantTimeStringEqual(left: string, right: string): boolean {
