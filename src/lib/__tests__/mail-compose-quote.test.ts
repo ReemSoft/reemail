@@ -270,7 +270,11 @@ describe("quoted email preparation", () => {
     const template = document.createElement("template");
     template.innerHTML = html;
 
-    expect(html).not.toMatch(/<style|position\s*:\s*fixed|z-index|transform|url\s*\(/i);
+    expect(html).not.toMatch(/<style|position\s*:\s*fixed|z-index|transform/i);
+    expect(html).toContain("https://tracker.example/pixel");
+    expect(
+      template.content.querySelector<HTMLElement>('[title="signature"]')?.style.backgroundImage,
+    ).toContain("https://tracker.example/pixel");
     expect(template.content.querySelector('[title="greeting"]')?.getAttribute("style")).toMatch(
       /margin|padding|color/,
     );
@@ -407,38 +411,66 @@ describe("quoted email preparation", () => {
     }
   });
 
-  it("blocks HTTPS and protocol-relative tracker images before live Composer insertion", () => {
-    const html = markQuotedCidImagesPending(`
-      <table><tr><td>
-        <img src="https://tracker.example/pixel.png" srcset="https://tracker.example/2x.png 2x" width="1" height="1">
-        <img src="//tracker.example/pixel.png" width="2" height="2">
-      </td></tr></table>`);
+  it("shows HTTPS and protocol-relative remote images immediately in live Composer", () => {
+    const html = markQuotedCidImagesPending(
+      '<table><tr><td><img src="https://cdn.example/logo.png" srcset="https://cdn.example/2x.png 2x" width="80"><img src="//cdn.example/banner.png" width="120"></td></tr></table>',
+    );
     const template = document.createElement("template");
     template.innerHTML = html;
     const images = Array.from(template.content.querySelectorAll<HTMLImageElement>("img"));
     expect(images).toHaveLength(2);
+    expect(images.map((image) => image.getAttribute("src"))).toEqual([
+      "https://cdn.example/logo.png",
+      "//cdn.example/banner.png",
+    ]);
     for (const image of images) {
-      expect(image.hasAttribute("src")).toBe(false);
       expect(image.hasAttribute("srcset")).toBe(false);
-      expect(image.dataset.mmRemoteImageBlocked).toBe("1");
-      expect(image.style.visibility).toBe("hidden");
+      expect(image.dataset.mmRemoteImageBlocked).toBeUndefined();
+      expect(image.style.visibility).toBe("");
+      expect(image.getAttribute("referrerpolicy")).toBe("no-referrer");
     }
-    expect(html).not.toMatch(/(?:src|srcset)=["'](?:https?:)?\/\//i);
   });
 
-  it("preserves the classified remote URL inertly without a live src", () => {
+  it("keeps cleartext HTTP remote images inert in live Composer", () => {
     const html = markQuotedCidImagesPending(
-      '<img src="https://tracker.example/pixel.png" srcset="https://tracker.example/2x.png 2x" width="1" height="1">',
+      '<img src="http://legacy.example/pixel.png" width="1" height="1">',
     );
     const template = document.createElement("template");
     template.innerHTML = html;
     const image = template.content.querySelector<HTMLImageElement>("img");
     expect(image?.hasAttribute("src")).toBe(false);
-    expect(image?.hasAttribute("srcset")).toBe(false);
-    expect(image?.dataset.mmRemoteImageUrl).toBe("https://tracker.example/pixel.png");
+    expect(image?.dataset.mmRemoteImageUrl).toBe("http://legacy.example/pixel.png");
     expect(image?.dataset.mmRemoteImageBlocked).toBe("1");
-    expect(html).toContain('data-mm-remote-image-url="https://tracker.example/pixel.png"');
-    expect(html).not.toMatch(/<img[^>]*\ssrc=/i);
+    expect(image?.style.visibility).toBe("hidden");
+  });
+
+  it("preserves HTTPS CSS and legacy background images in prepared quotes", () => {
+    document.body.innerHTML =
+      '<style>.hero{background-image:url("https://cdn.example/hero.png");background-repeat:no-repeat;background-position:center;background-size:cover}</style><table background="https://cdn.example/panel.png"><tr><td class="hero">Hero</td></tr></table>';
+    const html = exportPreparedQuotedDocument(document);
+    const template = document.createElement("template");
+    template.innerHTML = html;
+    const cell = template.content.querySelector<HTMLElement>("td");
+    const table = template.content.querySelector<HTMLTableElement>("table");
+    expect(cell?.style.backgroundImage).toContain("https://cdn.example/hero.png");
+    expect(cell?.style.backgroundRepeat).toBe("no-repeat");
+    expect(table?.getAttribute("background")).toBe("https://cdn.example/panel.png");
+    expect(template.content.querySelector("[class]")).toBeNull();
+  });
+
+  it("keeps an HTTPS remote URL live and classified for safe serialization", () => {
+    const html = markQuotedCidImagesPending(
+      '<img src="https://cdn.example/pixel.png" srcset="https://cdn.example/2x.png 2x" width="40">',
+    );
+    const template = document.createElement("template");
+    template.innerHTML = html;
+    const image = template.content.querySelector<HTMLImageElement>("img");
+    expect(image?.getAttribute("src")).toBe("https://cdn.example/pixel.png");
+    expect(image?.hasAttribute("srcset")).toBe(false);
+    expect(image?.dataset.mmRemoteImageUrl).toBe("https://cdn.example/pixel.png");
+    expect(image?.dataset.mmRemoteImageBlocked).toBeUndefined();
+    expect(image?.style.visibility).toBe("");
+    expect(image?.getAttribute("referrerpolicy")).toBe("no-referrer");
   });
 
   it("serializes blocked remote images back to their exact safe URL on the detached copy", () => {

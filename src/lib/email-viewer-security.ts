@@ -2,10 +2,10 @@
  * email-viewer-security — hardening helpers for the sandboxed HTML email viewer.
  *
  * These functions are used by `EmailBodyFrame` in `src/routes/mail.tsx` to
- * defend against malicious HTML/CSS in incoming mail. All CSS `url(...)`
- * references pointing to remote resources are stripped so a message cannot
- * exfiltrate the recipient's IP or track opens via `background-image`.
- * `@import` rules are removed for the same reason.
+ * defend against malicious HTML/CSS in incoming mail. CSS image URLs are
+ * limited to inline data plus HTTPS/protocol-relative resources; cleartext
+ * and non-image-capable schemes remain neutralised. `@import` stays blocked
+ * so remote stylesheets can never escape the isolated mail document.
  *
  * The srcDoc is served inside a `sandbox` iframe WITHOUT `allow-same-origin`,
  * so its origin is opaque ("null"). A strict CSP is embedded to defence-in-depth
@@ -23,19 +23,20 @@ import DOMPurify, { type Config } from "dompurify";
 // Remove @import rules (they always fetch a remote sheet).
 const IMPORT_RE = /@import[^;]*;?/gi;
 
-// Match `url(...)` inside CSS. We allow only `data:` (inline images stitched
-// by the bridge) — everything else is neutralised to `none`.
+// Match `url(...)` inside CSS. Inline data plus HTTPS/protocol-relative image
+// resources are renderable; cleartext and non-network-safe schemes are blocked.
 const URL_RE = /url\(\s*(['"]?)([^)'"]*)\1\s*\)/gi;
 
 function sanitizeCssText(css: string): string {
   if (!css) return "";
   let out = css.replace(IMPORT_RE, "");
   out = out.replace(URL_RE, (_m, _q, ref: string) => {
-    const v = String(ref || "")
-      .trim()
-      .toLowerCase();
-    if (v.startsWith("data:")) return `url(${ref})`;
-    // Block http(s):, blob:, filesystem:, javascript:, //cdn, /path, etc.
+    const raw = String(ref || "").trim();
+    const v = raw.toLowerCase();
+    if (v.startsWith("data:") || v.startsWith("https://") || v.startsWith("//")) {
+      return `url(${raw})`;
+    }
+    // Keep cleartext, blob/filesystem, javascript and relative fetches inert.
     return "none";
   });
   return out;

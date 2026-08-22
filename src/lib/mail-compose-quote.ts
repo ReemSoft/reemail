@@ -33,6 +33,15 @@ const SAFE_STYLE_PROPERTIES = new Set([
   "border-collapse",
   "border-spacing",
   "background-color",
+  "background-image",
+  "background-repeat",
+  "background-position",
+  "background-position-x",
+  "background-position-y",
+  "background-size",
+  "background-origin",
+  "background-clip",
+  "background-attachment",
   "color",
   "font-family",
   "font-size",
@@ -85,7 +94,24 @@ function normalizedCid(value: string): string {
 }
 
 function safeStyleValue(value: string): boolean {
-  return !/(?:url\s*\(|expression\s*\(|javascript:|behavior\s*:|@import)/i.test(value);
+  if (/(?:expression\s*\(|javascript:|behavior\s*:|@import)/i.test(value)) return false;
+  const urlTokenCount = value.match(/url\s*\(/gi)?.length ?? 0;
+  if (urlTokenCount === 0) return true;
+  const urlPattern = /url\(\s*(?:(["'])(.*?)\1|([^)]*))\s*\)/gi;
+  const matches = Array.from(value.matchAll(urlPattern));
+  if (matches.length !== urlTokenCount) return false;
+  return matches.every((match) => {
+    const ref = (match[2] ?? match[3] ?? "").trim();
+    const lower = ref.toLowerCase();
+    return (
+      /^(?:https:)?\/\//i.test(ref) ||
+      lower.startsWith("data:image/png;base64,") ||
+      lower.startsWith("data:image/jpeg;base64,") ||
+      lower.startsWith("data:image/jpg;base64,") ||
+      lower.startsWith("data:image/gif;base64,") ||
+      lower.startsWith("data:image/webp;base64,")
+    );
+  });
 }
 
 function addSafeProperty(properties: Set<string>, property: string): void {
@@ -97,7 +123,17 @@ function addSafeProperty(properties: Set<string>, property: string): void {
     for (const expanded of ["font-family", "font-size", "font-weight", "font-style", "line-height"])
       properties.add(expanded);
   } else if (property === "background") {
-    properties.add("background-color");
+    for (const expanded of [
+      "background-color",
+      "background-image",
+      "background-repeat",
+      "background-position",
+      "background-size",
+      "background-origin",
+      "background-clip",
+      "background-attachment",
+    ])
+      properties.add(expanded);
   } else if (property === "word-wrap") {
     properties.add("overflow-wrap");
   }
@@ -126,11 +162,11 @@ function blockRemoteImageSources(root: ParentNode, revealRemoteImages = false): 
     image.removeAttribute("srcset");
     const src = (image.getAttribute("src") ?? "").trim();
     if (!/^(?:https?:)?\/\//i.test(src)) continue;
-    // Keep the classified remote URL as inert internal metadata (never a live
-    // `src`), so detached outgoing serialization can restore it for recipients
-    // without the live Composer ever fetching it.
+    // Preserve the canonical source URL for draft/outgoing serialization.
+    // HTTPS content may also stay live in Composer when explicitly requested.
     image.setAttribute(REMOTE_IMAGE_URL_ATTR, src);
     if (revealRemoteImages && !/^http:\/\//i.test(src)) {
+      image.setAttribute("referrerpolicy", "no-referrer");
       image.removeAttribute(BLOCKED_REMOTE_IMAGE_ATTR);
       image.removeAttribute("aria-hidden");
       image.style.removeProperty("visibility");
@@ -142,6 +178,8 @@ function blockRemoteImageSources(root: ParentNode, revealRemoteImages = false): 
     image.setAttribute("aria-hidden", "true");
   }
   for (const element of root.querySelectorAll<HTMLElement>("[background]")) {
+    const background = (element.getAttribute("background") ?? "").trim();
+    if (revealRemoteImages && /^(?:https:)?\/\//i.test(background)) continue;
     element.removeAttribute("background");
   }
 }
@@ -175,7 +213,7 @@ export function markQuotedCidImagesPending(html: string): string {
   const sourceRoots: ParentNode[] = quotedContents.length ? quotedContents : [template.content];
   for (const root of sourceRoots) {
     isolateSourceSelectors(root);
-    blockRemoteImageSources(root);
+    blockRemoteImageSources(root, true);
     markCidImagesPending(root);
   }
   return template.innerHTML;
