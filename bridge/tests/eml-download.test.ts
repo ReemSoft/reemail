@@ -3,6 +3,7 @@ import { PassThrough, Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import test from "node:test";
 import {
+  EmlConsumerFailure,
   EmlDownloadTooLargeError,
   EmlSourceIncompleteError,
   withEmlSourceStreamInMailbox,
@@ -289,6 +290,82 @@ test(
           200,
         ),
       EmlSourceIncompleteError,
+    );
+  },
+);
+
+
+test(
+  "consumer-phase connection errors are fenced from mailbox auto-retry",
+  async () => {
+    const raw = Buffer.alloc(20);
+
+    const connectionError = Object.assign(
+      new Error("socket connection closed"),
+      {
+        code: "ECONNRESET",
+      },
+    );
+
+    const source = new Readable({
+      read() {
+        this.push(raw.subarray(0, 10));
+        this.destroy(connectionError);
+      },
+    });
+
+    const client = {
+      mailbox: {
+        uidValidity: "77",
+      },
+
+      async fetchOne() {
+        return {
+          uid: 42,
+          size: raw.length,
+        };
+      },
+
+      async download() {
+        return {
+          meta: {},
+          content: source,
+        };
+      },
+    };
+
+    await assert.rejects(
+      () =>
+        withEmlSourceStreamInMailbox(
+          client as never,
+          42,
+          "77",
+          async ({
+            content,
+            guard,
+          }) => {
+            await pipeline(
+              content,
+              guard,
+              new PassThrough(),
+            );
+          },
+          100,
+        ),
+      (error: unknown) => {
+        assert.ok(
+          error instanceof EmlConsumerFailure,
+        );
+        assert.equal(
+          error.original,
+          connectionError,
+        );
+        assert.equal(
+          (error as { code?: string }).code,
+          "EML_CONSUMER_FAILED",
+        );
+        return true;
+      },
     );
   },
 );

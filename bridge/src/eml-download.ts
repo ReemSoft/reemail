@@ -36,6 +36,27 @@ export class EmlSourceIncompleteError extends Error {
 }
 
 /**
+ * Internal fence marker.
+ *
+ * withAccountMailbox() may transparently retry connection errors that happen
+ * before a transfer starts. That is desirable for preflight IMAP work.
+ *
+ * Once the HTTP consumer has entered the source stream, however, replaying the
+ * same RFC822 bytes would be unsafe because the browser may already have
+ * received part of the message. We wrap all consumer failures with this marker
+ * so the outer wrapper can convert them to a fulfilled mailbox result, then
+ * rethrow only AFTER withAccountMailbox() has finished.
+ */
+export class EmlConsumerFailure extends Error {
+  readonly code = "EML_CONSUMER_FAILED";
+
+  constructor(readonly original: unknown) {
+    super("EML_CONSUMER_FAILED");
+    this.name = "EmlConsumerFailure";
+  }
+}
+
+/**
  * Pass-through byte guard for the RFC822 stream.
  *
  * The guard checks the real bytes while they move to the browser. _flush()
@@ -92,6 +113,16 @@ export interface EmlSourceStream {
 export type EmlSourceConsumer<T> = (
   source: EmlSourceStream,
 ) => Promise<T>;
+
+type EmlMailboxOutcome<T> =
+  | {
+      ok: true;
+      value: T | null;
+    }
+  | {
+      ok: false;
+      error: unknown;
+    };
 
 /**
  * Opens the original RFC822 source as a bounded stream and keeps the caller's
@@ -160,7 +191,21 @@ export async function withEmlSourceStreamInMailbox<T>(
     });
   } catch (error) {
     download.content.destroy();
-    throw error;
+
+    // These are intentional integrity/limit failures. withAccountMailbox()
+    // already treats them as non-connection errors, so preserve their exact
+    // public error types and do not wrap them.
+    if (
+      error instanceof EmlDownloadTooLargeError ||
+      error instanceof EmlSourceIncompleteError
+    ) {
+      throw error;
+    }
+
+    // Any other consumer-phase failure is fenced so the shared mailbox
+    // connection layer can never replay RFC822 bytes after the HTTP response
+    // may already have started.
+    throw new EmlConsumerFailure(error);
   }
 }
 
@@ -190,19 +235,43 @@ export async function withEmlSourceStream<T>(
   const path = resolveFolderPath(mailboxes, folder);
   if (!path) return null;
 
-  return withAccountMailbox(
+  const outcome = await withAccountMailbox<EmlMailboxOutcome<T>>(
     account,
     password,
     path,
-    (client) =>
-      withEmlSourceStreamInMailbox(
-        client,
-        uid,
-        expectedUidValidity,
-        consume,
-        maxBytes,
-        chunkSize,
-      ),
+    async (client) => {
+      try {
+        return {
+          ok: true,
+          value: await withEmlSourceStreamInMailbox(
+            client,
+            uid,
+            expectedUidValidity,
+            consume,
+            maxBytes,
+            chunkSize,
+          ),
+        };
+      } catch (error) {
+        if (error instanceof EmlConsumerFailure) {
+          // Resolve inside withAccountMailbox so its connection retry layer can
+          // never replay RFC822 bytes after the HTTP stream has started.
+          return {
+            ok: false,
+            error: error.original,
+          };
+        }
+
+        // Pre-stream errors retain the existing one-time connection retry.
+        throw error;
+      }
+    },
     "transfer",
   );
+
+  if (outcome.ok === false) {
+    throw outcome.error;
+  }
+
+  return outcome.value;
 }

@@ -79,4 +79,14 @@ test("RFC822 bytes stream on the isolated Bridge transfer data plane", () => {
     bridge,
     /pipeline\(\s*content,\s*guard,\s*res/s,
   );
+
+  assert.match(
+    eml,
+    /error instanceof EmlConsumerFailure[\s\S]*ok:\s*false/,
+  );
+
+  assert.match(
+    eml,
+    /if \(outcome\.ok === false\)[\s\S]*throw outcome\.error/,
+  );
 });
