@@ -23,6 +23,49 @@ export interface InlineCidPartition {
   oversizedUnsafeParts: InlineCidPart[];
 }
 
+/**
+ * Return only cid: image references present in one rendered HTML fragment.
+ * This is intentionally pure/string-only so deciding image scope adds zero DOM
+ * work and zero network work to message opening. The iframe calls it only for
+ * the fragment it actually renders (latest turn, or an expanded history turn).
+ */
+export function extractReferencedInlineCids(
+  html: string,
+  maxCount = INLINE_CID_METADATA_MAX_COUNT,
+): string[] {
+  if (!html || maxCount <= 0 || !/<img\b/i.test(html) || !/\bcid:/i.test(html)) return [];
+
+  const result: string[] = [];
+  const seen = new Set<string>();
+  const imgRe = /<img\b[^>]*>/gi;
+  let tagMatch: RegExpExecArray | null;
+
+  while ((tagMatch = imgRe.exec(html)) !== null && result.length < maxCount) {
+    const tag = tagMatch[0];
+    const srcMatch = tag.match(
+      /\bsrc\s*=\s*(?:"\s*cid:([^"]*)"|'\s*cid:([^']*)'|cid:([^\s>]+))/i,
+    );
+    let cid = (srcMatch?.[1] ?? srcMatch?.[2] ?? srcMatch?.[3] ?? "").trim();
+    if (!cid) continue;
+
+    cid = cid
+      .replace(/&lt;/gi, "<")
+      .replace(/&gt;/gi, ">")
+      .replace(/&amp;/gi, "&");
+    try {
+      cid = decodeURIComponent(cid);
+    } catch {
+      // Literal '%' in a legal Content-ID is kept unchanged.
+    }
+    cid = cid.replace(/^<|>$/g, "").trim().toLowerCase();
+    if (!cid || cid.length > 998 || seen.has(cid)) continue;
+    seen.add(cid);
+    result.push(cid);
+  }
+
+  return result;
+}
+
 /** Keep each post-paint Bridge request inside both count and decoded-byte limits. */
 export function chunkInlineCidParts(
   parts: readonly InlineCidPart[],
