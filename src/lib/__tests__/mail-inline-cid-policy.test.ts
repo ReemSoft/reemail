@@ -5,7 +5,6 @@ import {
   INLINE_CID_FAST_TOTAL_BYTES,
   INLINE_CID_STREAM_MAX_BYTES,
   chunkInlineCidParts,
-  extractReferencedInlineCids,
   partitionInlineCidParts,
   streamInlineCidPartsSequential,
   type InlineCidPart,
@@ -14,34 +13,6 @@ import {
 function part(cid: string, size: number, mimeType = "image/png"): InlineCidPart {
   return { cid, part: String(cid.length + 1), mimeType, size };
 }
-
-describe("visible inline CID scope", () => {
-  it("extracts only unique img cid references from the rendered HTML fragment", () => {
-    const html = [
-      '<p><img src="cid:Logo%40Example.COM"></p>',
-      '<a href="cid:not-an-image">link</a>',
-      '<img src="https://example.com/remote.png">',
-      "<img SRC=' cid:&lt;SECOND@Example.com&gt;'>",
-      '<img src="cid:logo%40example.com">',
-    ].join("");
-
-    expect(extractReferencedInlineCids(html)).toEqual([
-      "logo@example.com",
-      "second@example.com",
-    ]);
-  });
-
-  it("keeps extraction bounded and ignores cid text outside img src", () => {
-    const html =
-      "cid:plain-text " +
-      Array.from({ length: 60 }, (_, index) => `<img src="cid:image-${index}@example">`).join("");
-
-    const cids = extractReferencedInlineCids(html);
-    expect(cids).toHaveLength(50);
-    expect(cids[0]).toBe("image-0@example");
-    expect(cids[49]).toBe("image-49@example");
-  });
-});
 
 describe("large inline CID receive policy", () => {
   it("keeps a 1.8 MiB referenced CID out of the 256 KiB resolver", () => {
@@ -207,58 +178,6 @@ describe("large inline CID receive policy", () => {
     });
     expect(onMapping).not.toHaveBeenCalled();
     expect(fetchPart).toHaveBeenCalledTimes(1);
-  });
-
-  it("hydrates only CIDs reported by loaded visible message frames", () => {
-    const source = readFileSync("src/routes/mail.tsx", "utf8");
-    const viewer = source.slice(
-      source.indexOf("function useInlineImageMappings"),
-      source.indexOf("/** Body renderer"),
-    );
-    const body = source.slice(
-      source.indexOf("function MessageBody"),
-      source.indexOf("function TruncatedBodyWarning"),
-    );
-    const threaded = source.slice(
-      source.indexOf("function ThreadedEmailBody"),
-      source.indexOf("type InlineImageFlight"),
-    );
-    const frame = source.slice(
-      source.indexOf("function EmailBodyFrame"),
-      source.indexOf("/**\n * ThreadedEmailBody"),
-    );
-
-    expect(viewer).toContain("visibleCids: readonly string[]");
-    expect(viewer).toContain("const visibleCidSet = useMemo");
-    expect(viewer).toContain("(message.inlineParts ?? []).filter");
-    expect(viewer).toContain("visibleCidSet.has(normalizeCid(part.cid))");
-    expect(viewer).toContain("visibleCidSet.has(normalizeCid(image.cid))");
-    expect(viewer.indexOf("visibleInlineParts")).toBeLessThan(
-      viewer.indexOf("partitionInlineCidParts("),
-    );
-
-    expect(body).toContain("visibleCidScopesRef");
-    expect(body).toContain("visibleCids,");
-    expect(body).toContain("onCidScopeChange={handleCidScopeChange}");
-
-    // Image eligibility is announced only from iframe onLoad's RAF, after the
-    // body has already rendered. It is never part of the message-open fetch.
-    expect(frame).toContain("onLoad={() => {");
-    expect(frame).toContain("requestAnimationFrame(() => {");
-    expect(frame).toContain(
-      "onCidScopeChange?.(messageIdentity, extractReferencedInlineCids(html))",
-    );
-    expect(frame).not.toContain("useMemo(() => extractReferencedInlineCids");
-    expect(frame.indexOf("extractReferencedInlineCids(html)")).toBeGreaterThan(
-      frame.indexOf("onLoad={() => {"),
-    );
-    expect(frame).toContain("onCidScopeChange?.(messageIdentity, [])");
-
-    // Every actual body iframe participates. The quoted two are still rendered
-    // only inside the existing expanded branch, so collapsed history has no
-    // registered CID scope and starts zero image requests.
-    expect(threaded.split("onCidScopeChange={onCidScopeChange}").length - 1).toBe(5);
-    expect(threaded).toContain("{expanded &&");
   });
 
   it("keeps large streaming after frame readiness and out of CID prefetch", () => {

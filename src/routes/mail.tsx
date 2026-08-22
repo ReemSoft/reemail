@@ -19,7 +19,6 @@ import {
 } from "@/lib/email-viewer-security";
 import type { CidImageMapping, LargeCidByteMapping } from "@/lib/email-viewer-security";
 import {
-  extractReferencedInlineCids,
   partitionInlineCidParts,
   chunkInlineCidParts,
   fetchInlineCidPartsBatch,
@@ -129,7 +128,6 @@ function EmailBodyFrame({
   messageIdentity,
   className,
   onReady,
-  onCidScopeChange,
   largeCidDispatchersRef,
 }: {
   html: string;
@@ -137,7 +135,6 @@ function EmailBodyFrame({
   messageIdentity: string;
   className?: string;
   onReady?: () => void;
-  onCidScopeChange?: (scopeId: string, cids: string[]) => void;
   largeCidDispatchersRef?: LargeCidDispatcherRegistry;
 }) {
   const ref = useRef<HTMLIFrameElement | null>(null);
@@ -188,21 +185,17 @@ function EmailBodyFrame({
   );
 
   useEffect(() => {
-    // Drop the previous visible-CID scope before a new srcDoc becomes active.
-    // This is state-only: no CID parsing and no image I/O happens here.
-    onCidScopeChange?.(messageIdentity, []);
     setFrameReady(false);
     appliedCidSignatureRef.current = "";
     if (readyRafRef.current !== null) cancelAnimationFrame(readyRafRef.current);
     readyRafRef.current = null;
-  }, [srcDoc, messageIdentity, onCidScopeChange]);
+  }, [srcDoc]);
 
   useEffect(
     () => () => {
       if (readyRafRef.current !== null) cancelAnimationFrame(readyRafRef.current);
-      onCidScopeChange?.(messageIdentity, []);
     },
-    [messageIdentity, onCidScopeChange],
+    [],
   );
 
   useEffect(() => {
@@ -288,10 +281,6 @@ function EmailBodyFrame({
           if (readyRafRef.current !== null) cancelAnimationFrame(readyRafRef.current);
           readyRafRef.current = requestAnimationFrame(() => {
             readyRafRef.current = null;
-            // The iframe has loaded. Only now scan this already-rendered
-            // fragment and make its cid: references eligible for the separate
-            // media/image pipeline. Zero CID parsing happens before body paint.
-            onCidScopeChange?.(messageIdentity, extractReferencedInlineCids(html));
             onReady?.();
           });
         }}
@@ -312,7 +301,6 @@ function ThreadedEmailBody({
   messageIdentity,
   className,
   onReady,
-  onCidScopeChange,
   largeCidDispatchersRef,
   afterLatest,
   renderHistory,
@@ -323,7 +311,6 @@ function ThreadedEmailBody({
   messageIdentity: string;
   className?: string;
   onReady?: () => void;
-  onCidScopeChange?: (scopeId: string, cids: string[]) => void;
   largeCidDispatchersRef?: LargeCidDispatcherRegistry;
   /** Rendered directly under the newest turn (e.g. its own attachments). */
   afterLatest?: React.ReactNode;
@@ -353,7 +340,6 @@ function ThreadedEmailBody({
           cidImages={cidImages}
           messageIdentity={messageIdentity}
           onReady={onReady}
-          onCidScopeChange={onCidScopeChange}
           largeCidDispatchersRef={largeCidDispatchersRef}
         />
         {afterLatest}
@@ -368,7 +354,6 @@ function ThreadedEmailBody({
           cidImages={cidImages}
           messageIdentity={`${messageIdentity}:latest`}
           onReady={onReady}
-          onCidScopeChange={onCidScopeChange}
           largeCidDispatchersRef={largeCidDispatchersRef}
         />
         {afterLatest}
@@ -382,7 +367,6 @@ function ThreadedEmailBody({
         cidImages={cidImages}
         messageIdentity={`${messageIdentity}:latest`}
         onReady={onReady}
-        onCidScopeChange={onCidScopeChange}
         largeCidDispatchersRef={largeCidDispatchersRef}
       />
 
@@ -406,7 +390,6 @@ function ThreadedEmailBody({
                   cidImages={cidImages}
                   messageIdentity={`${messageIdentity}:quoted`}
                   onReady={onReady}
-                  onCidScopeChange={onCidScopeChange}
                   largeCidDispatchersRef={largeCidDispatchersRef}
                 />
               </div>,
@@ -418,7 +401,6 @@ function ThreadedEmailBody({
                 cidImages={cidImages}
                 messageIdentity={`${messageIdentity}:quoted`}
                 onReady={onReady}
-                onCidScopeChange={onCidScopeChange}
                 largeCidDispatchersRef={largeCidDispatchersRef}
               />
             </div>
@@ -472,7 +454,6 @@ async function decodeInlineMappings(images: CidImageMapping[]): Promise<CidImage
  */
 function useInlineImageMappings(
   message: MailMessage,
-  visibleCids: readonly string[],
   largeReady: boolean,
   largeReplayVersion: number,
   onResolved?: (images: NonNullable<MailMessage["inlineImages"]>) => void,
@@ -485,56 +466,29 @@ function useInlineImageMappings(
   const messageKey = uidValidity
     ? `${activeSession?.company?.id ?? "none"}|${activeSession?.account.id ?? "none"}|${identity?.folder ?? message.folder}|${identity?.uid ?? message.id}|${uidValidity}`
     : "";
-  const normalizeCid = (cid: string) =>
-    cid.trim().replace(/^<|>$/g, "").trim().toLowerCase();
-  const visibleCidSet = useMemo(
-    () => new Set(visibleCids.map(normalizeCid).filter(Boolean)),
-    [visibleCids],
-  );
-  const visibleInlineParts = useMemo(
-    () =>
-      (message.inlineParts ?? []).filter((part) =>
-        visibleCidSet.has(normalizeCid(part.cid)),
-      ),
-    [message.inlineParts, visibleCidSet],
-  );
   const embedded = useMemo(
     () =>
       (message.inlineImages ?? [])
-        .filter(
-          (image) =>
-            visibleCidSet.has(normalizeCid(image.cid)) &&
-            isAllowedInlineImageDataUri(image.dataUri),
-        )
+        .filter((image) => isAllowedInlineImageDataUri(image.dataUri))
         .map((image) => ({ cid: image.cid, dataUri: image.dataUri })),
-    [message.inlineImages, visibleCidSet],
-  );
-  const [resolved, setResolved] = useState<{ key: string; images: CidImageMapping[] }>({
-    key: messageKey,
-    images: [],
-  });
-  const resolvedCids = useMemo(
-    () =>
-      resolved.key === messageKey
-        ? resolved.images.map((image) => normalizeCid(image.cid))
-        : [],
-    [messageKey, resolved],
+    [message.inlineImages],
   );
   const inlinePartition = useMemo(
     () =>
       partitionInlineCidParts(
-        visibleInlineParts,
-        [
-          ...(message.inlineImages ?? []).map((image) => image.cid),
-          ...resolvedCids,
-        ],
+        message.inlineParts ?? [],
+        (message.inlineImages ?? []).map((image) => image.cid),
       ),
-    [message.inlineImages, resolvedCids, visibleInlineParts],
+    [message.inlineImages, message.inlineParts],
   );
   const deferredStreamParts = useMemo(
     () => [...inlinePartition.largeStreamParts, ...inlinePartition.overflowStreamParts],
     [inlinePartition],
   );
+  const [resolved, setResolved] = useState<{ key: string; images: CidImageMapping[] }>({
+    key: messageKey,
+    images: [],
+  });
   const onResolvedRef = useRef(onResolved);
   useEffect(() => {
     onResolvedRef.current = onResolved;
@@ -542,9 +496,7 @@ function useInlineImageMappings(
 
   useEffect(() => {
     let cancelled = false;
-    setResolved((current) =>
-      current.key === messageKey ? current : { key: messageKey, images: [] },
-    );
+    setResolved({ key: messageKey, images: [] });
 
     void decodeInlineMappings(embedded).then((decoded) => {
       if (cancelled) return;
@@ -699,9 +651,7 @@ function useInlineImageMappings(
     onLargeCid,
   ]);
 
-  return resolved.key === messageKey
-    ? resolved.images.filter((image) => visibleCidSet.has(normalizeCid(image.cid)))
-    : [];
+  return resolved.key === messageKey ? resolved.images : [];
 }
 
 /** Body renderer that first resolves any deferred inline images. */
@@ -725,67 +675,6 @@ function MessageBody({
   suppressQuoted?: boolean;
 }) {
   const bodyIdentity = `${message.id}|${message.uidValidity ?? ""}`;
-  const bodyIdentityRef = useRef(bodyIdentity);
-  bodyIdentityRef.current = bodyIdentity;
-  const visibleCidScopesRef = useRef<{
-    identity: string;
-    scopes: Map<string, string[]>;
-  }>({ identity: bodyIdentity, scopes: new Map() });
-  if (visibleCidScopesRef.current.identity !== bodyIdentity) {
-    visibleCidScopesRef.current = { identity: bodyIdentity, scopes: new Map() };
-  }
-  const [visibleCidState, setVisibleCidState] = useState<{
-    identity: string;
-    cids: string[];
-  }>({ identity: bodyIdentity, cids: [] });
-  const visibleCids =
-    visibleCidState.identity === bodyIdentity ? visibleCidState.cids : [];
-
-  const handleCidScopeChange = useCallback((scopeId: string, cids: string[]) => {
-    const currentIdentity = bodyIdentityRef.current;
-    const store = visibleCidScopesRef.current;
-    if (store.identity !== currentIdentity) {
-      visibleCidScopesRef.current = { identity: currentIdentity, scopes: new Map() };
-    }
-    const activeStore = visibleCidScopesRef.current;
-    const belongsToCurrentBody =
-      scopeId === currentIdentity || scopeId.startsWith(`${currentIdentity}:`);
-    if (!belongsToCurrentBody) {
-      activeStore.scopes.delete(scopeId);
-      return;
-    }
-
-    const normalized = [
-      ...new Set(
-        cids
-          .map((cid) => cid.trim().replace(/^<|>$/g, "").trim().toLowerCase())
-          .filter((cid) => cid.length > 0 && cid.length <= 998),
-      ),
-    ];
-    if (normalized.length === 0) activeStore.scopes.delete(scopeId);
-    else activeStore.scopes.set(scopeId, normalized);
-
-    const union: string[] = [];
-    const seen = new Set<string>();
-    for (const scopeCids of activeStore.scopes.values()) {
-      for (const cid of scopeCids) {
-        if (seen.has(cid)) continue;
-        seen.add(cid);
-        union.push(cid);
-        if (union.length >= 50) break;
-      }
-      if (union.length >= 50) break;
-    }
-
-    setVisibleCidState((current) => {
-      const same =
-        current.identity === currentIdentity &&
-        current.cids.length === union.length &&
-        current.cids.every((cid, index) => cid === union[index]);
-      return same ? current : { identity: currentIdentity, cids: union };
-    });
-  }, []);
-
   const sanitizedHtml = useMemo(() => {
     void bodyIdentity;
     return sanitizeEmailHtml(html);
@@ -820,7 +709,6 @@ function MessageBody({
   }, []);
   const cidImages = useInlineImageMappings(
     message,
-    visibleCids,
     largeReplayVersion > 0,
     largeReplayVersion,
     onInlineImages,
@@ -837,7 +725,6 @@ function MessageBody({
         messageIdentity={bodyIdentity}
         className={message.bodyTruncated ? undefined : className}
         onReady={markFrameReady}
-        onCidScopeChange={handleCidScopeChange}
         largeCidDispatchersRef={largeCidDispatchersRef}
         afterLatest={afterLatest}
         renderHistory={renderHistory}
