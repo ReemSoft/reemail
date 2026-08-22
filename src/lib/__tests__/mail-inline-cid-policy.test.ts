@@ -310,6 +310,10 @@ describe("large inline CID receive policy", () => {
     expect(viewer).toContain(
       "const parts = nextVisibleInlineCidBatch(inlinePartition.smallBatchParts)",
     );
+    expect(viewer).toContain("setAttemptedSmall((current) =>");
+    expect(viewer.indexOf("setAttemptedSmall((current) =>")).toBeLessThan(
+      viewer.indexOf("if (!result.ok) return;"),
+    );
     expect(viewer).toContain("...inlinePartition.overflowStreamParts");
     expect(viewer).toContain("const parts = deferredStreamParts");
     expect(viewer).toContain("fetchInlineCidPartsBatch");

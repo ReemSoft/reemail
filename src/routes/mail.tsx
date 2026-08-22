@@ -508,18 +508,24 @@ function useInlineImageMappings(
     key: messageKey,
     images: [],
   });
+  const [attemptedSmall, setAttemptedSmall] = useState<{ key: string; cids: string[] }>({
+    key: messageKey,
+    cids: [],
+  });
   const resolvedCids = useMemo(
     () =>
       resolved.key === messageKey ? resolved.images.map((image) => normalizeCid(image.cid)) : [],
     [messageKey, resolved],
   );
+  const attemptedSmallCids = attemptedSmall.key === messageKey ? attemptedSmall.cids : [];
   const inlinePartition = useMemo(
     () =>
       partitionInlineCidParts(visibleInlineParts, [
         ...(message.inlineImages ?? []).map((image) => image.cid),
         ...resolvedCids,
+        ...attemptedSmallCids,
       ]),
-    [message.inlineImages, resolvedCids, visibleInlineParts],
+    [attemptedSmallCids, message.inlineImages, resolvedCids, visibleInlineParts],
   );
   const deferredStreamParts = useMemo(
     () => [...inlinePartition.largeStreamParts, ...inlinePartition.overflowStreamParts],
@@ -589,7 +595,15 @@ function useInlineImageMappings(
       } catch {
         return;
       }
-      if (!result.ok || cancelled) return;
+      if (cancelled) return;
+      setAttemptedSmall((current) => {
+        const existing = current.key === messageKey ? current.cids : [];
+        const next = [...new Set([...existing, ...parts.map((part) => normalizeCid(part.cid))])];
+        return existing.length === next.length && existing.every((cid, index) => cid === next[index])
+          ? current
+          : { key: messageKey, cids: next };
+      });
+      if (!result.ok) return;
       const decoded = await decodeInlineMappings(
         result.images.map((image) => ({ cid: image.cid, dataUri: image.dataUri })),
       );
