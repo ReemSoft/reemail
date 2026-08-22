@@ -32,8 +32,17 @@ test("draft-save-v2 releases fresh source staging only on failure, retains on su
   );
   assert.match(
     draftV2,
-    /releaseStagedAttachments\(BRIDGE_API_KEY, abandonedSourceHandles, stagedAccount\)/,
+    /releaseStagedAttachments\(BRIDGE_TICKET_VERIFY_KEYS, abandonedSourceHandles, stagedAccount\)/,
   );
+});
+
+test("capability rotation signs new handles with NEXT and keeps primary verification-only", () => {
+  assert.match(source, /const BRIDGE_TICKET_SIGNING_KEY = BRIDGE_API_KEY_NEXT \|\| BRIDGE_API_KEY/);
+  assert.match(source, /const BRIDGE_TICKET_VERIFY_KEYS =/);
+  assert.doesNotMatch(source, /sealTransferTicket\(BRIDGE_API_KEY,/);
+  assert.doesNotMatch(source, /openTransferTicket\(BRIDGE_API_KEY,/);
+  assert.doesNotMatch(source, /resolveStagedAttachment\(BRIDGE_API_KEY,/);
+  assert.doesNotMatch(source, /secret: BRIDGE_API_KEY,/);
 });
 
 test("active send-v2 acknowledges SMTP before bounded Sent finalization", () => {

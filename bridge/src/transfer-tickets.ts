@@ -53,13 +53,11 @@ export function sealTransferTicket(
   return `${b64url(iv)}.${b64url(ciphertext)}.${b64url(cipher.getAuthTag())}`;
 }
 
-export function openTransferTicket(
+function openTransferTicketWithSecret(
   secret: string,
-  token: string,
+  parts: string[],
   expected: { purpose: string; account?: string; now?: number },
 ): TransferTicket {
-  const parts = token.split(".");
-  if (parts.length !== 3) throw new Error("INVALID_TICKET");
   try {
     const iv = decodeB64url(parts[0]);
     const ciphertext = decodeB64url(parts[1]);
@@ -84,4 +82,30 @@ export function openTransferTicket(
     }
     throw new Error("INVALID_TICKET");
   }
+}
+
+export function openTransferTicket(
+  secret: string | readonly string[],
+  token: string,
+  expected: { purpose: string; account?: string; now?: number },
+): TransferTicket {
+  const parts = token.split(".");
+  if (parts.length !== 3) throw new Error("INVALID_TICKET");
+
+  const candidates = [...new Set((Array.isArray(secret) ? secret : [secret]).filter(Boolean))];
+  if (candidates.length === 0) throw new Error("TRANSFER_TICKETS_NOT_CONFIGURED");
+
+  let lastInvalid: Error | null = null;
+  for (const candidate of candidates) {
+    try {
+      return openTransferTicketWithSecret(candidate, parts, expected);
+    } catch (error) {
+      if (error instanceof Error && error.message === "INVALID_TICKET") {
+        lastInvalid = error;
+        continue;
+      }
+      throw error;
+    }
+  }
+  throw lastInvalid ?? new Error("INVALID_TICKET");
 }

@@ -107,14 +107,20 @@ import {
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
 
-// Keep the primary key as the existing signing authority for transfer tickets
-// and staged handles. BRIDGE_API_KEY_NEXT is auth-only during the rollover;
-// this avoids changing every opaque token format or breaking in-flight work.
 const BRIDGE_API_KEY = process.env.BRIDGE_API_KEY || "";
+const BRIDGE_API_KEY_NEXT = process.env.BRIDGE_API_KEY_NEXT?.trim() || "";
 const BRIDGE_API_KEYS = configuredBridgeApiKeys({
   BRIDGE_API_KEY,
-  BRIDGE_API_KEY_NEXT: process.env.BRIDGE_API_KEY_NEXT,
+  BRIDGE_API_KEY_NEXT,
 });
+
+// During rotation, NEXT owns all new capability signatures immediately.
+// Old primary remains verification-only for the bounded legacy-handle drain.
+const BRIDGE_TICKET_SIGNING_KEY = BRIDGE_API_KEY_NEXT || BRIDGE_API_KEY;
+const BRIDGE_TICKET_VERIFY_KEYS =
+  BRIDGE_API_KEY_NEXT && BRIDGE_API_KEY_NEXT !== BRIDGE_API_KEY
+    ? [BRIDGE_API_KEY_NEXT, BRIDGE_API_KEY]
+    : [BRIDGE_TICKET_SIGNING_KEY];
 
 if (!BRIDGE_API_KEY) {
   console.warn("[bridge] Warning: BRIDGE_API_KEY is not set. Server will reject all requests.");
@@ -1047,7 +1053,7 @@ app.post("/api/attachment-upload-ticket", requireKey, (req, res) => {
     }
     const account = accountBinding(payload.account as MailAccount);
     const expiresAt = Date.now() + 60_000;
-    const ticket = sealTransferTicket(BRIDGE_API_KEY, {
+    const ticket = sealTransferTicket(BRIDGE_TICKET_SIGNING_KEY, {
       purpose: "attachment-upload",
       account,
       exp: expiresAt,
@@ -1077,7 +1083,7 @@ app.post("/api/direct/attachment-upload", async (req, res) => {
   try {
     const header = req.headers.authorization || "";
     const token = header.startsWith("Bearer ") ? header.slice(7) : "";
-    const ticket = openTransferTicket(BRIDGE_API_KEY, token, {
+    const ticket = openTransferTicket(BRIDGE_TICKET_VERIFY_KEYS, token, {
       purpose: "attachment-upload",
     });
     const data = ticket.data as Record<string, unknown>;
@@ -1095,7 +1101,7 @@ app.post("/api/direct/attachment-upload", async (req, res) => {
     }
     const stageStartedAt = performance.now();
     const staged = await stageAttachmentStream({
-      secret: BRIDGE_API_KEY,
+      secret: BRIDGE_TICKET_SIGNING_KEY,
       account: ticket.account,
       filename: data.filename,
       mimeType: data.mimeType,
@@ -1149,7 +1155,7 @@ app.post("/api/remote-attachment-stage", requireKey, async (req, res) => {
       return res.status(400).json({ ok: false, error: "UPLOAD_SIZE_MISMATCH" });
     }
     const staged = await stageAttachmentStream({
-      secret: BRIDGE_API_KEY,
+      secret: BRIDGE_TICKET_SIGNING_KEY,
       account: accountBinding(payload.account as MailAccount),
       filename: payload.filename,
       mimeType: payload.mimeType,
@@ -1204,19 +1210,19 @@ app.post("/api/send-v2", requireKey, async (req, res) => {
     const handleResolveStartedAt = performance.now();
     const normal = await Promise.all(
       payload.attachmentHandles.map((handle) =>
-        resolveStagedAttachment(BRIDGE_API_KEY, handle, account),
+        resolveStagedAttachment(BRIDGE_TICKET_VERIFY_KEYS, handle, account),
       ),
     );
     const inline = await Promise.all(
       payload.stagedInlineImages.map(async (item) => ({
         item,
-        staged: await resolveStagedAttachment(BRIDGE_API_KEY, item.handle, account),
+        staged: await resolveStagedAttachment(BRIDGE_TICKET_VERIFY_KEYS, item.handle, account),
       })),
     );
     const handleResolveMs = performance.now() - handleResolveStartedAt;
     const sourceStageStartedAt = performance.now();
     const sourceAttachments = await stageServerAttachmentSources({
-      secret: BRIDGE_API_KEY,
+      secret: BRIDGE_TICKET_SIGNING_KEY,
       account: payload.account as MailAccount,
       password: payload.password,
       sources: payload.sourceAttachments.map((source) => ({
@@ -1232,7 +1238,7 @@ app.post("/api/send-v2", requireKey, async (req, res) => {
     });
     sourceHandles = sourceAttachments.map(({ staged }) => staged.handle);
     const sourceInlineImages = await stageServerInlineSources({
-      secret: BRIDGE_API_KEY,
+      secret: BRIDGE_TICKET_SIGNING_KEY,
       account: payload.account as MailAccount,
       password: payload.password,
       sources: payload.sourceInlineImages.map((source) => ({
@@ -1341,7 +1347,7 @@ app.post("/api/send-v2", requireKey, async (req, res) => {
   } finally {
     if (stagedAccount) {
       await cleanupSendStagedAttachments({
-        secret: BRIDGE_API_KEY,
+        secret: BRIDGE_TICKET_VERIFY_KEYS,
         account: stagedAccount,
         clientHandles,
         sourceHandles,
@@ -1465,7 +1471,7 @@ app.post("/api/draft-save-v2", requireKey, imapGate("interactive"), async (req, 
     ): Promise<{ handle: string; resolved: ResolvedStagedAttachment } | null> => {
       if (!handle) return null;
       try {
-        const resolved = await resolveStagedAttachment(BRIDGE_API_KEY, handle, account);
+        const resolved = await resolveStagedAttachment(BRIDGE_TICKET_VERIFY_KEYS, handle, account);
         if (resolved.kind !== kind) return null;
         return { handle, resolved };
       } catch {
@@ -1560,7 +1566,7 @@ app.post("/api/draft-save-v2", requireKey, imapGate("interactive"), async (req, 
     }
     const resolvedNormal = await Promise.all(
       contract.attachmentHandles.map((handle) =>
-        resolveStagedAttachment(BRIDGE_API_KEY, handle, account),
+        resolveStagedAttachment(BRIDGE_TICKET_VERIFY_KEYS, handle, account),
       ),
     );
     markRoutePhase(
@@ -1573,7 +1579,7 @@ app.post("/api/draft-save-v2", requireKey, imapGate("interactive"), async (req, 
     const resolvedInline = await Promise.all(
       contract.stagedInlineImages.map(async (item) => ({
         item,
-        staged: await resolveStagedAttachment(BRIDGE_API_KEY, item.handle, account),
+        staged: await resolveStagedAttachment(BRIDGE_TICKET_VERIFY_KEYS, item.handle, account),
       })),
     );
     markRoutePhase(
@@ -1581,7 +1587,7 @@ app.post("/api/draft-save-v2", requireKey, imapGate("interactive"), async (req, 
       resolvedInline.reduce((sum, item) => sum + item.staged.size, 0),
     );
     const freshInlineSources = await stageServerInlineSources({
-      secret: BRIDGE_API_KEY,
+      secret: BRIDGE_TICKET_SIGNING_KEY,
       account: payload.account as MailAccount,
       password: payload.password,
       sources: inlineSourceInputs,
@@ -1596,7 +1602,7 @@ app.post("/api/draft-save-v2", requireKey, imapGate("interactive"), async (req, 
       freshInlineSources.reduce((sum, item) => sum + item.resolved.size, 0),
     );
     const freshNormalSources = await stageDraftServerAttachmentSources({
-      secret: BRIDGE_API_KEY,
+      secret: BRIDGE_TICKET_SIGNING_KEY,
       account: payload.account as MailAccount,
       password: payload.password,
       sources: normalSourceInputs,
@@ -1712,7 +1718,7 @@ app.post("/api/draft-save-v2", requireKey, imapGate("interactive"), async (req, 
       saveSucceeded,
     });
     if (stagedAccount && abandonedSourceHandles.length > 0 && !saveSucceeded) {
-      await releaseStagedAttachments(BRIDGE_API_KEY, abandonedSourceHandles, stagedAccount).catch(
+      await releaseStagedAttachments(BRIDGE_TICKET_VERIFY_KEYS, abandonedSourceHandles, stagedAccount).catch(
         () => undefined,
       );
     }
@@ -1732,11 +1738,11 @@ app.post("/api/staged-release", requireKey, async (req, res) => {
     // or expired payload cannot cause a partial release.
     const uniqueHandles = [...new Set(payload.handles)];
     for (const handle of uniqueHandles) {
-      if (!validateStagedHandle(BRIDGE_API_KEY, handle, account)) {
+      if (!validateStagedHandle(BRIDGE_TICKET_VERIFY_KEYS, handle, account)) {
         return res.status(400).json({ ok: false, error: "INVALID_STAGE_HANDLE" });
       }
     }
-    const released = await releaseStagedAttachments(BRIDGE_API_KEY, uniqueHandles, account);
+    const released = await releaseStagedAttachments(BRIDGE_TICKET_VERIFY_KEYS, uniqueHandles, account);
     return res.json({ ok: true, released });
   } catch (error) {
     const code = error instanceof z.ZodError ? "INVALID_PAYLOAD" : "RELEASE_FAILED";
@@ -1906,7 +1912,7 @@ app.post("/api/attachment-download-ticket", requireKey, (req, res) => {
   try {
     const payload = DownloadTicketPayloadSchema.parse(req.body);
     const expiresAt = Date.now() + 60_000;
-    const ticket = sealTransferTicket(BRIDGE_API_KEY, {
+    const ticket = sealTransferTicket(BRIDGE_TICKET_SIGNING_KEY, {
       purpose: "attachment-download",
       account: accountBinding(payload.account as MailAccount),
       exp: expiresAt,
@@ -1930,7 +1936,7 @@ app.get("/api/direct/attachment-download", async (req, res) => {
   let capabilityValidated = false;
   let transferAccount: MailAccount | null = null;
   try {
-    const ticket = openTransferTicket(BRIDGE_API_KEY, String(req.query.t || ""), {
+    const ticket = openTransferTicket(BRIDGE_TICKET_VERIFY_KEYS, String(req.query.t || ""), {
       purpose: "attachment-download",
     });
     const payload = DownloadCapabilityDataSchema.parse(ticket.data);
