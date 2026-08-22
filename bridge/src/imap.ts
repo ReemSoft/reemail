@@ -1694,12 +1694,16 @@ async function messageFromFetch(
     labels: [],
   };
 
+  // Every provider-list/search row carries the mailbox generation so later
+  // user actions can prove that its numeric UID is still the same identity.
+  // This reuses the already-open mailbox and performs zero additional IMAP I/O.
+  const mailbox = (client as unknown as { mailbox?: { uidValidity?: unknown } }).mailbox;
+  if (mailbox?.uidValidity != null) parsed.uidValidity = String(mailbox.uidValidity);
+
   if (folder === "drafts" && msg.headers) {
     const rawParsed = await simpleParser(msg.headers as Buffer);
     const draftIdHeader = headerValue(rawParsed, "X-MailMaestro-Draft-ID").trim();
     if (draftIdHeader) parsed.draftIdHeader = draftIdHeader;
-    const mailbox = (client as unknown as { mailbox?: { uidValidity?: unknown } }).mailbox;
-    if (mailbox?.uidValidity != null) parsed.uidValidity = String(mailbox.uidValidity);
   }
 
   return parsed;
@@ -1919,12 +1923,40 @@ function makePreview(text: string): string {
   return t.length > 160 ? t.slice(0, 157) + "..." : t;
 }
 
+/**
+ * A numeric IMAP UID is meaningful only inside one mailbox UIDVALIDITY.
+ * Every user-triggered UID mutation must compare the identity carried by the
+ * visible row with the mailbox generation that is open under the mutation
+ * lock. Missing identity fails closed as a mismatch.
+ */
+export class UidValidityMismatchError extends Error {
+  readonly code = "UIDVALIDITY_MISMATCH";
+
+  constructor() {
+    super("UIDVALIDITY_MISMATCH");
+    this.name = "UidValidityMismatchError";
+  }
+}
+
+export function assertExpectedUidValidity(
+  client: { mailbox?: false | { uidValidity?: unknown } },
+  expectedUidValidity: string,
+): void {
+  const mailbox = client.mailbox;
+  const current =
+    !mailbox || mailbox.uidValidity == null ? "" : String(mailbox.uidValidity);
+  if (!expectedUidValidity || !current || current !== expectedUidValidity) {
+    throw new UidValidityMismatchError();
+  }
+}
+
 export async function markRead(
   account: MailAccount,
   password: string,
   folder: MailFolder,
   uid: number,
   read: boolean,
+  expectedUidValidity: string,
 ): Promise<void> {
   const client = makeImapClient(account, password);
   try {
@@ -1934,6 +1966,7 @@ export async function markRead(
     if (!path) throw new Error("Folder not found");
     const lock = await client.getMailboxLock(path);
     try {
+      assertExpectedUidValidity(client, expectedUidValidity);
       if (read) {
         await client.messageFlagsAdd({ uid: [uid] } as any, ["\\Seen"], { uid: true });
       } else {
@@ -1953,6 +1986,7 @@ export async function starMessage(
   folder: MailFolder,
   uid: number,
   starred: boolean,
+  expectedUidValidity: string,
 ): Promise<void> {
   const client = makeImapClient(account, password);
   try {
@@ -1962,6 +1996,7 @@ export async function starMessage(
     if (!path) throw new Error("Folder not found");
     const lock = await client.getMailboxLock(path);
     try {
+      assertExpectedUidValidity(client, expectedUidValidity);
       if (starred) {
         await client.messageFlagsAdd({ uid: [uid] } as any, ["\\Flagged"], { uid: true });
       } else {
@@ -2003,6 +2038,7 @@ export async function moveMessage(
   fromFolder: MailFolder,
   uid: number,
   toFolder: MailFolder,
+  expectedUidValidity: string,
 ): Promise<MoveResult> {
   const client = makeImapClient(account, password);
   try {
@@ -2013,6 +2049,7 @@ export async function moveMessage(
     if (!fromPath || !toPath) throw new Error("Folder not found");
     const lock = await client.getMailboxLock(fromPath);
     try {
+      assertExpectedUidValidity(client, expectedUidValidity);
       const raw = (await client.messageMove({ uid: String(uid) } as any, toPath, {
         uid: true,
       })) as unknown;
@@ -2107,6 +2144,7 @@ export type DeleteResult =
  *   * lock.release  calls === 1 (even when messageDelete throws / returns false)
  */
 export interface PermanentDeleteImapClient {
+  mailbox?: { uidValidity?: unknown };
   getMailboxLock(path: string): Promise<{ release: () => void }>;
   messageDelete(query: unknown, options: { uid: true }): Promise<boolean>;
 }
@@ -2115,9 +2153,13 @@ export async function executePermanentDelete(
   client: PermanentDeleteImapClient,
   path: string,
   uid: number,
+  expectedUidValidity?: string,
 ): Promise<{ kind: "permanent-delete"; sourceUid: number }> {
   const lock = await client.getMailboxLock(path);
   try {
+    if (expectedUidValidity !== undefined) {
+      assertExpectedUidValidity(client, expectedUidValidity);
+    }
     const ok = await client.messageDelete({ uid: String(uid) }, { uid: true });
     if (!ok) throw new Error("IMAP messageDelete returned false");
     return { kind: "permanent-delete", sourceUid: uid };
@@ -2131,6 +2173,7 @@ export async function permanentDeleteMessage(
   password: string,
   folder: MailFolder,
   uid: number,
+  expectedUidValidity: string,
 ): Promise<{ kind: "permanent-delete"; sourceUid: number }> {
   const client = makeImapClient(account, password);
   try {
@@ -2138,7 +2181,12 @@ export async function permanentDeleteMessage(
     const mailboxes = await listMailboxes(client);
     const path = resolveFolderPath(mailboxes, folder);
     if (!path) throw new Error("Folder not found");
-    return await executePermanentDelete(client as unknown as PermanentDeleteImapClient, path, uid);
+    return await executePermanentDelete(
+      client as unknown as PermanentDeleteImapClient,
+      path,
+      uid,
+      expectedUidValidity,
+    );
   } finally {
     await client.logout().catch(() => {});
   }
@@ -2149,11 +2197,19 @@ export async function deleteMessage(
   password: string,
   folder: MailFolder,
   uid: number,
+  expectedUidValidity: string,
 ): Promise<DeleteResult> {
   if (decideDeleteMode(folder) === "permanent") {
-    return permanentDeleteMessage(account, password, folder, uid);
+    return permanentDeleteMessage(account, password, folder, uid, expectedUidValidity);
   }
-  const move = await moveMessage(account, password, folder, uid, "trash");
+  const move = await moveMessage(
+    account,
+    password,
+    folder,
+    uid,
+    "trash",
+    expectedUidValidity,
+  );
   return { kind: "moved-to-trash", move };
 }
 

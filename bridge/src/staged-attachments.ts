@@ -253,13 +253,16 @@ export async function releaseStagedAttachment(
 ): Promise<boolean> {
   const data = readStagedTicket(secret, handle, account, now);
   const filePath = safePath(data.id);
-  try {
-    await unlink(filePath);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
-    throw error;
-  }
-  await runExclusive(async () => {
+  // File deletion and accounting are one atomic release decision. Without
+  // this fence, two concurrent callers can both observe the file before either
+  // has completed unlink (notably on Windows) and both report success.
+  return runExclusive(async () => {
+    try {
+      await unlink(filePath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+      throw error;
+    }
     if (activeReservations.has(data.id)) {
       // Released before its upload committed (e.g. a cancelled in-flight
       // upload): only drop the reservation; the file was never counted.
@@ -267,8 +270,8 @@ export async function releaseStagedAttachment(
     } else {
       decrementTrackedUsage(account, data.size);
     }
+    return true;
   });
-  return true;
 }
 
 export async function releaseStagedAttachments(

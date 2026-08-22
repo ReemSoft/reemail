@@ -56,6 +56,7 @@ import {
   getInlineImagesBatch,
   getLargeInlinePart,
   getLargeInlinePartsBatch,
+  UidValidityMismatchError,
   markRead,
   starMessage,
   moveMessage,
@@ -186,6 +187,10 @@ const MessagePayloadSchema = FolderPayloadSchema.extend({
   uid: z.number().int().positive(),
 });
 
+const MutationMessagePayloadSchema = MessagePayloadSchema.extend({
+  expectedUidValidity: z.string().regex(/^[1-9]\d*$/).max(64),
+});
+
 const MessagePrefetchPayloadSchema = FolderPayloadSchema.extend({
   uids: z.array(z.number().int().positive()).min(1).max(12),
 });
@@ -243,15 +248,15 @@ const LargeInlinePartsPayloadSchema = MessagePayloadSchema.extend({
   }
 });
 
-const MarkReadPayloadSchema = MessagePayloadSchema.extend({
+const MarkReadPayloadSchema = MutationMessagePayloadSchema.extend({
   read: z.boolean(),
 });
 
-const StarPayloadSchema = MessagePayloadSchema.extend({
+const StarPayloadSchema = MutationMessagePayloadSchema.extend({
   starred: z.boolean(),
 });
 
-const MovePayloadSchema = MessagePayloadSchema.extend({
+const MovePayloadSchema = MutationMessagePayloadSchema.extend({
   toFolder: FolderSchema,
 });
 
@@ -816,11 +821,16 @@ app.post("/api/mark-read", requireKey, imapGate("interactive"), async (req, res)
       payload.folder,
       payload.uid,
       payload.read,
+      payload.expectedUidValidity,
     );
     return res.json({ ok: true });
-  } catch (err: any) {
+  } catch (err: unknown) {
+    if (err instanceof z.ZodError)
+      return res.status(400).json({ ok: false, error: "INVALID_PAYLOAD" });
+    if (err instanceof UidValidityMismatchError)
+      return res.status(409).json({ ok: false, error: "UIDVALIDITY_MISMATCH" });
     console.error("[bridge] /api/mark-read error:", err);
-    return res.status(500).json({ ok: false, error: err?.message || "Failed to update message" });
+    return res.status(500).json({ ok: false, error: "Failed to update message" });
   }
 });
 
@@ -833,11 +843,16 @@ app.post("/api/star", requireKey, imapGate("interactive"), async (req, res) => {
       payload.folder,
       payload.uid,
       payload.starred,
+      payload.expectedUidValidity,
     );
     return res.json({ ok: true });
-  } catch (err: any) {
+  } catch (err: unknown) {
+    if (err instanceof z.ZodError)
+      return res.status(400).json({ ok: false, error: "INVALID_PAYLOAD" });
+    if (err instanceof UidValidityMismatchError)
+      return res.status(409).json({ ok: false, error: "UIDVALIDITY_MISMATCH" });
     console.error("[bridge] /api/star error:", err);
-    return res.status(500).json({ ok: false, error: err?.message || "Failed to update message" });
+    return res.status(500).json({ ok: false, error: "Failed to update message" });
   }
 });
 
@@ -850,24 +865,30 @@ app.post("/api/move", requireKey, imapGate("interactive"), async (req, res) => {
       payload.folder,
       payload.uid,
       payload.toFolder,
+      payload.expectedUidValidity,
     );
     // Backward-compat: existing callers only check `ok`. New callers can
     // read `move.destinationUid` when `move.uidMappingAvailable === true`.
     return res.json({ ok: true, move });
-  } catch (err: any) {
+  } catch (err: unknown) {
+    if (err instanceof z.ZodError)
+      return res.status(400).json({ ok: false, error: "INVALID_PAYLOAD" });
+    if (err instanceof UidValidityMismatchError)
+      return res.status(409).json({ ok: false, error: "UIDVALIDITY_MISMATCH" });
     console.error("[bridge] /api/move error:", err);
-    return res.status(500).json({ ok: false, error: err?.message || "Failed to move message" });
+    return res.status(500).json({ ok: false, error: "Failed to move message" });
   }
 });
 
 app.post("/api/delete", requireKey, imapGate("interactive"), async (req, res) => {
   try {
-    const payload = MessagePayloadSchema.parse(req.body);
+    const payload = MutationMessagePayloadSchema.parse(req.body);
     const result = await deleteMessage(
       payload.account as any,
       payload.password,
       payload.folder,
       payload.uid,
+      payload.expectedUidValidity,
     );
     // Blocker 1 contract:
     //   trash source → { ok:true, kind:"permanent-delete", sourceUid }
@@ -876,9 +897,13 @@ app.post("/api/delete", requireKey, imapGate("interactive"), async (req, res) =>
       return res.json({ ok: true, kind: result.kind, sourceUid: result.sourceUid });
     }
     return res.json({ ok: true, kind: result.kind, move: result.move });
-  } catch (err: any) {
+  } catch (err: unknown) {
+    if (err instanceof z.ZodError)
+      return res.status(400).json({ ok: false, error: "INVALID_PAYLOAD" });
+    if (err instanceof UidValidityMismatchError)
+      return res.status(409).json({ ok: false, error: "UIDVALIDITY_MISMATCH" });
     console.error("[bridge] /api/delete error:", err);
-    return res.status(500).json({ ok: false, error: err?.message || "Failed to delete message" });
+    return res.status(500).json({ ok: false, error: "Failed to delete message" });
   }
 });
 

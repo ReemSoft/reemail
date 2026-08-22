@@ -16,6 +16,8 @@ export interface DeleteWriteThroughInput {
   /** Always "trash" for permanent-delete in Blocker 1; kept generic for future. */
   sourceCanonical: string;
   sourceUid: number;
+  /** Exact source generation accepted by Bridge; optional for legacy tests/callers. */
+  sourceUidValidity?: number;
 }
 
 export type DeleteWriteThroughOutcome =
@@ -43,7 +45,7 @@ export async function applyDeleteWriteThrough(
   const tomb = await tombstoneSourceRow(supabase, {
     accountId: input.accountId,
     folderId: src.id,
-    uidvalidity: src.uidvalidity,
+    uidvalidity: input.sourceUidValidity ?? src.uidvalidity,
     uid: input.sourceUid,
   });
 
