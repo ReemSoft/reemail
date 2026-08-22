@@ -5,7 +5,10 @@ import {
   INLINE_CID_FAST_TOTAL_BYTES,
   INLINE_CID_STREAM_MAX_BYTES,
   chunkInlineCidParts,
+  nextVisibleInlineCidBatch,
   extractReferencedInlineCids,
+  fetchInlineCidPartsBatch,
+  InlineMediaBusyResponseError,
   partitionInlineCidParts,
   streamInlineCidPartsSequential,
   type InlineCidPart,
@@ -60,6 +63,38 @@ describe("large inline CID receive policy", () => {
     expect(result.smallBatchParts).toEqual([small]);
     expect(result.largeStreamParts).toEqual([large]);
     expect(result.overflowStreamParts).toEqual([]);
+  });
+
+  it("puts a tiny visible logo in the first atomic response ahead of larger parts", () => {
+    const deferredLarge = part("large-photo", 2 * 1024 * 1024);
+    const medium = part("medium-visible", 220 * 1024);
+    const tiny = part("signature-logo", 6 * 1024);
+    const small = part("small-visible", 40 * 1024);
+    const partition = partitionInlineCidParts([deferredLarge, medium, tiny, small]);
+
+    expect(nextVisibleInlineCidBatch(partition.smallBatchParts)).toEqual([tiny, small]);
+    expect(partition.largeStreamParts).toEqual([deferredLarge]);
+  });
+
+  it("keeps every latency-first visible response bounded", () => {
+    const ordered = Array.from({ length: 8 }, (_, index) => part(`tiny-${index}`, 16 * 1024));
+    const batch = nextVisibleInlineCidBatch(ordered);
+    expect(batch).toHaveLength(4);
+    expect(batch.reduce((total, item) => total + item.size, 0)).toBe(64 * 1024);
+  });
+
+  it("classifies a deferred media 503 for bounded retry without parsing a body", async () => {
+    const controller = new AbortController();
+    const busy = fetchInlineCidPartsBatch([part("large", 300 * 1024)], {
+        signal: controller.signal,
+        fetchBatch: async () =>
+          new Response(JSON.stringify({ error: "IMAP_BUSY" }), {
+            status: 503,
+            headers: { "Retry-After": "2" },
+          }),
+      });
+    await expect(busy).rejects.toBeInstanceOf(InlineMediaBusyResponseError);
+    await expect(busy).rejects.toMatchObject({ retryAfterMs: 2_000 });
   });
 
   it("fails closed when one CID names different physical MIME parts", () => {
@@ -272,7 +307,13 @@ describe("large inline CID receive policy", () => {
       source.indexOf("const prefetchMessage"),
     );
     expect(viewer).toContain("if (!largeReady || !messageKey) return");
-    expect(viewer).toContain("const parts = inlinePartition.smallBatchParts");
+    expect(viewer).toContain(
+      "const parts = nextVisibleInlineCidBatch(inlinePartition.smallBatchParts)",
+    );
+    expect(viewer).toContain("setAttemptedSmall((current) =>");
+    expect(viewer.indexOf("setAttemptedSmall((current) =>")).toBeLessThan(
+      viewer.indexOf("if (!result.ok) return;"),
+    );
     expect(viewer).toContain("...inlinePartition.overflowStreamParts");
     expect(viewer).toContain("const parts = deferredStreamParts");
     expect(viewer).toContain("fetchInlineCidPartsBatch");
@@ -293,7 +334,8 @@ describe("large inline CID receive policy", () => {
     expect(viewer).toContain('fetch("/api/mail-inline-part"');
     expect(viewer).not.toContain('fetch("/api/mail-attachment"');
     expect(viewer).not.toContain("URL.createObjectURL");
-    expect(viewer).toContain("signal: controller.signal");
+    expect(viewer).toContain("signal: attemptSignal");
+    expect(viewer).toContain("releaseFlight?.()");
     expect(viewer).toContain("controller.abort()");
     expect(source).toContain("onLoad={() => {");
     expect(source).toContain("readyRafRef.current = requestAnimationFrame(() => {");
@@ -309,35 +351,20 @@ describe("large inline CID receive policy", () => {
   });
 });
 
-
 it("fans large CID mappings to every ready viewer frame without duplicate network hydration", () => {
   const mail = readFileSync("src/routes/mail.tsx", "utf8");
 
-  expect(mail).toContain(
-    "type LargeCidDispatcher = (images: LargeCidByteMapping[]) => void",
-  );
-  expect(mail).toContain(
-    "useRef<Set<LargeCidDispatcher>>(new Set())",
-  );
-  expect(mail).toContain(
-    "largeCidDispatchersRef.current.add(dispatch)",
-  );
-  expect(mail).toContain(
-    "largeCidDispatchersRef.current.delete(dispatch)",
-  );
+  expect(mail).toContain("type LargeCidDispatcher = (images: LargeCidByteMapping[]) => void");
+  expect(mail).toContain("useRef<Set<LargeCidDispatcher>>(new Set())");
+  expect(mail).toContain("largeCidDispatchersRef.current.add(dispatch)");
+  expect(mail).toContain("largeCidDispatchersRef.current.delete(dispatch)");
   expect(mail).toContain("bytes: image.bytes.slice(0)");
   expect(mail).toContain("largeReplayVersion");
-  expect(mail).toContain(
-    "if (!largeReady || largeReplayVersion <= 1 || !messageKey) return;",
-  );
+  expect(mail).toContain("if (!largeReady || largeReplayVersion <= 1 || !messageKey) return;");
 
   // Replay uses the already-bounded session cache only.
-  expect(mail).toContain(
-    "const cached = readLargeInlineCidSessionCache(messageKey, parts);",
-  );
-  expect(mail).toContain(
-    "if (cached.hits.length) onLargeCid?.(cached.hits);",
-  );
+  expect(mail).toContain("const cached = readLargeInlineCidSessionCache(messageKey, parts);");
+  expect(mail).toContain("if (cached.hits.length) onLargeCid?.(cached.hits);");
 
   // Both quoted fallback render paths must register with the same dispatcher
   // registry and trigger a replay once their iframe is actually ready.

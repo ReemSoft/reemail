@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 const source = readFileSync(resolve(__dirname, "../../routes/mail.tsx"), "utf8");
 const indexSource = readFileSync(resolve(__dirname, "../mail-index.functions.ts"), "utf8");
+const cidFlightSource = readFileSync(resolve(__dirname, "../mail-inline-cid-flight.ts"), "utf8");
 
 describe("MAILMAESTRO_INSTANT_NAVIGATION_R1 route integration", () => {
   it("paints a list-row shell before awaiting the interactive body", () => {
@@ -22,8 +23,9 @@ describe("MAILMAESTRO_INSTANT_NAVIGATION_R1 route integration", () => {
     expect(source).toMatch(/activeScopeGenerationRef\.current \+= 1/);
   });
 
-  it("uses exactly one CID batch Server Function and no per-image HTTP loop", () => {
+  it("uses bounded CID batch Server Functions and no per-image HTTP loop", () => {
     expect(source).toMatch(/resolveInlineImages\(\{\s*data:/);
+    expect(source).toContain("nextVisibleInlineCidBatch(inlinePartition.smallBatchParts)");
     expect(source).not.toMatch(/for \(const part of parts\)[\s\S]{0,300}resolveInlineImages/);
   });
 
@@ -89,8 +91,9 @@ describe("MAILMAESTRO_INSTANT_NAVIGATION_R1 route integration", () => {
 
   it("uses identity comparison before deleting message and CID flights", () => {
     expect(source).toContain("inflight.current.get(requestKey)?.promise === p");
-    expect(source).toContain("inlineImageFlights.get(messageKey)?.promise === promise");
-    expect(source).toContain("inlineImageFlights.get(key)?.promise === promise");
+    expect(cidFlightSource).toContain("flights.get(key) === created");
+    expect(cidFlightSource).toContain("flights.get(key) === flight");
+    expect(cidFlightSource).toContain("flight!.subscribers === 0");
   });
 
   it("propagates a scoped latest-intent generation only for current-list opens", () => {

@@ -66,13 +66,13 @@ describe("MAILMAESTRO_GMAIL_LATENCY_FIX", () => {
 
   it("only the interactive viewer persists resolved CID bytes", () => {
     const viewer = source.slice(
-      source.indexOf("const promise = resolveInlineImages({"),
-      source.indexOf("const promise = resolveInlineImages({") + 400,
+      source.indexOf("function useInlineImageMappings"),
+      source.indexOf("/** Body renderer"),
     );
     expect(viewer).toContain("persist: true");
     const background = source.slice(
-      source.indexOf("const promise = resolveInlineImagesBackground({"),
-      source.indexOf("const promise = resolveInlineImagesBackground({") + 400,
+      source.indexOf("const prefetchCidForMessage"),
+      source.indexOf("const prefetchMessage"),
     );
     expect(background).toContain("persist: false");
   });
